@@ -141,9 +141,18 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10765_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10792_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10831_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10842_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10848_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10849_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10865_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10870_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10935_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10977_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10980_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11004_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10991_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11103_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11062_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));

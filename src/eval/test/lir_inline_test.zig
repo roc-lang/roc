@@ -29,6 +29,70 @@ const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || li
     MissingSpecializedWorker,
 };
 
+const PeakAllocator = struct {
+    child: Allocator,
+    mutex: std.atomic.Mutex = .unlocked,
+    current_bytes: usize = 0,
+    peak_bytes: usize = 0,
+
+    fn allocator(self: *PeakAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn lock(self: *PeakAllocator) void {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    fn noteResize(self: *PeakAllocator, old_len: usize, new_len: usize) void {
+        self.current_bytes -= old_len;
+        self.current_bytes += new_len;
+        self.peak_bytes = @max(self.peak_bytes, self.current_bytes);
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        const result = self.child.rawAlloc(len, alignment, ret_addr);
+        if (result != null) self.noteResize(0, len);
+        return result;
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        if (!self.child.rawResize(memory, alignment, new_len, ret_addr)) return false;
+        self.noteResize(memory.len, new_len);
+        return true;
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        const result = self.child.rawRemap(memory, alignment, new_len, ret_addr);
+        if (result != null) self.noteResize(memory.len, new_len);
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        self.child.rawFree(memory, alignment, ret_addr);
+        self.noteResize(memory.len, 0);
+    }
+};
+
 var shared_test_builtins: ?eval.BuiltinModules = null;
 var shared_test_builtins_mutex: std.Io.Mutex = .init;
 
@@ -176,7 +240,6 @@ const LowerMonotypeOptions = struct {
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
     root_selection: enum { all, test_expects } = .all,
-    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -221,7 +284,6 @@ fn lowerMonotypeModuleWithOptions(
         },
         .{
             .requests = root_requests,
-            .procedure_template_root_grouping = options.procedure_template_root_grouping,
         },
         .{
             .specialization_cache = options.specialization_cache,
@@ -435,6 +497,9 @@ const StructuralJsonLirStats = struct {
     procedures: usize,
     statements: usize,
     locals: usize,
+    reference_counting: usize,
+    decrefs: usize,
+    conditional_decrefs: usize,
 };
 
 fn structuralJsonLirStats(
@@ -449,11 +514,38 @@ fn structuralJsonLirStats(
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
     const store = &lowered.lowered.lir_result.store;
+    var reference_counting: usize = 0;
+    var decrefs: usize = 0;
+    var conditional_decrefs: usize = 0;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt == .decref) {
+            reference_counting += 1;
+            decrefs += 1;
+        } else if (stmt == .decref_if_initialized) {
+            reference_counting += 1;
+            conditional_decrefs += 1;
+        }
+    }
     return .{
         .procedures = store.getProcSpecs().len,
         .statements = store.getCFStmts().len,
         .locals = store.getLocals().len,
+        .reference_counting = reference_counting,
+        .decrefs = decrefs,
+        .conditional_decrefs = conditional_decrefs,
     };
+}
+
+fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
+    const source = try structuralJsonSource(std.testing.allocator, field_count, "Str", .parse);
+    defer std.testing.allocator.free(source);
+
+    var peak_allocator = PeakAllocator{ .child = std.testing.allocator };
+    const allocator = peak_allocator.allocator();
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), peak_allocator.current_bytes);
+    return peak_allocator.peak_bytes;
 }
 
 fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
@@ -965,7 +1057,7 @@ fn liftModuleAfterSpecConstr(
     mono = undefined;
     errdefer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     return .{
         .resources = resources,
@@ -1170,7 +1262,7 @@ fn expectInlinePlanDecision(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
-    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
+    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, .all_calls);
     defer procedure_usage.deinit();
 
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
@@ -1878,6 +1970,150 @@ test "issue 10889 nested optional JSON parser specialization growth is bounded" 
     try std.testing.expect(nested_expression_growth <= flat_expression_growth * 2);
 }
 
+test "issue 10979 flat JSON record parser growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const eight = try structuralJsonMonotypeStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonMonotypeStats(allocator, 16, "Str", .parse);
+    const thirty_two = try structuralJsonMonotypeStats(allocator, 32, "Str", .parse);
+    const sixty_four = try structuralJsonMonotypeStats(allocator, 64, "Str", .parse);
+
+    const narrow_per_field = (sixteen.expressions - eight.expressions) / 8;
+    const wide_per_field = (sixty_four.expressions - thirty_two.expressions) / 32;
+    if (wide_per_field > narrow_per_field * 2) {
+        std.debug.print(
+            "flat JSON parser per-field Monotype cost grew from {d} expressions per field in the 8->16 window " ++
+                "to {d} in the 32->64 window (expressions {d}/{d}/{d}/{d}, locals {d}/{d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                eight.expressions,
+                sixteen.expressions,
+                thirty_two.expressions,
+                sixty_four.expressions,
+                eight.locals,
+                sixteen.locals,
+                thirty_two.locals,
+                sixty_four.locals,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field <= narrow_per_field * 2);
+}
+
+test "issue 11100 flat JSON record parser peak allocation is linear in field count" {
+    // Repro for https://github.com/roc-lang/roc/issues/11100.
+    // Peak live requested bytes are deterministic allocator accounting, not
+    // wall time. A whole-pipeline peak is the maximum of several phases, so
+    // compare adjacent totals: subtracting them becomes invalid when the
+    // dominating phase changes between input sizes. A doubling may use at
+    // most three times the memory, allowing 50% per-field variance while
+    // still rejecting the issue's greater-than-fourfold 16-to-32 growth.
+    const sizes = [_]usize{ 8, 16, 32 };
+    var peaks: [sizes.len]usize = undefined;
+    for (sizes, &peaks) |field_count, *peak| {
+        peak.* = try structuralJsonLirPeakBytes(field_count);
+    }
+
+    if (peaks[1] > peaks[0] * 3 or peaks[2] > peaks[1] * 3) {
+        std.debug.print(
+            "flat JSON parser peak allocation grew nonlinearly: " ++
+                "{d}/{d}/{d} fields used {d}/{d}/{d} peak bytes\n",
+            .{ sizes[0], sizes[1], sizes[2], peaks[0], peaks[1], peaks[2] },
+        );
+    }
+    try std.testing.expect(peaks[1] <= peaks[0] * 3);
+    try std.testing.expect(peaks[2] <= peaks[1] * 3);
+}
+
+test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const four = try structuralJsonLirStats(allocator, 4, "Str", .parse);
+    const eight = try structuralJsonLirStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonLirStats(allocator, 16, "Str", .parse);
+
+    const narrow_per_field = (eight.reference_counting - four.reference_counting) / 4;
+    const wide_per_field = (sixteen.reference_counting - eight.reference_counting) / 8;
+    const narrow_statements_per_field = (eight.statements - four.statements) / 4;
+    const wide_statements_per_field = (sixteen.statements - eight.statements) / 8;
+    if (wide_per_field * 2 > narrow_per_field * 3 or
+        wide_statements_per_field * 2 > narrow_statements_per_field * 3)
+    {
+        std.debug.print(
+            "flat JSON parser per-field ARC cost grew from {d} statements per field in the 4->8 window " ++
+                "to {d} in the 8->16 window; total LIR grew from {d} to {d} statements per field " ++
+                "(RC statements {d}/{d}/{d}, decrefs {d}/{d}/{d}, conditional {d}/{d}/{d}, total statements {d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                narrow_statements_per_field,
+                wide_statements_per_field,
+                four.reference_counting,
+                eight.reference_counting,
+                sixteen.reference_counting,
+                four.decrefs,
+                eight.decrefs,
+                sixteen.decrefs,
+                four.conditional_decrefs,
+                eight.conditional_decrefs,
+                sixteen.conditional_decrefs,
+                four.statements,
+                eight.statements,
+                sixteen.statements,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field * 2 <= narrow_per_field * 3);
+    try std.testing.expect(wide_statements_per_field * 2 <= narrow_statements_per_field * 3);
+}
+
+test "issue 10979 shared JSON record continuations preserve field semantics" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Shape : { f0 : Str, f1 : Str }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    duplicate : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    duplicate = Json.parse("{ \"f0\": \"first\", \"f1\": \"middle\", \"f0\": \"last\" }")
+        \\    missing : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing = Json.parse("{ \"f0\": \"only\" }")
+        \\    invalid : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    invalid = Json.parse("{ \"f0\": \"started\", ")
+        \\    duplicate_ok = match duplicate {
+        \\        Ok(record) => record.f0 == "last" and record.f1 == "middle"
+        \\        Err(_) => False
+        \\    }
+        \\    missing_ok = match missing {
+        \\        Err(MissingRequiredField(field)) => field == "f1"
+        \\        _ => False
+        \\    }
+        \\    invalid_ok = match invalid {
+        \\        Err(InvalidJson(_)) => True
+        \\        _ => False
+        \\    }
+        \\    duplicate_ok and missing_ok and invalid_ok
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
 test "issue 10121 structural JSON helper sharing survives LIR lowering" {
     const allocator = std.testing.allocator;
     const encoder_one = try structuralJsonLirStats(allocator, 1, "Try(Str, [Missing])", .encode);
@@ -2021,7 +2257,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     });
 }
 
-test "test roots share template work only when explicitly grouped" {
+test "adjacent expect roots remain isolated and ordered" {
     const allocator = std.testing.allocator;
     const source =
         \\identity : a -> a
@@ -2033,23 +2269,22 @@ test "test roots share template work only when explicitly grouped" {
         \\main = 0
     ;
 
-    var isolated_diagnostics = MonoLower.Diagnostics{};
-    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &isolated_diagnostics,
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .root_selection = .test_expects,
     });
-    defer isolated.deinit(allocator);
+    defer lowered.deinit(allocator);
 
-    var shared_diagnostics = MonoLower.Diagnostics{};
-    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &shared_diagnostics,
-        .root_selection = .test_expects,
-        .procedure_template_root_grouping = .shared_adjacent,
-    });
-    defer shared.deinit(allocator);
+    const roots = lowered.mono.rootsView();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expect(roots[0].def != roots[1].def);
 
-    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
-    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
+    var root_index: usize = 0;
+    for (lowered.resources.checked_artifact.root_requests.requests) |request| {
+        if (request.kind != .test_expect) continue;
+        try std.testing.expectEqual(request.order, roots[root_index].request.order);
+        root_index += 1;
+    }
+    try std.testing.expectEqual(roots.len, root_index);
 }
 
 test "deferred specialization bodies queue once and drain at the wave boundary" {
@@ -2168,10 +2403,12 @@ test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
     ;
 
     const counters = try monotypeCountersForModule(allocator, source);
-    // Each helper adds a fixed amount of work: completed transitive interface
-    // summaries replay without coupling the two independent calls.
-    try std.testing.expect(counters.template_misses <= 75);
-    try std.testing.expect(counters.nominal_backing_instantiations <= 2250);
+    // Each helper adds a bounded amount of work: completed transitive interface
+    // summaries replay without coupling the two independent calls. Resolving
+    // hidden defaultable evidence at checked edges adds exact specializations
+    // to this chain, but does not restore its prior combinatorial growth.
+    try std.testing.expect(counters.template_misses <= 80);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 3100);
 }
 
 test "independent same-name helper requirements lower separately" {
@@ -2922,6 +3159,8 @@ test "procedure boundary keeps a deeper single-use helper inline" {
 }
 
 test "escaping single-call block helper is not inlined" {
+    // The annotation makes this callable-containing data value an explicit
+    // compile-time root for the inline-plan pipeline exercised by this test.
     try expectInlinePlanDecision(
         \\helper : List(U64), U64 -> List(U64)
         \\helper = |xs, i| {
@@ -2929,6 +3168,7 @@ test "escaping single-call block helper is not inlined" {
         \\    a.set(1, i) ?? a
         \\}
         \\
+        \\main : (List(U64), (List(U64), U64 -> List(U64)))
         \\main = (helper([0.U64, 0], 1), helper)
     , "helper", false);
 }
@@ -4171,6 +4411,76 @@ fn reachableProcDebugName(
     return false;
 }
 
+const PerElementProcSummary = struct {
+    count: usize,
+    named: bool,
+};
+
+fn perElementProcSummary(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: ?[]const u8,
+) TestError!PerElementProcSummary {
+    const store = @constCast(&lowered.lir_result.store);
+    var reachable = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer reachable.deinit(allocator);
+    try reachable.append(allocator, try rootProc(lowered));
+    var reachable_visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
+    defer reachable_visited.deinit();
+
+    var hot = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer hot.deinit(allocator);
+    while (reachable.pop()) |proc_id| {
+        const proc_entry = try reachable_visited.getOrPut(proc_id);
+        if (proc_entry.found_existing) continue;
+        const proc_body = store.getProcSpec(proc_id).body orelse continue;
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try reachable.append(allocator, call);
+
+        var proc_stmts = try lir.BodyClone.ReachableStmts.init(store, proc_body);
+        defer proc_stmts.deinit();
+        while (try proc_stmts.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .join or !try containsJumpTo(store, stmt.join.body, stmt.join.id)) continue;
+            var loop_stmts = try lir.BodyClone.ReachableStmts.init(store, stmt.join.body);
+            defer loop_stmts.deinit();
+            while (try loop_stmts.next()) |loop_stmt_id| {
+                const loop_stmt = store.getCFStmt(loop_stmt_id);
+                if (loop_stmt == .assign_call) try hot.append(allocator, loop_stmt.assign_call.proc);
+            }
+        }
+    }
+
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+    var count: usize = 0;
+    var named = false;
+    while (hot.pop()) |proc_id| {
+        const entry = try visited.getOrPut(proc_id);
+        if (entry.found_existing) continue;
+        count += 1;
+        if (store.procDebugName(proc_id)) |name| {
+            if (expected_name) |expected| {
+                if (std.mem.eql(u8, name, expected)) named = true;
+            }
+        }
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try hot.append(allocator, call);
+    }
+    return .{ .count = count, .named = named };
+}
+
+fn perElementProcDebugName(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: []const u8,
+) TestError!bool {
+    return (try perElementProcSummary(allocator, lowered, expected_name)).named;
+}
+
 fn procOrInlineScopeDebugName(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -4278,6 +4588,76 @@ fn findSingleLoopJoin(
         found = stmt.join;
     }
     return found orelse error.TestUnexpectedResult;
+}
+
+const PerElementConstructionSummary = struct {
+    struct_assign_count: usize = 0,
+    tag_assign_count: usize = 0,
+    single_variant_tag_assign_count: usize = 0,
+    store_struct_count: usize = 0,
+    store_tag_count: usize = 0,
+};
+
+fn perElementConstructionSummary(
+    allocator: Allocator,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+) TestError!PerElementConstructionSummary {
+    const store = &lowered.lir_result.store;
+    const root_body = store.getProcSpec(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const loop = try findSingleLoopJoin(store, root_body);
+
+    var bodies = std.ArrayList(LIR.CFStmtId).empty;
+    defer bodies.deinit(allocator);
+    try bodies.append(allocator, loop.body);
+
+    var visited_procs = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited_procs.deinit();
+
+    var summary = PerElementConstructionSummary{};
+    while (bodies.pop()) |body| {
+        var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+        defer walk.deinit();
+        while (try walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_struct) summary.struct_assign_count += 1;
+            if (stmt == .assign_tag) {
+                summary.tag_assign_count += 1;
+                const target_layout = lowered.lir_result.layouts.getLayout(store.getLocal(stmt.assign_tag.target).layout_idx);
+                if (target_layout.tag == .tag_union and lowered.lir_result.layouts.getTagUnionInfo(target_layout).variants.len == 1) {
+                    summary.single_variant_tag_assign_count += 1;
+                }
+            }
+            if (stmt == .store_struct) summary.store_struct_count += 1;
+            if (stmt == .store_tag) summary.store_tag_count += 1;
+            if (stmt == .assign_call) {
+                const entry = try visited_procs.getOrPut(stmt.assign_call.proc);
+                if (!entry.found_existing) {
+                    const proc_body = store.getProcSpec(stmt.assign_call.proc).body orelse continue;
+                    try bodies.append(allocator, proc_body);
+                }
+            }
+        }
+    }
+    return summary;
+}
+
+fn loopCarriedWrapperCount(lowered: *lir.CheckedPipeline.LoweredProgram) TestError!usize {
+    const store = &lowered.lir_result.store;
+    const layouts = &lowered.lir_result.layouts;
+    const root_body = store.getProcSpec(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const loop = try findSingleLoopJoin(store, root_body);
+    const params = store.getLocalSpan(loop.params);
+    var count: usize = 0;
+    for (0..params.len) |index| {
+        const param_layout = layouts.getLayout(store.getLocal(GuardedList.at(params, index)).layout_idx);
+        if (param_layout.tag == .struct_ or param_layout.tag == .closure) {
+            count += 1;
+        } else if (param_layout.tag == .tag_union) {
+            const info = layouts.getTagUnionInfo(param_layout);
+            if (info.variants.len == 1) count += 1;
+        }
+    }
+    return count;
 }
 
 fn countLocalDecrefs(
@@ -4726,6 +5106,57 @@ test "F32 and F64 range syntax fuses without Iter.next" {
             return error.TestUnexpectedResult;
         }
         try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+    }
+}
+
+test "issue 10991 dev loops do not rebuild their iterators every element" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8, counted_loop: bool }{
+        .{ .name = "range", .counted_loop = true, .source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $total = 0.U64
+        \\    for d in 1..=n {
+        \\        $total = $total + (d % 7)
+        \\    }
+        \\    $total
+        \\}
+        },
+        .{ .name = "List.fold", .counted_loop = false, .source =
+        \\main : U64 -> U64
+        \\main = |n| List.repeat(3.U64, n).fold(0.U64, |acc, d| acc + d)
+        },
+    };
+
+    for (cases) |case| {
+        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+            var lowered = try lowerModuleWithOptions(allocator, case.source, inline_mode, .{ .proc_debug_names = true });
+            defer lowered.deinit(allocator);
+
+            if (case.counted_loop) {
+                const constructions = try perElementConstructionSummary(allocator, &lowered.lowered);
+                const carried_wrappers = try loopCarriedWrapperCount(&lowered.lowered);
+                if (constructions.single_variant_tag_assign_count != 0 or carried_wrappers != 0) {
+                    const procs = try perElementProcSummary(allocator, &lowered.lowered, null);
+                    std.debug.print("{s} {s} loop retained {any}, {d} loop-carried wrappers, across {d} per-element callees\n", .{
+                        @tagName(inline_mode),
+                        case.name,
+                        constructions,
+                        carried_wrappers,
+                        procs.count,
+                    });
+                }
+                try std.testing.expectEqual(@as(usize, 0), constructions.single_variant_tag_assign_count);
+                try std.testing.expectEqual(@as(usize, 0), carried_wrappers);
+            }
+
+            for ([_][]const u8{ "Builtin.Iter.custom", "iter_from_step" }) |name| {
+                if (try perElementProcDebugName(allocator, &lowered.lowered, name)) {
+                    std.debug.print("{s} remained on the per-element path of a {s} {s} loop\n", .{ name, @tagName(inline_mode), case.name });
+                    return error.TestUnexpectedResult;
+                }
+            }
+        }
     }
 }
 
@@ -6025,7 +6456,7 @@ test "static list iter append loop eliminates public iter adapters" {
 //     try std.testing.expectEqual(@as(u32, 0), lowered.lowered.post_check_stats.optimized_contexts);
 // }
 
-test "post-check lowering mode gates public iter adapter elimination" {
+test "post-check lowering modes eliminate public iter adapters" {
     const allocator = std.testing.allocator;
     const source =
         \\sum_points : U64 -> U64
@@ -6056,7 +6487,7 @@ test "post-check lowering mode gates public iter adapter elimination" {
     defer ordinary.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.append"));
-    try std.testing.expect(try reachableProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.append"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.append"));
 }
 
 // Ported pending iterator redesign: this test constructs state_loop/state_continue lifted IR that the current lifted AST does not define.
@@ -6789,9 +7220,9 @@ test "spec constr specializes match-joined record state carried by while loop" {
 // both through the interpreter against `RuntimeHostEnv`, then asserts the two
 // runs are observationally identical:
 //
-//   * `.wrappers` is the optimized/inlined lowering (the closest proxy the tree
-//     has for the lower-all-known-wrappers path).
-//   * `.none` is the naive, un-inlined lowering ("unfused").
+//   * `.wrappers` is the fully optimized/inlined lowering (the closest proxy
+//     the tree has for the lower-all-known-wrappers path).
+//   * `.none` runs only the bounded iterator-fusion subset used by dev builds.
 //
 // The two runs must agree on:
 //   * crash-versus-no-crash (`RecordedRun.termination`), and
@@ -7440,7 +7871,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     mono_consumed = true;
     defer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
@@ -7573,7 +8004,7 @@ test "custom literal field default gets an ordinary conversion root" {
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
-            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => return error.TestUnexpectedResult,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);
@@ -9318,3 +9749,104 @@ test "wide loop-carried state scalarizes into flat join params" {
 // the loop. Its binding must survive into the loop body from the entry
 // edges alone; the fact-free first walk of the back edge can never
 // re-derive it, or the dominating length guard proves nothing.
+
+// A recursive mention at a constant argument (`Weird(Str)` inside the
+// declaration of `Weird(a)`) instantiates one backing per distinct argument
+// class and terminates: the mention's checked type is scope-independent, so
+// every nesting level presents the same argument cell and the second level
+// hits the placeholder registered by the first.
+test "recursive nominal mention at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Weird(a) := [End, Wrap(Weird(Str))].{
+        \\    make : a -> Weird(a)
+        \\    make = |_| End
+        \\
+        \\    wrap : Weird(Str) -> Weird(a)
+        \\    wrap = |w| Wrap(w)
+        \\}
+        \\
+        \\main : U8
+        \\main = {
+        \\    w : Weird(U8)
+        \\    w = Weird.wrap(Weird.make("s"))
+        \\    match w {
+        \\        Wrap(_) => 1
+        \\        End => 0
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}
+
+// Mutually recursive declarations whose cross-mentions use constant
+// arguments are finite, but the declaration of `Alt(x)` also contains
+// `List(x)`, whose meaning depends on the enclosing formal binding. A
+// nested expansion of `Alt(Str)` reached through `Bare` must instantiate
+// `List(Str)` there, not reuse the outer expansion's `List(I64)`; the
+// checker-typed pattern match below meets that inner slot and exposes any
+// collapsed reuse as a type mismatch.
+test "nested expansion of a mutually recursive nominal keeps formal-dependent payloads per level" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Alt(x) := [Load(List(x)), Wrap(Bare(Str))].{
+        \\    load : x -> Alt(x)
+        \\    load = |v| Load([v])
+        \\}
+        \\
+        \\Bare(y) := [Tie(Alt(Str)), End]
+        \\
+        \\main : Str
+        \\main = {
+        \\    a = Alt.load(42)
+        \\    match a {
+        \\        Wrap(bare) => match bare {
+        \\            Tie(alt) => match alt {
+        \\                Load(strs) => strs.get(0) ?? "none"
+        \\                Wrap(_) => "wrap"
+        \\            }
+        \\            End => "end"
+        \\        }
+        \\        Load(_) => "load"
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}
+
+// A constant-argument recursive nominal declared in an imported module
+// expands its backing inside a fresh cross-module instantiation context;
+// the recursive mention's closed checked type memoizes per context, so
+// nested expansion levels present one argument cell and the expansion
+// terminates there just as it does for a local declaration.
+test "imported recursive nominal at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const chain_module =
+        \\Chain(a) := [Stop, Link(Chain(Str))].{
+        \\    stop : a -> Chain(a)
+        \\    stop = |_| Stop
+        \\
+        \\    link : a, Chain(Str) -> Chain(a)
+        \\    link = |_, c| Link(c)
+        \\
+        \\    depth : Chain(a) -> U8
+        \\    depth = |c| match c {
+        \\        Stop => 0
+        \\        Link(_) => 1
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Chain
+        \\
+        \\main : U8
+        \\main = Chain.link(7, Chain.stop("s")).depth()
+    ;
+
+    const counters = try monotypeCountersForModuleWithImports(allocator, source, &.{
+        .{ .name = "Chain", .source = chain_module },
+    });
+    try std.testing.expect(counters.nominal_backing_instantiations >= 1);
+}

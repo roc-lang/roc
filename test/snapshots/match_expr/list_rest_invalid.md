@@ -18,11 +18,11 @@ OLD LIST REST PATTERN - list_rest_invalid.md:3:6:3:12
 OLD LIST REST PATTERN - list_rest_invalid.md:4:9:4:15
 NAME NOT IN SCOPE - list_rest_invalid.md:1:7:1:12
 UNUSED VARIABLE - list_rest_invalid.md:2:6:2:11
-UNUSED VARIABLE - list_rest_invalid.md:2:15:2:15
-UNUSED VARIABLE - list_rest_invalid.md:3:8:3:8
+UNUSED VARIABLE - list_rest_invalid.md:2:15:2:19
+UNUSED VARIABLE - list_rest_invalid.md:3:8:3:12
 UNUSED VARIABLE - list_rest_invalid.md:3:14:3:18
 UNUSED VARIABLE - list_rest_invalid.md:4:6:4:7
-UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
+UNUSED VARIABLE - list_rest_invalid.md:4:11:4:15
 UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 # PROBLEMS
 ── ✗ old list rest pattern ─────────────────────────── list_rest_invalid.md:2:13
@@ -88,7 +88,7 @@ suppress this warning.
 Variable rest is defined here and then never used:
 
 [first, ..rest] => 0 # invalid rest pattern should error
-          ^
+          ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -98,7 +98,7 @@ suppress this warning.
 Variable rest is defined here and then never used:
 
 [..rest, last] => 1 # invalid rest pattern should error
-   ^
+   ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -128,7 +128,7 @@ suppress this warning.
 Variable rest is defined here and then never used:
 
 [x, ..rest, y] => 2 # invalid rest pattern should error
-      ^
+      ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.

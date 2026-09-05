@@ -7,6 +7,7 @@ const types = @import("types");
 const Var = types.Var;
 const parse = @import("parse");
 const CIR = @import("can").CIR;
+const DependencyGraph = @import("can").DependencyGraph;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
 const CoreCtx = @import("can").CoreCtx;
@@ -475,9 +476,11 @@ pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) TestEnvError!void {
+pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool, allow_can_errors: bool = false }) TestEnvError!void {
     try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
+    if (!options.allow_can_errors) {
+        try self.assertNoCanProblems();
+    }
     if (!options.allow_type_errors) {
         try self.assertNoTypeProblems();
     }
@@ -495,19 +498,49 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
 fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Var {
     const idents = self.module_env.getIdentStoreConst();
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.gpa);
+    var scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer scratch.deinit(self.gpa);
     for (defs_slice) |def_idx| {
         const def = self.module_env.store.getDef(def_idx);
-        const ptrn = self.module_env.store.getPattern(def.pattern);
-        if (ptrn != .assign) {
-            std.debug.print(
-                "Found a top-level def whose pattern is '{s}', not a plain assign, while looking up def '{s}'\n",
-                .{ @tagName(ptrn), target_def_name },
-            );
-            return error.TestUnexpectedResult;
+        if (self.module_env.store.getPattern(def.pattern) == .assign) {
+            const def_name = idents.getText(self.module_env.store.getPattern(def.pattern).assign.ident);
+            if (std.mem.eql(u8, target_def_name, def_name)) {
+                return ModuleEnv.varFrom(def_idx);
+            }
+            continue;
         }
-        const def_name = idents.getText(ptrn.assign.ident);
-        if (std.mem.eql(u8, target_def_name, def_name)) {
-            return ModuleEnv.varFrom(def_idx);
+        // A destructuring def binds several names; each name's var is its
+        // binder pattern's var.
+        binders.clearRetainingCapacity();
+        try DependencyGraph.appendPatternBinders(self.module_env, def.pattern, &binders, &scratch, self.gpa);
+        for (binders.items) |binder| {
+            const ident = switch (self.module_env.store.getPattern(binder)) {
+                .assign => |assign| assign.ident,
+                .var_assign => |assign| assign.ident,
+                .as => |as_pattern| as_pattern.ident,
+                .applied_tag,
+                .nominal,
+                .nominal_external,
+                .record_destructure,
+                .list,
+                .tuple,
+                .str_interpolation,
+                .num_literal,
+                .num_from_numeral_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => unreachable,
+            };
+            if (std.mem.eql(u8, target_def_name, idents.getText(ident))) {
+                return ModuleEnv.varFrom(binder);
+            }
         }
     }
 

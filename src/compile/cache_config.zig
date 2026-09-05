@@ -160,7 +160,17 @@ pub const Constants = struct {
     ///     family for internal builtin types.
     /// 71: Annotation node payload packs its boolean flags into one byte and
     ///     records the source region of the annotated name.
-    pub const CACHE_VERSION = 71;
+    /// 72: Checked binding schemes serialize generated-codec relations that
+    ///     downstream specializations must revalidate.
+    /// 73: Generated codec contracts retain structural body shapes and mark
+    ///     specialization-conditional method capabilities.
+    /// 74: Canonicalization warns on a `?` applied to a function's return
+    ///     value (new diagnostic).
+    /// 75: Checked dispatch data drops symbolic constraint-callable evidence
+    ///     and records recursive resolved references explicitly.
+    /// 76: CIR has an explicit mutable-binder pattern and binding-name warning
+    ///     diagnostic node tags.
+    pub const CACHE_VERSION = 76;
 };
 
 /// Configuration for the Roc cache system.

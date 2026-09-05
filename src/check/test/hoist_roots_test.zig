@@ -875,7 +875,9 @@ test "hoist roots publish top-level destructure binders used by executable roots
         \\s : Rec
         \\s = { req: 7, other: 1 }
         \\{ req, .. } = s
-        \\(a, b) = (1, 2)
+        \\pair : (U8, U8)
+        \\pair = (1, 2)
+        \\(a, b) = pair
         \\ops : { scale : U64 -> U64, other : U64 }
         \\ops = { scale: |x| x * 2, other: 0 }
         \\{ scale, .. } = ops
@@ -1212,8 +1214,8 @@ test "hoist roots are not selected for branch-local binding dependencies" {
 test "hoist roots are not selected for mutable local dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
-        \\    var x = 41.I64
-        \\    y = x + 1.I64
+        \\    var $x = 41.I64
+        \\    y = $x + 1.I64
         \\    y
         \\}
     );
@@ -1460,7 +1462,11 @@ test "hoist roots are not selected for custom from_quote conversion roots" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected for effectful static dispatch calls" {
+test "hoist roots select the pure receiver binding of an effectful static dispatch call, never the call" {
+    // The receiver's type is known, so the method resolves before the call
+    // is finished checking and the call is effectful from the start, exactly
+    // like the plain call `Foo.show!(foo)`. The pure receiver binding is
+    // still a root of its own; the effectful call is not one.
     var test_env = try TestEnv.init("Test",
         \\Foo := { x: I64 }.{
         \\    show! : Foo => I64
@@ -1478,7 +1484,11 @@ test "hoist roots are not selected for effectful static dispatch calls" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const root_region = test_env.module_env.store.getExprRegion(roots[0].expr);
+    try std.testing.expectEqualStrings("{ x: 42.I64 }", test_env.module_env.getSource(root_region));
+    try std.testing.expect(roots[0].pattern != null);
 }
 
 test "hoist roots are not selected when an effectful function argument is called" {

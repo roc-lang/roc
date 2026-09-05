@@ -747,12 +747,15 @@ fn parseAndCheckProgramForProblemsImpl(
         };
     }
 
-    var explicit_problem_root_names_storage: [1][]const u8 = undefined;
-    var explicit_problem_root_names: []const []const u8 = &.{};
+    var problem_root_storage: [1]ExecutableRootInput = undefined;
+    var problem_roots: []const ExecutableRootInput = &.{};
     switch (source_kind) {
         .expr => {
-            explicit_problem_root_names_storage[0] = evalRootName(source_kind, false);
-            explicit_problem_root_names = explicit_problem_root_names_storage[0..];
+            problem_root_storage[0] = .{
+                .name = evalRootName(source_kind, false),
+                .evaluation = .runtime,
+            };
+            problem_roots = problem_root_storage[0..];
         },
         .module => {},
     }
@@ -765,7 +768,7 @@ fn parseAndCheckProgramForProblemsImpl(
         false,
         false,
         .checked_artifact,
-        explicit_problem_root_names,
+        problem_roots,
         builtin_env,
         builtin_indices,
         main_imports,
@@ -1287,6 +1290,7 @@ fn publishProgramForComptimeProblemsImpl(
         pre_published_builtin,
         .report_comptime_problems,
         null,
+        null,
     );
     defer cleanupParseAndCanonical(allocator, resources);
 
@@ -1321,12 +1325,81 @@ pub fn publishProgramKeepingReportedComptimeProblems(
         null,
         .report_comptime_problems,
         null,
+        null,
     );
+}
+
+/// Publish a program for an interactive compile-time evaluation while retaining
+/// the exact checked resources that own both its diagnostics and finalized
+/// `ConstStore` values. Unlike the runtime inspected-program helpers, this does
+/// not publish or lower an executable root.
+pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
+    event_callback: ?CompileTimeFinalization.EventCallback,
+) Error!ParsedResources {
+    const ctfe_options: CompileTimeFinalization.Options = .{
+        .event_callback = event_callback,
+    };
+    return parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .comptime_repl_root,
+        pre_published_builtin,
+        .report_comptime_problems,
+        &ctfe_options,
+        roc_ctx,
+    );
+}
+
+/// Return the finalized string value of the explicitly published compile-time
+/// REPL root. The returned bytes borrow from `resources`.
+pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const u8 {
+    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .repl_expr) continue;
+
+        var node = switch (root.payload) {
+            .const_node => |const_node| const_node,
+            .pending, .fn_value, .discarded, .expect => return error.Internal,
+        };
+        while (true) {
+            switch (resources.checked_artifact.const_store.get(node)) {
+                .str => |str| return resources.checked_artifact.const_store.strBytes(str),
+                .nominal => |nominal| node = nominal.backing,
+                .pending,
+                .zst,
+                .scalar,
+                .list,
+                .box,
+                .tuple,
+                .record,
+                .crash,
+                .tag,
+                .fn_value,
+                => return error.Internal,
+            }
+        }
+    }
+
+    return error.EntrypointNotFound;
 }
 
 const PublishedRootMode = union(enum) {
     eval_root: bool,
+    comptime_repl_root,
     published_roots_only,
+};
+
+const ExecutableRootInput = struct {
+    name: []const u8,
+    evaluation: enum { runtime, compile_time },
 };
 
 const ComptimeProblemReporting = enum {
@@ -1353,6 +1426,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         root_mode,
         pre_published_builtin,
         .ignore_comptime_problems,
+        null,
         roc_ctx,
     );
 }
@@ -1366,6 +1440,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
     root_mode: PublishedRootMode,
     pre_published_builtin: ?PrePublishedBuiltin,
     problem_reporting: ComptimeProblemReporting,
+    ctfe_options: ?*const CompileTimeFinalization.Options,
     roc_ctx: ?CoreCtx,
 ) Error!ParsedResources {
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
@@ -1439,12 +1514,22 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         };
     }
 
-    var explicit_eval_root_names_storage: [1][]const u8 = undefined;
-    var explicit_eval_root_names: []const []const u8 = &.{};
+    var executable_root_storage: [1]ExecutableRootInput = undefined;
+    var executable_roots: []const ExecutableRootInput = &.{};
     switch (root_mode) {
         .eval_root => |root_inspect_wrap| {
-            explicit_eval_root_names_storage[0] = evalRootName(source_kind, root_inspect_wrap);
-            explicit_eval_root_names = explicit_eval_root_names_storage[0..];
+            executable_root_storage[0] = .{
+                .name = evalRootName(source_kind, root_inspect_wrap),
+                .evaluation = .runtime,
+            };
+            executable_roots = executable_root_storage[0..];
+        },
+        .comptime_repl_root => {
+            executable_root_storage[0] = .{
+                .name = evalRootName(source_kind, false),
+                .evaluation = .compile_time,
+            };
+            executable_roots = executable_root_storage[0..];
         },
         .published_roots_only => {},
     }
@@ -1457,7 +1542,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         inspect_wrap,
         false,
         .checked_artifact,
-        explicit_eval_root_names,
+        executable_roots,
         builtin_env,
         builtin_indices,
         main_imports,
@@ -1521,6 +1606,31 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             };
             explicit_roots = explicit_root_storage[0..];
         },
+        .comptime_repl_root => {
+            const root_name = evalRootName(source_kind, false);
+            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
+                }
+                unreachable;
+            };
+            const root_def = main_checked.module_env.store.getDef(root_def_idx);
+            if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
+                const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse {
+                    if (@import("builtin").mode == .Debug) {
+                        std.debug.panic("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
+                    }
+                    unreachable;
+                };
+                explicit_root_storage[0] = .{
+                    .kind = .repl_expr,
+                    .source = .{ .expr = body_expr },
+                    .abi = .compile_time,
+                    .exposure = .private,
+                };
+                explicit_roots = explicit_root_storage[0..];
+            }
+        },
         .published_roots_only => {},
     }
 
@@ -1528,7 +1638,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
     var top_level_hoisted_roots = std.ArrayList(check.HoistRoots.SelectedHoistedRoot).empty;
     defer top_level_hoisted_roots.deinit(allocator);
     const hoisted_roots = switch (root_mode) {
-        .eval_root => roots: {
+        .eval_root, .comptime_repl_root => roots: {
             for (selected_hoisted_roots) |root| {
                 if (main_checked.checker.selectedHoistedRootIsTopLevel(root)) {
                     try top_level_hoisted_roots.append(allocator, root);
@@ -1548,7 +1658,10 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
             .hoisted_roots = hoisted_roots,
-            .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+            .compile_time_finalizer = if (ctfe_options) |options|
+                CompileTimeFinalization.finalizerWithOptions(options)
+            else
+                CompileTimeFinalization.finalizer(),
             .problem_store = switch (problem_reporting) {
                 .ignore_comptime_problems => null,
                 .report_comptime_problems => &main_checked.checker.problems,
@@ -1593,7 +1706,7 @@ pub fn parseCheckModule(
     inspect_wrap: bool,
     hosted_transform: bool,
     validation: ModuleValidation,
-    explicit_root_names: []const []const u8,
+    executable_roots: []const ExecutableRootInput,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
     available_imports: []const AvailableImport,
@@ -1698,14 +1811,20 @@ pub fn parseCheckModule(
         builtin_ctx,
     );
     checker.fixupTypeWriter();
-    for (explicit_root_names) |root_name| {
-        const root_def_idx = czer.explicitRootDefByName(root_name) orelse {
+    for (executable_roots) |root| {
+        const root_def_idx = czer.explicitRootDefByName(root.name) orelse {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("eval helper invariant violated: explicit executable root `{s}` was not found", .{root_name});
+                std.debug.panic("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
             }
             unreachable;
         };
-        try checker.addExecutableRootDef(root_def_idx);
+        switch (root.evaluation) {
+            .runtime => try checker.addExecutableRootDef(root_def_idx),
+            .compile_time => {
+                const body = zeroArgRootBody(module_env, root_def_idx);
+                try checker.addCompileTimeExecutableRootDef(root_def_idx, body.lambda, body.body);
+            },
+        }
     }
     errdefer checker.deinit();
     var check_timer = try StageTimer.start();
@@ -1860,6 +1979,153 @@ fn evalRootName(source_kind: SourceKind, inspect_wrap: bool) []const u8 {
         .expr => "main",
         .module => if (inspect_wrap) "codex_test_inspect_main" else "main",
     };
+}
+
+const ZeroArgRootBody = struct {
+    lambda: CIR.Expr.Idx,
+    body: CIR.Expr.Idx,
+};
+
+fn zeroArgRootInvariant(message: []const u8) noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic("eval helper invariant violated: {s}", .{message});
+    }
+    unreachable;
+}
+
+fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRootBody {
+    const def = module_env.store.getDef(def_idx);
+    const lambda_idx = switch (module_env.store.getExpr(def.expr)) {
+        .e_closure => |closure| closure.lambda_idx,
+        .e_lambda => def.expr,
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_match,
+        .e_if,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_block,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => zeroArgRootInvariant("compile-time REPL root was not a lambda"),
+    };
+    const lambda = switch (module_env.store.getExpr(lambda_idx)) {
+        .e_lambda => |lambda| lambda,
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_match,
+        .e_if,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_block,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => zeroArgRootInvariant("compile-time REPL closure did not contain a lambda"),
+    };
+    if (lambda.args.span.len != 0) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("eval helper invariant violated: compile-time REPL root had parameters", .{});
+        }
+        unreachable;
+    }
+    return .{ .lambda = lambda_idx, .body = lambda.body };
 }
 
 fn publishImportArtifacts(
@@ -2511,6 +2777,7 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
             static_strings.entries,
             tables.erased_arg_desc_offsets,
             tables.erased_arg_desc_params,
+            tables.worker_procs,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -2968,6 +3235,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
             module.store,
             module.tables.erased_arg_desc_offsets,
             module.tables.erased_arg_desc_params,
+            module.tables.worker_procs,
         );
         codegen.layout_store = module.layouts;
         defer codegen.deinit();

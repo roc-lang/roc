@@ -459,6 +459,12 @@ pub const Store = struct {
         std.debug.assert(!self.savepoint_active);
     }
 
+    /// Whether a speculative solver transaction is open, so writes made now
+    /// may still be rolled back.
+    pub fn savepointActive(self: *const Self) bool {
+        return self.savepoint_active;
+    }
+
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
         // Replay journaled in-place writes in reverse so each pre-existing entry
@@ -1049,7 +1055,22 @@ pub const Store = struct {
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
         const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
         defer trace.end();
+        // A source slice that lives inside this same list (a `sliceVars`
+        // result) would dangle if the append reallocated the list, so callers
+        // must copy such a slice out first. Debug builds check that here.
+        if (builtin.mode == .Debug and self.sliceAliasesVars(s)) {
+            std.debug.panic("appendVars: source slice aliases the var list it is appended to", .{});
+        }
         return try self.vars.appendSlice(self.gpa, s);
+    }
+
+    fn sliceAliasesVars(self: *const Self, s: []const Var) bool {
+        if (s.len == 0) return false;
+        const items = self.vars.items.items;
+        const items_start = @intFromPtr(items.ptr);
+        const items_end = items_start + items.len * @sizeOf(Var);
+        const source_start = @intFromPtr(s.ptr);
+        return source_start >= items_start and source_start < items_end;
     }
 
     /// Append a record field to the backing list, returning the idx
@@ -2483,7 +2504,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     const flex = try original.fresh();
     const str_var = try original.freshFromContent(Content{ .structure = .empty_record });
     const list_elem = try original.fresh();
-    const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 999 };
+    const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 999 };
     const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
     const list_content = try original.mkNominal(
         .{ .ident_idx = list_ident_idx },
@@ -2506,16 +2527,16 @@ test "Store comprehensive CompactWriter roundtrip" {
     const field2_var = try original.fresh();
     const field2_presence = try original.fresh();
     const record_fields = try original.appendRecordFields(&[_]RecordField{
-        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 }, .presence = .required(field1_var) },
-        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 }, .presence = .unknown(field2_presence, field2_var) },
+        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 100 }, .presence = .required(field1_var) },
+        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 200 }, .presence = .unknown(field2_presence, field2_var) },
     });
     const record_ext = try original.fresh();
     const record_content = Content{ .structure = .{ .record = .{ .fields = record_fields, .ext = record_ext } } };
     const record_var = try original.freshFromContent(record_content);
 
     // Create a tag union
-    const tag1 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 300 }, &[_]Var{flex});
-    const tag2 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 400 }, &[_]Var{ arg1, arg2 });
+    const tag1 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 300 }, &[_]Var{flex});
+    const tag2 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 400 }, &[_]Var{ arg1, arg2 });
     const tag_union_ext = try original.fresh();
     const tag_union_content = try original.mkTagUnion(&[_]Tag{ tag1, tag2 }, tag_union_ext);
     const tag_union_var = try original.freshFromContent(tag_union_content);
@@ -2746,11 +2767,11 @@ test "Store.Serialized roundtrip" {
     const field_presence = try store.fresh();
     const record_fields = try store.appendRecordFields(&.{
         .{
-            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 },
+            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 100 },
             .presence = .required(flex),
         },
         .{
-            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 },
+            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 200 },
             .presence = .unknown(field_presence, str_var),
         },
     });

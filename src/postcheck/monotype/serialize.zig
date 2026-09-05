@@ -28,6 +28,11 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 16: generated-codec specialization identities name their complete
+/// derivation boundary and instantiated constructor rather than one grounding
+/// call edge.
+/// Version 15: specialization identities include the exact generated-codec
+/// contract whose prepared calls a procedure body consumes.
 /// Version 14: nested function references and callable identities carry the
 /// default-root qualifier (declaring module content identity) for stored
 /// functions inside defaulted-field expressions.
@@ -41,7 +46,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 14;
+pub const FORMAT_VERSION: u32 = 16;
 
 const SECTION_COUNT = 43;
 
@@ -629,6 +634,9 @@ pub const MappedProgramView = struct {
 
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return false;
+            if (spec.identity.codec_contract) |contract| {
+                if (!self.typeRefInBounds(contract.constructor_ty)) return false;
+            }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return false;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return false;
             if (!self.fnRefInBounds(spec.fn_id)) return false;
@@ -694,6 +702,7 @@ pub const MappedProgramView = struct {
             => true,
             .static_data_candidate => |candidate| self.staticDataRefInBounds(candidate.static_data) and
                 self.exprRefInBounds(candidate.runtime_expr),
+            .typed_boundary => |boundary| self.exprRefInBounds(boundary.value),
             .list, .tuple => |span| self.exprIdSpanInBounds(span),
             .record => |span| self.fieldExprSpanInBounds(span),
             .record_update => |update| self.exprRefInBounds(update.base) and self.fieldExprSpanInBounds(update.fields),
@@ -726,10 +735,12 @@ pub const MappedProgramView = struct {
                 self.exprRefInBounds(payload.uninitialized),
             .try_sequence => |try_| self.exprRefInBounds(try_.try_expr) and
                 self.localRefInBounds(try_.ok_local) and
+                (try_.err_target == null or @intFromEnum(try_.err_target.?) < self.exprs.len) and
                 self.exprRefInBounds(try_.ok_body),
             .try_record_sequence => |try_| self.exprRefInBounds(try_.try_expr) and
                 self.localRefInBounds(try_.value_local) and
                 self.localRefInBounds(try_.rest_local) and
+                (try_.err_target == null or @intFromEnum(try_.err_target.?) < self.exprs.len) and
                 self.exprRefInBounds(try_.ok_body),
             .block => |block| self.stmtIdSpanInBounds(block.statements) and self.exprRefInBounds(block.final_expr),
             .loop_ => |loop| self.typedLocalSpanInBounds(loop.params) and
@@ -737,11 +748,16 @@ pub const MappedProgramView = struct {
                 self.exprRefInBounds(loop.body),
             .break_ => |maybe_expr| if (maybe_expr) |expr| self.exprRefInBounds(expr) else true,
             .continue_ => |continue_| self.exprIdSpanInBounds(continue_.values),
-            // These shared-union variants are post-lift-only and are never
-            // valid in a serialized Monotype specialization.
-            .join_point,
-            .jump,
-            => false,
+            .join_point => |join_point| @intFromEnum(join_point.id) < self.exprs.len and
+                self.typedLocalSpanInBounds(join_point.params) and
+                self.typedLocalSpanInBounds(join_point.retained) and
+                self.exprRefInBounds(join_point.body) and
+                self.exprRefInBounds(join_point.remainder),
+            .jump => |jump| @intFromEnum(jump.target) < self.exprs.len and
+                self.exprIdSpanInBounds(jump.args) and
+                self.typedLocalSpanInBounds(jump.loop_params) and
+                self.exprIdSpanInBounds(jump.loop_values) and
+                jump.loop_params.len == jump.loop_values.len,
             .dbg,
             .expect,
             => |expr| self.exprRefInBounds(expr),
@@ -1610,6 +1626,16 @@ fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) v
     writeHashBytes32(hasher, spec.identity.method_scope.bytes);
     writeHashBytes32(hasher, spec.identity.source_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.identity.evidence_digest.bytes);
+    writeHashBytes32(hasher, spec.identity.codec_contract_digest.bytes);
+    if (spec.identity.codec_contract) |contract| {
+        writeHashBool(hasher, true);
+        writeHashBytes32(hasher, contract.module.bytes);
+        writeHashU32(hasher, @intFromEnum(contract.derivation));
+        writeHashU32(hasher, @intFromEnum(contract.kind));
+        writeHashBytes32(hasher, contract.constructor_ty_digest.bytes);
+    } else {
+        writeHashBool(hasher, false);
+    }
     writeHashBytes32(hasher, spec.identity.request_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.request_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.solved_fn_ty_digest.bytes);
@@ -2305,7 +2331,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
     const call_args = try program.addExprSpan(&.{local_expr});
     const typed_args = try program.addTypedLocalSpan(&.{.{ .local = local, .ty = unit_ty }});
 
-    const fn_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .equality }};
+    const fn_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .{ .derivation = .equality } }};
     const fn_evidence_frame_nodes = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
     };
@@ -2357,6 +2383,8 @@ test "monotype specialization cache maps fresh single-shard program view equival
             .method_scope = testModuleDigest(5),
             .source_fn_ty_digest = .{},
             .evidence_digest = fn_template.evidence_digest,
+            .codec_contract_digest = .{},
+            .codec_contract = null,
             .request_fn_ty_digest = .{},
             .request_fn_ty = fn_ty,
         },
@@ -2709,7 +2737,7 @@ test "monotype specialization cache rejects corrupt function evidence topology b
     out_of_bounds_frames.const_evidence_frame_head = 0;
     try expectFnEvidenceMappingCorruption(out_of_bounds_frames, &.{}, &.{});
 
-    const one_evidence = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .equality }};
+    const one_evidence = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .{ .derivation = .equality } }};
     const root_frame = check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1);
     var missing_head = empty_template;
     missing_head.const_evidence = .{ .start = 0, .len = 1 };
@@ -2722,8 +2750,8 @@ test "monotype specialization cache rejects corrupt function evidence topology b
     try expectFnEvidenceMappingCorruption(bad_root, &one_evidence, &.{generalized_root});
 
     const two_evidence = [_]check.ConstStore.ConstFnEvidence{
-        .{ .structural = .equality },
-        .{ .structural = .hash },
+        .{ .structural = .{ .derivation = .equality } },
+        .{ .structural = .{ .derivation = .hash } },
     };
     var two_frame_template = empty_template;
     two_frame_template.const_evidence = .{ .start = 0, .len = 2 };
@@ -2854,6 +2882,8 @@ test "monotype specialization cache validity includes stored specialization iden
             .method_scope = testModuleDigest(8),
             .source_fn_ty_digest = first_source_digest,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .codec_contract_digest = .{},
+            .codec_contract = null,
             .request_fn_ty_digest = mono_digest,
             .request_fn_ty = spec_ty,
         },
@@ -2868,6 +2898,17 @@ test "monotype specialization cache validity includes stored specialization iden
     second_spec.identity.source_fn_ty_digest = second_source_digest;
     var third_spec = first_spec;
     third_spec.identity.method_scope = testModuleDigest(9);
+    var fourth_spec = first_spec;
+    fourth_spec.identity.codec_contract_digest = first_source_digest;
+    fourth_spec.identity.codec_contract = .{
+        .module = testModuleDigest(10),
+        .derivation = @enumFromInt(11),
+        .kind = .encoder,
+        .constructor_ty_digest = mono_digest,
+        .constructor_ty = spec_ty,
+    };
+    var fifth_spec = fourth_spec;
+    fifth_spec.identity.codec_contract.?.derivation = @enumFromInt(13);
 
     const no_specs = computeValidityId(.{ .root_module = testModuleId(1) });
     const first = computeValidityId(.{
@@ -2882,10 +2923,20 @@ test "monotype specialization cache validity includes stored specialization iden
         .root_module = testModuleId(1),
         .specs = &.{third_spec},
     });
+    const fourth = computeValidityId(.{
+        .root_module = testModuleId(1),
+        .specs = &.{fourth_spec},
+    });
+    const fifth = computeValidityId(.{
+        .root_module = testModuleId(1),
+        .specs = &.{fifth_spec},
+    });
 
     try std.testing.expect(!std.mem.eql(u8, no_specs[0..], first[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], second[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], third[0..]));
+    try std.testing.expect(!std.mem.eql(u8, first[0..], fourth[0..]));
+    try std.testing.expect(!std.mem.eql(u8, fourth[0..], fifth[0..]));
 }
 
 fn expectEquivalentProgramViews(

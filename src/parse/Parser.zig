@@ -144,14 +144,6 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
-/// Check if the token at the given position is a var identifier (starts with '$')
-fn isVarIdent(self: *Parser, token: Token.Idx) bool {
-    if (self.tok_buf.resolveIdentifier(token)) |ident| {
-        return ident.attributes.reassignable;
-    }
-    return false;
-}
-
 /// Check if the current position looks like a type declaration with a valid type following.
 /// This peeks ahead without consuming tokens to determine if we have:
 /// - `Name :` followed by a valid type start token
@@ -611,6 +603,12 @@ fn recordValueDecl(
     }
 
     const decl_idx = try self.decl_index.addDecl(record);
+    // Only a module-scope declaration is referenced ahead of itself: a block
+    // resolves names in order, and an associated block rejects destructuring
+    // declarations.
+    if (name_tok == null and self.decl_index.scopes.items[@intFromEnum(scope_idx)].kind == .module) {
+        try self.recordDestructuredValueNames(scope_idx, decl_idx, pattern_idx);
+    }
     if (self.currentPendingAnno()) |pending| {
         if (pending.*) |anno_idx| {
             const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
@@ -620,6 +618,78 @@ fn recordValueDecl(
         }
         pending.* = null;
     }
+}
+
+/// Register every name a destructuring declaration pattern binds as a value
+/// the declaration declares, so that each resolves like a plainly named
+/// declaration when referenced ahead of it.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn recordDestructuredValueNames(
+    self: *Parser,
+    scope_idx: DeclIndex.ScopeIdx,
+    decl_idx: DeclIndex.DeclIdx,
+    root: AST.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    var pending: std.ArrayList(AST.Pattern.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |pattern_idx| {
+        switch (self.store.getPattern(pattern_idx)) {
+            .ident => |p| try self.addDeclValueName(scope_idx, decl_idx, p.ident_tok),
+            .as => |p| {
+                try self.addDeclValueName(scope_idx, decl_idx, p.name);
+                try pending.append(self.gpa, p.pattern);
+            },
+            .record => |p| {
+                for (self.store.patternRecordFieldSlice(p.fields)) |field_idx| {
+                    const field = self.store.getPatternRecordField(field_idx);
+                    if (field.value) |value| {
+                        try pending.append(self.gpa, value);
+                    } else if (field.name) |name| {
+                        try self.addDeclValueName(scope_idx, decl_idx, name);
+                    }
+                }
+            },
+            .list_rest => |p| {
+                if (p.name) |name| try self.addDeclValueName(scope_idx, decl_idx, name);
+            },
+            .tag => |p| {
+                for (self.store.patternSlice(p.args)) |arg| try pending.append(self.gpa, arg);
+            },
+            .list => |p| {
+                for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
+            },
+            .tuple => |p| {
+                for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
+            },
+            // A `var` binder is rejected outside a block, where names are not
+            // referenced ahead of their declaration. Alternatives are rejected
+            // in a declaration pattern, and a string pattern cannot start a
+            // declaration, so neither binds a name here.
+            .var_ident,
+            .alternatives,
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .string,
+            .single_quote,
+            .underscore,
+            .malformed,
+            => {},
+        }
+    }
+}
+
+fn addDeclValueName(
+    self: *Parser,
+    scope_idx: DeclIndex.ScopeIdx,
+    decl_idx: DeclIndex.DeclIdx,
+    name_tok: Token.Idx,
+) std.mem.Allocator.Error!void {
+    const ident = self.tok_buf.resolveIdentifier(name_tok) orelse return;
+    try self.decl_index.addValueName(scope_idx, ident, decl_idx);
 }
 
 fn addStatementWithTypeDependencies(
@@ -917,9 +987,6 @@ fn parseRecordFieldTokens(self: *Parser) std.mem.Allocator.Error!AST.RecordField
     self.expect(.LowerIdent) catch {
         return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
     };
-    if (self.isVarIdent(start)) {
-        try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = start, .end = start + 1 });
-    }
     const name = start;
     var value: AST.RecordField.Value = .punned;
     if (self.peek() == .OpColon) {
@@ -1481,9 +1548,6 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
             return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, start);
         }
         const name_tok = self.pos;
-        if (self.isVarIdent(name_tok)) {
-            try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = name_tok, .end = name_tok + 1 });
-        }
         self.advance();
         if (self.peek() != .OpColon) {
             self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
@@ -4675,9 +4739,6 @@ fn runExprStatementKernel(
                 continue :expr_kernel .record_finish;
             } else if (self.peek() == .LowerIdent) {
                 const field_start = self.pos;
-                if (self.isVarIdent(field_start)) {
-                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
-                }
                 self.advance();
                 const name = field_start;
                 if (self.peek() == .OpColon) {
@@ -5391,9 +5452,6 @@ fn runExprStatementKernel(
             else if (self.peek() == .LowerIdent or self.peek() == .Underscore or self.peek() == .NamedUnderscore) {
                 const field_start = self.pos;
                 const name_tag = self.peek();
-                if (name_tag == .LowerIdent and self.isVarIdent(field_start)) {
-                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
-                }
                 const name = self.pos;
                 self.advance();
                 var optional_mark: ?Token.Idx = null;
@@ -5868,10 +5926,6 @@ fn runExprStatementKernel(
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
                     } else if (next_tok == .OpColon) {
-                        if (tok == .LowerIdent and self.isVarIdent(start)) {
-                            last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
-                            continue :expr_kernel .statement_complete;
-                        }
                         self.advance();
                         self.advance();
                         try open_syntax.pushType(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
@@ -6456,13 +6510,13 @@ fn runExprStatementKernel(
                     self.advance();
                     if (self.peek() == .KwAs) {
                         self.advance();
-                        if (self.peek() != .LowerIdent) {
+                        if (self.peek() != .LowerIdent and self.peek() != .NamedUnderscore) {
                             last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                             continue :expr_kernel .pattern_complete;
                         }
                         name = self.pos;
                         self.advance();
-                    } else if (self.peek() == .LowerIdent) {
+                    } else if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                         last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
                         continue :expr_kernel .pattern_complete;
                     }
@@ -6764,11 +6818,11 @@ fn runExprStatementKernel(
                 var rest_name: ?Token.Idx = null;
                 if (self.peek() == .KwAs) {
                     self.advance();
-                    if (self.peek() == .LowerIdent) {
+                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                         rest_name = self.pos;
                         self.advance();
                     }
-                } else if (self.peek() == .LowerIdent) {
+                } else if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                     rest_name = self.pos;
                     self.advance();
                     try self.pushDiagnostic(.pattern_list_rest_old_syntax, .{ .start = rest_start, .end = self.pos });
@@ -6840,9 +6894,6 @@ fn runExprStatementKernel(
                 continue :expr_kernel .pattern_record_finish;
             } else if (self.peek() == .LowerIdent) {
                 const field_start = self.pos;
-                if (self.isVarIdent(field_start)) {
-                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
-                }
                 const name = self.pos;
                 self.advance();
                 if (self.peek() == .Comma or self.peek() == .CloseCurly) {

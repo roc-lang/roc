@@ -10,7 +10,6 @@ const base = @import("base");
 const can = @import("can");
 const compile = @import("compile");
 const eval = @import("eval");
-const lir = @import("lir");
 const parse = @import("parse");
 const reporting = @import("reporting");
 
@@ -24,6 +23,31 @@ const ModuleSource = eval.Inspected.ModuleSource;
 const max_import_file_bytes: usize = 16 * 1024 * 1024;
 
 const ReplSession = @This();
+
+const ComptimeEventCollector = struct {
+    allocator: Allocator,
+    events: std.ArrayListUnmanaged(eval.InspectedRun.Event) = .empty,
+
+    fn deinit(self: *ComptimeEventCollector) void {
+        for (self.events.items) |*event| event.deinit(self.allocator);
+        self.events.deinit(self.allocator);
+    }
+
+    fn notify(context: *anyopaque, event: eval.CompileTimeFinalization.EventView) void {
+        const self: *ComptimeEventCollector = @ptrCast(@alignCast(context));
+        const owned = switch (event) {
+            .dbg => |message| self.allocator.dupe(u8, message) catch {
+                std.debug.panic("REPL failed to copy a compile-time event", .{});
+            },
+        };
+        self.events.append(self.allocator, switch (event) {
+            .dbg => .{ .dbg = owned },
+        }) catch {
+            self.allocator.free(owned);
+            std.debug.panic("REPL failed to record a compile-time event", .{});
+        };
+    }
+};
 
 const RenderError = Allocator.Error || error{WriteFailed};
 const ModuleRenderError = eval.Inspected.Error || RenderError;
@@ -1176,7 +1200,7 @@ fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedRe
 
 fn bindingPatternOfName(env: *ModuleEnv, pattern_idx: can.CIR.Pattern.Idx, name: []const u8) ?can.CIR.Pattern.Idx {
     switch (env.store.getPattern(pattern_idx)) {
-        .assign => |assign| {
+        inline .assign, .var_assign => |assign| {
             if (std.mem.eql(u8, env.getIdent(assign.ident), name)) return pattern_idx;
         },
         .as => |as_pattern| {
@@ -1609,9 +1633,9 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
-    // Keep the expression inside the explicit zero-argument root so `dbg`,
-    // failed `expect`, and crash callbacks occur during inspected execution,
-    // not while checking finalizes a top-level value.
+    // Checking preserves the REPL semantics of this zero-argument expression
+    // root, while checked publication selects its body for compile-time
+    // evaluation and archives the resulting Str directly in ConstStore.
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
     defer self.allocator.free(source);
 
@@ -1621,20 +1645,20 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     };
     defer self.freeModuleSources(import_sources);
 
-    const target_usize: base.target.TargetUsize = switch (self.backend_kind) {
-        .interpreter, .dev, .llvm => .native,
-        .wasm => .u32,
-    };
-    const compile_outcome = eval.Inspected.compileProgramForTargetWithBuiltinAndContextReporting(
+    var event_collector: ComptimeEventCollector = .{ .allocator = self.allocator };
+    defer event_collector.deinit();
+
+    var resources = eval.Inspected.publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
         self.allocator,
-        self.roc_ctx.std_io,
         .module,
         source,
         import_sources,
-        target_usize,
         self.prePublishedBuiltin(),
         self.roc_ctx,
-        self.specialization_strategy,
+        .{
+            .context = @ptrCast(&event_collector),
+            .notify = ComptimeEventCollector.notify,
+        },
     ) catch |err| switch (err) {
         error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
         error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
@@ -1738,19 +1762,8 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         error.WriteFailed,
         => return err,
     };
-    var compiled = switch (compile_outcome) {
-        .compiled => |compiled| compiled,
-        .diagnostics => |resources_value| {
-            var resources = resources_value;
-            defer resources.deinit(self.allocator);
-            return .{ .diagnostic = try eval.Inspected.renderParsedResourcesProblemsWithConfig(
-                self.allocator,
-                &resources,
-                report_config,
-            ) };
-        },
-    };
-    defer compiled.deinit(self.allocator);
+    defer resources.deinit(self.allocator);
+    self.last_events = try event_collector.events.toOwnedSlice(self.allocator);
 
     // Checked publication deliberately succeeds in the presence of user
     // errors so build/run/test can execute independent roots. A REPL
@@ -1758,49 +1771,16 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     // leave the session definitions intact instead of executing the explicit
     // runtime-error node and aborting the remaining batch input. Warnings
     // (e.g. an unused loop binder) never block evaluation.
-    if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &compiled.resources)) {
+    if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &resources)) {
         return .{ .diagnostic = try eval.Inspected.renderParsedResourcesProblemsWithConfig(
             self.allocator,
-            &compiled.resources,
+            &resources,
             report_config,
         ) };
     }
 
-    const lowered = &compiled.lowered;
-    const program: eval.InspectedRun.Program = .{
-        .store = &lowered.view.store,
-        .layouts = &lowered.view.layouts,
-        .boxy_tables = eval.boxy_runtime.BoxyTables.fromImageView(&lowered.view),
-        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
-        .boxy_sidecar_desc = lir.LirImage.BoxySidecar.fromHeader(lowered.image_header),
-        .main_proc = lowered.mainProc(),
-    };
-    const result = (switch (self.backend_kind) {
-        .interpreter => eval.InspectedRun.run(
-            self.allocator,
-            .interpreter,
-            program,
-            if (self.import_policy == .virtual_only) eval.InspectedRun.replEffectHost() else .reject,
-        ),
-        .dev => eval.InspectedRun.run(self.allocator, .dev, program, {}),
-        .wasm => eval.InspectedRun.run(self.allocator, .wasm, program, {}),
-        .llvm => eval.InspectedRun.run(self.allocator, .llvm, program, {}),
-    }) catch |err| switch (err) {
-        error.UnsupportedHostedFunction => return .{ .diagnostic = try self.allocator.dupe(
-            u8,
-            "This REPL only supports the hosted function Repl.emit!.",
-        ) },
-        error.InvalidHostedFunctionSignature => return .{ .diagnostic = try self.allocator.dupe(
-            u8,
-            "Repl.emit! has an invalid runtime signature.",
-        ) },
-        else => return err,
-    };
-    self.last_events = result.events;
-    return switch (result.outcome) {
-        .returned => |output| .{ .output = output },
-        .crashed => |message| .{ .runtime_crash = message },
-    };
+    const output = try eval.Inspected.finalizedComptimeReplStr(&resources);
+    return .{ .output = try self.allocator.dupe(u8, output) };
 }
 
 fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
@@ -2620,7 +2600,10 @@ fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) ReplTestEr
     defer repl.deinit();
 
     for (steps) |step_pair| {
-        const result = try repl.step(step_pair[0]);
+        const result = repl.step(step_pair[0]) catch |err| {
+            std.debug.print("{s} ERROR for {s}: {s}\n", .{ backendName(backend), step_pair[0], @errorName(err) });
+            return err;
+        };
         defer testing.allocator.free(result);
         testing.expectEqualStrings(step_pair[1], result) catch |err| {
             std.debug.print("{s} FAILED for: {s}\n", .{ backendName(backend), step_pair[0] });
@@ -2698,11 +2681,11 @@ test "Repl - language stepping returns structured definition metadata" {
     }
 }
 
-test "Repl - virtual session records ordered one-way effects" {
+test "Repl - compile-time evaluation rejects one-way effects" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
     repl.import_policy = .virtual_only;
-    const config = reporting.ReportingConfig.initColorTerminal();
+    const config = reporting.ReportingConfig.initForTesting();
 
     const imported = try repl.stepLanguageWithConfig("import Repl", config);
     defer imported.deinit(testing.allocator);
@@ -2735,12 +2718,38 @@ test "Repl - virtual session records ordered one-way effects" {
     );
     defer emitted.deinit(testing.allocator);
     switch (emitted) {
-        .expression => {},
         .diagnostic => |diagnostic| {
-            std.debug.print("Repl emit failed:\n{s}\n", .{diagnostic.message});
-            return error.TestUnexpectedResult;
+            try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind);
+            try testing.expect(std.mem.find(u8, diagnostic.message, "Effectful Compile Time Expression") != null);
+            try testing.expect(std.mem.find(u8, diagnostic.message, "REPL expressions are evaluated at compile time") != null);
         },
-        .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+
+    const events = repl.takeEvents();
+    defer {
+        for (events) |*event| event.deinit(testing.allocator);
+        testing.allocator.free(events);
+    }
+    try testing.expectEqual(@as(usize, 0), events.len);
+}
+
+test "Repl - compile-time evaluation records dbg events" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.stepLanguageWithConfig(
+        \\{
+        \\    dbg "hello"
+        \\    42
+        \\}
+    ,
+        reporting.ReportingConfig.initForTesting(),
+    );
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .expression => |output| try testing.expectEqualStrings("42.0", output),
+        .definition, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const events = repl.takeEvents();
@@ -2750,11 +2759,8 @@ test "Repl - virtual session records ordered one-way effects" {
     }
     try testing.expectEqual(@as(usize, 1), events.len);
     switch (events[0]) {
-        .effect => |effect| {
-            try testing.expectEqualStrings("log", effect.name);
-            try testing.expectEqualStrings("a long runtime-allocated effect payload", effect.payload);
-        },
-        .dbg, .expect_failed, .crashed => return error.TestUnexpectedResult,
+        .dbg => |message| try testing.expectEqualStrings("\"hello\"", message),
+        .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
     }
 }
 
@@ -3276,20 +3282,29 @@ test "Repl - invalid syntax preserves definitions" {
     try testing.expectEqualStrings("42.0", result);
 }
 
-// Repro for https://github.com/roc-lang/roc/issues/10491: a runtime crash is
-// reported without terminating the REPL session.
-test "Repl - issue 10491 integer overflow reports crash and continues" {
-    const steps = &[_][2][]const u8{
-        .{
-            "U64.highest + U64.highest",
-            "This Roc code crashed with: \"Integer addition overflowed\"",
-        },
-        .{ "1 + 1", "2.0" },
-    };
+// Repro for https://github.com/roc-lang/roc/issues/10491: a compile-time crash
+// is reported without terminating the REPL session.
+test "Repl - issue 10491 integer overflow reports compile-time crash and continues" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    const config = reporting.ReportingConfig.initForTesting();
 
-    try expectStateful(.interpreter, steps);
-    try expectStateful(.dev, steps);
-    try expectStateful(.wasm, steps);
+    const overflow = try repl.stepWithConfig("U64.highest + U64.highest", config);
+    defer overflow.deinit(testing.allocator);
+    switch (overflow) {
+        .diagnostic => |message| {
+            try testing.expect(std.mem.find(u8, message, "crashed during compile-time evaluation") != null);
+            try testing.expect(std.mem.find(u8, message, "Integer addition overflowed") != null);
+        },
+        .output, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
+
+    const recovered = try repl.stepWithConfig("1 + 1", config);
+    defer recovered.deinit(testing.allocator);
+    switch (recovered) {
+        .output => |output| try testing.expectEqualStrings("2.0", output),
+        .diagnostic, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10063: the annotated
@@ -3317,6 +3332,42 @@ test "Repl - issue 10063 nested iterator where constraints" {
     };
 
     try expectStateful(.interpreter, steps);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10985: an open tag union
+// still requires a catch-all branch when matched inside a runtime function.
+test "Repl - issue 10985 non-exhaustive match on an open tag union is reported" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const inputs = [_][]const u8{
+        "f : [A, B, ..] -> Str",
+        \\f = |x| {
+        \\    match x {
+        \\        A => "A"
+        \\        B => "B"
+        \\    }
+        \\}
+        ,
+        "f(A)",
+    };
+    var reported = false;
+    for (inputs) |input| {
+        const result = try repl.stepWithConfig(input, reporting.ReportingConfig.initForTesting());
+        defer result.deinit(testing.allocator);
+        switch (result) {
+            .diagnostic => |message| {
+                if (std.mem.find(u8, message, "doesn't cover all possible cases") != null or
+                    std.mem.find(u8, message, "Non Exhaustive Match") != null)
+                {
+                    reported = true;
+                }
+            },
+            .output, .runtime_crash, .none, .exit => {},
+        }
+    }
+
+    try testing.expect(reported);
 }
 
 test "Repl - for loop over list" {

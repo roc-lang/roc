@@ -116,7 +116,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
     try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                try self.evidenceForUseSite(record.expr),");
-    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence)");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
     try expectContains(lower_source, "try self.restoreConstFnAtNode(view, fn_id, request_fn_node)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
@@ -862,8 +862,8 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     );
     try expectContains(cell_boundary, "self.lowerExprAtTypeCellWithDemand(checked_expr, cell, .runtime_value)");
     try expectContains(cell_boundary, "const region = self.sourceRegionForExpr(expr)");
-    try expectContains(cell_boundary, "self.builder.program.current_loc = try self.sourceLocFor(region)");
-    try expectContains(cell_boundary, "self.builder.program.current_region = region");
+    try expectContains(cell_boundary, "self.builder.current_loc = try self.sourceLocFor(region)");
+    try expectContains(cell_boundary, "self.builder.current_region = region");
     try expectContains(cell_boundary, "return switch (cell)");
     try expectContains(cell_boundary, ".sealed => |ty|");
     try expectContains(cell_boundary, "self.requireLoweredExprAtCell(expr, cell, demand, lowered)");

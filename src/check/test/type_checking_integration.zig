@@ -126,6 +126,30 @@ test "check type - binop operands same type works - I64 plus I64" {
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }
 
+test "issue 10755: large boolean-or expression checks" {
+    try checkLargeBooleanChain("value = False", " or False");
+}
+
+test "large boolean-and expression checks" {
+    try checkLargeBooleanChain("value = True", " and True");
+}
+
+fn checkLargeBooleanChain(first_term: []const u8, remaining_term: []const u8) TestEnv.TestEnvError!void {
+    const allocator = testing.allocator;
+    const term_count = 1200;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, first_term);
+    for (1..term_count) |_| {
+        try source.appendSlice(allocator, remaining_term);
+    }
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 // BOUNDARY DEFAULTING: a literal flowing through method-call dispatch
 // (`add_x(5)` with `add_x : a -> r where [a.plus : (a, x) -> r]`) lives on a
 // var unreachable from the enclosing def's signature. Instantiation copies only
@@ -4787,9 +4811,9 @@ test "check type - patterns record field mismatch" {
 test "check type - var reassignment" {
     const source =
         \\main = {
-        \\  var x = 1
-        \\  x = x + 1
-        \\  x
+        \\  var $x = 1
+        \\  $x = $x + 1
+        \\  $x
         \\}
     ;
     try checkTypesModule(
@@ -5258,11 +5282,11 @@ test "check type - type module - fn declarations " {
 test "check type - for" {
     const source =
         \\main = {
-        \\  var result = 0
+        \\  var $result = 0
         \\  for x in [1, 2, 3] {
-        \\    result = result + x
+        \\    $result = $result + x
         \\  }
-        \\  result
+        \\  $result
         \\}
     ;
     try checkTypesModule(

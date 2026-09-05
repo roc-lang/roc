@@ -248,6 +248,8 @@ store: *const LirStore,
 layout_store: *const LayoutStore,
 erased_arg_desc_offsets: []const LIR.ErasedArgDescOffset,
 erased_arg_desc_params: []const LIR.ErasedArgDescParam,
+/// Exact dense LIR proc ids reachable through Boxy method slots.
+boxy_worker_procs: []const LIR.LirProcSpecId,
 module: WasmModule,
 pending_bodies: std.AutoHashMap(LocalFunctionIndex, CodeBuilder),
 active_fn_stack: std.ArrayList(LocalFunctionIndex),
@@ -549,6 +551,7 @@ pub fn init(
     layout_store: *const LayoutStore,
     erased_arg_desc_offsets: []const LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const LIR.ErasedArgDescParam,
+    boxy_worker_procs: []const LIR.LirProcSpecId,
     cpu_level: CpuLevel,
 ) Self {
     return .{
@@ -558,6 +561,7 @@ pub fn init(
         .layout_store = layout_store,
         .erased_arg_desc_offsets = erased_arg_desc_offsets,
         .erased_arg_desc_params = erased_arg_desc_params,
+        .boxy_worker_procs = boxy_worker_procs,
         .module = WasmModule.init(allocator),
         .pending_bodies = std.AutoHashMap(LocalFunctionIndex, CodeBuilder).init(allocator),
         .active_fn_stack = .empty,
@@ -597,10 +601,11 @@ pub fn initWithModule(
     layout_store: *const LayoutStore,
     erased_arg_desc_offsets: []const LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const LIR.ErasedArgDescParam,
+    boxy_worker_procs: []const LIR.LirProcSpecId,
     module: *WasmModule,
     cpu_level: CpuLevel,
 ) Self {
-    var self = Self.init(allocator, store, layout_store, erased_arg_desc_offsets, erased_arg_desc_params, cpu_level);
+    var self = Self.init(allocator, store, layout_store, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, cpu_level);
     self.module.deinit();
     self.module = module.*;
     module.* = WasmModule.init(allocator);
@@ -8648,11 +8653,12 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
         if (proc.is_static_initializer) continue;
         try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
-    if (self.boxy_symbol_targets.count() != 0) {
-        for (proc_specs, 0..) |proc, i| {
-            if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) continue;
-            try self.generateBoxyDictProcThunk(@enumFromInt(@as(u32, @intCast(i))), proc);
+    for (self.boxy_worker_procs) |proc_id| {
+        const proc = self.store.getProcSpec(proc_id);
+        if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
+            wasmInvariantFmt("Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
         }
+        try self.generateBoxyDictProcThunk(proc_id, proc);
     }
 }
 
@@ -9317,11 +9323,14 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
     }
     try self.emitBoxyCall("roc_boxy_init_embedded");
 
-    const proc_specs = self.store.getProcSpecs();
-    for (proc_specs, 0..) |proc, i| {
-        const proc_id: u32 = @intCast(i);
-        const table_idx = self.boxy_dict_thunk_table_indices.get(proc_id) orelse continue;
-        try self.emitI32Const(@intCast(proc_id));
+    for (self.boxy_worker_procs) |proc_id| {
+        const proc = self.store.getProcSpec(proc_id);
+        const proc_index = @intFromEnum(proc_id);
+        const table_idx = self.boxy_dict_thunk_table_indices.get(proc_index) orelse wasmInvariantFmt(
+            "Boxy worker proc {d} had no generated dispatch thunk",
+            .{proc_index},
+        );
+        try self.emitI32Const(@intCast(proc_index));
         try self.emitFunctionTableIndexConst(table_idx);
         try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc.ret_layout))));
         try self.emitI64Const(@bitCast(proc.rc_borrowed_params));
@@ -14740,7 +14749,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (box_layout.tag == .box_of_zst or
                 (erased_box_ptr and try self.layoutByteSize(ll.ret_layout) == 0))
             {
-                _ = try self.emitProcLocal(box_expr);
+                // The input is an already-evaluated LIR local. A zero-sized
+                // payload needs no load; pushing its pointer here would leave
+                // an extra operand beneath the result. ARC owns its release.
                 const result_vt = try self.resolveValType(ll.ret_layout);
                 switch (result_vt) {
                     .i32 => {
@@ -14767,7 +14778,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 else
                     ls.builtinBoxAbi(box_layout_idx).elem_size;
                 if (elem_size == 0) {
-                    _ = try self.emitProcLocal(box_expr);
+                    // Only the result belongs on the operand stack for an
+                    // empty payload; the box local needs no dereference.
                     const result_vt = try self.resolveValType(ll.ret_layout);
                     switch (result_vt) {
                         .i32 => {
@@ -22147,7 +22159,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
         .ret_layout = .u64,
     });
 
-    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, .default);
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     try std.testing.expectEqual(@as(usize, 1), codegen.precomputed_overflow_results.count());
@@ -22158,7 +22170,7 @@ test "final static data address tracking keeps referenced data through DCE" {
     const fake_store: *const LirStore = undefined;
     const fake_layouts: *const LayoutStore = undefined;
 
-    var codegen = Self.init(allocator, fake_store, fake_layouts, &.{}, &.{}, .default);
+    var codegen = Self.init(allocator, fake_store, fake_layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
     codegen.configureStaticDataAddressTracking();
 

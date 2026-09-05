@@ -297,9 +297,12 @@ const DemandAnalyzer = struct {
             try analyzer.graph_def_set.put(allocator, def_idx, {});
         }
 
+        var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binders.deinit(allocator);
+        var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binder_scratch.deinit(allocator);
         for (summary_defs) |def_idx| {
-            const def = cir.store.getDef(def_idx);
-            try analyzer.pattern_to_def.put(allocator, def.pattern, def_idx);
+            try mapDefBinderPatterns(cir, &analyzer.pattern_to_def, def_idx, &binders, &binder_scratch, allocator);
         }
 
         for (resolved_literal_targets) |target| {
@@ -950,6 +953,7 @@ const DemandAnalyzer = struct {
                 }
             },
             .assign,
+            .var_assign,
             .num_literal,
             .num_from_numeral_literal,
             .small_dec_literal,
@@ -1050,61 +1054,137 @@ const DemandAnalyzer = struct {
         pending.append(stack_allocator, root) catch return false;
         while (pending.pop()) |current| {
             if (current == needle) return true;
-            switch (self.cir.store.getPattern(current)) {
-                .as => |as_pattern| pending.append(stack_allocator, as_pattern.pattern) catch return false,
-                .applied_tag => |tag| {
-                    for (self.cir.store.slicePatterns(tag.args)) |arg| {
-                        pending.append(stack_allocator, arg) catch return false;
-                    }
-                },
-                .nominal => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
-                .nominal_external => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
-                .record_destructure => |record| {
-                    for (self.cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                        const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                        pending.append(stack_allocator, destruct.kind.toPatternIdx()) catch return false;
-                    }
-                },
-                .list => |list| {
-                    for (self.cir.store.slicePatterns(list.patterns)) |item| {
-                        pending.append(stack_allocator, item) catch return false;
-                    }
-                    if (list.rest_info) |rest| {
-                        if (rest.pattern) |rest_pattern| {
-                            pending.append(stack_allocator, rest_pattern) catch return false;
-                        }
-                    }
-                },
-                .tuple => |tuple| {
-                    for (self.cir.store.slicePatterns(tuple.patterns)) |item| {
-                        pending.append(stack_allocator, item) catch return false;
-                    }
-                },
-                .str_interpolation => |str| {
-                    for (0..str.steps.span.len) |offset| {
-                        const step = self.cir.store.getStrPatternStep(str.steps, @intCast(offset));
-                        if (step.capture) |capture| {
-                            pending.append(stack_allocator, capture) catch return false;
-                        }
-                    }
-                },
-                .assign,
-                .num_literal,
-                .num_from_numeral_literal,
-                .small_dec_literal,
-                .dec_literal,
-                .frac_f32_literal,
-                .frac_f64_literal,
-                .str_literal,
-                .underscore,
-                .runtime_error,
-                => {},
-            }
+            appendChildPatterns(self.cir, current, &pending, stack_allocator) catch return false;
         }
 
         return false;
     }
 };
+
+/// Append the patterns nested directly inside `pattern_idx`.
+fn appendChildPatterns(
+    cir: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    out: *std.ArrayList(CIR.Pattern.Idx),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    switch (cir.store.getPattern(pattern_idx)) {
+        .as => |as_pattern| try out.append(allocator, as_pattern.pattern),
+        .applied_tag => |tag| {
+            for (cir.store.slicePatterns(tag.args)) |arg| {
+                try out.append(allocator, arg);
+            }
+        },
+        .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
+        .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
+        .record_destructure => |record| {
+            for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                const destruct = cir.store.getRecordDestruct(destruct_idx);
+                try out.append(allocator, destruct.kind.toPatternIdx());
+            }
+        },
+        .list => |list| {
+            for (cir.store.slicePatterns(list.patterns)) |item| {
+                try out.append(allocator, item);
+            }
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    try out.append(allocator, rest_pattern);
+                }
+            }
+        },
+        .tuple => |tuple| {
+            for (cir.store.slicePatterns(tuple.patterns)) |item| {
+                try out.append(allocator, item);
+            }
+        },
+        .str_interpolation => |str| {
+            for (0..str.steps.span.len) |offset| {
+                const step = cir.store.getStrPatternStep(str.steps, @intCast(offset));
+                if (step.capture) |capture| {
+                    try out.append(allocator, capture);
+                }
+            }
+        },
+        .assign,
+        .var_assign,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+    }
+}
+
+/// Append every binder pattern (`assign` or `as`) inside `root`, `root`
+/// itself included, in a deterministic order.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+pub fn appendPatternBinders(
+    cir: *const ModuleEnv,
+    root: CIR.Pattern.Idx,
+    out: *std.ArrayList(CIR.Pattern.Idx),
+    scratch: *std.ArrayList(CIR.Pattern.Idx),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    scratch.clearRetainingCapacity();
+    try scratch.append(allocator, root);
+    while (scratch.pop()) |pattern_idx| {
+        if (patternBindsName(cir.store.getPattern(pattern_idx))) {
+            try out.append(allocator, pattern_idx);
+        }
+        try appendChildPatterns(cir, pattern_idx, scratch, allocator);
+    }
+}
+
+/// Whether a pattern node itself binds a name (nested binders aside).
+fn patternBindsName(pattern: CIR.Pattern) bool {
+    return switch (pattern) {
+        .assign, .var_assign, .as => true,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .str_interpolation,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => false,
+    };
+}
+
+/// Map every name a def's pattern binds to that def. A def whose pattern
+/// destructures its right-hand side binds several names, and a reference to
+/// any of them is a reference to the def that computes the whole value, so
+/// each one must resolve to the def for the name-reference graph to see the
+/// dependency (and any cycle) it creates.
+fn mapDefBinderPatterns(
+    cir: *const ModuleEnv,
+    pattern_to_def: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx),
+    def_idx: CIR.Def.Idx,
+    binders: *std.ArrayList(CIR.Pattern.Idx),
+    scratch: *std.ArrayList(CIR.Pattern.Idx),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    binders.clearRetainingCapacity();
+    try appendPatternBinders(cir, cir.store.getDef(def_idx).pattern, binders, scratch, allocator);
+    for (binders.items) |binder| {
+        try pattern_to_def.put(allocator, binder, def_idx);
+    }
+}
 
 /// Build a dependency graph for all definitions
 pub fn buildDependencyGraph(
@@ -1516,9 +1596,12 @@ pub fn computeCheckOrder(
     // Source position of each def, for the deterministic tie-break.
     var def_position: std.AutoHashMapUnmanaged(CIR.Def.Idx, u32) = .{};
     defer def_position.deinit(allocator);
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(allocator);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(allocator);
     for (defs_slice, 0..) |def_idx, position| {
-        const def = cir.store.getDef(def_idx);
-        try pattern_to_def.put(allocator, def.pattern, def_idx);
+        try mapDefBinderPatterns(cir, &pattern_to_def, def_idx, &binders, &binder_scratch, allocator);
         try def_position.put(allocator, def_idx, @intCast(position));
     }
 

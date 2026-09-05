@@ -41,12 +41,20 @@ const PatternRefutability = can.PatternRefutability;
 
 const DispatchInstantiationPhase = enum {
     template_relation_replay,
+    type_query,
     expression_lowering,
 };
 
-const DraftRequestEvidenceMode = enum {
-    resolved,
-    synthesized,
+/// How a specialization request refers to its procedure. Checking records a
+/// `recursive_reference` when a lookup shares the type variables of a
+/// definition still in flight; only such a request may join an in-progress
+/// ancestor specialization before its fresh cells are related. Every other
+/// request instantiates a scheme (a scheme use, a dispatch target, a generated
+/// codec's component call, or a compiler-generated component edge) and
+/// identifies with an existing specialization only through an exact interface.
+const DraftRequestEdge = enum {
+    instantiation,
+    recursive_reference,
 };
 
 /// Coordinator-facing view of one frozen graph's finalized type/name domain.
@@ -265,11 +273,42 @@ pub const Options = struct {
     /// ConstStore shape may require runtime storage.
     static_data_literals: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    /// Optional executor for isolated procedure roots and ordinary
+    /// specialization batches.
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Optional phase timings for the work owned by Monotype lowering.
     timing: ?*Timing = null,
 };
 
-/// Timings for the sequential phases owned by Monotype lowering.
+/// Aggregate execution measurements for executor-backed Monotype work.
+///
+/// Worker work is the sum of task callback elapsed times, not process or thread
+/// CPU time, so it may exceed Monotype wall time when callbacks overlap.
+pub const ParallelMetricsSnapshot = struct {
+    /// Sum of executor callback intervals; overlapping work is counted once per
+    /// callback and can therefore exceed wall time.
+    worker_work_ns: u64 = 0,
+    /// Sum of validation, serial retry, discard, and ordered commit intervals
+    /// after executor barriers.
+    coordinator_post_batch_work_ns: u64 = 0,
+    root_tasks_submitted: u64 = 0,
+    root_tasks_committed: u64 = 0,
+    root_tasks_retried_serial: u64 = 0,
+    specialization_tasks_submitted: u64 = 0,
+    specialization_tasks_committed: u64 = 0,
+    specialization_tasks_retried_serial: u64 = 0,
+    specialization_tasks_discarded_ready: u64 = 0,
+    task_waves: u64 = 0,
+    /// Largest executor width represented by any aggregated lowering.
+    peak_worker_lanes_available: u64 = 0,
+    /// Largest number of lanes used by any one aggregated lowering.
+    peak_worker_lanes_used: u64 = 0,
+    /// Tasks after the first task on a lane within one lowering invocation.
+    within_lowering_lane_reuse_tasks: u64 = 0,
+};
+
+/// Timings for coordinator wall phases and aggregate executor work owned by
+/// Monotype lowering.
 pub const Timing = struct {
     std_io: std.Io,
     setup_ns: u64 = 0,
@@ -287,9 +326,11 @@ pub const Timing = struct {
     procedure_body_local_proc_context_ns: u64 = 0,
     procedure_body_finalization_ns: u64 = 0,
     procedure_completion_ns: u64 = 0,
+    procedure_parallel_wait_ns: u64 = 0,
     layout_requests_ns: u64 = 0,
     static_data_requests_ns: u64 = 0,
     finalization_ns: u64 = 0,
+    parallel: ParallelMetricsSnapshot = .{},
     body_work_timing_enabled: bool = false,
     active_procedure_phase: ?ProcedureTimingPhase = null,
     active_procedure_phase_started_ns: i64 = 0,
@@ -317,14 +358,16 @@ pub const Timing = struct {
             .procedure_body_local_proc_context_ns = self.procedure_body_local_proc_context_ns,
             .procedure_body_finalization_ns = self.procedure_body_finalization_ns,
             .procedure_completion_ns = self.procedure_completion_ns,
+            .procedure_parallel_wait_ns = self.procedure_parallel_wait_ns,
             .layout_requests_ns = self.layout_requests_ns,
             .static_data_requests_ns = self.static_data_requests_ns,
             .finalization_ns = self.finalization_ns,
+            .parallel = self.parallel,
         };
     }
 
     fn start(self: *const Timing) i64 {
-        return @intCast(@max(0, std.Io.Timestamp.now(self.std_io, .awake).nanoseconds));
+        return timingNowNs(self.std_io);
     }
 
     fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
@@ -364,6 +407,7 @@ pub const Timing = struct {
             .body_lowering => self.procedure_body_lowering_ns +%= elapsed_ns,
             .body_finalization => self.procedure_body_finalization_ns +%= elapsed_ns,
             .completion => self.procedure_completion_ns +%= elapsed_ns,
+            .parallel_wait => self.procedure_parallel_wait_ns +%= elapsed_ns,
         }
         self.active_procedure_phase = next;
         self.active_procedure_phase_started_ns = now;
@@ -387,6 +431,10 @@ pub const Timing = struct {
     }
 };
 
+fn timingNowNs(std_io: std.Io) i64 {
+    return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
+}
+
 /// Immutable Monotype phase timings consumed by checked-pipeline reporting.
 pub const TimingSnapshot = struct {
     setup_ns: u64 = 0,
@@ -404,9 +452,11 @@ pub const TimingSnapshot = struct {
     procedure_body_local_proc_context_ns: u64 = 0,
     procedure_body_finalization_ns: u64 = 0,
     procedure_completion_ns: u64 = 0,
+    procedure_parallel_wait_ns: u64 = 0,
     layout_requests_ns: u64 = 0,
     static_data_requests_ns: u64 = 0,
     finalization_ns: u64 = 0,
+    parallel: ParallelMetricsSnapshot = .{},
 };
 
 const TimingPhase = enum {
@@ -417,6 +467,27 @@ const TimingPhase = enum {
     finalization,
 };
 
+const TimingPhaseScope = struct {
+    timing: ?*Timing = null,
+    started_ns: i64 = 0,
+    phase: TimingPhase = undefined,
+
+    fn begin(timing: ?*Timing, phase: TimingPhase) TimingPhaseScope {
+        const active = timing orelse return .{};
+        return .{
+            .timing = active,
+            .started_ns = active.start(),
+            .phase = phase,
+        };
+    }
+
+    fn end(self: *TimingPhaseScope) void {
+        const timing = self.timing orelse return;
+        timing.finish(self.started_ns, self.phase);
+        self.timing = null;
+    }
+};
+
 const ProcedureTimingPhase = enum {
     root_wrapper,
     lookup_reservation,
@@ -425,6 +496,7 @@ const ProcedureTimingPhase = enum {
     body_lowering,
     body_finalization,
     completion,
+    parallel_wait,
 };
 
 const ProcedureTimingScope = struct {
@@ -441,6 +513,29 @@ const ProcedureTimingScope = struct {
     fn end(self: *ProcedureTimingScope) void {
         const timing = self.timing orelse return;
         timing.switchProcedurePhase(self.previous);
+        self.timing = null;
+    }
+};
+
+/// Aggregate elapsed coordinator work after an executor batch has completed,
+/// including validation, serial retry, discard, and ordered commit.
+///
+/// This overlaps the coordinator's procedure wall-time classification and is
+/// therefore reported as work rather than as another sequential phase.
+const ParallelCoordinatorTimingScope = struct {
+    timing: ?*Timing = null,
+    started_ns: i64 = 0,
+
+    fn begin(timing: ?*Timing) ParallelCoordinatorTimingScope {
+        const active = timing orelse return .{};
+        return .{ .timing = active, .started_ns = active.start() };
+    }
+
+    fn end(self: *ParallelCoordinatorTimingScope) void {
+        const timing = self.timing orelse return;
+        const finished_ns = timing.start();
+        const elapsed_ns: u64 = @intCast(@max(0, finished_ns - self.started_ns));
+        timing.parallel.coordinator_post_batch_work_ns +%= elapsed_ns;
         self.timing = null;
     }
 };
@@ -501,7 +596,6 @@ pub const BodyDiagnostics = struct {
     spec_jobs_skipped_ready: u64 = 0,
     spec_job_shards_lowered: u64 = 0,
     spec_job_shards_committed: u64 = 0,
-    cross_root_template_reuses: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
     deferred_template_bodies_lowered: u64 = 0,
@@ -558,76 +652,68 @@ pub fn run(
         Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
     }
 
-    const setup_started_ns = if (options.timing) |timing| timing.start() else 0;
+    var setup_timing_scope = TimingPhaseScope.begin(options.timing, .setup);
+    defer setup_timing_scope.end();
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
+    defer builder.recordParallelLaneMetrics();
     try builder.initHostedCatalog();
     try builder.loadCandidateSpecializationShards();
-    if (options.timing) |timing| timing.finish(setup_started_ns, .setup);
+    setup_timing_scope.end();
 
     // Wave 1: roots in listed order, then the specialization queue. Each
     // root remains a distinct job whose result lands in root order; symbolic
     // requests discovered while roots seal are reserved immediately and their
     // bodies drain afterward in deterministic dispatch order.
-    const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
-    if (options.timing) |timing| timing.startProcedureBreakdown();
-    switch (roots.procedure_template_root_grouping) {
-        .isolated => for (roots.requests) |request| try builder.lowerRoot(request),
-        .shared_adjacent => {
-            var root_index: usize = 0;
-            while (root_index < roots.requests.len) {
-                if (roots.requests[root_index].procedure_template == null) {
-                    try builder.lowerRoot(roots.requests[root_index]);
-                    root_index += 1;
-                    continue;
-                }
-
-                const batch_start = root_index;
-                while (root_index < roots.requests.len and roots.requests[root_index].procedure_template != null) {
-                    root_index += 1;
-                }
-                try builder.lowerTemplateRootBatch(roots.requests[batch_start..root_index]);
-            }
-        },
+    {
+        var procedure_timing_scope = TimingPhaseScope.begin(options.timing, .procedure_specialization);
+        defer procedure_timing_scope.end();
+        if (options.timing) |timing| timing.startProcedureBreakdown();
+        defer if (options.timing) |timing| timing.finishProcedureBreakdown();
+        try builder.lowerIsolatedRoots(roots.requests);
+        try builder.drainPendingSpecJobs();
     }
-    try builder.drainPendingSpecJobs();
-    if (options.timing) |timing| timing.finishProcedureBreakdown();
-    if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
 
     // Wave 2: layout requests lower types serially and discover no
     // specializations, so the queue must still be empty afterward.
-    const layouts_started_ns = if (options.timing) |timing| timing.start() else 0;
-    for (roots.layout_requests) |checked_ty| {
-        try builder.lowerLayoutRequest(checked_ty);
+    {
+        var layout_timing_scope = TimingPhaseScope.begin(options.timing, .layout_requests);
+        defer layout_timing_scope.end();
+        for (roots.layout_requests) |checked_ty| {
+            try builder.lowerLayoutRequest(checked_ty);
+        }
+        builder.requirePendingSpecJobsDrained();
     }
-    builder.requirePendingSpecJobsDrained();
-    if (options.timing) |timing| timing.finish(layouts_started_ns, .layout_requests);
 
     // Wave 3: static-data restoration in listed order, then a second
     // specialization queue drain for the template bodies it discovered.
-    const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
-    for (roots.static_data_requests) |request| {
-        try builder.lowerStaticDataRequest(request);
+    {
+        var static_data_timing_scope = TimingPhaseScope.begin(options.timing, .static_data_requests);
+        defer static_data_timing_scope.end();
+        for (roots.static_data_requests) |request| {
+            try builder.lowerStaticDataRequest(request);
+        }
+        try builder.drainPendingSpecJobs();
     }
-    try builder.drainPendingSpecJobs();
-    if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data_requests);
 
-    const finalization_started_ns = if (options.timing) |timing| timing.start() else 0;
-    program.next_symbol = builder.symbols.next;
-    try program.sealRemainingCaptureIdentities();
-    program.freeze();
+    {
+        var finalization_timing_scope = TimingPhaseScope.begin(options.timing, .finalization);
+        defer finalization_timing_scope.end();
+        program.next_symbol = builder.symbols.coordinator.next;
+        try program.sealRemainingCaptureIdentities();
+        program.freeze();
 
-    if (@import("builtin").mode == .Debug) {
-        verifyMonotypeTypeStore(&program);
-        verifyMonotypeCompletedTypeIds(&program);
-        verifyMonotypeCallTargets(&program);
-        builder.spec_store.validateLookupIntegrity();
-        verifyMonotypeSpecsReady(&program);
+        if (@import("builtin").mode == .Debug) {
+            verifyMonotypeTypeStore(&program);
+            verifyMonotypeCompletedTypeIds(&program);
+            verifyMonotypeCallTargets(&program);
+            builder.spec_store.validateLookupIntegrity();
+            verifyMonotypeSpecsReady(&program);
+        }
     }
-    if (options.timing) |timing| timing.finish(finalization_started_ns, .finalization);
 
     return program;
 }
@@ -718,12 +804,14 @@ const SpecEvidence = union(enum) {
 /// The checker's structural decision, retaining the exact checked evidence
 /// record when one exists. Generated codecs use that record's stable contract
 /// reference instead of reconstructing their internal method instantiations.
+const CheckedSpecStructuralEvidence = struct {
+    view: ModuleView,
+    evidence: static_dispatch.StructuralEvidence,
+};
+
 const SpecStructuralEvidence = struct {
     derivation: static_dispatch.StructuralDerivation,
-    checked: ?struct {
-        view: ModuleView,
-        evidence: static_dispatch.StructuralEvidence,
-    } = null,
+    checked: ?CheckedSpecStructuralEvidence = null,
 };
 
 const SpecEvidenceTarget = struct {
@@ -1664,16 +1752,30 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
             .structural, .unreachable_value, .checked_error => false,
         },
         .structural => |a_structural| switch (b) {
-            // The checked contract is provenance for materializing the
-            // derivation's internal calls, not a distinct dispatch choice.
-            // Once the monomorphic callable agrees, structural specialization
-            // identity is exactly the derivation selected by checking.
-            .structural => |b_structural| std.meta.eql(a_structural.derivation, b_structural.derivation),
+            .structural => |b_structural| specStructuralEvidenceEql(a_structural, b_structural),
             .target, .unreachable_value, .checked_error => false,
         },
         .unreachable_value => b == .unreachable_value,
         .checked_error => b == .checked_error,
     };
+}
+
+fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructuralEvidence) bool {
+    if (!std.meta.eql(left.derivation, right.derivation)) return false;
+    if ((left.checked == null) != (right.checked == null)) return false;
+    if (left.checked == null) return true;
+    const left_checked = left.checked.?;
+    const right_checked = right.checked.?;
+    return moduleBytesEqual(left_checked.view.key.bytes, right_checked.view.key.bytes) and
+        left_checked.evidence.generated_codec_derivation == right_checked.evidence.generated_codec_derivation and
+        std.meta.eql(
+            left_checked.view.types.rootKey(left_checked.evidence.dispatcher_ty),
+            right_checked.view.types.rootKey(right_checked.evidence.dispatcher_ty),
+        ) and
+        std.meta.eql(
+            left_checked.view.types.rootKey(left_checked.evidence.callable_ty),
+            right_checked.view.types.rootKey(right_checked.evidence.callable_ty),
+        );
 }
 
 fn specMethodTargetEql(left: *const SpecEvidenceTarget, right: *const SpecEvidenceTarget) bool {
@@ -1726,6 +1828,31 @@ fn optionalTypeDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
         return std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes);
     }
     return right == null;
+}
+
+fn optionalCodecContractAnchorEql(
+    left: ?CheckedCodecContractAnchor,
+    right: ?CheckedCodecContractAnchor,
+) bool {
+    if ((left == null) != (right == null)) return false;
+    if (left == null) return true;
+    return moduleBytesEqual(left.?.view.key.bytes, right.?.view.key.bytes) and
+        left.?.derivation == right.?.derivation and
+        left.?.kind == right.?.kind;
+}
+
+fn optionalDraftCodecContractContextEql(
+    graph: *InstGraph,
+    left: ?DraftCodecContractContext,
+    right: ?DraftCodecContractContext,
+) bool {
+    if ((left == null) != (right == null)) return false;
+    if (left == null) return true;
+    return optionalCodecContractAnchorEql(left.?.anchor, right.?.anchor) and
+        graph.sameFunctionInterface(
+            left.?.constructor_node,
+            right.?.constructor_node,
+        );
 }
 
 fn evidenceChainRequiresLocalContext(evidence: EvidenceChain) bool {
@@ -2065,6 +2192,12 @@ const TemplateReservation = struct {
 /// reserves the identity and queues the body for the scheduler's wave drain.
 const TemplateBodyScheduling = enum { immediate, queued };
 
+/// Keep more ready jobs in each executor run than there are worker lanes.
+/// Dynamic lane reuse smooths procedure-size skew and amortizes each frozen
+/// coordinator barrier without changing dispatch-order commit. Four bounds
+/// the completed shards retained until each batch reaches its commit barrier.
+const parallel_spec_jobs_per_lane: usize = 4;
+
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
 /// lifetime: evidence lives in the evidence arena, the requested type is
@@ -2086,6 +2219,7 @@ const PendingSpecJob = struct {
     fn_ty: Type.TypeId,
     evidence: []const SpecEvidence,
     signature_relation: Ast.SignatureRelation,
+    codec_contract: ?SealedCodecContractContext,
 };
 
 /// One reserved template body lowered into graph-local and draft-local state,
@@ -2109,6 +2243,8 @@ const SealedPendingTemplateBody = struct {
 };
 
 const SpecJobEpoch = enum(u64) { _ };
+/// Stable specialization workspace identity used to preserve per-worker epochs.
+pub const SpecJobWorkerId = enum(u32) { serial = std.math.maxInt(u32), _ };
 
 /// Result-owned type/name suffix from one specialization workspace epoch.
 ///
@@ -2133,6 +2269,7 @@ const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
     name_store: names.NameStore,
+    checked_type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
     program: ?*Ast.Program = null,
@@ -2150,6 +2287,7 @@ const SpecJobWorkspace = struct {
             .captured_names = name_store.epochBoundary(),
             .types = types,
             .name_store = name_store,
+            .checked_type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
         };
     }
 
@@ -2253,8 +2391,39 @@ const SpecJobWorkspace = struct {
         }
         if (self.workspace_to_program) |*relocation| relocation.deinit();
         if (self.program_to_workspace) |*relocation| relocation.deinit();
+        self.checked_type_cache.deinit();
         self.types.deinit();
         self.name_store.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Lowering-owned persistent state for one executor worker across the complete
+/// Monotype run. Executor barriers end task-result ownership, while the
+/// workspace retains cumulative relocation state for later tasks on its lane.
+pub const SpecJobWorkerState = struct {
+    worker_id: SpecJobWorkerId,
+    allocator: Allocator,
+    workspace: SpecJobWorkspace,
+    builder: ?*Builder = null,
+    tasks_started: u64 = 0,
+    counters: SpecializationCounters = .{},
+    diagnostics: Diagnostics = .{},
+
+    pub fn init(allocator: Allocator, worker_id: SpecJobWorkerId) SpecJobWorkerState {
+        return .{
+            .worker_id = worker_id,
+            .allocator = allocator,
+            .workspace = SpecJobWorkspace.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *SpecJobWorkerState) void {
+        if (self.builder) |builder| {
+            builder.deinit();
+            self.allocator.destroy(builder);
+        }
+        self.workspace.deinit();
         self.* = undefined;
     }
 };
@@ -2277,6 +2446,11 @@ const SpecJobCommitDomain = struct {
     }
 
     fn absorb(self: *SpecJobCommitDomain, epoch: *const SpecJobStoreEpoch) Allocator.Error!void {
+        if (!std.meta.eql(self.name_store.epochBoundary(), epoch.names.begin) or
+            !std.meta.eql(self.types.epochBoundary(), epoch.types.begin))
+        {
+            Common.compilerBug("specialization worker epochs reached ordered commit out of sequence");
+        }
         // Reserve both stores before advancing either durable boundary. An OOM
         // leaves the epoch retryable and preserves exact cross-store continuity.
         try epoch.names.prepareAppend(&self.name_store);
@@ -2319,7 +2493,10 @@ const SpecJobCommitDomain = struct {
 /// One immutable graph-free result handed from ordinary body lowering to
 /// ordered coordinator commit.
 const CompletedSpecJobShard = struct {
+    worker_id: SpecJobWorkerId,
     dispatch_index: u64,
+    worker_local_symbol_count: u32,
+    specialization_counter_delta: ?SpecializationCounters = null,
     store_epoch: SpecJobStoreEpoch,
     body_draft: BodyDraftStore,
     pending: SealedPendingTemplateBody,
@@ -2338,10 +2515,94 @@ const CompletedSpecJobShard = struct {
     }
 };
 
-const RootTemplateBatch = struct {
-    graph: *InstGraph,
-    draft: *BodyDraftStore,
-    pending: std.ArrayList(PendingTemplateBody) = .empty,
+/// Graph-free procedure-use root result. Keeping this shape separate prevents
+/// root commit concerns from leaking into ordinary specialization shards.
+const CompletedProcedureRootShard = struct {
+    worker_id: SpecJobWorkerId,
+    worker_local_symbol_count: u32,
+    specialization_counter_delta: ?SpecializationCounters = null,
+    store_epoch: SpecJobStoreEpoch,
+    body_draft: BodyDraftStore,
+    root_ty: Type.TypeId,
+    root_def: DraftDefId,
+    diagnostics: ?*SpecJobDiagnostics,
+    diagnostics_committed: bool = false,
+    store_epoch_absorbed: bool = false,
+
+    fn deinit(self: *CompletedProcedureRootShard) void {
+        const allocator = self.body_draft.allocator;
+        self.body_draft.deinit();
+        self.store_epoch.deinit();
+        if (self.diagnostics) |diagnostics| allocator.destroy(diagnostics);
+        self.* = undefined;
+    }
+};
+
+/// Immutable coordinator input shared by one frozen ordinary-specialization batch.
+const SpecJobWorkerInputs = struct {
+    modules: Common.CheckedModules,
+    program: *Ast.Program,
+    proc_debug_names: bool,
+    specialization_cache: SpecializationCacheControl,
+    loaded_specialization_shards: []const LoadedSpecializationShard,
+    collect_counters: bool,
+    collect_diagnostics: bool,
+    inline_expects: InlineExpectMode,
+    static_data_literals: bool,
+    target_usize: base.target.TargetUsize,
+    hosted_catalog: []const HostedCatalogEntry,
+    current_loc: base.SourceLoc,
+    current_region: base.Region,
+    timing_std_io: ?std.Io,
+};
+
+const PreparedSpecJob = struct {
+    job: PendingSpecJob,
+    view: ModuleView,
+    method_scope: ModuleView,
+    template: checked.CheckedProcedureTemplate,
+};
+
+/// Caller-owned task storage. Executor callbacks write only their own element.
+const SpecJobTaskContext = struct {
+    inputs: *const SpecJobWorkerInputs,
+    workers: []?SpecJobWorkerState,
+    prepared: PreparedSpecJob,
+    shard: ?CompletedSpecJobShard = null,
+    failed: bool = false,
+    retry_serial: bool = false,
+    completed: bool = false,
+    worker_work_ns: u64 = 0,
+};
+
+/// Reusable caller-owned scheduler storage. Executor runs are synchronous, so
+/// no callback retains these task descriptors after a batch completes.
+const SpecJobTaskBuffers = struct {
+    prepared: []PreparedSpecJob = &.{},
+    contexts: []SpecJobTaskContext = &.{},
+    tasks: []base.post_check_task_executor.Task = &.{},
+    completions: []base.post_check_task_executor.Completion = &.{},
+
+    fn deinit(self: *SpecJobTaskBuffers, allocator: Allocator) void {
+        if (self.completions.len != 0) allocator.free(self.completions);
+        if (self.tasks.len != 0) allocator.free(self.tasks);
+        if (self.contexts.len != 0) allocator.free(self.contexts);
+        if (self.prepared.len != 0) allocator.free(self.prepared);
+        self.* = .{};
+    }
+};
+
+/// Caller-owned root task storage lets unordered executor completion be
+/// validated before any ordered coordinator commit begins.
+const ProcedureRootTaskContext = struct {
+    inputs: *const SpecJobWorkerInputs,
+    workers: []?SpecJobWorkerState,
+    request: checked.RootRequest,
+    shard: ?CompletedProcedureRootShard = null,
+    failed: bool = false,
+    retry_serial: bool = false,
+    completed: bool = false,
+    worker_work_ns: u64 = 0,
 };
 
 const FinalBodyOutputCounts = struct {
@@ -2529,6 +2790,7 @@ fn templateSpecIdentity(
     method_scope: checked.ModuleId,
     source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
+    codec_contract: ?Ast.CodecContractIdentity,
     request_fn_ty: Type.TypeId,
     request_fn_ty_digest: names.TypeDigest,
 ) Ast.SpecIdentity {
@@ -2541,6 +2803,8 @@ fn templateSpecIdentity(
         .method_scope = moduleDigestFromId(method_scope),
         .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
+        .codec_contract_digest = codecContractIdentityDigest(codec_contract),
+        .codec_contract = codec_contract,
         .request_fn_ty_digest = request_fn_ty_digest,
         .request_fn_ty = request_fn_ty,
     };
@@ -2552,6 +2816,7 @@ fn nestedSpecIdentity(
     source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
     capture_abi_digest: names.TypeDigest,
+    codec_contract: ?Ast.CodecContractIdentity,
     request_fn_ty: Type.TypeId,
     request_fn_ty_digest: names.TypeDigest,
 ) Ast.SpecIdentity {
@@ -2571,9 +2836,24 @@ fn nestedSpecIdentity(
         .method_scope = moduleDigestFromId(method_scope),
         .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
+        .codec_contract_digest = codecContractIdentityDigest(codec_contract),
+        .codec_contract = codec_contract,
         .request_fn_ty_digest = request_fn_ty_digest,
         .request_fn_ty = request_fn_ty,
     };
+}
+
+fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeDigest {
+    const actual = contract orelse return .{};
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.monotype.codec_contract.v3");
+    hasher.update(&actual.module.bytes);
+    var integer: [4]u8 = undefined;
+    std.mem.writeInt(u32, &integer, @intFromEnum(actual.derivation), .little);
+    hasher.update(&integer);
+    hasher.update(&.{@intFromEnum(actual.kind)});
+    hasher.update(&actual.constructor_ty_digest.bytes);
+    return .{ .bytes = hasher.finalResult() };
 }
 
 /// A nominal identity paired with the name domain that owns it.
@@ -2582,11 +2862,45 @@ const QualifiedTypeDef = struct {
     def: Type.TypeDef,
 };
 
+const SymbolDomain = enum {
+    coordinator,
+    worker_local,
+};
+
+/// Routes symbol allocation without changing the many lowering sites which
+/// create symbols. Worker-local allocation is reset for each ordinary shard;
+/// coordinator allocation remains the durable program domain.
+const SymbolDomains = struct {
+    coordinator: Common.SymbolGen = .{},
+    worker_local: Common.SymbolGen = .{},
+    active: SymbolDomain = .coordinator,
+
+    fn fresh(self: *SymbolDomains) Common.Symbol {
+        const generator = switch (self.active) {
+            .coordinator => &self.coordinator,
+            .worker_local => &self.worker_local,
+        };
+        if (generator.next == std.math.maxInt(u32)) {
+            Common.compilerBug("Monotype symbol domain overflow");
+        }
+        return generator.fresh();
+    }
+
+    fn freshCoordinator(self: *SymbolDomains) Common.Symbol {
+        if (self.coordinator.next == std.math.maxInt(u32)) {
+            Common.compilerBug("Monotype symbol domain overflow");
+        }
+        return self.coordinator.fresh();
+    }
+};
+
 const Builder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
+    current_loc: base.SourceLoc,
+    current_region: base.Region,
     proc_debug_names: bool,
     specialization_cache: SpecializationCacheControl,
     loaded_specialization_shards: []const LoadedSpecializationShard,
@@ -2598,8 +2912,14 @@ const Builder = struct {
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     target_usize: base.target.TargetUsize,
+    post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*Timing,
-    symbols: Common.SymbolGen = .{},
+    /// Executor workers use the existing allocation error channel as a private
+    /// unwind when a representation-sensitive call must re-run on the
+    /// coordinator. No worker result is committed in that case.
+    spec_job_parallel_callback: bool = false,
+    spec_job_requires_serial_retry: bool = false,
+    symbols: SymbolDomains = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
@@ -2612,13 +2932,17 @@ const Builder = struct {
     /// validates FIFO accounting; later worker results also buffer ordinary
     /// body appends behind this index.
     next_spec_accept_index: u64 = 0,
-    /// Serial precursor to a worker-local workspace: ordinary queued jobs reuse
-    /// one private type domain and one cumulative pair of relocation maps.
-    spec_job_workspace: ?SpecJobWorkspace = null,
+    /// Serial execution uses the same worker-tagged ownership protocol as
+    /// executor callbacks.
+    spec_job_worker: ?SpecJobWorkerState = null,
     /// Coordinator-owned exact-prefix copy of immutable specialization
     /// epochs. It is the concrete source for cumulative workspace-to-program
     /// relocation after worker results stop borrowing the mutable workspace.
     spec_job_commit_domain: ?SpecJobCommitDomain = null,
+    /// Fixed worker-indexed ownership for executor-backed ordinary jobs.
+    spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
+    spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
+    spec_job_task_buffers: SpecJobTaskBuffers = .{},
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -2681,7 +3005,32 @@ const Builder = struct {
 
     /// Const restoration must intern names in the destination program.
     fn constNameStore(self: *Builder) *names.NameStore {
+        return self.activeNameStore();
+    }
+
+    fn hasPrivateTypeDestination(self: *const Builder) bool {
+        const draft = self.active_body_draft orelse return false;
+        const workspace = draft.spec_job_workspace orelse return false;
+        if (workspace.active_epoch == null) return false;
+        if (self.active_graph == null) {
+            Common.compilerBug("active specialization workspace has no ordinary body destination");
+        }
+        return true;
+    }
+
+    fn activeTypeStore(self: *Builder) *Type.Store {
+        if (self.hasPrivateTypeDestination()) return &self.active_body_draft.?.spec_job_workspace.?.types;
+        return &self.program.types;
+    }
+
+    fn activeNameStore(self: *Builder) *names.NameStore {
+        if (self.hasPrivateTypeDestination()) return &self.active_body_draft.?.spec_job_workspace.?.name_store;
         return &self.program.names;
+    }
+
+    fn activeCheckedTypeCache(self: *Builder) *std.AutoHashMap(CheckedTypeAddress, Type.TypeId) {
+        if (self.hasPrivateTypeDestination()) return &self.active_body_draft.?.spec_job_workspace.?.checked_type_cache;
+        return &self.type_cache;
     }
 
     /// This scope's expression-data type for restored const values.
@@ -2706,6 +3055,8 @@ const Builder = struct {
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .program = program,
+            .current_loc = program.current_loc,
+            .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
@@ -2715,6 +3066,7 @@ const Builder = struct {
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
+            .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .spec_store = spec_store,
@@ -2730,6 +3082,34 @@ const Builder = struct {
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .evidence_arena = std.heap.ArenaAllocator.init(allocator),
         };
+    }
+
+    fn ensureSpecJobWorkerBuilder(
+        worker: *SpecJobWorkerState,
+        inputs: *const SpecJobWorkerInputs,
+    ) Allocator.Error!*Builder {
+        if (worker.builder) |builder| return builder;
+
+        const builder = try worker.allocator.create(Builder);
+        errdefer worker.allocator.destroy(builder);
+        builder.* = Builder.init(worker.allocator, inputs.modules, inputs.program, .{
+            .proc_debug_names = inputs.proc_debug_names,
+            .specialization_cache = inputs.specialization_cache,
+            .loaded_specialization_shards = inputs.loaded_specialization_shards,
+            .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
+            .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
+            .inline_expects = inputs.inline_expects,
+            .static_data_literals = inputs.static_data_literals,
+            .target_usize = inputs.target_usize,
+            .post_check_executor = null,
+            .timing = null,
+        });
+        errdefer builder.deinit();
+        builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
+        builder.current_loc = inputs.current_loc;
+        builder.current_region = inputs.current_region;
+        worker.builder = builder;
+        return builder;
     }
 
     fn loadCandidateSpecializationShards(self: *Builder) Allocator.Error!void {
@@ -2801,8 +3181,15 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.spec_job_task_buffers.deinit(self.allocator);
+        for (self.spec_job_parallel_workers) |*worker| {
+            if (worker.*) |*initialized| initialized.deinit();
+        }
+        for (self.spec_job_parallel_commit_domains) |*domain| domain.deinit();
+        self.allocator.free(self.spec_job_parallel_commit_domains);
+        self.allocator.free(self.spec_job_parallel_workers);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
-        if (self.spec_job_workspace) |*workspace| workspace.deinit();
+        if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
@@ -2898,6 +3285,23 @@ const Builder = struct {
 
     fn specializationTypeDigest(self: *Builder, ty: Type.TypeId) names.TypeDigest {
         return self.specializationTypeDigestIn(&self.program.types, &self.program.names, ty);
+    }
+
+    fn codecContractIdentity(
+        self: *Builder,
+        contract: ?SealedCodecContractContext,
+    ) ?Ast.CodecContractIdentity {
+        const actual = contract orelse return null;
+        return .{
+            .module = .{ .bytes = actual.anchor.view.key.bytes },
+            .derivation = actual.anchor.derivation,
+            .kind = switch (actual.anchor.kind) {
+                .parser => .parser,
+                .encoder => .encoder,
+            },
+            .constructor_ty_digest = self.specializationTypeDigest(actual.constructor_ty),
+            .constructor_ty = actual.constructor_ty,
+        };
     }
 
     fn specializationTypeDigestIn(
@@ -3195,19 +3599,19 @@ const Builder = struct {
     }
 
     fn typeName(self: *Builder, view: ModuleView, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
-        return self.program.names.internTypeName(view.names.typeNameText(id));
+        return self.activeNameStore().internTypeName(view.names.typeNameText(id));
     }
 
     fn moduleIdentity(self: *Builder, view: ModuleView, id: names.ModuleIdentityId) Allocator.Error!names.ModuleIdentityId {
-        return self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(id));
+        return self.activeNameStore().internModuleIdentity(view.names.moduleIdentityBytes(id));
     }
 
     fn recordFieldName(self: *Builder, view: ModuleView, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
-        return self.program.names.internRecordFieldLabel(view.names.recordFieldLabelText(id));
+        return self.activeNameStore().internRecordFieldLabel(view.names.recordFieldLabelText(id));
     }
 
     fn tagName(self: *Builder, view: ModuleView, id: names.TagNameId) Allocator.Error!names.TagNameId {
-        return self.program.names.internTagLabel(view.names.tagLabelText(id));
+        return self.activeNameStore().internTagLabel(view.names.tagLabelText(id));
     }
 
     fn hostedTryAdapterCapability(
@@ -3256,7 +3660,7 @@ const Builder = struct {
         const def = if (request.procedure_binding) |binding|
             try self.lowerProcedureBindingRoot(request, binding)
         else if (request.procedure_template) |template|
-            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence, null)
+            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence)
         else if (request.procedure_use) |procedure|
             try self.lowerProcedureUseRoot(request, procedure)
         else
@@ -3265,68 +3669,125 @@ const Builder = struct {
         try self.program.addRoot(.{ .def = def, .request = request });
     }
 
-    /// Lower adjacent checked template roots into one graph and draft. Every
-    /// root receives a fresh `BodyContext` (and therefore a fresh checked-type
-    /// instantiation scope), but graph-local specialization identities remain
-    /// visible across roots. Equivalent callee requests can consequently reuse
-    /// the first deferred request before either graph sealing or body lowering.
-    fn lowerTemplateRootBatch(self: *Builder, requests: []const checked.RootRequest) Allocator.Error!void {
-        if (requests.len == 0) return;
+    /// Procedure-use runs are the only isolated roots without an ordered
+    /// coordinator dependency; every other root kind remains a serial barrier.
+    fn lowerIsolatedRoots(self: *Builder, requests: []const checked.RootRequest) Allocator.Error!void {
+        const executor = self.post_check_executor orelse {
+            for (requests) |request| try self.lowerRoot(request);
+            return;
+        };
+        if (executor.worker_count <= 1) {
+            for (requests) |request| try self.lowerRoot(request);
+            return;
+        }
+        var index: usize = 0;
+        while (index < requests.len) {
+            if (requests[index].procedure_use == null) {
+                try self.lowerRoot(requests[index]);
+                index += 1;
+                continue;
+            }
+            const start = index;
+            while (index < requests.len and
+                requests[index].procedure_use != null and
+                index - start < executor.worker_count) : (index += 1)
+            {}
+            try self.lowerProcedureRootBatch(executor, requests[start..index]);
+        }
+    }
 
-        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
-        defer graph_setup_timing_scope.end();
-        const graph = try self.createGraph();
-        defer graph.destroy();
-        var body_draft = BodyDraftStore.init(self.allocator);
-        defer body_draft.deinit();
-        var batch = RootTemplateBatch{ .graph = graph, .draft = &body_draft };
-        defer batch.pending.deinit(self.allocator);
-        const defs = try self.allocator.alloc(Ast.DefId, requests.len);
-        defer self.allocator.free(defs);
-        graph_setup_timing_scope.end();
-
-        const draft_guard = FinalBodyOutputGuard.begin(self);
-        for (requests, 0..) |request, index| {
-            const template = request.procedure_template orelse
-                Common.invariant("procedure-template root batch contained another root kind");
-            defs[index] = try self.lowerTemplate(
-                template,
-                moduleView(self.root_view),
-                request.checked_type,
-                request.root_evidence,
-                &batch,
+    /// Run a frozen root batch to completion before committing its first root,
+    /// so callbacks can never overlap coordinator mutation.
+    fn lowerProcedureRootBatch(
+        self: *Builder,
+        executor: base.post_check_task_executor.Executor,
+        requests: []const checked.RootRequest,
+    ) Allocator.Error!void {
+        try self.ensureParallelSpecJobState(executor.worker_count);
+        const contexts = try self.allocator.alloc(ProcedureRootTaskContext, requests.len);
+        defer self.allocator.free(contexts);
+        const tasks = try self.allocator.alloc(base.post_check_task_executor.Task, requests.len);
+        defer self.allocator.free(tasks);
+        const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, requests.len);
+        defer self.allocator.free(completions);
+        const inputs = SpecJobWorkerInputs{
+            .modules = self.modules,
+            .program = self.program,
+            .proc_debug_names = self.proc_debug_names,
+            .specialization_cache = self.specialization_cache,
+            .loaded_specialization_shards = self.loaded_specialization_shards,
+            .collect_counters = self.counters != null,
+            .collect_diagnostics = self.diagnostics != null,
+            .inline_expects = self.inline_expects,
+            .static_data_literals = self.static_data_literals,
+            .target_usize = self.target_usize,
+            .hosted_catalog = self.hosted_catalog,
+            .current_loc = self.current_loc,
+            .current_region = self.current_region,
+            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
+        };
+        for (requests, 0..) |request, task_id| {
+            contexts[task_id] = .{
+                .inputs = &inputs,
+                .workers = self.spec_job_parallel_workers,
+                .request = request,
+            };
+            tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runProcedureRootTask };
+        }
+        defer for (contexts) |*context| {
+            if (context.shard) |*shard| shard.deinit();
+        };
+        if (self.timing) |timing| {
+            timing.parallel.root_tasks_submitted +%= @intCast(requests.len);
+            timing.parallel.task_waves +%= 1;
+            timing.parallel.peak_worker_lanes_available = @max(
+                timing.parallel.peak_worker_lanes_available,
+                @as(u64, @intCast(executor.worker_count)),
             );
         }
-        const draft_end = draft_guard.end(self);
-
-        const root_nodes = try self.allocator.alloc(NodeId, batch.pending.items.len);
-        defer self.allocator.free(root_nodes);
-        for (batch.pending.items, 0..) |pending, index| root_nodes[index] = pending.root_node;
-
-        const sealed = try self.sealActiveBodyDraft(
-            graph,
-            &body_draft,
-            draft_guard,
-            draft_end,
-            null,
-            root_nodes,
-            null,
-            null,
-            null,
-        );
-        defer sealed.deinit(self.allocator);
-
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-        if (sealed.root_tys.len != batch.pending.items.len) {
-            Common.invariant("root template batch sealing returned the wrong number of root types");
+        var run_error: ?Allocator.Error = null;
+        {
+            var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+            defer wait_timing_scope.end();
+            executor.run(tasks, completions) catch |err| {
+                run_error = err;
+            };
         }
-        for (batch.pending.items, sealed.root_tys) |pending, final_fn_ty| {
-            try self.finishReservedTemplateBody(pending, sealed.ids, final_fn_ty);
+        self.recordParallelWorkerWork(contexts);
+        if (run_error) |err| return err;
+
+        var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+        defer commit_timing_scope.end();
+        for (completions) |completion| {
+            if (completion.id >= contexts.len) Common.compilerBug("post-check executor returned an unknown root task");
+            const context = &contexts[completion.id];
+            if (context.completed) Common.compilerBug("post-check executor completed a root task more than once");
+            if (completion.value != @as(?*anyopaque, @ptrCast(context))) {
+                Common.compilerBug("post-check executor returned the wrong root task context");
+            }
+            context.completed = true;
+            if (context.shard) |*shard| {
+                if (@intFromEnum(shard.worker_id) != completion.worker_id) {
+                    Common.compilerBug("post-check executor changed root worker ownership");
+                }
+            }
         }
-        for (requests, defs) |request, def| {
-            try self.appendRuntimeSchemaRequestsForDef(def);
-            try self.program.addRoot(.{ .def = def, .request = request });
+        for (contexts) |*context| {
+            if (!context.completed) Common.compilerBug("post-check executor omitted a root completion");
+            if (context.failed) return error.OutOfMemory;
+        }
+        for (contexts) |*context| {
+            if (context.retry_serial) {
+                if (self.timing) |timing| timing.parallel.root_tasks_retried_serial +%= 1;
+                try self.lowerRoot(context.request);
+            } else {
+                const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
+                try self.appendRuntimeSchemaRequestsForDef(def);
+                try self.program.addRoot(.{ .def = def, .request = context.request });
+                if (self.timing) |timing| timing.parallel.root_tasks_committed +%= 1;
+                context.shard.?.deinit();
+                context.shard = null;
+            }
         }
     }
 
@@ -3467,6 +3928,41 @@ const Builder = struct {
         request: checked.RootRequest,
         procedure: checked.ProcedureUseTemplate,
     ) Allocator.Error!Ast.DefId {
+        const worker = self.ensureSerialSpecJobWorker();
+        var shard = try self.lowerProcedureUseRootToShard(worker, request, procedure);
+        defer shard.deinit();
+        return self.commitCompletedProcedureRootShard(&shard);
+    }
+
+    /// Produce a root entirely in a worker epoch, sealing every graph-qualified
+    /// cell before destroying the graph and handing ownership to the coordinator.
+    fn lowerProcedureUseRootToShard(
+        self: *Builder,
+        worker: *SpecJobWorkerState,
+        request: checked.RootRequest,
+        procedure: checked.ProcedureUseTemplate,
+    ) Allocator.Error!CompletedProcedureRootShard {
+        if (self.symbols.active != .coordinator) {
+            Common.compilerBug("procedure root shard entered with a worker-local symbol domain active");
+        }
+        self.symbols.worker_local = .{};
+        self.symbols.active = .worker_local;
+        defer self.symbols.active = .coordinator;
+        const workspace = &worker.workspace;
+        const epoch = workspace.beginEpoch(self.program);
+        errdefer workspace.finishEpoch(epoch);
+        const program_types_before = self.program.types.epochBoundary();
+        const program_names_before = self.program.names.epochBoundary();
+        const program_loc_before = self.program.current_loc;
+        const program_region_before = self.program.current_region;
+        const shard_diagnostics: ?*SpecJobDiagnostics = if (self.diagnostics != null) blk: {
+            const diagnostics = try self.allocator.create(SpecJobDiagnostics);
+            diagnostics.* = .{};
+            break :blk diagnostics;
+        } else null;
+        errdefer if (shard_diagnostics) |diagnostics| self.allocator.destroy(diagnostics);
+        self.active_spec_job_diagnostics = shard_diagnostics;
+        defer self.active_spec_job_diagnostics = null;
         const view = moduleView(self.root_view);
         const callable_eval = self.callableEvalForProcedureUse(procedure);
         const template_ref = if (callable_eval) |use| blk: {
@@ -3481,16 +3977,18 @@ const Builder = struct {
         } else self.templateRefForProcedureUse(procedure);
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try self.createGraph();
-        defer graph.destroy();
+        const graph = try self.createGraphForStores(&workspace.types, &workspace.name_store);
+        errdefer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
         var body_draft = BodyDraftStore.init(self.allocator);
+        errdefer body_draft.deinit();
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = &workspace.name_store;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
-        defer body_draft.deinit();
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
         defer ctx.deinit();
 
@@ -3541,6 +4039,7 @@ const Builder = struct {
                     root_node,
                     &.{},
                     request.root_evidence,
+                    false,
                 );
                 const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
                 try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
@@ -3568,21 +4067,50 @@ const Builder = struct {
         });
         body_timing_scope.end();
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(
-            graph,
-            &body_draft,
-            draft,
-            draft_end,
-            root_node,
-            &.{},
-            null,
-            root_def,
-            null,
-        );
-        defer sealed.deinit(self.allocator);
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-        return sealed.root_def orelse Common.invariant("procedure use root did not commit its wrapper definition");
+        try self.finalizeBodyDraftGraph(graph, &body_draft, draft, draft_end);
+        const root_ty = seal: {
+            var phase_b_sealer = GraphTypeFinals.init(graph);
+            defer phase_b_sealer.deinit();
+            try self.emitDraftDeferredStructuralSerializations(&body_draft, graph, &phase_b_sealer);
+            try self.emitDraftDeferredCallsiteIntrinsics(&body_draft, graph, &phase_b_sealer);
+            try self.emitDraftDeferredStructuralEqs(&body_draft, graph, &phase_b_sealer);
+            try self.emitDraftDeferredInspects(&body_draft, graph, &phase_b_sealer);
+            try body_draft.finishOwnerRuns();
+            var sealer = GraphTypeFinals.init(graph);
+            defer sealer.deinit();
+            try sealDraftCoordinatorIntents(graph, &body_draft, &sealer);
+            const sealed_root_ty = try sealer.sealNode(root_node);
+            try body_draft.sealTypeCellsInPlace(graph, &sealer);
+            body_draft.discardGraphStateAfterSeal();
+            body_draft.assertGraphStateDiscarded();
+            break :seal sealed_root_ty;
+        };
+        body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
+        if (self.spec_job_parallel_callback) {
+            if (!std.meta.eql(program_types_before, self.program.types.epochBoundary()) or
+                !std.meta.eql(program_names_before, self.program.names.epochBoundary()))
+            {
+                Common.compilerBug("parallel root lowering mutated coordinator stores");
+            }
+            if (!std.meta.eql(program_loc_before, self.program.current_loc) or
+                !std.meta.eql(program_region_before, self.program.current_region))
+            {
+                Common.compilerBug("parallel root lowering mutated coordinator source scratch");
+            }
+        }
+        var store_epoch = try workspace.captureStoreEpoch(epoch);
+        errdefer store_epoch.deinit();
+        graph.destroy();
+        workspace.finishEpoch(epoch);
+        return .{
+            .worker_id = worker.worker_id,
+            .worker_local_symbol_count = body_draft.worker_local_symbol_count,
+            .store_epoch = store_epoch,
+            .body_draft = body_draft,
+            .root_ty = root_ty,
+            .root_def = root_def,
+            .diagnostics = shard_diagnostics,
+        };
     }
 
     fn lowerProcedureBindingRoot(
@@ -3781,7 +4309,6 @@ const Builder = struct {
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         root_evidence: ?checked.CheckedEvidenceSpan,
-        root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
         const fn_ty = try self.lowerContextFreeSpecializationType(
             source_ty_view,
@@ -3812,8 +4339,8 @@ const Builder = struct {
             .count,
             null,
             null,
-            root_batch,
             .immediate,
+            null,
         );
     }
 
@@ -3889,7 +4416,17 @@ const Builder = struct {
                     .nested = nested,
                 } };
             },
-            .structural => |structural| try nodes.append(self.allocator, .{ .structural = structural.derivation }),
+            .structural => |structural| try nodes.append(self.allocator, .{ .structural = .{
+                .derivation = structural.derivation,
+                .checked = if (structural.checked) |checked_structural| .{
+                    .view = .{ .bytes = checked_structural.view.key.bytes },
+                    .dispatcher_key = checked_structural.view.types.rootKey(checked_structural.evidence.dispatcher_ty),
+                    .dispatcher_ty = checked_structural.evidence.dispatcher_ty,
+                    .callable_key = checked_structural.view.types.rootKey(checked_structural.evidence.callable_ty),
+                    .callable_ty = checked_structural.evidence.callable_ty,
+                    .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
+                } else null,
+            } }),
             .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
             .checked_error => try nodes.append(self.allocator, .checked_error),
         };
@@ -3945,8 +4482,8 @@ const Builder = struct {
         request_accounting: TemplateRequestAccounting,
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
-        root_batch: ?*RootTemplateBatch,
         body_scheduling: TemplateBodyScheduling,
+        codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -3972,7 +4509,15 @@ const Builder = struct {
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
         if (try self.spec_store.findLocal(
-            templateSpecIdentity(template_ref, method_scope.key, source_fn_key, evidence_digest, fn_ty, request_digest),
+            templateSpecIdentity(
+                template_ref,
+                method_scope.key,
+                source_fn_key,
+                evidence_digest,
+                self.codecContractIdentity(codec_contract),
+                fn_ty,
+                request_digest,
+            ),
             specializationEvidenceView(identity_evidence),
         )) |hit| {
             if (request_accounting == .count) self.count("template_hits");
@@ -4021,7 +4566,7 @@ const Builder = struct {
                                 job.evidence,
                                 null,
                                 job.signature_relation,
-                                null,
+                                job.codec_contract,
                             );
                             return existing.def;
                         },
@@ -4042,7 +4587,9 @@ const Builder = struct {
 
         const ReservedSpec = struct { reservation: TemplateReservation, spec: Ast.SpecId };
         const reserved: ReservedSpec = blk: {
-            const symbol = self.symbols.fresh();
+            // This reservation is appended directly to the durable Program even
+            // when an enclosing shard is using the worker-local symbol domain.
+            const symbol = self.symbols.freshCoordinator();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
             self.promoteFnSignatureRelation(fn_id, signature_relation);
@@ -4055,7 +4602,7 @@ const Builder = struct {
                 .fn_id = fn_id,
                 .args = Ast.Span(Ast.TypedLocal).empty(),
                 .body = .hosted,
-                .ret = self.functionShape(lower_fn_ty, "procedure template root type was not a function").ret,
+                .ret = self.programFunctionShape(lower_fn_ty, "procedure template root type was not a function").ret,
             });
             const spec = try self.addTemplateSpecRecord(
                 template_ref,
@@ -4064,6 +4611,7 @@ const Builder = struct {
                 identity_evidence,
                 lower_fn_ty,
                 request_digest,
+                self.codecContractIdentity(codec_contract),
                 fn_id,
                 switch (body_scheduling) {
                     .immediate => .lowering,
@@ -4090,9 +4638,6 @@ const Builder = struct {
         switch (body_scheduling) {
             .immediate => {},
             .queued => {
-                if (root_batch != null) {
-                    Common.invariant("queued Monotype specialization request cannot join a root batch");
-                }
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
@@ -4109,6 +4654,7 @@ const Builder = struct {
                     .fn_ty = lower_fn_ty,
                     .evidence = spec_evidence,
                     .signature_relation = signature_relation,
+                    .codec_contract = codec_contract,
                 });
                 self.next_spec_dispatch_index += 1;
                 self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
@@ -4116,6 +4662,12 @@ const Builder = struct {
             },
         }
 
+        if (self.spec_job_parallel_callback) {
+            Common.compilerBug("parallel specialization worker attempted coordinator-owned immediate completion");
+        }
+        const previous_symbol_domain = self.symbols.active;
+        self.symbols.active = .coordinator;
+        defer self.symbols.active = previous_symbol_domain;
         try self.completeTemplateReservation(
             reservation,
             fn_template,
@@ -4127,15 +4679,15 @@ const Builder = struct {
             spec_evidence,
             retained_topology,
             signature_relation,
-            root_batch,
+            codec_contract,
         );
         return reservation.def;
     }
 
     /// Lower the body (or hosted completion) for a specialization whose
     /// identity, ids, and seed are already reserved. Runs immediately for
-    /// direct callers and root batches, and from the scheduler's wave drain
-    /// for queued symbolic requests.
+    /// direct callers and from the scheduler's wave drain for queued symbolic
+    /// requests.
     fn completeTemplateReservation(
         self: *Builder,
         reservation: TemplateReservation,
@@ -4148,7 +4700,7 @@ const Builder = struct {
         spec_evidence: []const SpecEvidence,
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
-        root_batch: ?*RootTemplateBatch,
+        codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
@@ -4182,7 +4734,7 @@ const Builder = struct {
                 hosted_fn_template.const_evidence = fn_template.const_evidence;
                 hosted_fn_template.const_evidence_frames = fn_template.const_evidence_frames;
                 hosted_fn_template.const_evidence_frame_head = fn_template.const_evidence_frame_head;
-                const fn_data = self.functionShape(lower_fn_ty, "hosted procedure template root type was not a function");
+                const fn_data = self.programFunctionShape(lower_fn_ty, "hosted procedure template root type was not a function");
                 const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
                 const hosted_try = try self.hostedTryAdapterCapability(view, template.hosted_try_adapter);
                 if (try self.hostedTryAdapterSourceType(hosted_try, declared_mono_fn_ty, lower_fn_ty)) |adapter_source_fn_ty| {
@@ -4197,8 +4749,8 @@ const Builder = struct {
                         .count,
                         null,
                         null,
-                        null,
                         .immediate,
+                        null,
                     );
                     const adapter_template = Ast.FnTemplate{
                         .fn_def = .{ .checked_generated = template_ref },
@@ -4255,26 +4807,6 @@ const Builder = struct {
             => {},
         }
 
-        if (root_batch) |batch| {
-            const pending = try self.lowerReservedTemplateBodyIntoDraft(
-                batch.graph,
-                batch.draft,
-                reservation,
-                fn_template,
-                template_ref,
-                view,
-                method_scope,
-                template,
-                source_fn_key,
-                lower_fn_ty,
-                spec_evidence,
-                retained_topology,
-                signature_relation,
-            );
-            try batch.pending.append(self.allocator, pending);
-            return;
-        }
-
         const graph = try self.createGraph();
         defer graph.destroy();
         var body_draft_storage = BodyDraftStore.init(self.allocator);
@@ -4295,6 +4827,7 @@ const Builder = struct {
             spec_evidence,
             retained_topology,
             signature_relation,
+            codec_contract,
         );
         const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(
@@ -4329,6 +4862,191 @@ const Builder = struct {
     /// drains. Bodies executed here may enqueue further requests; those join
     /// the same FIFO and are reached by this same loop, in enqueue order.
     fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
+        const executor = self.post_check_executor orelse {
+            return self.drainPendingSpecJobsSerial();
+        };
+        if (executor.worker_count <= 1) {
+            return self.drainPendingSpecJobsSerial();
+        }
+
+        try self.ensureParallelSpecJobState(executor.worker_count);
+        const batch_capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
+        const buffers = try self.ensureSpecJobTaskBuffers(batch_capacity);
+        const prepared = buffers.prepared;
+        const contexts = buffers.contexts;
+        const tasks = buffers.tasks;
+        const completions = buffers.completions;
+
+        const inputs = SpecJobWorkerInputs{
+            .modules = self.modules,
+            .program = self.program,
+            .proc_debug_names = self.proc_debug_names,
+            .specialization_cache = self.specialization_cache,
+            .loaded_specialization_shards = self.loaded_specialization_shards,
+            .collect_counters = self.counters != null,
+            .collect_diagnostics = self.diagnostics != null,
+            .inline_expects = self.inline_expects,
+            .static_data_literals = self.static_data_literals,
+            .target_usize = self.target_usize,
+            .hosted_catalog = self.hosted_catalog,
+            .current_loc = self.current_loc,
+            .current_region = self.current_region,
+            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
+        };
+
+        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
+            const frontier = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
+            self.requireNextSpecAcceptance(frontier.dispatch_index);
+            if (self.spec_store.recordStatus(frontier.spec) == .ready) {
+                self.pending_spec_jobs_head += 1;
+                try self.executePendingSpecJob(frontier);
+                continue;
+            }
+
+            const frontier_view = self.moduleForDigest(names.procTemplateModuleDigest(frontier.template_ref));
+            const frontier_template = frontier_view.templates.get(frontier.template_ref.template);
+            if (frontier_template.target == .hosted) {
+                self.pending_spec_jobs_head += 1;
+                try self.executePendingSpecJob(frontier);
+                continue;
+            }
+
+            var batch_len: usize = 0;
+            while (batch_len < batch_capacity and
+                self.pending_spec_jobs_head < self.pending_spec_jobs.items.len)
+            {
+                const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
+                const expected_dispatch = self.next_spec_accept_index + batch_len;
+                if (job.dispatch_index != expected_dispatch) {
+                    Common.compilerBug("Monotype specialization batch was not contiguous in dispatch order");
+                }
+                if (self.spec_store.recordStatus(job.spec) != .reserved) break;
+                const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
+                const template = view.templates.get(job.template_ref.template);
+                if (template.target == .hosted) break;
+
+                prepared[batch_len] = .{
+                    .job = job,
+                    .view = view,
+                    .method_scope = self.moduleForId(job.method_scope),
+                    .template = template,
+                };
+                self.pending_spec_jobs_head += 1;
+                batch_len += 1;
+            }
+            if (batch_len == 0) {
+                Common.compilerBug("parallel Monotype specialization drain made no progress");
+            }
+
+            for (0..batch_len) |index| {
+                contexts[index] = .{
+                    .inputs = &inputs,
+                    .workers = self.spec_job_parallel_workers,
+                    .prepared = prepared[index],
+                };
+                tasks[index] = .{
+                    .id = index,
+                    .context = &contexts[index],
+                    .run = runSpecJobTask,
+                };
+            }
+
+            var initialized_contexts = batch_len;
+            defer {
+                for (contexts[0..initialized_contexts]) |*context| {
+                    if (context.shard) |*shard| shard.deinit();
+                    context.shard = null;
+                }
+            }
+            if (self.timing) |timing| {
+                timing.parallel.specialization_tasks_submitted +%= @intCast(batch_len);
+                timing.parallel.task_waves +%= 1;
+                timing.parallel.peak_worker_lanes_available = @max(
+                    timing.parallel.peak_worker_lanes_available,
+                    @as(u64, @intCast(executor.worker_count)),
+                );
+            }
+            var run_error: ?Allocator.Error = null;
+            {
+                var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+                defer wait_timing_scope.end();
+                executor.run(tasks[0..batch_len], completions[0..batch_len]) catch |err| {
+                    run_error = err;
+                };
+            }
+            self.recordParallelWorkerWork(contexts[0..batch_len]);
+            if (run_error) |err| return err;
+
+            var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+            defer commit_timing_scope.end();
+            for (completions[0..batch_len]) |completion| {
+                if (completion.id >= batch_len) {
+                    Common.compilerBug("post-check executor returned an unknown specialization task");
+                }
+                const context = &contexts[completion.id];
+                if (context.completed) {
+                    Common.compilerBug("post-check executor completed a specialization task more than once");
+                }
+                if (completion.value != @as(?*anyopaque, @ptrCast(context))) {
+                    Common.compilerBug("post-check executor returned the wrong specialization task context");
+                }
+                context.completed = true;
+                if (context.shard) |*shard| {
+                    if (@intFromEnum(shard.worker_id) != completion.worker_id) {
+                        Common.compilerBug("post-check executor changed specialization worker ownership");
+                    }
+                }
+            }
+            for (contexts[0..batch_len]) |*context| {
+                if (!context.completed) {
+                    Common.compilerBug("post-check executor omitted a specialization completion");
+                }
+                if (context.failed) return error.OutOfMemory;
+                if (context.retry_serial) {
+                    if (context.shard != null) {
+                        Common.compilerBug("serial specialization retry retained a worker shard");
+                    }
+                    if (self.timing) |timing| timing.parallel.specialization_tasks_retried_serial +%= 1;
+                    try self.executePendingSpecJob(context.prepared.job);
+                    continue;
+                }
+                switch (self.spec_store.recordStatus(context.prepared.job.spec)) {
+                    .ready => {
+                        // A preceding serial retry may have claimed this queued
+                        // reservation immediately. Accept the ready entry and
+                        // discard its independently lowered body. The worker's
+                        // cumulative type/name suffix must still be absorbed so
+                        // later epochs from that worker retain exact ids.
+                        if (context.shard) |*shard| {
+                            const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
+                            try commit_domain.absorb(&shard.store_epoch);
+                            shard.store_epoch_absorbed = true;
+                            shard.deinit();
+                            if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
+                        }
+                        context.shard = null;
+                        try self.executePendingSpecJob(context.prepared.job);
+                        continue;
+                    },
+                    .reserved => {},
+                    .lowering => Common.invariant("parallel Monotype specialization was already lowering at commit"),
+                }
+                self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
+                self.spec_store.markLowering(context.prepared.job.spec);
+                const shard = &context.shard.?;
+                try self.commitCompletedSpecJobShard(shard);
+                if (self.timing) |timing| timing.parallel.specialization_tasks_committed +%= 1;
+                shard.deinit();
+                context.shard = null;
+            }
+            initialized_contexts = 0;
+        }
+        self.pending_spec_jobs.clearRetainingCapacity();
+        self.pending_spec_jobs_head = 0;
+        self.requirePendingSpecJobsDrained();
+    }
+
+    fn drainPendingSpecJobsSerial(self: *Builder) Allocator.Error!void {
         while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
             const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
             self.pending_spec_jobs_head += 1;
@@ -4337,6 +5055,120 @@ const Builder = struct {
         self.pending_spec_jobs.clearRetainingCapacity();
         self.pending_spec_jobs_head = 0;
         self.requirePendingSpecJobsDrained();
+    }
+
+    fn runSpecJobTask(
+        opaque_context: *anyopaque,
+        executor_worker: base.post_check_task_executor.Worker,
+    ) ?*anyopaque {
+        const context: *SpecJobTaskContext = @ptrCast(@alignCast(opaque_context));
+        const task_started_ns = if (context.inputs.timing_std_io) |std_io| timingNowNs(std_io) else 0;
+        defer if (context.inputs.timing_std_io) |std_io| {
+            const finished_ns = timingNowNs(std_io);
+            context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
+        };
+        if (executor_worker.id >= context.workers.len or
+            executor_worker.id >= std.math.maxInt(u32))
+        {
+            Common.compilerBug("post-check executor returned an invalid specialization worker id");
+        }
+        const slot = &context.workers[executor_worker.id];
+        if (slot.* == null) {
+            slot.* = SpecJobWorkerState.init(
+                executor_worker.allocator,
+                @enumFromInt(executor_worker.id),
+            );
+        }
+        const worker = &slot.*.?;
+        if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
+        worker.counters = .{};
+        worker.diagnostics = .{};
+        const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        if (builder.active_graph != null or builder.active_body_draft != null or
+            builder.active_template_root != null or builder.active_spec_job_diagnostics != null)
+        {
+            Common.compilerBug("specialization executor reused a worker with active lowering state");
+        }
+        builder.current_loc = context.inputs.current_loc;
+        builder.current_region = context.inputs.current_region;
+        builder.spec_job_parallel_callback = true;
+        builder.spec_job_requires_serial_retry = false;
+        defer builder.spec_job_parallel_callback = false;
+        var shard = builder.lowerPendingSpecJobToShard(
+            worker,
+            context.prepared.job,
+            context.prepared.view,
+            context.prepared.method_scope,
+            context.prepared.template,
+        ) catch {
+            if (builder.spec_job_requires_serial_retry) {
+                builder.spec_job_requires_serial_retry = false;
+                context.retry_serial = true;
+            } else {
+                context.failed = true;
+            }
+            return context;
+        };
+        if (builder.spec_job_requires_serial_retry) {
+            Common.compilerBug("parallel specialization retry escaped worker lowering");
+        }
+        if (context.inputs.collect_counters) {
+            shard.specialization_counter_delta = worker.counters;
+        }
+        context.shard = shard;
+        return context;
+    }
+
+    fn runProcedureRootTask(
+        opaque_context: *anyopaque,
+        executor_worker: base.post_check_task_executor.Worker,
+    ) ?*anyopaque {
+        const context: *ProcedureRootTaskContext = @ptrCast(@alignCast(opaque_context));
+        const task_started_ns = if (context.inputs.timing_std_io) |std_io| timingNowNs(std_io) else 0;
+        defer if (context.inputs.timing_std_io) |std_io| {
+            const finished_ns = timingNowNs(std_io);
+            context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
+        };
+        if (executor_worker.id >= context.workers.len or executor_worker.id >= std.math.maxInt(u32)) {
+            Common.compilerBug("post-check executor returned an invalid root worker id");
+        }
+        const slot = &context.workers[executor_worker.id];
+        if (slot.* == null) {
+            slot.* = SpecJobWorkerState.init(executor_worker.allocator, @enumFromInt(executor_worker.id));
+        }
+        const worker = &slot.*.?;
+        if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
+        worker.counters = .{};
+        worker.diagnostics = .{};
+        const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        builder.current_loc = context.inputs.current_loc;
+        builder.current_region = context.inputs.current_region;
+        builder.spec_job_parallel_callback = true;
+        builder.spec_job_requires_serial_retry = false;
+        defer builder.spec_job_parallel_callback = false;
+        var shard = builder.lowerProcedureUseRootToShard(
+            worker,
+            context.request,
+            context.request.procedure_use orelse
+                Common.compilerBug("procedure root task lost its procedure use"),
+        ) catch {
+            if (builder.spec_job_requires_serial_retry) {
+                builder.spec_job_requires_serial_retry = false;
+                context.retry_serial = true;
+            } else {
+                context.failed = true;
+            }
+            return context;
+        };
+        if (context.inputs.collect_counters) shard.specialization_counter_delta = worker.counters;
+        context.shard = shard;
+        return context;
     }
 
     fn requirePendingSpecJobsDrained(self: *Builder) void {
@@ -4389,7 +5221,7 @@ const Builder = struct {
                     job.evidence,
                     null,
                     job.signature_relation,
-                    null,
+                    job.codec_contract,
                 );
                 self.acceptSpecDispatch(job.dispatch_index);
             },
@@ -4398,7 +5230,14 @@ const Builder = struct {
             .entry,
             .comptime_only,
             => {
-                var shard = try self.lowerPendingSpecJobToShard(job, view, template);
+                const worker = self.ensureSerialSpecJobWorker();
+                var shard = try self.lowerPendingSpecJobToShard(
+                    worker,
+                    job,
+                    view,
+                    self.moduleForId(job.method_scope),
+                    template,
+                );
                 defer shard.deinit();
                 try self.commitCompletedSpecJobShard(&shard);
             },
@@ -4416,11 +5255,11 @@ const Builder = struct {
         self.next_spec_accept_index += 1;
     }
 
-    fn ensureSpecJobWorkspace(self: *Builder) *SpecJobWorkspace {
-        if (self.spec_job_workspace == null) {
-            self.spec_job_workspace = SpecJobWorkspace.init(self.allocator);
+    fn ensureSerialSpecJobWorker(self: *Builder) *SpecJobWorkerState {
+        if (self.spec_job_worker == null) {
+            self.spec_job_worker = SpecJobWorkerState.init(self.allocator, .serial);
         }
-        return &self.spec_job_workspace.?;
+        return &self.spec_job_worker.?;
     }
 
     fn ensureSpecJobCommitDomain(self: *Builder) *SpecJobCommitDomain {
@@ -4430,18 +5269,108 @@ const Builder = struct {
         return &self.spec_job_commit_domain.?;
     }
 
+    fn recordParallelWorkerWork(self: *Builder, contexts: anytype) void {
+        const timing = self.timing orelse return;
+        for (contexts) |*context| {
+            timing.parallel.worker_work_ns +%= context.worker_work_ns;
+            context.worker_work_ns = 0;
+        }
+    }
+
+    fn recordParallelLaneMetrics(self: *Builder) void {
+        const timing = self.timing orelse return;
+        var lanes_used: u64 = 0;
+        var lane_reuse_tasks: u64 = 0;
+        for (self.spec_job_parallel_workers) |worker| {
+            const initialized = worker orelse continue;
+            lanes_used += 1;
+            lane_reuse_tasks +%= initialized.tasks_started -| 1;
+        }
+        timing.parallel.peak_worker_lanes_used = @max(timing.parallel.peak_worker_lanes_used, lanes_used);
+        timing.parallel.within_lowering_lane_reuse_tasks +%= lane_reuse_tasks;
+    }
+
+    fn ensureParallelSpecJobState(self: *Builder, worker_count: usize) Allocator.Error!void {
+        if (self.spec_job_parallel_workers.len != 0) {
+            if (self.spec_job_parallel_workers.len != worker_count or
+                self.spec_job_parallel_commit_domains.len != worker_count)
+            {
+                Common.compilerBug("post-check executor changed worker count between specialization waves");
+            }
+            return;
+        }
+        if (worker_count <= 1) {
+            Common.compilerBug("parallel specialization state requested without multiple workers");
+        }
+
+        const workers = try self.allocator.alloc(?SpecJobWorkerState, worker_count);
+        errdefer self.allocator.free(workers);
+        @memset(workers, null);
+        const domains = try self.allocator.alloc(SpecJobCommitDomain, worker_count);
+        errdefer self.allocator.free(domains);
+        for (domains) |*domain| domain.* = SpecJobCommitDomain.init(self.allocator);
+        self.spec_job_parallel_workers = workers;
+        self.spec_job_parallel_commit_domains = domains;
+    }
+
+    fn ensureSpecJobTaskBuffers(
+        self: *Builder,
+        batch_capacity: usize,
+    ) Allocator.Error!*SpecJobTaskBuffers {
+        const buffers = &self.spec_job_task_buffers;
+        if (buffers.prepared.len != 0) {
+            if (buffers.prepared.len != batch_capacity or
+                buffers.contexts.len != batch_capacity or
+                buffers.tasks.len != batch_capacity or
+                buffers.completions.len != batch_capacity)
+            {
+                Common.compilerBug("Monotype specialization task buffer capacity changed");
+            }
+            return buffers;
+        }
+        if (buffers.contexts.len != 0 or
+            buffers.tasks.len != 0 or
+            buffers.completions.len != 0)
+        {
+            Common.compilerBug("Monotype specialization task buffers were only partially initialized");
+        }
+
+        var initialized: SpecJobTaskBuffers = .{};
+        errdefer initialized.deinit(self.allocator);
+        initialized.prepared = try self.allocator.alloc(PreparedSpecJob, batch_capacity);
+        initialized.contexts = try self.allocator.alloc(SpecJobTaskContext, batch_capacity);
+        initialized.tasks = try self.allocator.alloc(base.post_check_task_executor.Task, batch_capacity);
+        initialized.completions = try self.allocator.alloc(base.post_check_task_executor.Completion, batch_capacity);
+        buffers.* = initialized;
+        return buffers;
+    }
+
+    fn specJobCommitDomainFor(self: *Builder, worker_id: SpecJobWorkerId) *SpecJobCommitDomain {
+        if (worker_id == .serial) return self.ensureSpecJobCommitDomain();
+        if (self.spec_job_parallel_commit_domains.len == 0) {
+            Common.compilerBug("parallel specialization shard reached a serial commit domain");
+        }
+        const raw: usize = @intFromEnum(worker_id);
+        if (raw >= self.spec_job_parallel_commit_domains.len) {
+            Common.compilerBug("specialization shard referenced an unknown executor worker");
+        }
+        return &self.spec_job_parallel_commit_domains[raw];
+    }
+
     /// Lower one ordinary queued specialization into an owned workspace epoch
     /// and a graph-free sealed draft. The graph is destroyed before the result
     /// crosses the handoff; only ordered program appends happen afterward.
     ///
-    /// Deferred preparation still uses shared Builder coordination, so it
-    /// executes serially here. Representation-sensitive immediate callees also
-    /// complete synchronously until those outputs move into the shard protocol;
-    /// their durable types and names cross the explicit store boundary.
+    /// Deferred preparation executes against the worker's private Builder and
+    /// workspace. A representation-sensitive immediate callee still needs
+    /// coordinator reservation and completion, so executor callbacks unwind and
+    /// retry that uncommon whole job on the existing serial path.
     fn lowerPendingSpecJobToShard(
         self: *Builder,
+        worker: *SpecJobWorkerState,
         job: PendingSpecJob,
         view: ModuleView,
+        method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!CompletedSpecJobShard {
         switch (template.target) {
@@ -4453,9 +5382,20 @@ const Builder = struct {
             .hosted => Common.compilerBug("hosted specialization entered Roc body shard lowering"),
         }
 
-        const workspace = self.ensureSpecJobWorkspace();
+        if (self.symbols.active != .coordinator) {
+            Common.compilerBug("Monotype specialization shard entered with a worker-local symbol domain active");
+        }
+        self.symbols.worker_local = .{};
+        self.symbols.active = .worker_local;
+        defer self.symbols.active = .coordinator;
+
+        const workspace = &worker.workspace;
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
+        const program_types_before = self.program.types.epochBoundary();
+        const program_names_before = self.program.names.epochBoundary();
+        const program_loc_before = self.program.current_loc;
+        const program_region_before = self.program.current_region;
         if (self.active_spec_job_diagnostics != null) {
             Common.compilerBug("Monotype specialization shard began with another shard diagnostic sink active");
         }
@@ -4473,6 +5413,12 @@ const Builder = struct {
         errdefer body_draft.deinit();
         body_draft.spec_job_workspace = workspace;
         body_draft.mutable_graph_names = &workspace.name_store;
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        self.active_body_draft = &body_draft;
+        defer self.active_graph = saved_graph;
+        defer self.active_body_draft = saved_body_draft;
         const final_guard = FinalBodyOutputGuard.begin(self);
         const pending = try self.lowerReservedTemplateBodyIntoDraft(
             graph,
@@ -4481,24 +5427,42 @@ const Builder = struct {
             job.fn_template,
             job.template_ref,
             view,
-            self.moduleForId(job.method_scope),
+            method_scope,
             template,
             job.source_fn_key,
             job.fn_ty,
             job.evidence,
             null,
             job.signature_relation,
+            job.codec_contract,
         );
         const final_end = final_guard.end(self);
         try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
         const sealed_pending = try self.sealOrdinarySpecJobDraft(graph, &body_draft, pending);
+        body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
+        if (self.spec_job_parallel_callback) {
+            const program_types_after = self.program.types.epochBoundary();
+            if (!std.meta.eql(program_types_before, program_types_after)) {
+                Common.compilerBug("parallel specialization lowering mutated the coordinator type store");
+            }
+            if (!std.meta.eql(program_names_before, self.program.names.epochBoundary())) {
+                Common.compilerBug("parallel specialization lowering mutated the coordinator name store");
+            }
+            if (!std.meta.eql(program_loc_before, self.program.current_loc) or
+                !std.meta.eql(program_region_before, self.program.current_region))
+            {
+                Common.compilerBug("parallel specialization lowering mutated coordinator source scratch");
+            }
+        }
         var store_epoch = try workspace.captureStoreEpoch(epoch);
         errdefer store_epoch.deinit();
         self.countBodyDiagnostic("spec_job_shards_lowered");
         graph.destroy();
         workspace.finishEpoch(epoch);
         return .{
+            .worker_id = worker.worker_id,
             .dispatch_index = job.dispatch_index,
+            .worker_local_symbol_count = body_draft.worker_local_symbol_count,
             .store_epoch = store_epoch,
             .body_draft = body_draft,
             .pending = sealed_pending,
@@ -4525,7 +5489,7 @@ const Builder = struct {
         self.active_spec_job_diagnostics = shard.diagnostics;
         defer self.active_spec_job_diagnostics = null;
 
-        const commit_domain = self.ensureSpecJobCommitDomain();
+        const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
         try commit_domain.absorb(&shard.store_epoch);
         shard.store_epoch_absorbed = true;
         const committed_type_relocation = commit_domain.committedTypeRelocation(
@@ -4538,11 +5502,16 @@ const Builder = struct {
             &self.program.names,
             committed_type_relocation,
         );
+        if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
+            Common.compilerBug("Monotype specialization shard symbol count disagreed with its sealed draft");
+        }
+        shard.body_draft.relocateWorkerLocalSymbols(&self.symbols.coordinator);
         shard.body_draft.assertGraphStateDiscarded();
         const sealed = try self.commitSealedBodyDraft(
             &shard.body_draft,
             shard.pending.root_ty,
             &committed_types,
+            null,
         );
         defer sealed.deinit(self.allocator);
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
@@ -4553,9 +5522,55 @@ const Builder = struct {
                 Common.compilerBug("Monotype specialization shard lost its coordinator diagnostic sink");
             diagnostics.addTo(destination);
         }
+        if (shard.specialization_counter_delta) |delta| {
+            const destination = self.counters orelse
+                Common.compilerBug("Monotype specialization shard lost its coordinator counter sink");
+            addFlatCounters(SpecializationCounters, destination, delta);
+        }
         shard.diagnostics_committed = true;
         self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
         self.acceptSpecDispatch(shard.dispatch_index);
+    }
+
+    /// Commit one root shard after its worker epoch joins the cumulative lane
+    /// domain, recovering the wrapper def from the exhaustive draft commit.
+    fn commitCompletedProcedureRootShard(
+        self: *Builder,
+        shard: *CompletedProcedureRootShard,
+    ) Allocator.Error!Ast.DefId {
+        if (shard.diagnostics_committed or shard.store_epoch_absorbed) {
+            Common.compilerBug("procedure root shard was committed more than once");
+        }
+        const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
+        try commit_domain.absorb(&shard.store_epoch);
+        shard.store_epoch_absorbed = true;
+        var committed_types = CommittedGraphTypes.relocatedStore(
+            &commit_domain.types,
+            &commit_domain.name_store,
+            &self.program.types,
+            &self.program.names,
+            commit_domain.committedTypeRelocation(self.program),
+        );
+        if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
+            Common.compilerBug("procedure root shard symbol count disagreed with its sealed draft");
+        }
+        shard.body_draft.relocateWorkerLocalSymbols(&self.symbols.coordinator);
+        shard.body_draft.assertGraphStateDiscarded();
+        const sealed = try self.commitSealedBodyDraft(
+            &shard.body_draft,
+            shard.root_ty,
+            &committed_types,
+            shard.root_def,
+        );
+        defer sealed.deinit(self.allocator);
+        const def = sealed.root_def orelse
+            Common.invariant("procedure root shard did not commit its wrapper definition");
+        if (shard.diagnostics) |diagnostics| diagnostics.addTo(self.diagnostics.?);
+        if (shard.specialization_counter_delta) |delta| {
+            addFlatCounters(SpecializationCounters, self.counters.?, delta);
+        }
+        shard.diagnostics_committed = true;
+        return def;
     }
 
     fn lowerReservedTemplateBodyIntoDraft(
@@ -4573,6 +5588,7 @@ const Builder = struct {
         spec_evidence: []const SpecEvidence,
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
+        codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!PendingTemplateBody {
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
@@ -4595,20 +5611,31 @@ const Builder = struct {
             body_draft,
         );
         body_ctx.evidence = retained_topology orelse rootEvidence(template_ref, spec_evidence);
-        const lowered_template = self.lowered_templates.getPtr(reservation.fn_id) orelse
-            Common.invariant("procedure specialization lost its evidence record before body lowering");
-        lowered_template.evidence = body_ctx.evidence.vector;
         defer body_ctx.deinit();
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
+        const draft_codec_contract: ?DraftCodecContractContext = if (codec_contract) |contract| .{
+            .anchor = contract.anchor,
+            .constructor_node = try body_ctx.activeNodeFromType(
+                try body_ctx.importProgramType(contract.constructor_ty),
+            ),
+        } else null;
+        if (draft_codec_contract) |contract| {
+            try body_ctx.instantiateCodecContractAtCall(
+                contract.anchor,
+                contract.constructor_node,
+            );
+        }
         self.active_template_root = .{
             .graph = graph,
             .family = DraftTemplateFamilyAddress.init(template_ref, method_scope.key, source_fn_key),
             .evidence = body_ctx.evidence.vector,
             .request_fn_node = root_node,
             .initial_request_arg_classes = try graph.snapshotFunctionArgumentClasses(root_node),
+            .codec_contract = draft_codec_contract,
             .fn_id = reservation.fn_id,
+            .signature_relation = signature_relation,
         };
         const root_owner = try body_draft.enterOwner(.{ .reserved_fn = reservation.fn_id });
         defer root_owner.leave();
@@ -4625,10 +5652,11 @@ const Builder = struct {
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
+        const final_signature_relation = self.active_template_root.?.signature_relation;
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
-            break :blk switch (signature_relation) {
+            break :blk switch (final_signature_relation) {
                 .exact_graph => root_node,
                 .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
                     root_node,
@@ -4640,7 +5668,7 @@ const Builder = struct {
         return .{
             .reservation = reservation,
             .fn_template = fn_template,
-            .signature_relation = signature_relation,
+            .signature_relation = final_signature_relation,
             .root_node = completed_root,
             .lowered = lowered,
         };
@@ -4668,7 +5696,7 @@ const Builder = struct {
             .independent_roots => final_fn_ty,
         };
         self.program.setFnSource(pending.reservation.fn_id, def_template);
-        const sealed_fn_data = self.functionShape(final_fn_ty, "checked procedure template root type was not a function");
+        const sealed_fn_data = self.programFunctionShape(final_fn_ty, "checked procedure template root type was not a function");
         self.program.setDef(pending.reservation.def, .{
             .symbol = pending.reservation.symbol,
             .fn_def = def_template,
@@ -4688,11 +5716,16 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         raw_request_fn_node: NodeId,
         partial_evidence: []const SpecEvidence,
-        evidence_mode: DraftRequestEvidenceMode,
+        request_edge: DraftRequestEdge,
         signature_relation: Ast.SignatureRelation,
+        codec_contract_anchor: ?CheckedCodecContractAnchor,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
+        const codec_contract: ?DraftCodecContractContext = if (codec_contract_anchor) |anchor|
+            source_ctx.activeCodecContractContextForAnchor(anchor)
+        else
+            source_ctx.activeCodecContractContext();
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         if (partial_evidence.len > template.evidence_params.len) {
@@ -4705,15 +5738,20 @@ const Builder = struct {
         const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
-        // in its own specialization graph. Reuse that exact function instead
-        // of deferring a sibling body: doing so keeps recursion within one
-        // Monotype instantiation context and lets recursive representation
-        // evidence (notably forced-dynamic iterator flow) reach the root before
-        // its single seal.
+        // in its own specialization graph. A checked recursive reference to it
+        // reuses that exact function instead of deferring a sibling body:
+        // doing so keeps recursion within one Monotype instantiation context
+        // and lets recursive representation evidence (notably forced-dynamic
+        // iterator flow) reach the root before its single seal.
         if (self.active_template_root) |active_root| {
             if (active_root.graph == source_ctx.graph and
                 active_root.family.sameRecursiveCallable(family) and
-                specEvidenceVectorEql(active_root.evidence, evidence))
+                specEvidenceVectorEql(active_root.evidence, evidence) and
+                optionalDraftCodecContractContextEql(
+                    source_ctx.graph,
+                    active_root.codec_contract,
+                    codec_contract,
+                ))
             {
                 const exact_interface = source_ctx.graph.sameFunctionInterface(
                     active_root.request_fn_node,
@@ -4723,14 +5761,7 @@ const Builder = struct {
                     source_ctx.draft.current_owner,
                     active_root.fn_id,
                 );
-                const partial_recursive_allowed = active_recursive_edge and switch (evidence_mode) {
-                    .resolved => true,
-                    .synthesized => try draftRequestOverlapsInitialArgumentClass(
-                        source_ctx.graph,
-                        active_root.initial_request_arg_classes,
-                        request_fn_node,
-                    ),
-                };
+                const partial_recursive_allowed = active_recursive_edge and request_edge == .recursive_reference;
                 if (exact_interface or partial_recursive_allowed) {
                     if (active_recursive_edge) {
                         try source_ctx.graph.unifyRecursiveFunctionInterface(
@@ -4755,7 +5786,8 @@ const Builder = struct {
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
         const structural_lexical_dependent = template.target != .hosted and
             source_ctx.local_proc_contexts.count() != 0 and
-            specEvidenceContainsStructural(evidence);
+            (specEvidenceContainsStructural(evidence) or
+                source_ctx.activeCodecContractContainsLocalTarget());
         const lexical_context_key: ?names.TypeDigest = if (structural_lexical_dependent)
             try source_ctx.codecLexicalContextKey()
         else
@@ -4795,6 +5827,7 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
                     const spec_request = draftTemplateSpecLookupRequestNode(spec);
                     if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec_request)) continue;
                     const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec_request);
@@ -4823,6 +5856,7 @@ const Builder = struct {
                             const spec = &source_ctx.draft.template_specs.items[raw_spec];
                             if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                             if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                            if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
                             const exact_interface = source_ctx.graph.sameFunctionInterface(
                                 draftTemplateSpecLookupRequestNode(spec),
                                 request_fn_node,
@@ -4831,19 +5865,7 @@ const Builder = struct {
                                 source_ctx.draft.current_owner,
                                 spec.fn_id,
                             );
-                            // Synthesized component calls can share ubiquitous
-                            // result cells such as Bool across unrelated
-                            // component types; require an argument-class
-                            // anchor before treating a partial match as
-                            // recursion.
-                            const partial_recursive_allowed = active_recursive_edge and switch (evidence_mode) {
-                                .resolved => true,
-                                .synthesized => try draftRequestOverlapsInitialArgumentClass(
-                                    source_ctx.graph,
-                                    spec.initial_request_arg_classes,
-                                    request_fn_node,
-                                ),
-                            };
+                            const partial_recursive_allowed = active_recursive_edge and request_edge == .recursive_reference;
                             if (!draftOpenCandidateQualifies(
                                 spec.state,
                                 exact_interface,
@@ -4875,6 +5897,7 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
                     const spec_request = draftTemplateSpecLookupRequestNode(spec);
                     if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec_request)) continue;
                     const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec_request);
@@ -4896,9 +5919,7 @@ const Builder = struct {
             const candidate_owner = source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].parent_owner;
             switch (request_owner) {
                 .reserved_fn => |requesting_root| switch (candidate_owner) {
-                    .reserved_fn => |candidate_root| if (requesting_root != candidate_root) {
-                        self.countBodyDiagnostic("cross_root_template_reuses");
-                    },
+                    .reserved_fn => |candidate_root| _ = candidate_root != requesting_root,
                     .root, .draft_fn => {},
                 },
                 .root, .draft_fn => {},
@@ -4960,8 +5981,8 @@ const Builder = struct {
                 .source_fn_key = source_fn_key,
                 .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
                 .evidence_digest = evidence_digest,
-                .const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes),
-                .const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames),
+                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
             },
             .signature_relation = signature_relation,
@@ -5006,6 +6027,7 @@ const Builder = struct {
             .lexical_owner = lexical_owner,
             .lexical = lexical,
             .lexical_context_key = lexical_context_key,
+            .codec_contract = codec_contract,
             .fn_id = fn_id,
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
@@ -5065,6 +6087,12 @@ const Builder = struct {
             template.target != .hosted)
         {
             try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
+        }
+        if (codec_contract) |contract| {
+            try body_ctx.instantiateCodecContractAtCall(
+                contract.anchor,
+                contract.constructor_node,
+            );
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
         try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
@@ -5179,12 +6207,21 @@ const Builder = struct {
         evidence: StoredConstFnEvidence,
         request_fn_ty: Type.TypeId,
         request_fn_ty_digest: names.TypeDigest,
+        codec_contract: ?Ast.CodecContractIdentity,
         fn_id: Ast.FnId,
         status: Ast.SpecStatus,
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            templateSpecIdentity(template_ref, method_scope, source_fn_key, evidence_digest, request_fn_ty, request_fn_ty_digest),
+            templateSpecIdentity(
+                template_ref,
+                method_scope,
+                source_fn_key,
+                evidence_digest,
+                codec_contract,
+                request_fn_ty,
+                request_fn_ty_digest,
+            ),
             evidence,
             fn_id,
             status,
@@ -5198,13 +6235,14 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         evidence: StoredConstFnEvidence,
         capture_abi_digest: names.TypeDigest,
+        codec_contract: ?Ast.CodecContractIdentity,
         request_fn_ty: Type.TypeId,
         request_fn_ty_digest: names.TypeDigest,
         fn_id: Ast.FnId,
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, request_fn_ty, request_fn_ty_digest),
+            nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
             fn_id,
             .lowering,
@@ -5252,7 +6290,7 @@ const Builder = struct {
         if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name orelse return;
-        const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
+        const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));
         try draft.proc_debug_names.append(self.allocator, .{ .symbol = symbol, .name = name });
     }
 
@@ -5297,13 +6335,18 @@ const Builder = struct {
         owner_template: names.ProcTemplate,
         checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
-        const graph = try self.createGraph();
+        const destination_types = self.activeTypeStore();
+        const destination_names = self.activeNameStore();
+        const workspace = if (self.active_body_draft) |draft| draft.spec_job_workspace else null;
+        const graph = try self.createGraphForStores(destination_types, destination_names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
         var body_draft = BodyDraftStore.init(self.allocator);
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = destination_names;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
         defer body_draft.deinit();
@@ -5316,7 +6359,8 @@ const Builder = struct {
 
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
-        if (self.type_cache.get(address)) |cached| return cached;
+        const cache = self.activeCheckedTypeCache();
+        if (cache.get(address)) |cached| return cached;
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
@@ -5327,11 +6371,11 @@ const Builder = struct {
             checked_ty: checked.CheckedTypeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
-                try context.builder.type_cache.put(context.address, reserved);
+                try context.builder.activeCheckedTypeCache().put(context.address, reserved);
                 return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.view.types.payload(context.checked_ty));
             }
         };
-        return try self.program.types.addRecursive(Context{
+        return try self.activeTypeStore().addRecursive(Context{
             .builder = self,
             .address = address,
             .view = view,
@@ -5352,14 +6396,14 @@ const Builder = struct {
             .tuple => |items| blk: {
                 const lowered = try self.lowerTypeSlice(view, items);
                 defer self.allocator.free(lowered);
-                break :blk .{ .tuple = try self.program.types.addSpan(lowered) };
+                break :blk .{ .tuple = try self.activeTypeStore().addSpan(lowered) };
             },
             .tag_union => |tag_union| try self.lowerTagUnionRow(view, tag_union.tags, tag_union.ext),
             .function => |fn_ty| blk: {
                 const args = try self.lowerTypeSlice(view, fn_ty.args);
                 defer self.allocator.free(args);
                 break :blk .{ .func = .{
-                    .args = try self.program.types.addSpan(args),
+                    .args = try self.activeTypeStore().addSpan(args),
                     .ret = try self.lowerType(view, fn_ty.ret),
                 } };
             },
@@ -5370,7 +6414,7 @@ const Builder = struct {
                     .named_type = .{ .module = self.declaredModuleForAlias(view, alias), .ty = checked_ty },
                     .def = try self.typeDef(view, alias.origin_module, alias.name, alias.source_decl),
                     .kind = .alias,
-                    .args = try self.program.types.addSpan(args),
+                    .args = try self.activeTypeStore().addSpan(args),
                     .backing = .{
                         .ty = try self.lowerType(view, alias.backing),
                         .use = .inspectable,
@@ -5410,13 +6454,13 @@ const Builder = struct {
                 defer self.allocator.free(args);
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 const def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
-                self.noteBuiltinTryDef(nominal.builtin, &self.program.names, def);
+                self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = checked_ty },
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
-                    .args = try self.program.types.addSpan(args),
+                    .args = try self.activeTypeStore().addSpan(args),
                     .backing = switch (nominal.representation) {
                         .opaque_without_backing => null,
                         .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => .{
@@ -5449,7 +6493,7 @@ const Builder = struct {
     }
 
     fn namedBackingType(self: *Builder, ty: Type.TypeId) ?Type.TypeId {
-        return switch (self.program.types.get(ty)) {
+        return switch (self.activeTypeStore().get(ty)) {
             .named => |named| if (named.backing) |backing| backing.ty else null,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
         };
@@ -5472,7 +6516,7 @@ const Builder = struct {
     fn nominalConstructionLayer(self: *Builder, ty: Type.TypeId) ?NominalConstructionLayer {
         var current = ty;
         while (true) {
-            switch (self.program.types.get(current)) {
+            switch (self.activeTypeStore().get(current)) {
                 .named => |named| {
                     const backing = named.backing orelse return null;
                     switch (named.kind) {
@@ -5486,29 +6530,33 @@ const Builder = struct {
     }
 
     fn shapeContent(self: *Builder, ty: Type.TypeId) Type.Content {
+        return shapeContentFromStore(self.activeTypeStore(), ty);
+    }
+
+    fn shapeContentFromStore(type_store: *const Type.Store, ty: Type.TypeId) Type.Content {
         var current = ty;
         while (true) {
-            switch (self.program.types.get(current)) {
+            switch (type_store.get(current)) {
                 .named => |named| if (named.backing) |backing| {
                     current = backing.ty;
                     continue;
                 } else {
-                    return self.program.types.get(current);
+                    return type_store.get(current);
                 },
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return self.program.types.get(current),
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return type_store.get(current),
             }
         }
     }
 
     fn typeHasBuiltinOwner(self: *Builder, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (methodOwnerFromType(&self.program.types, ty) orelse return false) {
+        return switch (methodOwnerFromType(self.activeTypeStore(), ty) orelse return false) {
             .builtin => |actual| actual == owner,
             .nominal => false,
         };
     }
 
     fn typeIsBuiltinJsonEncoding(self: *Builder, ty: Type.TypeId) bool {
-        return switch (self.program.types.get(ty)) {
+        return switch (self.activeTypeStore().get(ty)) {
             .named => |named| blk: {
                 if (self.typeDefIsBuiltinJsonEncoding(named.def)) break :blk true;
                 if (named.kind == .alias) {
@@ -5521,13 +6569,13 @@ const Builder = struct {
     }
 
     fn typeDefIsBuiltinJsonEncoding(self: *Builder, def: Type.TypeDef) bool {
-        const type_name = self.program.names.typeNameText(def.type_name);
+        const type_name = self.activeNameStore().typeNameText(def.type_name);
         if (!Ident.textEql(type_name, "JsonEncoding") and !Ident.textEql(type_name, "Builtin.Encoding.JsonEncoding")) return false;
         return self.moduleIdentityIsBuiltin(def.module);
     }
 
     fn moduleIdentityIsBuiltin(self: *Builder, module: names.ModuleIdentityId) bool {
-        const origin_hash = self.program.names.moduleIdentityBytes(module);
+        const origin_hash = self.activeNameStore().moduleIdentityBytes(module);
         if (self.moduleViewHasBuiltinIdentity(moduleView(self.root_view), origin_hash)) return true;
         for (self.modules.imports) |imported| {
             if (self.moduleViewHasBuiltinIdentity(moduleView(imported), origin_hash)) return true;
@@ -5544,13 +6592,13 @@ const Builder = struct {
 
     fn recordFieldByTextOptional(self: *Builder, ty: Type.TypeId, text: []const u8) ?Type.Field {
         const fields = switch (self.shapeContent(ty)) {
-            .record => |span| self.program.types.fieldSpan(span),
+            .record => |span| self.activeTypeStore().fieldSpan(span),
             .zst => return null,
             .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
-            if (Ident.textEql(self.program.names.recordFieldLabelText(field.name), text)) return field;
+            if (Ident.textEql(self.activeNameStore().recordFieldLabelText(field.name), text)) return field;
         }
         return null;
     }
@@ -5574,7 +6622,7 @@ const Builder = struct {
         if (!self.typeHasBuiltinOwner(spec_ty, .parse_tag_union_spec)) return false;
         const backing_ty = self.namedBackingType(spec_ty) orelse return false;
         return switch (self.shapeContent(backing_ty)) {
-            .record => |span| self.program.types.fieldSpan(span).len != 0,
+            .record => |span| self.activeTypeStore().fieldSpan(span).len != 0,
             .zst => false,
             _ => return false,
         };
@@ -5582,6 +6630,13 @@ const Builder = struct {
 
     fn functionShape(self: *Builder, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
         return switch (self.shapeContent(ty)) {
+            .func => |func| .{ .args = func.args, .ret = func.ret },
+            .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => Common.invariant(message),
+        };
+    }
+
+    fn programFunctionShape(self: *Builder, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
+        return switch (shapeContentFromStore(&self.program.types, ty)) {
             .func => |func| .{ .args = func.args, .ret = func.ret },
             .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => Common.invariant(message),
         };
@@ -5604,10 +6659,10 @@ const Builder = struct {
     fn tagPayloadSpan(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.Span {
         return switch (self.shapeContent(ty)) {
             .tag_union => |tags| {
-                const tag_span = self.program.types.tagSpan(tags);
+                const tag_span = self.activeTypeStore().tagSpan(tags);
                 for (0..GuardedList.borrowLen(tag_span)) |index| {
                     const tag = GuardedList.at(tag_span, index);
-                    if (self.program.names.tagLabelTextEql(tag.name, name)) return tag.payloads;
+                    if (self.activeNameStore().tagLabelTextEql(tag.name, name)) return tag.payloads;
                 }
                 Common.invariant("tag pattern was absent from checked tag-union type");
             },
@@ -5621,13 +6676,18 @@ const Builder = struct {
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        const graph = try self.createGraph();
+        const destination_types = self.activeTypeStore();
+        const destination_names = self.activeNameStore();
+        const workspace = if (self.active_body_draft) |draft| draft.spec_job_workspace else null;
+        const graph = try self.createGraphForStores(destination_types, destination_names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
         var body_draft = BodyDraftStore.init(self.allocator);
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = destination_names;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
         defer body_draft.deinit();
@@ -5666,10 +6726,11 @@ const Builder = struct {
         var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
         var current = backing;
+        const type_store = self.activeTypeStore();
         while (true) {
             if (seen.contains(current)) return current;
             try seen.put(current, {});
-            switch (self.program.types.get(current)) {
+            switch (type_store.get(current)) {
                 .named => |named| {
                     if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
                         return current;
@@ -5683,27 +6744,29 @@ const Builder = struct {
     }
 
     fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) bool {
-        const actual = self.program.types.span(actual_span);
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const actual = type_store.span(actual_span);
         if (actual.len != expected.len) return false;
         for (expected, 0..) |expected_ty, index| {
             const actual_ty = GuardedList.at(actual, index);
             if (actual_ty == expected_ty) continue;
-            const actual_digest = self.program.types.specializationDigest(&self.program.names, actual_ty);
-            const expected_digest = self.program.types.specializationDigest(&self.program.names, expected_ty);
+            const actual_digest = type_store.specializationDigest(name_store, actual_ty);
+            const expected_digest = type_store.specializationDigest(name_store, expected_ty);
             if (!std.mem.eql(u8, actual_digest.bytes[0..], expected_digest.bytes[0..])) return false;
         }
         return true;
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
-        return self.program.types.span(self.tupleItemSpan(ty));
+        return self.activeTypeStore().span(self.tupleItemSpan(ty));
     }
 
     fn recordField(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
-        const fields = self.program.types.fieldSpan(self.recordFieldsSpan(ty));
+        const fields = self.activeTypeStore().fieldSpan(self.recordFieldsSpan(ty));
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
-            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field;
+            if (self.activeNameStore().recordFieldLabelTextEql(field.name, name)) return field;
         }
         Common.invariant("record pattern field was absent from checked record type");
     }
@@ -5713,7 +6776,7 @@ const Builder = struct {
     }
 
     fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
-        return self.program.types.span(self.tagPayloadSpan(ty, name));
+        return self.activeTypeStore().span(self.tagPayloadSpan(ty, name));
     }
 
     /// The closed structural tagged slot of an optional field:
@@ -5722,27 +6785,31 @@ const Builder = struct {
     /// variant 1—the discriminant contract every consumer (construction,
     /// `.?` runtime tests, layout, glue) shares.
     fn optionalSlotType(self: *Builder, payload_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        const missing = try self.program.names.internTagLabel(optional_slot_missing_tag);
-        const present = try self.program.names.internTagLabel(optional_slot_present_tag);
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const missing = try name_store.internTagLabel(optional_slot_missing_tag);
+        const present = try name_store.internTagLabel(optional_slot_present_tag);
         const tags = [_]Type.Store.TagInput{
             .{ .name = missing, .checked_name = missing, .payloads = &.{} },
             .{ .name = present, .checked_name = present, .payloads = &.{payload_ty} },
         };
-        return try self.program.types.internTagUnion(&self.program.names, &tags);
+        return try type_store.internTagUnion(name_store, &tags);
     }
 
     /// The tags and payload type of an optional field's Monotype tagged slot.
     fn optionalSlotInfo(self: *Builder, slot_ty: Type.TypeId) Allocator.Error!OptionalSlotInfo {
-        const missing_name = try self.program.names.internTagLabel(optional_slot_missing_tag);
-        const present_name = try self.program.names.internTagLabel(optional_slot_present_tag);
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const missing_name = try name_store.internTagLabel(optional_slot_missing_tag);
+        const present_name = try name_store.internTagLabel(optional_slot_present_tag);
         const missing_tag = self.tagByNameOrNull(slot_ty, missing_name) orelse
             Common.invariant("optional field slot type had no Missing tag");
         const present_tag = self.tagByNameOrNull(slot_ty, present_name) orelse
             Common.invariant("optional field slot type had no Present tag");
-        if (self.program.types.span(missing_tag.payloads).len != 0) {
+        if (type_store.span(missing_tag.payloads).len != 0) {
             Common.invariant("optional field slot Missing tag unexpectedly had payloads");
         }
-        const present_payloads = self.program.types.span(present_tag.payloads);
+        const present_payloads = type_store.span(present_tag.payloads);
         if (present_payloads.len != 1) {
             Common.invariant("optional field slot Present tag must carry exactly one payload");
         }
@@ -5756,7 +6823,7 @@ const Builder = struct {
     /// Recognize the compiler-reserved optional-slot encoding when only a
     /// completed Monotype is available (design.md "Field Kinds").
     fn optionalFieldSlot(self: *Builder, slot_ty: Type.TypeId) ?OptionalSlotInfo {
-        return optionalFieldSlotForType(&self.program.types, &self.program.names, slot_ty);
+        return optionalFieldSlotForType(self.activeTypeStore(), self.activeNameStore(), slot_ty);
     }
 
     fn lowerRecordFields(self: *Builder, view: ModuleView, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
@@ -5776,7 +6843,8 @@ const Builder = struct {
                 .default = try self.monoFieldDefault(view, field),
             };
         }
-        return .{ .record = try self.program.types.addRecordFields(&self.program.names, lowered) };
+        const type_store = self.activeTypeStore();
+        return .{ .record = try type_store.addRecordFields(self.activeNameStore(), lowered) };
     }
 
     /// Translate a checked `??` identity into the Monotype name store.
@@ -5784,7 +6852,7 @@ const Builder = struct {
         const default = field.kind.defaultIdentity() orelse return null;
         const origin_module = default.origin() orelse Common.invariant("defaulted checked field carried no default origin module");
         return .{
-            .module = try self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
+            .module = try self.activeNameStore().internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
             .expr_node = default.expr_node,
         };
     }
@@ -5827,7 +6895,8 @@ const Builder = struct {
             }
         }
 
-        return .{ .record = try self.program.types.addRecordFields(&self.program.names, fields.items) };
+        const type_store = self.activeTypeStore();
+        return .{ .record = try type_store.addRecordFields(self.activeNameStore(), fields.items) };
     }
 
     fn appendRecordFields(
@@ -5886,7 +6955,8 @@ const Builder = struct {
             }
         }
 
-        return .{ .tag_union = try self.program.types.addTagVariants(&self.program.names, tags.items) };
+        const type_store = self.activeTypeStore();
+        return .{ .tag_union = try type_store.addTagVariants(self.activeNameStore(), tags.items) };
     }
 
     fn appendTags(
@@ -5902,7 +6972,7 @@ const Builder = struct {
             try out.append(self.allocator, .{
                 .name = tag_name,
                 .checked_name = tag_name,
-                .payloads = try self.program.types.addSpan(payloads),
+                .payloads = try self.activeTypeStore().addSpan(payloads),
             });
         }
     }
@@ -6052,7 +7122,7 @@ const Builder = struct {
                 },
             }
         }
-        return try self.program.types.addDeclaredFields(entries);
+        return try self.activeTypeStore().addDeclaredFields(entries);
     }
 
     fn lowerCheckedDeclaredOrder(
@@ -6076,7 +7146,7 @@ const Builder = struct {
                 },
             };
         }
-        return try self.program.types.addDeclaredFields(entries);
+        return try self.activeTypeStore().addDeclaredFields(entries);
     }
 
     fn constNode(self: *Builder, const_locator: checked.ConstLocator, node: ?checked.ConstNodeId) ConstNode {
@@ -6243,7 +7313,7 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
     ) Allocator.Error!?MethodLookup {
-        const method = try self.program.names.internMethodName(method_name);
+        const method = try self.activeNameStore().internMethodName(method_name);
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
         if (self.scoped_method_targets.get(address)) |resolution| {
             return switch (resolution) {
@@ -6493,8 +7563,8 @@ const Builder = struct {
             .count,
             null,
             null,
-            null,
             .immediate,
+            null,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -6551,7 +7621,9 @@ const Builder = struct {
                     &.{},
                     fn_ctx.evidence,
                     null,
+                    false,
                     .exact_graph,
+                    null,
                 );
                 const draft_fn = switch (fn_target) {
                     .draft => |id| id,
@@ -6587,8 +7659,8 @@ const Builder = struct {
                     .count,
                     null,
                     retained,
-                    null,
                     .immediate,
+                    null,
                 );
                 return self.defFnId(def);
             },
@@ -6606,6 +7678,12 @@ const Builder = struct {
         requested: Ast.SignatureRelation,
     ) void {
         if (requested != .exact_graph) return;
+        if (self.active_template_root) |*active_root| {
+            if (active_root.fn_id == fn_id and self.hasPrivateTypeDestination()) {
+                active_root.signature_relation = .exact_graph;
+                return;
+            }
+        }
         var fn_ = self.program.getFn(fn_id);
         if (fn_.signature_relation == .exact_graph) return;
         fn_.signature_relation = .exact_graph;
@@ -6675,10 +7753,16 @@ const Builder = struct {
         capture_entry_guards: []const NodeId,
         requested_evidence: EvidenceChain,
         owned_scope: ?checked.DispatchScopeId,
+        recursive_reference: bool,
         signature_relation: Ast.SignatureRelation,
+        codec_contract_anchor: ?CheckedCodecContractAnchor,
     ) Allocator.Error!DraftFnTarget {
         self.count("nested_requests");
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
+        const codec_contract: ?DraftCodecContractContext = if (codec_contract_anchor) |anchor|
+            source_ctx.activeCodecContractContextForAnchor(anchor)
+        else
+            source_ctx.activeCodecContractContext();
         const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
         const stored_evidence = try self.constFnEvidence(requested_evidence);
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
@@ -6718,6 +7802,7 @@ const Builder = struct {
                         continue;
                     }
                     if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
                     if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                     if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                     const spec_fn_ty = spec.request_fn_ty orelse continue;
@@ -6734,6 +7819,7 @@ const Builder = struct {
                         if (spec.state != .lowered) continue;
                         if (spec.request_fn_ty != null) continue;
                         if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                        if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                         if (signature_relation == .exact_graph and
@@ -6766,6 +7852,7 @@ const Builder = struct {
                             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                             if (spec.request_fn_ty != null) continue;
                             if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                            if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                             if (signature_relation == .exact_graph and
@@ -6783,7 +7870,7 @@ const Builder = struct {
                                 spec.state,
                                 exact_interface,
                                 active_recursive_edge,
-                                true,
+                                recursive_reference,
                             )) continue;
                             if (!selection.add(raw_spec, exact_interface)) {
                                 Common.invariant("draft nested request matched more than one partial active recursive specialization");
@@ -6793,55 +7880,27 @@ const Builder = struct {
                 }
             }
         }
-        if (selection.selected() == null) {
+        // A checked recursive reference whose fresh cells have not yet joined
+        // any interface class above names the in-progress specialization of
+        // the same site on its own ownership chain.
+        if (selection.selected() == null and recursive_reference) {
             for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
+                if (spec.state != .lowering) continue;
+                if (spec.request_fn_ty != null) continue;
                 if (signature_relation == .exact_graph and
                     source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
                 {
                     continue;
                 }
-                if (!try draftNestedActiveRecursiveCandidate(
-                    source_ctx.graph,
-                    spec,
-                    family,
-                    capture_entry_guards,
-                    requested_evidence,
-                    source_ctx.draft.current_owner,
-                )) continue;
+                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) continue;
+                if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                if (!source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id)) continue;
                 const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!selection.add(raw_spec, false)) {
-                    Common.invariant("draft nested request matched more than one active recursive specialization");
+                    Common.invariant("checked recursive nested reference matched more than one in-progress specialization on its ownership chain");
                 }
-            }
-        }
-        if (selection.selected() == null) {
-            var capture_anchor: ?u32 = null;
-            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
-                if (signature_relation == .exact_graph and
-                    source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
-                {
-                    continue;
-                }
-                if (!try draftNestedCaptureAnchoredRecursiveCandidate(
-                    source_ctx.graph,
-                    spec,
-                    family,
-                    request_fn_node,
-                    capture_entry_guards,
-                    requested_evidence,
-                )) continue;
-                const raw_spec: u32 = @intCast(raw_spec_usize);
-                if (capture_anchor) |anchor_raw| {
-                    const anchor = &source_ctx.draft.nested_specs.items[anchor_raw];
-                    const candidate_request = try source_ctx.graph.functionNodes(spec.request_fn_node);
-                    try source_ctx.graph.markRecursiveValueSlot(candidate_request.ret);
-                    try source_ctx.graph.unify(anchor.request_fn_node, spec.request_fn_node);
-                } else {
-                    capture_anchor = raw_spec;
-                }
-            }
-            if (capture_anchor) |raw_spec| {
-                if (!selection.add(raw_spec, false)) unreachable;
             }
         }
         if (selection.selected()) |raw_spec| {
@@ -6851,27 +7910,12 @@ const Builder = struct {
             // checked cells before reusing the in-progress definition.
             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
             const active_recursive_edge = spec.state == .lowering and
-                (source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id) or
-                    try draftNestedActiveRecursiveCandidate(
-                        source_ctx.graph,
-                        spec,
-                        family,
-                        capture_entry_guards,
-                        requested_evidence,
-                        source_ctx.draft.current_owner,
-                    ));
-            if (try draftNestedCaptureAnchoredRecursiveCandidate(
-                source_ctx.graph,
-                spec,
-                family,
-                request_fn_node,
-                capture_entry_guards,
-                requested_evidence,
-            )) {
-                const request = try source_ctx.graph.functionNodes(request_fn_node);
-                try source_ctx.graph.markRecursiveValueSlot(request.ret);
-            }
+                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
             if (active_recursive_edge) {
+                // A recursive edge into a function with no arguments carries
+                // its recursive value flow through the result alone.
+                const request = try source_ctx.graph.functionNodes(request_fn_node);
+                if (request.args.len == 0) try source_ctx.graph.markRecursiveValueSlot(request.ret);
                 try source_ctx.graph.unifyRecursiveFunctionInterface(
                     spec.request_fn_node,
                     spec.initial_request_arg_classes,
@@ -6914,8 +7958,8 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .evidence_digest = evidence_digest,
-            .const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
         }, .signature_relation = signature_relation });
         const symbol = self.symbols.fresh();
@@ -6935,6 +7979,7 @@ const Builder = struct {
             .demand_start = @intCast(source_ctx.draft.runtime_value_demands.items.len),
             .demand_frame_floor = source_ctx.runtime_demand_guard_frames,
             .capture_entry_guards = try source_ctx.graph.arena().dupe(NodeId, capture_entry_guards),
+            .codec_contract = codec_contract,
             .lexical_owner = source_ctx.draft.current_owner,
             .requires_local = evidenceChainRequiresLocalContext(requested_evidence),
             .local_context_dependent = evidenceChainRequiresLocalContext(requested_evidence),
@@ -6966,8 +8011,15 @@ const Builder = struct {
         defer owner_scope.leave();
 
         var nested_ctx = try source_ctx.nestedInstantiationContext(source_fn_key);
+        nested_ctx.in_deferred_body = true;
         nested_ctx.evidence = requested_evidence;
         defer nested_ctx.deinit();
+        if (codec_contract) |contract| {
+            try nested_ctx.instantiateCodecContractAtCall(
+                contract.anchor,
+                contract.constructor_node,
+            );
+        }
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
@@ -7161,6 +8213,20 @@ const Builder = struct {
         if (!std.mem.eql(u8, left.method_scope.bytes[0..], right.method_scope.bytes[0..])) return false;
         if (!std.mem.eql(u8, left.source_fn_ty_digest.bytes[0..], right.source_fn_ty_digest.bytes[0..])) return false;
         if (!std.meta.eql(left.evidence_digest, right.evidence_digest)) return false;
+        if (!std.mem.eql(u8, left.codec_contract_digest.bytes[0..], right.codec_contract_digest.bytes[0..])) return false;
+        if ((left.codec_contract == null) != (right.codec_contract == null)) return false;
+        if (left.codec_contract) |left_contract| {
+            const right_contract = right.codec_contract.?;
+            if (!std.meta.eql(left_contract.module, right_contract.module) or
+                left_contract.derivation != right_contract.derivation or
+                left_contract.kind != right_contract.kind or
+                !std.meta.eql(left_contract.constructor_ty_digest, right_contract.constructor_ty_digest) or
+                !try self.program.types.typeEql(
+                    &self.program.names,
+                    left_contract.constructor_ty,
+                    right_contract.constructor_ty,
+                )) return false;
+        }
         if (!std.mem.eql(u8, left.request_fn_ty_digest.bytes[0..], right.request_fn_ty_digest.bytes[0..])) return false;
         return try self.program.types.typeEql(&self.program.names, left.request_fn_ty, right.request_fn_ty);
     }
@@ -7259,12 +8325,12 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
+        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
         var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -7418,12 +8484,12 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
+        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
         var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -7504,11 +8570,11 @@ const Builder = struct {
         defer ctx.deinit();
         ctx.evidence = boundary.evidence;
         ctx.current_fn_key = boundary.current_fn_key;
-        ctx.active_codec_contract = .{
-            .structural = boundary.structural,
-            .callable_node = boundary.callable_node,
-            .shape_node = boundary.shape_node,
-        };
+        ctx.active_codec_contract = try ctx.instantiateCodecContract(
+            boundary.structural,
+            boundary.callable_node,
+            boundary.shape_node,
+        );
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
         const kind: CodecKind = switch (boundary.plan.result_mode) {
@@ -7555,6 +8621,8 @@ const Builder = struct {
         ctx.evidence = boundary.evidence;
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
+        try ctx.installRetainedCodecContract(boundary.codec_contract orelse
+            Common.invariant("deferred parse-tag-union intrinsic had no enclosing codec contract"));
 
         const callable = try graph.functionNodes(boundary.callable_node);
         const constructor_node = try ctx.parseTagUnionSyntheticBoundary(callable, callable.ret);
@@ -7604,12 +8672,12 @@ const Builder = struct {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
-            const saved_loc = self.program.current_loc;
-            defer self.program.current_loc = saved_loc;
-            const saved_region = self.program.current_region;
-            defer self.program.current_region = saved_region;
-            self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            const saved_loc = self.current_loc;
+            defer self.current_loc = saved_loc;
+            const saved_region = self.current_region;
+            defer self.current_region = saved_region;
+            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
             var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -7677,12 +8745,12 @@ const Builder = struct {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
-            const saved_loc = self.program.current_loc;
-            defer self.program.current_loc = saved_loc;
-            const saved_region = self.program.current_region;
-            defer self.program.current_region = saved_region;
-            self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            const saved_loc = self.current_loc;
+            defer self.current_loc = saved_loc;
+            const saved_region = self.current_region;
+            defer self.current_region = saved_region;
+            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
             var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -7771,12 +8839,12 @@ const Builder = struct {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
-            const saved_loc = self.program.current_loc;
-            defer self.program.current_loc = saved_loc;
-            const saved_region = self.program.current_region;
-            defer self.program.current_region = saved_region;
-            self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            const saved_loc = self.current_loc;
+            defer self.current_loc = saved_loc;
+            const saved_region = self.current_region;
+            defer self.current_region = saved_region;
+            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
             var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -7823,12 +8891,12 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
+        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
         var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -7896,6 +8964,7 @@ const Builder = struct {
         draft_fn_ty: Type.TypeId,
         coordinator_fn_ty: Type.TypeId,
         body_scheduling: TemplateBodyScheduling,
+        codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.template_specs.items.len) {
             Common.invariant("deferred template specialization index was outside the draft table");
@@ -7908,6 +8977,7 @@ const Builder = struct {
             draft_fn_ty,
             coordinator_fn_ty,
             body_scheduling,
+            codec_contract,
         );
         body_draft.template_specs.items[spec_index].resolved_slot = resolved_slot;
         body_draft.template_specs.items[spec_index].state = .resolved;
@@ -7920,14 +8990,15 @@ const Builder = struct {
         draft_fn_ty: Type.TypeId,
         coordinator_fn_ty: Type.TypeId,
         body_scheduling: TemplateBodyScheduling,
+        codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!Ast.FnSlot {
         const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
 
         const requested_evidence = StoredConstFnEvidence{
-            .nodes = self.program.constFnEvidence(draft_fn.source.const_evidence),
-            .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
+            .nodes = body_draft.constFnEvidence(draft_fn.source.const_evidence),
+            .frames = body_draft.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
             .head = draft_fn.source.const_evidence_frame_head,
         };
         const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
@@ -7936,6 +9007,7 @@ const Builder = struct {
             spec.method_scope,
             spec.source_fn_key,
             draft_fn.source.evidence_digest,
+            self.codecContractIdentity(codec_contract),
             coordinator_fn_ty,
             request_digest,
         );
@@ -7983,8 +9055,8 @@ const Builder = struct {
                 .already_counted,
                 request_digest,
                 null,
-                null,
                 body_scheduling,
+                codec_contract,
             );
             break :blk .{ .local = self.defFnId(def) };
         };
@@ -7998,6 +9070,7 @@ const Builder = struct {
         draft_fn_ty: Type.TypeId,
         coordinator_fn_ty: Type.TypeId,
         body_scheduling: TemplateBodyScheduling,
+        codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.sealed_template_specs.items.len) {
             Common.invariant("sealed template specialization index was outside the intent table");
@@ -8010,6 +9083,7 @@ const Builder = struct {
             draft_fn_ty,
             coordinator_fn_ty,
             body_scheduling,
+            codec_contract,
         );
         body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved_slot;
         body_draft.sealed_template_specs.items[spec_index].state = .resolved;
@@ -8031,6 +9105,12 @@ const Builder = struct {
             const spec = &body_draft.sealed_template_specs.items[spec_index];
             const draft_fn_ty = spec.request_fn_ty;
             const coordinator_fn_ty = try committed_types.commitType(draft_fn_ty);
+            const codec_contract: ?SealedCodecContractContext = if (spec.codec_contract) |contract| .{
+                .anchor = contract.anchor,
+                .constructor_ty = try committed_types.commitType(
+                    contract.constructor_ty,
+                ),
+            } else null;
             // Seal-time requests are symbolic: they reserve the callee's id
             // for call-site patching and queue the body for the wave drain.
             try self.resolveSealedTemplateSpecAtType(
@@ -8039,6 +9119,7 @@ const Builder = struct {
                 draft_fn_ty,
                 coordinator_fn_ty,
                 .queued,
+                codec_contract,
             );
         }
     }
@@ -8086,6 +9167,18 @@ const Builder = struct {
         defer self.allocator.free(allow_identity_merge);
         @memset(allow_identity_merge, true);
 
+        for (body_draft.sealed_nested_specs.items) |*spec| {
+            spec.sealed_codec_contract = if (spec.codec_contract) |contract|
+                self.codecContractIdentity(.{
+                    .anchor = contract.anchor,
+                    .constructor_ty = try committed_types.commitType(
+                        contract.constructor_ty,
+                    ),
+                })
+            else
+                null;
+        }
+
         var next_fn: u32 = @intCast(self.program.fnCount());
         for (body_draft.fns.items, 0..) |fn_, raw_index| {
             const draft_id: DraftFnId = @enumFromInt(@as(u32, @intCast(raw_index)));
@@ -8101,19 +9194,37 @@ const Builder = struct {
                 }
             }
 
-            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source);
+            // Evidence does not participate in the specialization type digest.
+            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, 0, 0);
             const fn_ty = sealed_template.mono_fn_ty;
             const digest = self.specializationTypeDigest(fn_ty);
             const requested_evidence = StoredConstFnEvidence{
-                .nodes = self.program.constFnEvidence(sealed_template.const_evidence),
-                .frames = self.program.constFnEvidenceFrames(sealed_template.const_evidence_frames),
-                .head = sealed_template.const_evidence_frame_head,
+                .nodes = body_draft.constFnEvidence(fn_.source.const_evidence),
+                .frames = body_draft.constFnEvidenceFrames(fn_.source.const_evidence_frames),
+                .head = fn_.source.const_evidence_frame_head,
             };
             var identity: ?Ast.SpecIdentity = null;
             var lexical_owner: ?DraftOwner = null;
             if (template_spec) |spec| {
                 if (!spec.local_context_dependent) {
-                    identity = templateSpecIdentity(spec.template_ref, spec.method_scope, spec.source_fn_key, sealed_template.evidence_digest, fn_ty, digest);
+                    const codec_contract = if (spec.codec_contract) |contract|
+                        self.codecContractIdentity(.{
+                            .anchor = contract.anchor,
+                            .constructor_ty = try committed_types.commitType(
+                                contract.constructor_ty,
+                            ),
+                        })
+                    else
+                        null;
+                    identity = templateSpecIdentity(
+                        spec.template_ref,
+                        spec.method_scope,
+                        spec.source_fn_key,
+                        sealed_template.evidence_digest,
+                        codec_contract,
+                        fn_ty,
+                        digest,
+                    );
                 }
                 lexical_owner = spec.lexical_owner;
                 allow_imported[raw_index] = !spec.requires_local;
@@ -8129,6 +9240,7 @@ const Builder = struct {
                                 spec.source_fn_key,
                                 sealed_template.evidence_digest,
                                 spec.capture_abi_digest,
+                                spec.sealed_codec_contract,
                                 fn_ty,
                                 digest,
                             );
@@ -8169,8 +9281,8 @@ const Builder = struct {
                         if (try self.draftSpecIdentityEql(existing, wanted)) {
                             const prior_template = body_draft.fns.items[prior].source;
                             const prior_evidence = StoredConstFnEvidence{
-                                .nodes = self.program.constFnEvidence(prior_template.const_evidence),
-                                .frames = self.program.constFnEvidenceFrames(prior_template.const_evidence_frames),
+                                .nodes = body_draft.constFnEvidence(prior_template.const_evidence),
+                                .frames = body_draft.constFnEvidenceFrames(prior_template.const_evidence_frames),
                                 .head = prior_template.const_evidence_frame_head,
                             };
                             if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
@@ -8357,6 +9469,10 @@ const Builder = struct {
                 .source_fn_key = spec.source_fn_key,
                 .request_fn_ty = request_ty,
                 .evidence = spec.evidence,
+                .codec_contract = if (spec.codec_contract) |contract| .{
+                    .anchor = contract.anchor,
+                    .constructor_ty = try sealer.sealNode(contract.constructor_node),
+                } else null,
                 .requires_local = spec.requires_local,
                 .local_context_dependent = spec.local_context_dependent,
                 .lexical_owner = spec.lexical_owner,
@@ -8380,6 +9496,10 @@ const Builder = struct {
                     sealer,
                     spec.capture_entry_guards,
                 ),
+                .codec_contract = if (spec.codec_contract) |contract| .{
+                    .anchor = contract.anchor,
+                    .constructor_ty = try sealer.sealNode(contract.constructor_node),
+                } else null,
                 .lexical_owner = spec.lexical_owner,
                 .requires_local = spec.requires_local,
                 .local_context_dependent = spec.local_context_dependent,
@@ -8537,6 +9657,7 @@ const Builder = struct {
         body_draft: *BodyDraftStore,
         root_ty: Type.TypeId,
         committed_types: *CommittedGraphTypes,
+        root_def: ?DraftDefId,
     ) Allocator.Error!ActiveBodyDraftSeal {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
         defer timing_scope.end();
@@ -8577,7 +9698,7 @@ const Builder = struct {
             .root_ty = sealed_root,
             .root_tys = sealed_roots,
             .extra_ty = null,
-            .root_def = null,
+            .root_def = if (root_def) |draft_def| body_ids.def(draft_def) else null,
             .root_fn = null,
             .core_maps = retained_core_maps,
         };
@@ -8621,7 +9742,7 @@ const Builder = struct {
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             const capture_abi_digest = spec.capture_abi_digest;
             if (try self.spec_store.findLocal(
-                nestedSpecIdentity(spec.nested, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, fn_ty, digest),
+                nestedSpecIdentity(spec.nested, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
                 specializationEvidenceView(evidence),
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
@@ -8630,6 +9751,7 @@ const Builder = struct {
                 spec.source_fn_key,
                 evidence,
                 capture_abi_digest,
+                spec.sealed_codec_contract,
                 fn_ty,
                 digest,
                 fn_id,
@@ -8674,15 +9796,20 @@ const Builder = struct {
         };
     }
 
-    fn constFnTemplateToMono(self: *Builder, fn_value: anytype, mono_fn_ty: Type.TypeId) Allocator.Error!Ast.FnTemplate {
+    fn constFnTemplateToMono(
+        self: *Builder,
+        fn_value: anytype,
+        mono_fn_ty: Type.TypeId,
+        retain_program_evidence: bool,
+    ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = try self.constFnDefToMono(fn_value.fn_def),
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = mono_fn_ty,
-            .const_evidence = try self.program.addConstFnEvidence(fn_value.evidence),
-            .const_evidence_frames = try self.program.addConstFnEvidenceFrames(fn_value.evidence_frames),
-            .const_evidence_frame_head = fn_value.evidence_frame_head,
+            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .empty(),
+            .const_evidence_frames = if (retain_program_evidence) try self.program.addConstFnEvidenceFrames(fn_value.evidence_frames) else .empty(),
+            .const_evidence_frame_head = if (retain_program_evidence) fn_value.evidence_frame_head else null,
         };
     }
 
@@ -8692,8 +9819,9 @@ const Builder = struct {
         fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         mono_fn_ty: Type.TypeId,
+        retain_program_evidence: bool,
     ) Allocator.Error!Ast.FnTemplate {
-        var template = try self.constFnTemplateToMono(fn_value, mono_fn_ty);
+        var template = try self.constFnTemplateToMono(fn_value, mono_fn_ty, retain_program_evidence);
         if (fn_value.captures.len == 0) return template;
 
         switch (template.fn_def) {
@@ -9319,7 +10447,7 @@ const Builder = struct {
             return try self.restoreConstEncoderForRuntimeFnExpr(store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
         if (fn_value.captures.len == 0) {
-            const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
+            const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty, true);
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(template, fn_value);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
@@ -9403,7 +10531,7 @@ const Builder = struct {
             else
                 try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
         }
-        const template = try self.constFnTemplateToMono(fn_value, ty);
+        const template = try self.constFnTemplateToMono(fn_value, ty, true);
         const nested = switch (template.fn_def) {
             .nested => |nested| nested,
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
@@ -9442,7 +10570,9 @@ const Builder = struct {
             capture_entry_guards,
             fn_ctx.evidence,
             null,
+            false,
             .exact_graph,
+            null,
         );
 
         defer self.allocator.free(capture_values);
@@ -9496,23 +10626,26 @@ const Builder = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
+        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(fn_data.args));
         defer self.allocator.free(arg_tys);
         if (arg_tys.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
         if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored parser constructor result type differed from restored function type");
 
         const runtime_fn = self.functionShape(ty, "stored parser runtime value had a non-function type");
-        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(runtime_fn.args));
+        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(runtime_fn.args));
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
+        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const state_local = try fn_ctx.addLocal(self.symbols.fresh(), runtime_arg_tys[0]);
         const state_expr = try fn_ctx.localExpr(state_local, runtime_arg_tys[0]);
 
@@ -9622,23 +10755,26 @@ const Builder = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored encoder_for constructor had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
+        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(fn_data.args));
         defer self.allocator.free(arg_tys);
         if (arg_tys.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
         if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored encoder_for constructor result type differed from restored function type");
 
         const runtime_fn = self.functionShape(ty, "stored encoder_for runtime value had a non-function type");
-        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(runtime_fn.args));
+        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(runtime_fn.args));
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
+        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const value_local = try fn_ctx.addLocal(self.symbols.fresh(), runtime_arg_tys[0]);
         const value_expr = try fn_ctx.localExpr(value_local, runtime_arg_tys[0]);
         const state_local = try fn_ctx.addLocal(self.symbols.fresh(), runtime_arg_tys[1]);
@@ -9812,24 +10948,31 @@ const Builder = struct {
     }
 
     fn constRecordFields(self: *Builder, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Field, "fields") {
-        return self.program.types.fieldSpan(self.recordFieldsSpan(ty));
+        return self.activeTypeStore().fieldSpan(self.recordFieldsSpan(ty));
     }
 
     fn primitiveType(self: *Builder, primitive: Type.Primitive) Allocator.Error!Type.TypeId {
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const private_destination = self.hasPrivateTypeDestination();
         return switch (primitive) {
             .u64 => blk: {
-                if (self.u64_ty) |ty| break :blk ty;
-                const ty = try self.program.types.internPrimitive(&self.program.names, .u64);
-                if (!self.program.types.hasSpeculativeConstruction()) self.u64_ty = ty;
+                if (!private_destination) {
+                    if (self.u64_ty) |ty| break :blk ty;
+                }
+                const ty = try type_store.internPrimitive(name_store, .u64);
+                if (!private_destination and !type_store.hasSpeculativeConstruction()) self.u64_ty = ty;
                 break :blk ty;
             },
             .bool => blk: {
-                if (self.bool_ty) |ty| break :blk ty;
-                const ty = try self.program.types.internPrimitive(&self.program.names, .bool);
-                if (!self.program.types.hasSpeculativeConstruction()) self.bool_ty = ty;
+                if (!private_destination) {
+                    if (self.bool_ty) |ty| break :blk ty;
+                }
+                const ty = try type_store.internPrimitive(name_store, .bool);
+                if (!private_destination and !type_store.hasSpeculativeConstruction()) self.bool_ty = ty;
                 break :blk ty;
             },
-            .str, .u8, .i8, .u16, .i16, .u32, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => try self.program.types.internPrimitive(&self.program.names, primitive),
+            .str, .u8, .i8, .u16, .i16, .u32, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => try type_store.internPrimitive(name_store, primitive),
         };
     }
 
@@ -9837,11 +10980,11 @@ const Builder = struct {
     /// used during draft finalization, where the active graph remains present
     /// but the supplied TypeIds are durable rather than active snapshots.
     fn closedFunctionType(self: *Builder, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.program.types.internFunc(&self.program.names, arg_tys, ret_ty);
+        return try self.activeTypeStore().internFunc(self.activeNameStore(), arg_tys, ret_ty);
     }
 
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
-        const args = self.program.types.span(span);
+        const args = self.activeTypeStore().span(span);
         if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
         return GuardedList.at(args, 0);
     }
@@ -9896,9 +11039,7 @@ const Builder = struct {
         const declared_try = (try self.hostedTryInfoOrNull(hosted_try, declared.ret)) orelse return null;
         const requested_try = (try self.hostedTryInfoOrNull(hosted_try, requested.ret)) orelse return null;
 
-        const declared_args = self.program.types.span(declared.args);
-        const requested_args = self.program.types.span(requested.args);
-        if (declared_args.len != requested_args.len) {
+        if (declared.args.len != requested.args.len) {
             Common.invariant("hosted function use changed arity from the declared ABI");
         }
 
@@ -9935,9 +11076,7 @@ const Builder = struct {
         defer transaction_result.deinit();
         const narrowed_err_ty = transaction_result.root;
         const narrowed_try_ty = try self.hostedTryTypeLike(hosted_try, requested.ret, requested_try.ok_ty, narrowed_err_ty);
-        const source_args = try GuardedList.dupe(self.allocator, Type.TypeId, requested_args);
-        defer self.allocator.free(source_args);
-        return try self.closedFunctionType(source_args, narrowed_try_ty);
+        return try self.program.types.internFuncFromSpan(&self.program.names, requested.args, narrowed_try_ty);
     }
 
     fn hostedTryAdapterBody(
@@ -10428,8 +11567,8 @@ const DraftFnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     evidence_digest: Ast.EvidenceDigest = .{},
-    const_evidence: Ast.Span(check.ConstStore.ConstFnEvidence) = Ast.Span(check.ConstStore.ConstFnEvidence).empty(),
-    const_evidence_frames: Ast.Span(check.ConstStore.ConstFnEvidenceFrame) = Ast.Span(check.ConstStore.ConstFnEvidenceFrame).empty(),
+    const_evidence: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
 };
 
@@ -10564,6 +11703,7 @@ const DraftTrySequence = struct {
     try_expr: DraftExprId,
     ok_local: DraftLocalId,
     err_is_cold: bool = false,
+    err_target: ?DraftExprId = null,
     ok_body: DraftExprId,
 };
 
@@ -10574,7 +11714,25 @@ const DraftTryRecordSequence = struct {
     rest_local: DraftLocalId,
     rest_field: names.RecordFieldNameId,
     err_is_cold: bool = false,
+    err_target: ?DraftExprId = null,
     ok_body: DraftExprId,
+};
+
+const DraftJoinPointExpr = struct {
+    /// A generated Monotype join is identified by its reserved owning
+    /// expression. Sealing maps both through the same expression relocation.
+    id: DraftExprId,
+    params: DraftSpan(DraftTypedLocal),
+    retained: DraftSpan(DraftTypedLocal) = DraftSpan(DraftTypedLocal).empty(),
+    body: DraftExprId,
+    remainder: DraftExprId,
+};
+
+const DraftJumpExpr = struct {
+    target: DraftExprId,
+    args: DraftSpan(DraftExprId),
+    loop_params: DraftSpan(DraftTypedLocal) = DraftSpan(DraftTypedLocal).empty(),
+    loop_values: DraftSpan(DraftExprId) = DraftSpan(DraftExprId).empty(),
 };
 
 const DraftBlockExpr = struct {
@@ -10706,6 +11864,8 @@ const DraftExprData = union(enum(u8)) {
     loop_: DraftLoopExpr,
     break_: ?DraftExprId,
     continue_: DraftContinueExpr,
+    join_point: DraftJoinPointExpr,
+    jump: DraftJumpExpr,
     return_: DraftReturn,
     crash: DraftStringLiteralId,
     comptime_branch_taken: DraftComptimeBranchTaken,
@@ -10866,23 +12026,6 @@ fn draftOpenCandidateQualifies(
     return exact_interface or (state == .lowering and active_recursive_edge and partial_recursive_allowed);
 }
 
-fn draftRequestOverlapsInitialArgumentClass(
-    graph: *InstGraph,
-    initial_arg_classes: []const ArgumentClassSnapshot,
-    request_fn_node: NodeId,
-) Allocator.Error!bool {
-    const request = try graph.functionNodes(request_fn_node);
-    if (initial_arg_classes.len != request.args.len) {
-        Common.invariant("draft recursive request changed function argument arity");
-    }
-    for (initial_arg_classes, request.args) |initial_class, request_arg| {
-        for (initial_class.members) |member| {
-            if (graph.sameClass(member, request_arg)) return true;
-        }
-    }
-    return false;
-}
-
 fn draftCaptureEntryGuardsMatch(
     graph: *InstGraph,
     stored_guards: []const NodeId,
@@ -10892,45 +12035,6 @@ fn draftCaptureEntryGuardsMatch(
     for (stored_guards, requested_guards) |stored, requested| {
         if (!graph.sameClass(stored, requested)) return false;
     }
-    return true;
-}
-
-fn draftNestedActiveRecursiveCandidate(
-    graph: *InstGraph,
-    spec: *const DraftNestedSpec,
-    family: DraftNestedFamilyAddress,
-    capture_entry_guards: []const NodeId,
-    requested_evidence: EvidenceChain,
-    current_owner: DraftOwner,
-) Allocator.Error!bool {
-    if (spec.state != .lowering) return false;
-    if (spec.request_fn_ty != null) return false;
-    if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
-    if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
-    if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
-    if (!std.meta.eql(spec.lexical_owner, current_owner)) return false;
-    return true;
-}
-
-fn draftNestedCaptureAnchoredRecursiveCandidate(
-    graph: *InstGraph,
-    spec: *const DraftNestedSpec,
-    family: DraftNestedFamilyAddress,
-    request_fn_node: NodeId,
-    capture_entry_guards: []const NodeId,
-    requested_evidence: EvidenceChain,
-) Allocator.Error!bool {
-    if (spec.state != .lowering) return false;
-    if (spec.request_fn_ty != null) return false;
-    if (capture_entry_guards.len == 0) return false;
-    if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
-    if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
-    if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
-
-    const request = try graph.functionNodes(request_fn_node);
-    if (request.args.len != 0) return false;
-    const spec_request = try graph.functionNodes(spec.request_fn_node);
-    if (spec_request.args.len != 0) return false;
     return true;
 }
 
@@ -11142,7 +12246,9 @@ const ActiveTemplateRoot = struct {
     evidence: []const SpecEvidence,
     request_fn_node: NodeId,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
+    codec_contract: ?DraftCodecContractContext,
     fn_id: Ast.FnId,
+    signature_relation: Ast.SignatureRelation,
 };
 
 const DraftNestedFamilyAddress = struct {
@@ -11230,6 +12336,7 @@ const DraftTemplateSpec = struct {
     lexical_owner: ?DraftOwner = null,
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
+    codec_contract: ?DraftCodecContractContext = null,
     fn_id: DraftFnId,
     resolved_slot: ?Ast.FnSlot = null,
     /// Mid-lowering iterator-result completion may resolve a body before the
@@ -11251,6 +12358,7 @@ const SealedTemplateSpec = struct {
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
     evidence: []const SpecEvidence,
+    codec_contract: ?SealedCodecContractContext,
     requires_local: bool,
     local_context_dependent: bool,
     lexical_owner: ?DraftOwner,
@@ -11430,6 +12538,7 @@ const DraftDeferredCallsiteIntrinsic = struct {
     evidence: EvidenceChain,
     current_fn_key: names.TypeDigest,
     lexical: DraftCodecLexicalContext,
+    codec_contract: ?RetainedCodecContract,
 };
 
 const DraftCodecLocalProcContext = struct {
@@ -11448,6 +12557,97 @@ const CodecKind = enum {
     encoder,
 };
 
+/// Durable checker-owned grounding for a codec method body. The selected call
+/// links that procedure's checked callable type to the complete generated-codec
+/// contract that justified calling it.
+const CheckedCodecContractAnchor = struct {
+    view: ModuleView,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    call_index: u32,
+    kind: CodecKind,
+};
+
+/// Graph-local specialization context for a procedure body reached from a
+/// generated codec call. The instantiated constructor carries the complete
+/// producer-authored contract component bindings, including components that
+/// the grounding format call's own type does not mention.
+const DraftCodecContractContext = struct {
+    anchor: CheckedCodecContractAnchor,
+    constructor_node: NodeId,
+};
+
+/// Durable form of `DraftCodecContractContext` used after the requesting
+/// graph's single sealing boundary and by queued specialization jobs.
+const SealedCodecContractContext = struct {
+    anchor: CheckedCodecContractAnchor,
+    constructor_ty: Type.TypeId,
+};
+
+const CodecContractBoundary = struct {
+    callable_node: NodeId,
+    shape_node: NodeId,
+};
+
+const InstantiatedGeneratedCodecCall = struct {
+    view: ModuleView,
+    call_index: u32,
+    checked: static_dispatch.GeneratedCodecCall,
+    dispatcher_node: NodeId,
+    callable_node: NodeId,
+    subject_node: ?NodeId,
+    resolution: union(enum) {
+        callable: static_dispatch.EvidenceNodeId,
+        structural: static_dispatch.GeneratedCodecDerivationId,
+    },
+    debug_consumed: if (@import("builtin").mode == .Debug) bool else void = if (@import("builtin").mode == .Debug) false else {},
+};
+
+/// One unique checker-authored generated-call role. Repeated source
+/// occurrences with the same exact subject share this direct slot.
+const CodecMethodCallSlot = struct {
+    method: names.MethodNameId,
+    method_role: u32,
+    subject_node: ?NodeId,
+    call_index: u32,
+};
+
+const ActiveCodecContract = struct {
+    view: ModuleView,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    kind: CodecKind,
+    evidence: EvidenceChain,
+    calls_start: usize,
+    calls_len: usize,
+    method_call_slots: []CodecMethodCallSlot,
+    grounding_call_index: ?u32,
+    constructor_node: NodeId,
+};
+
+/// Graph-native snapshot of an already-instantiated checker contract. Deferred
+/// intrinsic preparation runs in a fresh BodyContext but must consume the same
+/// call identities and type nodes selected at the enclosing codec boundary.
+const RetainedCodecContract = struct {
+    view: ModuleView,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    kind: CodecKind,
+    evidence: EvidenceChain,
+    calls: []const InstantiatedGeneratedCodecCall,
+    method_call_slots: []const CodecMethodCallSlot,
+    grounding_call_index: ?u32,
+    constructor_node: NodeId,
+
+    fn deinit(self: RetainedCodecContract, allocator: Allocator) void {
+        allocator.free(self.calls);
+        allocator.free(self.method_call_slots);
+    }
+};
+
+const CodecContractExpansion = struct {
+    view: [32]u8,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    shape_node: NodeId,
+};
+
 const CodecCallPurpose = enum {
     format,
     custom,
@@ -11463,6 +12663,15 @@ const DraftPreparedCodecCall = struct {
     boundary_expr: DraftExprId,
     kind: CodecKind,
     purpose: CodecCallPurpose = .format,
+    /// Checker-authored method identity, retained as immutable text so sealed
+    /// emission never has to consult a method registry to rediscover it.
+    method_name: []const u8,
+    /// Exact checker-authored role selected while the graph relation that
+    /// witnesses its subject is still available.
+    method_role: u32,
+    subject_bearing: bool,
+    contract_view: [32]u8,
+    contract_derivation: static_dispatch.GeneratedCodecDerivationId,
     shape_node: NodeId,
     lookup: MethodLookup,
     callable_node: NodeId,
@@ -11472,6 +12681,11 @@ const DraftPreparedCodecCall = struct {
 const FrozenPreparedCodecCall = struct {
     kind: CodecKind,
     purpose: CodecCallPurpose,
+    method_name: []const u8,
+    method_role: u32,
+    subject_bearing: bool,
+    contract_view: [32]u8,
+    contract_derivation: static_dispatch.GeneratedCodecDerivationId,
     shape_ty: Type.TypeId,
     lookup: MethodLookup,
     callable_ty: Type.TypeId,
@@ -11483,29 +12697,154 @@ const CustomCodecCallAddress = struct {
     shape_ty: Type.TypeId,
 };
 
+/// Exact Phase-B address installed from the checker role Phase A selected.
+/// A subject-free role is reusable for every shape and therefore carries no
+/// shape identity. A subject-bearing role carries the full Monotype digest of
+/// Phase A's related shape; exact equality inside one digest bucket protects
+/// correctness from digest collisions without scanning unrelated calls.
+const FormatCodecCallAddress = struct {
+    kind: CodecKind,
+    method_name: []const u8,
+    shape_digest: ?names.TypeDigest,
+};
+
+const FormatCodecCallAddressContext = struct {
+    pub fn hash(_: @This(), address: FormatCodecCallAddress) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, address.kind);
+        hasher.update(address.method_name);
+        std.hash.autoHash(&hasher, address.shape_digest != null);
+        if (address.shape_digest) |shape_digest| {
+            hasher.update(&shape_digest.bytes);
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), left: FormatCodecCallAddress, right: FormatCodecCallAddress) bool {
+        return left.kind == right.kind and
+            std.mem.eql(u8, left.method_name, right.method_name) and
+            optionalTypeDigestEql(left.shape_digest, right.shape_digest);
+    }
+};
+
+const FormatCodecCallMap = std.HashMap(
+    FormatCodecCallAddress,
+    std.ArrayList(PreparedCodecCallId),
+    FormatCodecCallAddressContext,
+    std.hash_map.default_max_load_percentage,
+);
+
 const FrozenPreparedCodecCalls = struct {
     calls: []FrozenPreparedCodecCall,
+    format_call_ids: FormatCodecCallMap,
     custom_call_ids: std.AutoHashMap(CustomCodecCallAddress, PreparedCodecCallId),
 
-    fn init(allocator: Allocator, calls: []FrozenPreparedCodecCall) Allocator.Error!FrozenPreparedCodecCalls {
+    fn init(
+        allocator: Allocator,
+        type_store: *Type.Store,
+        name_store: *const names.NameStore,
+        calls: []FrozenPreparedCodecCall,
+    ) Allocator.Error!FrozenPreparedCodecCalls {
         errdefer allocator.free(calls);
+        var format_call_ids = FormatCodecCallMap.init(allocator);
+        errdefer {
+            var buckets = format_call_ids.valueIterator();
+            while (buckets.next()) |bucket| bucket.deinit(allocator);
+            format_call_ids.deinit();
+        }
         var custom_call_ids = std.AutoHashMap(CustomCodecCallAddress, PreparedCodecCallId).init(allocator);
         errdefer custom_call_ids.deinit();
 
         for (calls, 0..) |call, index| {
-            if (call.purpose != .custom) continue;
             if (index > std.math.maxInt(u32)) Common.invariant("prepared codec call index exceeded its identity range");
-            const entry = try custom_call_ids.getOrPut(.{ .kind = call.kind, .shape_ty = call.shape_ty });
-            if (entry.found_existing) Common.invariant("frozen codec plan had multiple custom calls for one shape");
-            entry.value_ptr.* = @enumFromInt(index);
+            switch (call.purpose) {
+                .format => {
+                    const address = FormatCodecCallAddress{
+                        .kind = call.kind,
+                        .method_name = call.method_name,
+                        .shape_digest = if (call.subject_bearing)
+                            type_store.typeDigest(name_store, call.shape_ty)
+                        else
+                            null,
+                    };
+                    const entry = try format_call_ids.getOrPut(address);
+                    if (!entry.found_existing) entry.value_ptr.* = .empty;
+                    var equivalent = false;
+                    for (entry.value_ptr.items) |previous_id| {
+                        const previous = calls[@intFromEnum(previous_id)];
+                        const same_shape = if (call.subject_bearing)
+                            try type_store.typeEql(name_store, previous.shape_ty, call.shape_ty)
+                        else
+                            !previous.subject_bearing;
+                        if (!same_shape) continue;
+                        const same_role = moduleBytesEqual(previous.contract_view, call.contract_view) and
+                            previous.contract_derivation == call.contract_derivation and
+                            previous.method_role == call.method_role;
+                        const same_target = methodLookupIdentityEql(previous.lookup, call.lookup) and
+                            try type_store.typeEql(name_store, previous.callable_ty, call.callable_ty) and
+                            std.meta.eql(previous.callee, call.callee);
+                        if (!same_target) {
+                            if (same_role) {
+                                Common.invariant("one checker codec method role prepared multiple call targets");
+                            } else {
+                                Common.invariant("frozen codec call address conflated distinct checker method-role targets");
+                            }
+                        }
+                        equivalent = true;
+                        break;
+                    }
+                    if (!equivalent) try entry.value_ptr.append(allocator, @enumFromInt(index));
+                },
+                .custom => {
+                    const entry = try custom_call_ids.getOrPut(.{ .kind = call.kind, .shape_ty = call.shape_ty });
+                    if (entry.found_existing) Common.invariant("frozen codec plan had multiple custom calls for one shape");
+                    entry.value_ptr.* = @enumFromInt(index);
+                },
+            }
         }
 
-        return .{ .calls = calls, .custom_call_ids = custom_call_ids };
+        return .{
+            .calls = calls,
+            .format_call_ids = format_call_ids,
+            .custom_call_ids = custom_call_ids,
+        };
     }
 
     fn deinit(self: *FrozenPreparedCodecCalls, allocator: Allocator) void {
+        var buckets = self.format_call_ids.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(allocator);
+        self.format_call_ids.deinit();
         self.custom_call_ids.deinit();
         allocator.free(self.calls);
+    }
+
+    fn formatCall(
+        self: *const FrozenPreparedCodecCalls,
+        type_store: *Type.Store,
+        name_store: *const names.NameStore,
+        kind: CodecKind,
+        method_name: []const u8,
+        shape_ty: ?Type.TypeId,
+    ) Allocator.Error!?*const FrozenPreparedCodecCall {
+        const ids = self.format_call_ids.get(.{
+            .kind = kind,
+            .method_name = method_name,
+            .shape_digest = if (shape_ty) |shape| type_store.typeDigest(name_store, shape) else null,
+        }) orelse return null;
+        var found: ?*const FrozenPreparedCodecCall = null;
+        for (ids.items) |id| {
+            const index = @intFromEnum(id);
+            if (index >= self.calls.len) Common.invariant("prepared codec call identity was outside its frozen plan");
+            const call = &self.calls[index];
+            if (shape_ty) |shape| {
+                if (!call.subject_bearing or !try type_store.typeEql(name_store, call.shape_ty, shape)) continue;
+            } else if (call.subject_bearing) {
+                continue;
+            }
+            if (found != null) Common.invariant("frozen codec digest bucket contained multiple exact format-call matches");
+            found = call;
+        }
+        return found;
     }
 
     fn customCall(
@@ -11785,6 +13124,7 @@ const DraftNestedSpec = struct {
     demand_end: u32 = 0,
     demand_frame_floor: RuntimeDemandGuardFrameStack = .{},
     capture_entry_guards: []const NodeId,
+    codec_contract: ?DraftCodecContractContext = null,
     lexical_owner: DraftOwner,
     requires_local: bool,
     local_context_dependent: bool,
@@ -11804,6 +13144,8 @@ const SealedNestedSpec = struct {
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
     capture_abi_digest: names.TypeDigest,
+    codec_contract: ?SealedCodecContractContext,
+    sealed_codec_contract: ?Ast.CodecContractIdentity = null,
     lexical_owner: DraftOwner,
     requires_local: bool,
     local_context_dependent: bool,
@@ -11975,7 +13317,11 @@ const DraftStaticDataRequest = struct {
 
 const BodyDraftStore = struct {
     allocator: Allocator,
+    symbol_domain: SymbolDomain,
+    worker_local_symbol_count: u32,
     fns: std.ArrayList(DraftFn),
+    const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+    const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
     defs: std.ArrayList(DraftDef),
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
@@ -12083,7 +13429,11 @@ const BodyDraftStore = struct {
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
             .allocator = allocator,
+            .symbol_domain = .coordinator,
+            .worker_local_symbol_count = 0,
             .fns = .empty,
+            .const_fn_evidence = .empty,
+            .const_fn_evidence_frames = .empty,
             .defs = .empty,
             .def_owners = .empty,
             .nested_defs = .empty,
@@ -12167,6 +13517,47 @@ const BodyDraftStore = struct {
             .program_type_relocation = null,
             .committed_type_relocation = null,
         };
+    }
+
+    fn sealWorkerLocalSymbols(self: *BodyDraftStore, count: u32) void {
+        if (self.symbol_domain != .coordinator or self.worker_local_symbol_count != 0) {
+            Common.compilerBug("Monotype body draft symbol domain was sealed more than once");
+        }
+        self.symbol_domain = .worker_local;
+        self.worker_local_symbol_count = count;
+    }
+
+    fn relocateWorkerLocalSymbol(self: *const BodyDraftStore, symbol: *Common.Symbol, symbol_base: u32) void {
+        const local: u32 = @intFromEnum(symbol.*);
+        if (local >= self.worker_local_symbol_count) {
+            Common.compilerBug("Monotype body draft retained a symbol outside its worker-local domain");
+        }
+        const relocated = std.math.add(u32, symbol_base, local) catch
+            Common.compilerBug("Monotype worker-local symbol relocation overflow");
+        symbol.* = @enumFromInt(relocated);
+    }
+
+    /// Exhaustive symbol-bearing storage owned by a body draft. Symbols inside
+    /// `DraftFnTemplate.fn_def`, roots, and sealed specialization IDs are
+    /// coordinator reservations and deliberately do not belong to this domain.
+    fn relocateWorkerLocalSymbols(self: *BodyDraftStore, coordinator: *Common.SymbolGen) void {
+        if (self.symbol_domain != .worker_local) {
+            Common.compilerBug("Monotype body draft did not carry a worker-local symbol domain");
+        }
+        const symbol_base = coordinator.next;
+        coordinator.next = std.math.add(u32, symbol_base, self.worker_local_symbol_count) catch
+            Common.compilerBug("Monotype worker-local symbol reservation overflow");
+
+        for (self.locals.items) |*local| self.relocateWorkerLocalSymbol(&local.symbol, symbol_base);
+        for (self.defs.items) |*def| self.relocateWorkerLocalSymbol(&def.symbol, symbol_base);
+        for (self.nested_defs.items) |*def| self.relocateWorkerLocalSymbol(&def.symbol, symbol_base);
+        for (self.proc_debug_names.items) |*debug_name| {
+            self.relocateWorkerLocalSymbol(&debug_name.symbol, symbol_base);
+        }
+        for (self.nested_specs.items) |*spec| self.relocateWorkerLocalSymbol(&spec.symbol, symbol_base);
+
+        self.symbol_domain = .coordinator;
+        self.worker_local_symbol_count = 0;
     }
 
     fn mutableGraphNameStore(
@@ -12258,6 +13649,9 @@ const BodyDraftStore = struct {
         for (self.deferred_callsite_intrinsics.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
+            if (boundary.codec_contract) |contract| {
+                contract.deinit(self.allocator);
+            }
         }
         for (self.deferred_inspects.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
@@ -12346,6 +13740,8 @@ const BodyDraftStore = struct {
         self.sealed_nested_specs.deinit(self.allocator);
         self.def_owners.deinit(self.allocator);
         self.defs.deinit(self.allocator);
+        self.const_fn_evidence_frames.deinit(self.allocator);
+        self.const_fn_evidence.deinit(self.allocator);
         self.fns.deinit(self.allocator);
     }
 
@@ -12592,6 +13988,26 @@ const BodyDraftStore = struct {
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    fn addConstFnEvidence(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidence) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidence) {
+        const start: u32 = @intCast(self.const_fn_evidence.items.len);
+        try self.const_fn_evidence.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    fn addConstFnEvidenceFrames(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidenceFrame) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidenceFrame) {
+        const start: u32 = @intCast(self.const_fn_evidence_frames.items.len);
+        try self.const_fn_evidence_frames.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    fn constFnEvidence(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
+        return self.const_fn_evidence.items[span.start..][0..span.len];
+    }
+
+    fn constFnEvidenceFrames(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+        return self.const_fn_evidence_frames.items[span.start..][0..span.len];
     }
 
     const ReservedExprSpan = struct {
@@ -12938,6 +14354,9 @@ const BodyDraftStore = struct {
         for (self.deferred_callsite_intrinsics.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
+            if (boundary.codec_contract) |contract| {
+                contract.deinit(self.allocator);
+            }
         }
         for (self.deferred_inspects.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
@@ -13098,6 +14517,9 @@ const BodyDraftStore = struct {
         emit_defs: ?[]const bool,
         emit_nested_defs: ?[]const bool,
     ) Allocator.Error!void {
+        const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
+        const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
+
         for (self.source_files.items, 0..) |file, index| {
             if (!ids.retained(.source_files, index)) continue;
             _ = try program.addSourceFile(.{
@@ -13309,7 +14731,7 @@ const BodyDraftStore = struct {
         for (self.fns.items, 0..) |fn_, index| {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
-                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source),
+                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span.start, evidence_frames_span.start),
                 .signature_relation = fn_.signature_relation,
             });
         }
@@ -13317,7 +14739,7 @@ const BodyDraftStore = struct {
         try program.defs.ensureUnusedCapacity(program.allocator, self.defs.items.len);
         for (self.defs.items, 0..) |def, index| {
             if (emit_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template) else null;
+            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span.start, evidence_frames_span.start) else null;
             const sealed_fn_id = if (def.fn_id) |fn_id| ids.fnTarget(fn_id) else null;
             if (sealed_fn_def) |template| {
                 if (sealed_fn_id) |fn_id| {
@@ -13337,7 +14759,7 @@ const BodyDraftStore = struct {
         try program.nested_defs.ensureUnusedCapacity(program.allocator, self.nested_defs.items.len);
         for (self.nested_defs.items, 0..) |def, index| {
             if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def);
+            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span.start, evidence_frames_span.start);
             const sealed_fn_id = ids.fnTarget(def.fn_id);
             program.setFnSource(sealed_fn_id, sealed_fn_def);
             program.nested_defs.appendAssumeCapacity(.{
@@ -13409,6 +14831,8 @@ const BodyDraftStore = struct {
     fn sealFnTemplate(
         committed_types: *CommittedGraphTypes,
         template: DraftFnTemplate,
+        evidence_start: u32,
+        evidence_frames_start: u32,
     ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = template.fn_def,
@@ -13416,8 +14840,8 @@ const BodyDraftStore = struct {
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .evidence_digest = template.evidence_digest,
-            .const_evidence = template.const_evidence,
-            .const_evidence_frames = template.const_evidence_frames,
+            .const_evidence = .{ .start = evidence_start + template.const_evidence.start, .len = template.const_evidence.len },
+            .const_evidence_frames = .{ .start = evidence_frames_start + template.const_evidence_frames.start, .len = template.const_evidence_frames.len },
             .const_evidence_frame_head = template.const_evidence_frame_head,
         };
     }
@@ -13513,6 +14937,7 @@ const BodyDraftStore = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .typed_boundary,
             .list,
             .record_update,
             .nominal,
@@ -13641,6 +15066,8 @@ const BodyDraftStore = struct {
                 .loop_,
                 .break_,
                 .continue_,
+                .join_point,
+                .jump,
                 .return_,
                 .crash,
                 .comptime_branch_taken,
@@ -13782,6 +15209,7 @@ const BodyDraftStore = struct {
                 .try_expr = ids.expr(try_.try_expr),
                 .ok_local = ids.local(try_.ok_local),
                 .err_is_cold = try_.err_is_cold,
+                .err_target = if (try_.err_target) |target| @enumFromInt(@intFromEnum(ids.expr(target))) else null,
                 .ok_body = ids.expr(try_.ok_body),
             } },
             .try_record_sequence => |try_| .{ .try_record_sequence = .{
@@ -13791,6 +15219,7 @@ const BodyDraftStore = struct {
                 .rest_local = ids.local(try_.rest_local),
                 .rest_field = try committed_types.commitRecordFieldName(try_.rest_field),
                 .err_is_cold = try_.err_is_cold,
+                .err_target = if (try_.err_target) |target| @enumFromInt(@intFromEnum(ids.expr(target))) else null,
                 .ok_body = ids.expr(try_.ok_body),
             } },
             .block => |block| .{ .block = .{
@@ -13805,6 +15234,19 @@ const BodyDraftStore = struct {
             .break_ => |break_| .{ .break_ = if (break_) |expr| ids.expr(expr) else null },
             .continue_ => |continue_| .{ .continue_ = .{
                 .values = ids.exprSpan(continue_.values),
+            } },
+            .join_point => |join_point| .{ .join_point = .{
+                .id = @enumFromInt(@intFromEnum(ids.expr(join_point.id))),
+                .params = ids.typedLocalSpan(join_point.params),
+                .retained = ids.typedLocalSpan(join_point.retained),
+                .body = ids.expr(join_point.body),
+                .remainder = ids.expr(join_point.remainder),
+            } },
+            .jump => |jump| .{ .jump = .{
+                .target = @enumFromInt(@intFromEnum(ids.expr(jump.target))),
+                .args = ids.exprSpan(jump.args),
+                .loop_params = ids.typedLocalSpan(jump.loop_params),
+                .loop_values = ids.exprSpan(jump.loop_values),
             } },
             .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
@@ -13844,6 +15286,39 @@ const BodyDraftStore = struct {
         return ids.stmtSpan(span);
     }
 };
+
+test "ordered worker-local symbol relocation reserves distinct deterministic domains" {
+    const allocator = std.testing.allocator;
+    var first = BodyDraftStore.init(allocator);
+    defer first.deinit();
+    var second = BodyDraftStore.init(allocator);
+    defer second.deinit();
+
+    var first_symbols: Common.SymbolGen = .{};
+    var second_symbols: Common.SymbolGen = .{};
+    try first.locals.append(allocator, .{
+        .id = @enumFromInt(@as(u32, @intCast(first.locals.items.len))),
+        .symbol = first_symbols.fresh(),
+        .ty = undefined,
+    });
+    try second.locals.append(allocator, .{
+        .id = @enumFromInt(@as(u32, @intCast(second.locals.items.len))),
+        .symbol = second_symbols.fresh(),
+        .ty = undefined,
+    });
+    first.sealWorkerLocalSymbols(1);
+    second.sealWorkerLocalSymbols(1);
+
+    var coordinator = Common.SymbolGen{ .next = 41 };
+    first.relocateWorkerLocalSymbols(&coordinator);
+    second.relocateWorkerLocalSymbols(&coordinator);
+
+    try std.testing.expectEqual(@as(u32, 41), @intFromEnum(first.locals.items[0].symbol));
+    try std.testing.expectEqual(@as(u32, 42), @intFromEnum(second.locals.items[0].symbol));
+    try std.testing.expectEqual(@as(u32, 43), coordinator.next);
+    try std.testing.expectEqual(SymbolDomain.coordinator, first.symbol_domain);
+    try std.testing.expectEqual(SymbolDomain.coordinator, second.symbol_domain);
+}
 
 const FinalIdOffsets = struct {
     const CoreIdMode = union(enum) {
@@ -14416,12 +15891,12 @@ const BodyContext = struct {
     /// expressions; it may not lower another checked default expression.
     frozen_field_defaults: ?*FrozenPreparedFieldDefaults = null,
     /// Exact checker-authored contract for the structural codec currently
-    /// being prepared, plus the live constructor and shape cells it denotes.
-    active_codec_contract: ?struct {
-        structural: SpecStructuralEvidence,
-        callable_node: NodeId,
-        shape_node: NodeId,
-    } = null,
+    /// being prepared. Every checked type in the contract is instantiated
+    /// once at the boundary; individual call preparation only selects from
+    /// these graph-native identities.
+    instantiated_codec_calls: std.ArrayList(InstantiatedGeneratedCodecCall) = .empty,
+    active_codec_contract: ?ActiveCodecContract = null,
+    codec_contract_expansion_stack: std.ArrayList(CodecContractExpansion) = .empty,
     /// Final structural serialization emission consumes only durable types and
     /// exact prepared call identities instead of reconstructing checked requests.
     frozen_sealed_emission: bool = false,
@@ -14438,6 +15913,12 @@ const BodyContext = struct {
     /// the root id travels through template requests into other modules'
     /// body contexts, where the same integer names an unrelated root.
     current_entry_root: ?EntryRoot = null,
+    /// Whether this context lowers a lambda body nested inside the current
+    /// entry root. Such a body runs only when the lambda is called, after the
+    /// root's value exists, so a constant of the root's own scrutinee (a
+    /// sibling name bound by the same top-level destructure) is an ordinary
+    /// constant use there, restored recursively like a top-level constant.
+    in_deferred_body: bool = false,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -14828,9 +16309,11 @@ const BodyContext = struct {
         return true;
     }
 
-    /// Crossing into global program type production is centralized here.
+    /// Primitive construction already targets this body's active type domain.
     fn primitiveType(self: *BodyContext, primitive: Type.Primitive) Allocator.Error!Type.TypeId {
-        return self.importProgramType(try self.builder.primitiveType(primitive));
+        const active_ty = try self.builder.primitiveType(primitive);
+        if (self.typeStore() == self.builder.activeTypeStore()) return active_ty;
+        return try self.importProgramType(active_ty);
     }
 
     /// Crossing from checked types into global program type production is centralized here.
@@ -14843,7 +16326,9 @@ const BodyContext = struct {
         view: ModuleView,
         checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
-        return self.importProgramType(try self.builder.lowerType(view, checked_ty));
+        const active_ty = try self.builder.lowerType(view, checked_ty);
+        if (self.typeStore() == self.builder.activeTypeStore()) return active_ty;
+        return try self.importProgramType(active_ty);
     }
 
     /// Import one coordinator-owned type closure into this body's graph domain.
@@ -15011,13 +16496,13 @@ const BodyContext = struct {
                 if (self.optionalFieldSlot(shape_ty)) |slot| {
                     return try self.collectSerializationPlanInputs(kind, slot.payload_ty, encoding_ty, plan, inputs);
                 }
-                if ((try self.customParserLookup(shape_ty)) != null or self.parseScalarMethodName(shape_ty) != null) return;
+                if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null or self.parseScalarMethodName(shape_ty) != null) return;
             },
             .encoder => {
                 if (self.tryNullInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_payload_ty, encoding_ty, plan, inputs);
                 }
-                if ((try self.customEncoderForLookup(shape_ty)) != null or self.encodeScalarMethodName(shape_ty) != null) return;
+                if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null or self.encodeScalarMethodName(shape_ty) != null) return;
             },
         }
         if (self.setPayloadType(shape_ty)) |payload_ty| {
@@ -15213,6 +16698,16 @@ const BodyContext = struct {
         }
     };
 
+    /// Producer-authored control-flow for one derived record parser. All three
+    /// format field-event modes route to these same field continuations, so
+    /// field parsing and loop-state transition code each exist once.
+    const ParseRecordContinuations = struct {
+        error_join: DraftExprId,
+        entry_end_join: DraftExprId,
+        skip_join: DraftExprId,
+        field_joins: []const DraftExprId,
+    };
+
     /// Loop-carried control locals for a derived record parser. `done` is set
     /// when the format reports the end of the record so the next iteration
     /// finishes at the loop head, which keeps the record-construction code at
@@ -15225,12 +16720,6 @@ const BodyContext = struct {
         remaining_local: DraftLocalId,
         bool_ty: Type.TypeId,
         u64_ty: Type.TypeId,
-    };
-
-    const UpdatedFieldSlot = struct {
-        local: DraftLocalId,
-        ty: Type.TypeId,
-        index: usize,
     };
 
     /// Loop-carried control locals for a derived list parser. In Counted mode
@@ -15379,6 +16868,8 @@ const BodyContext = struct {
             .parser_defs = std.AutoHashMap(GeneratedParserDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .frozen_equality_method_calls = null,
             .frozen_codec_calls = null,
+            .instantiated_codec_calls = .empty,
+            .codec_contract_expansion_stack = .empty,
         };
     }
 
@@ -15394,6 +16885,8 @@ const BodyContext = struct {
         self.inspect_defs.deinit();
         self.hash_expansion_stack.deinit();
         self.equality_expansion_stack.deinit();
+        self.codec_contract_expansion_stack.deinit(self.allocator);
+        self.instantiated_codec_calls.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
@@ -15635,6 +17128,7 @@ const BodyContext = struct {
             .@"unreachable",
             .break_,
             .continue_,
+            .jump,
             .return_,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -15749,6 +17243,10 @@ const BodyContext = struct {
                 break :blk try self.anyImpossibilityProof(proofs.items);
             },
             .loop_ => |loop_| try self.anyExprSpanImpossibilityProof(loop_.initial_values),
+            // A join may be entered through its remainder or any lexically
+            // nested jump. The generated control-flow producer owns that
+            // reachability; this local proof builder does not approximate it.
+            .join_point => null,
             .comptime_branch_taken => |branch| self.exprImpossibilityProof(branch.body),
             .dbg => |child| self.exprImpossibilityProof(child),
             .expect_err => |expect_err| self.exprImpossibilityProof(expect_err.msg),
@@ -15778,8 +17276,8 @@ const BodyContext = struct {
         defer timing_scope.end();
         const id = try self.draft.addExprWithSource(
             .{ .ty = try self.draftTypeCell(expr.ty), .data = expr.data },
-            self.builder.program.current_loc,
-            self.builder.program.current_region,
+            self.builder.current_loc,
+            self.builder.current_region,
         );
         self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(
             self.draft.exprs.items[@intFromEnum(id)].ty,
@@ -15809,8 +17307,8 @@ const BodyContext = struct {
         defer timing_scope.end();
         const id = try self.draft.addExprWithSource(
             .{ .ty = ty, .data = data },
-            self.builder.program.current_loc,
-            self.builder.program.current_region,
+            self.builder.current_loc,
+            self.builder.current_region,
         );
         self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(ty, data);
         return id;
@@ -16103,8 +17601,8 @@ const BodyContext = struct {
                 .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
-                .const_evidence = try self.builder.program.addConstFnEvidence(stored_evidence.nodes),
-                .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
+                .const_evidence = try self.draft.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence_frames = try self.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
             },
@@ -16144,7 +17642,7 @@ const BodyContext = struct {
     fn addStmt(self: *BodyContext, stmt: DraftStmt) Allocator.Error!DraftStmtId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
-        const id = try self.draft.addStmtWithSource(stmt, self.builder.program.current_loc, self.builder.program.current_region);
+        const id = try self.draft.addStmtWithSource(stmt, self.builder.current_loc, self.builder.current_region);
         self.draft.stmt_impossibility_proofs.items[@intFromEnum(id)] = try self.stmtDataImpossibilityProof(stmt);
         return id;
     }
@@ -16736,6 +18234,23 @@ const BodyContext = struct {
         self.frozen_field_defaults = parent.frozen_field_defaults;
     }
 
+    fn inheritActiveCodecContract(self: *BodyContext, parent: *const BodyContext) Allocator.Error!void {
+        const active = parent.active_codec_contract orelse return;
+        const calls = parent.activeCodecCalls();
+        try self.instantiated_codec_calls.appendSlice(self.allocator, calls);
+        self.active_codec_contract = .{
+            .view = active.view,
+            .derivation = active.derivation,
+            .kind = active.kind,
+            .evidence = active.evidence,
+            .calls_start = 0,
+            .calls_len = calls.len,
+            .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, active.method_call_slots),
+            .grounding_call_index = active.grounding_call_index,
+            .constructor_node = active.constructor_node,
+        };
+    }
+
     const CallableBodyDemandScope = struct {
         ctx: *BodyContext,
         previous_frames: RuntimeDemandGuardFrameStack,
@@ -16803,8 +18318,10 @@ const BodyContext = struct {
         child.generated_encoder_source_expr = self.generated_encoder_source_expr;
         child.generated_encoder_lambda_index = self.generated_encoder_lambda_index;
         child.inheritFrozenEmissionContext(self);
+        try child.inheritActiveCodecContract(self);
         child.source_region_override = self.source_region_override;
         child.current_entry_root = self.current_entry_root;
+        child.in_deferred_body = self.in_deferred_body;
         child.active_const_binding = self.active_const_binding;
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
@@ -17255,6 +18772,17 @@ const BodyContext = struct {
             .nominal => |backing| self.exprCarriesFunctionDefinitionEvidence(backing),
             .let_ => |let_| self.exprCarriesFunctionDefinitionEvidence(let_.value) or
                 self.exprCarriesFunctionDefinitionEvidence(let_.rest),
+            .join_point => |join_point| self.exprCarriesFunctionDefinitionEvidence(join_point.body) or
+                self.exprCarriesFunctionDefinitionEvidence(join_point.remainder),
+            .jump => |jump| blk: {
+                for (self.exprSpan(jump.loop_values)) |value| {
+                    if (self.exprCarriesFunctionDefinitionEvidence(value)) break :blk true;
+                }
+                for (self.exprSpan(jump.args)) |arg| {
+                    if (self.exprCarriesFunctionDefinitionEvidence(arg)) break :blk true;
+                }
+                break :blk false;
+            },
             .local,
             .unit,
             .pending_deferred,
@@ -17527,6 +19055,27 @@ const BodyContext = struct {
             .continue_ => |continue_| {
                 for (self.exprSpan(continue_.values)) |value| {
                     if (try self.exprDependsOnFreeLocalInner(value, target, bound)) return true;
+                }
+                return false;
+            },
+            .join_point => |join_point| {
+                for (self.typedLocalSpan(join_point.retained)) |retained| {
+                    if (try self.localDependsOnTarget(retained.local, target, bound)) return true;
+                }
+                var added = std.ArrayList(DraftLocalId).empty;
+                defer added.deinit(self.allocator);
+                try self.bindTypedLocalLocals(join_point.params, bound, &added);
+                const body_depends = try self.exprDependsOnFreeLocalInner(join_point.body, target, bound);
+                removeBoundLocals(bound, added.items);
+                if (body_depends) return true;
+                return try self.exprDependsOnFreeLocalInner(join_point.remainder, target, bound);
+            },
+            .jump => |jump| {
+                for (self.exprSpan(jump.loop_values)) |value| {
+                    if (try self.exprDependsOnFreeLocalInner(value, target, bound)) return true;
+                }
+                for (self.exprSpan(jump.args)) |arg| {
+                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound)) return true;
                 }
                 return false;
             },
@@ -17885,10 +19434,6 @@ const BodyContext = struct {
         return try self.resolvedTypeViewForNode(node);
     }
 
-    fn resolvedCheckedTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        return try self.resolvedTypeViewForNode(try self.lowerTypeNode(checked_ty));
-    }
-
     fn lowerTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         return try self.activeTypeFromCell(try self.lowerTypeCell(checked_ty));
     }
@@ -17964,32 +19509,43 @@ const BodyContext = struct {
         return try self.instNode(checked_ty);
     }
 
+    /// Resolve a checked type's memoized instantiation node. A closed checked
+    /// type (no identity variables anywhere, field kinds included) means the
+    /// same thing under every declaration scope, so it memoizes at the
+    /// instantiation-context level; an open type's meaning depends on the
+    /// innermost declaration scope's formal bindings, so it memoizes there
+    /// and only there. An outer declaration scope must never answer an open
+    /// lookup: the same open checked type mentioned at two nesting levels of
+    /// a recursive declaration expansion binds the formals differently, and
+    /// an outer answer would collapse those distinct types into one node.
     fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
-        var index = self.instantiation.decl_scopes.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.instantiation.decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        const scopes = self.instantiation.decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            return self.instantiation.node_map.get(checked_ty);
         }
-        if (self.instantiation.decl_scopes.items.len != 0) return null;
-        return self.instantiation.node_map.get(checked_ty);
+        return scopes[scopes.len - 1].get(checked_ty);
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
-        if (self.instantiation.decl_scopes.items.len != 0) {
-            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, node);
+        const scopes = self.instantiation.decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            try self.instantiation.node_map.put(checked_ty, node);
             return;
         }
-        try self.instantiation.node_map.put(checked_ty, node);
+        try scopes[scopes.len - 1].put(checked_ty, node);
     }
 
+    /// Field-kind memoization scopes exactly like `scopedNode`. A kind cell
+    /// is looked up by its undetermined variable's checked type, and a
+    /// variable is always open, so inside a declaration expansion this
+    /// resolves in the innermost scope; the closed branch exists only to
+    /// keep the routing rule identical to `scopedNode`'s.
     fn scopedFieldKind(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?InstantiatedFieldKind {
-        var index = self.instantiation.field_kind_decl_scopes.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.instantiation.field_kind_decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        const scopes = self.instantiation.field_kind_decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            return self.instantiation.field_kind_map.get(checked_ty);
         }
-        if (self.instantiation.field_kind_decl_scopes.items.len != 0) return null;
-        return self.instantiation.field_kind_map.get(checked_ty);
+        return scopes[scopes.len - 1].get(checked_ty);
     }
 
     fn putScopedFieldKind(
@@ -17997,11 +19553,12 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         field_kind: InstantiatedFieldKind,
     ) Allocator.Error!void {
-        if (self.instantiation.field_kind_decl_scopes.items.len != 0) {
-            try self.instantiation.field_kind_decl_scopes.items[self.instantiation.field_kind_decl_scopes.items.len - 1].put(checked_ty, field_kind);
+        const scopes = self.instantiation.field_kind_decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            try self.instantiation.field_kind_map.put(checked_ty, field_kind);
             return;
         }
-        try self.instantiation.field_kind_map.put(checked_ty, field_kind);
+        try scopes[scopes.len - 1].put(checked_ty, field_kind);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -18238,8 +19795,19 @@ const BodyContext = struct {
     /// formals and backing share one set of checked roots across every instance
     /// of the nominal, so the backing instantiates inside a fresh scope seeded
     /// with this instance's argument nodes: two instances of the same nominal at
-    /// different arguments stay independent, and the recursive uses inside the
-    /// backing resolve through the scope chain.
+    /// different arguments stay independent.
+    ///
+    /// Termination: the checker's `validateNominalDeclArgumentGrowth` rejects
+    /// any declaration group whose formal-flow graph carries a growing edge
+    /// inside a cycle, and any recursive mention argument holding a variable
+    /// that is no formal of the mentioning declaration. What remains keeps
+    /// the reachable argument tuples finite here: a formal argument resolves
+    /// in the innermost scope to this instance's own argument cell, so the
+    /// recursive lookup hits the placeholder registered below before the
+    /// backing expands; a closed argument memoizes once per instantiation
+    /// context, so nested expansions present the same cell; and a
+    /// formal-wrapping argument only occurs on acyclic flow edges, so the
+    /// fresh cells it mints never feed back into their own declaration.
     fn instNominalBackingNode(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
@@ -18789,6 +20357,7 @@ const BodyContext = struct {
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .repl_expr,
             => saved_source_region_override,
         };
         const body = if (root.literalConversionKind() != null) blk: {
@@ -18800,6 +20369,7 @@ const BodyContext = struct {
             .hoisted_validation,
             .callable_binding,
             .expect,
+            .repl_expr,
             => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
             .numeral_conversion,
             .quote_conversion,
@@ -19635,12 +21205,12 @@ const BodyContext = struct {
         fn_nodes: FunctionNodes,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!LoweredTemplateBody {
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
-        self.builder.program.current_region = declaration.region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(declaration.region);
+        self.builder.current_region = declaration.region;
 
         const args = try self.allocator.alloc(DraftTypedLocal, fn_nodes.args.len);
         defer self.allocator.free(args);
@@ -19693,14 +21263,14 @@ const BodyContext = struct {
         const saved_return_target = self.current_return_target;
         defer self.current_return_target = saved_return_target;
         self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell };
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const body_expr = self.view.bodies.expr(checked_body);
         const body_region = self.sourceRegionForExpr(body_expr);
-        self.builder.program.current_loc = try self.sourceLocFor(body_region);
-        self.builder.program.current_region = body_region;
+        self.builder.current_loc = try self.sourceLocFor(body_region);
+        self.builder.current_region = body_region;
 
         const exhaustiveness_scope = self.comptime_exhaustiveness_context.resetForRuntimeFunction();
         defer exhaustiveness_scope.leave();
@@ -19811,12 +21381,12 @@ const BodyContext = struct {
         }
         const body_loc = self.exprLoc(body);
         const body_region_after_lowering = self.exprRegion(body);
-        const saved_body_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_body_loc;
-        const saved_body_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_body_region;
-        self.builder.program.current_loc = body_loc;
-        self.builder.program.current_region = body_region_after_lowering;
+        const saved_body_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_body_loc;
+        const saved_body_region = self.builder.current_region;
+        defer self.builder.current_region = saved_body_region;
+        self.builder.current_loc = body_loc;
+        self.builder.current_region = body_region_after_lowering;
         var remaining = arg_lets.items.len;
         while (remaining > 0) {
             remaining -= 1;
@@ -20002,13 +21572,13 @@ const BodyContext = struct {
 
     fn lowerExprInner(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(expr_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const region = self.sourceRegionForExpr(expr);
-        self.builder.program.current_loc = try self.sourceLocFor(region);
-        self.builder.program.current_region = region;
+        self.builder.current_loc = try self.sourceLocFor(region);
+        self.builder.current_region = region;
         if (try self.lowerDivergentExprInContext(expr_id, .uncontextual)) |lowered| return lowered;
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
@@ -20180,6 +21750,7 @@ const BodyContext = struct {
     }
 
     fn loweringOwnHoistedConstRoot(self: *BodyContext, entry: checked.HoistedConstEntry) bool {
+        if (self.in_deferred_body) return false;
         if (self.current_entry_root) |entry_root| {
             return moduleBytesEqual(entry_root.module.bytes, self.view.key.bytes) and entry.root == entry_root.root;
         }
@@ -20199,12 +21770,12 @@ const BodyContext = struct {
                 if (!self.sameType(ty, stored_ty)) {
                     Common.invariant("stored hoisted const representation differed from its expected Monotype type");
                 }
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(source_region);
-                self.builder.program.current_region = source_region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(source_region);
+                self.builder.current_region = source_region;
                 break :blk try self.restoredStaticDataCandidateNode(
                     self.view,
                     self.view,
@@ -20235,12 +21806,12 @@ const BodyContext = struct {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
                 try relateRequestComponent(self.graph, request_node, stored_node);
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(source_region);
-                self.builder.program.current_region = source_region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(source_region);
+                self.builder.current_region = source_region;
                 break :blk try self.restoredStaticDataCandidateNodeAtNode(
                     self.view,
                     self.view,
@@ -20359,13 +21930,13 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(expr_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const region = self.sourceRegionForExpr(expr);
-        self.builder.program.current_loc = try self.sourceLocFor(region);
-        self.builder.program.current_region = region;
+        self.builder.current_loc = try self.sourceLocFor(region);
+        self.builder.current_region = region;
         const data: BodyExprData = switch (expr.data) {
             .pending,
             .anno_only,
@@ -21079,6 +22650,16 @@ const BodyContext = struct {
                     self.allocator.free(lexical.binders);
                     self.allocator.free(lexical.local_procs);
                 };
+                const codec_contract = if (intrinsic == .parse_tag_union)
+                    try self.retainActiveCodecContract()
+                else
+                    null;
+                var codec_contract_needs_cleanup = true;
+                errdefer if (codec_contract_needs_cleanup) {
+                    if (codec_contract) |contract| {
+                        contract.deinit(self.allocator);
+                    }
+                };
                 try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{
                     .view = self.view,
                     .method_scope = self.method_scope,
@@ -21094,8 +22675,10 @@ const BodyContext = struct {
                     .evidence = self.evidence,
                     .current_fn_key = self.current_fn_key,
                     .lexical = lexical,
+                    .codec_contract = codec_contract,
                 });
                 lexical_needs_cleanup = false;
+                codec_contract_needs_cleanup = false;
                 return expr;
             }
         }
@@ -21201,6 +22784,8 @@ const BodyContext = struct {
                         self.view.types.rootKey(expr.ty),
                         request_fn_node,
                         try self.evidenceForUseSite(record.expr),
+                        record.recursive_reference,
+                        null,
                     );
                     const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                     return try self.addExprWithTypeCell(
@@ -21218,8 +22803,8 @@ const BodyContext = struct {
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
-                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null),
-                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence),
+                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null, record.recursive_reference),
+                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference),
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
             }
         }
@@ -23853,7 +25438,7 @@ const BodyContext = struct {
         if (self.optionalFieldSlot(shape_ty)) |slot| {
             return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, slot.payload_ty, encoding_expr, encoding_ty, str_ty);
         }
-        if ((try self.customParserLookup(shape_ty)) != null) return;
+        if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty);
@@ -23910,7 +25495,7 @@ const BodyContext = struct {
         if (self.tryNullInfo(shape_ty)) |info| {
             return try self.buildEncodeConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
-        if ((try self.customEncoderForLookup(shape_ty)) != null) return;
+        if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null) return;
         if (self.encodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
@@ -23969,7 +25554,7 @@ const BodyContext = struct {
         if (self.tryNullInfo(shape_ty)) |info| {
             return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, encoding_ty, str_ty);
         }
-        if ((try self.customEncoderForLookup(shape_ty)) != null) return;
+        if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null) return;
         if (self.encodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
@@ -24045,7 +25630,7 @@ const BodyContext = struct {
                 locals[index],
                 self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
             );
-            values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
+            values[index] = try self.renamedRecordFieldNameExpr(.encoder, encoding_expr, encoding_ty, field, str_ty);
         }
 
         try self.parserPlanPut(plan, shape_ty, .{
@@ -24134,7 +25719,7 @@ const BodyContext = struct {
                 locals[index],
                 self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
             );
-            values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
+            values[index] = try self.renamedRecordFieldNameExpr(.parser, encoding_expr, encoding_ty, field, str_ty);
         }
 
         try self.parserPlanPut(plan, shape_ty, .{
@@ -24189,7 +25774,7 @@ const BodyContext = struct {
         if (self.tryNullInfo(shape_ty)) |info| {
             return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
         }
-        if ((try self.customParserLookup(shape_ty)) != null) return;
+        if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty);
@@ -24259,7 +25844,7 @@ const BodyContext = struct {
         if (self.tryNullInfo(shape_ty)) |info| {
             return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, info.ok_payload_ty);
         }
-        if ((try self.customParserLookup(shape_ty)) != null) return;
+        if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, payload_ty);
@@ -24533,9 +26118,9 @@ const BodyContext = struct {
             else
                 selected.tag_text;
 
-        const parse_lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
-        const parse_mono_ty = try self.frozenCodecCallableForShape(parse_lookup, shape_ty) orelse
-            Common.invariant("parser format callable was not prepared before graph sealing");
+        const prepared = try self.frozenFormatCodecCallForShape(.parser, method_name, shape_ty);
+        const parse_lookup = prepared.lookup;
+        const parse_mono_ty = prepared.callable_ty;
         const parse_fn = self.functionShape(parse_mono_ty, "parser target method was not a function");
         const parse_arg_tys = self.typeStore().span(parse_fn.args);
         if (!Ident.textEql(selected.tag_text, "TagUnion")) {
@@ -24547,7 +26132,7 @@ const BodyContext = struct {
             return try self.addExpr(.{
                 .ty = ret_ty,
                 .data = .{ .call_proc = .{
-                    .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty, .synthesize)),
+                    .callee = draftProcCalleeForSlot(prepared.callee),
                     .args = try self.addExprSpan(&parse_args),
                     .captures = try self.methodTargetCaptureSpan(parse_lookup),
                 } },
@@ -24581,7 +26166,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, final_spec_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
@@ -24684,9 +26269,9 @@ const BodyContext = struct {
             .payload_tys = payload_tys,
         };
 
-        const parse_lookup = try self.methodLookupForTypeName(encoding_ty, "parse_record_field");
-        const callable_mono_ty = try self.frozenCodecCallableForShape(parse_lookup, shape_ty) orelse
-            Common.invariant("record parser callable was not prepared before graph sealing");
+        const prepared = try self.frozenFormatCodecCallForShape(.parser, "parse_record_field", shape_ty);
+        const parse_lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const parse_fn = self.functionShape(callable_mono_ty, "parse_record_field target method was not a function");
         const parse_arg_tys = self.typeStore().span(parse_fn.args);
         if (parse_arg_tys.len != 3) Common.invariant("parse_record_field target method had an unexpected arity");
@@ -24718,7 +26303,7 @@ const BodyContext = struct {
 
             for (record_fields, 0..) |field, index| {
                 locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
-                values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
+                values[index] = try self.renamedRecordFieldNameExpr(.parser, encoding_expr, encoding_ty, field, str_ty);
             }
 
             break :blk locals;
@@ -24741,12 +26326,51 @@ const BodyContext = struct {
             .bool_ty = bool_ty,
             .u64_ty = u64_ty,
         };
+
+        const error_join = try self.reserveGeneratedJoinPoint(ret_ty);
+        const entry_end_join = try self.reserveGeneratedJoinPoint(ret_ty);
+        const entry_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const skip_join = try self.reserveGeneratedJoinPoint(ret_ty);
+        const skip_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const field_joins = try self.allocator.alloc(DraftExprId, record_fields.len);
+        defer self.allocator.free(field_joins);
+        const field_state_locals = try self.allocator.alloc(DraftLocalId, record_fields.len);
+        defer self.allocator.free(field_state_locals);
+        for (field_joins, field_state_locals) |*join, *local| {
+            join.* = try self.reserveGeneratedJoinPoint(ret_ty);
+            local.* = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        }
+        const continuations = ParseRecordContinuations{
+            .error_join = error_join,
+            .entry_end_join = entry_end_join,
+            .skip_join = skip_join,
+            .field_joins = field_joins,
+        };
+
         const fields_expr = try self.lowerFieldNamesValue(fields_ty, fields_backing_ty, field_handle_ty, renamed_field_locals, renamed_field_lengths);
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), fields_ty);
+        const parser_retained = try self.allocator.alloc(
+            BodyTypedLocal,
+            1 + renamed_field_locals.len + record_slots.payload_locals.len,
+        );
+        defer self.allocator.free(parser_retained);
+        var retained_index: usize = 0;
+        parser_retained[retained_index] = .{ .local = fields_local, .ty = fields_ty };
+        retained_index += 1;
+        for (renamed_field_locals) |local| {
+            parser_retained[retained_index] = .{ .local = local, .ty = str_ty };
+            retained_index += 1;
+        }
+        for (record_slots.payload_locals, record_slots.payload_tys) |local, ty| {
+            parser_retained[retained_index] = .{ .local = local, .ty = ty };
+            retained_index += 1;
+        }
+        if (retained_index != parser_retained.len) Common.invariant("record parser retained local count differed");
+
         const step_expr = try self.addExpr(.{
             .ty = step_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{
                     encoding_expr,
                     try self.localExpr(fields_local, fields_ty),
@@ -24758,21 +26382,18 @@ const BodyContext = struct {
 
         const event_local = try self.addLocal(self.builder.symbols.fresh(), event_ty);
         const event_body = try self.lowerParseRecordEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
             record_slots,
             ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
             event_local,
             event_ty,
         );
-        const step_body = try self.sequenceTry(step_expr, step_try_ty, event_local, event_body, ret_ty);
+        const step_body = try self.sequenceTryTo(step_expr, step_try_ty, event_local, event_body, ret_ty, error_join);
 
         const remaining_is_zero = try self.lowLevelExpr(.num_is_eq, &.{
             try self.localExpr(ctl.remaining_local, u64_ty),
@@ -24799,8 +26420,84 @@ const BodyContext = struct {
             record_slots,
             renamed_field_locals,
             try self.localExpr(cursor_local, state_ty),
+            error_join,
         );
-        const loop_body = try self.ifExpr(finish_cond, finish_body, step_body, ret_ty);
+        var loop_body = try self.ifExpr(finish_cond, finish_body, step_body, ret_ty);
+
+        var field_index = record_fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            const field_body = try self.lowerParseMatchedRecordFieldNext(
+                record_fields[field_index],
+                field_index,
+                encoding_expr,
+                encoding_ty,
+                state_ty,
+                record_slots,
+                precomputed_plan,
+                field_state_locals[field_index],
+                ret_ty,
+                entry_end_join,
+                error_join,
+            );
+            try self.completeGeneratedJoinPoint(
+                field_joins[field_index],
+                &.{.{ .local = field_state_locals[field_index], .ty = state_ty }},
+                &.{},
+                field_body,
+                loop_body,
+            );
+            loop_body = field_joins[field_index];
+        }
+
+        const skip_body = try self.lowerSkipRecordFieldNext(
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            ret_ty,
+            skip_state_local,
+            entry_end_join,
+            error_join,
+        );
+        try self.completeGeneratedJoinPoint(
+            skip_join,
+            &.{.{ .local = skip_state_local, .ty = state_ty }},
+            &.{},
+            skip_body,
+            loop_body,
+        );
+        loop_body = skip_join;
+
+        const entry_end_body = try self.lowerParseRecordEntryEnd(
+            shape_ty,
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            ret_ty,
+            entry_state_local,
+            record_slots,
+            ctl,
+            error_join,
+        );
+        try self.completeGeneratedJoinPoint(
+            entry_end_join,
+            &.{.{ .local = entry_state_local, .ty = state_ty }},
+            parser_retained,
+            entry_end_body,
+            loop_body,
+        );
+        loop_body = entry_end_join;
+
+        const error_local = try self.addLocal(self.builder.symbols.fresh(), ret_info.err_ty);
+        const error_body = try self.tryErr(ret_ty, try self.localExpr(error_local, ret_info.err_ty));
+        try self.completeGeneratedJoinPoint(
+            error_join,
+            &.{.{ .local = error_local, .ty = ret_info.err_ty }},
+            parser_retained,
+            error_body,
+            loop_body,
+        );
+        loop_body = error_join;
 
         const params = try self.allocator.alloc(BodyTypedLocal, record_loop_slot_offset + record_slots.payload_locals.len + record_slots.presence_locals.len);
         defer self.allocator.free(params);
@@ -24827,7 +26524,7 @@ const BodyContext = struct {
             "parse_record_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            shape_ty,
             start_try_ty,
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
@@ -24915,14 +26612,11 @@ const BodyContext = struct {
 
     fn lowerParseRecordEvent(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
         ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
@@ -24973,14 +26667,9 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{field_payload_pat}),
         } } });
         const field_body = try self.lowerParseRecordDirectFieldEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             field_payload_local,
             field_payload_ty,
         );
@@ -24992,14 +26681,9 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{try_field_payload_pat}),
         } } });
         const try_field_body = try self.lowerParseRecordNamedFieldEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
@@ -25015,14 +26699,9 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{try_field_caseless_payload_pat}),
         } } });
         const try_field_caseless_body = try self.lowerParseRecordNamedFieldEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
@@ -25172,7 +26851,6 @@ const BodyContext = struct {
         remaining_expr: DraftExprId,
         record_slots: ParseRecordSlots,
         ctl: RecordLoopCtl,
-        updated: ?UpdatedFieldSlot,
     ) Allocator.Error!DraftExprId {
         const values = try self.allocator.alloc(DraftExprId, record_loop_slot_offset + record_slots.payload_locals.len + record_slots.presence_locals.len);
         defer self.allocator.free(values);
@@ -25185,17 +26863,11 @@ const BodyContext = struct {
         // marked present.
         const payload_offset = record_loop_slot_offset;
         for (record_slots.payload_locals, record_slots.payload_tys, 0..) |local, ty, index| {
-            values[payload_offset + index] = if (updated != null and index == updated.?.index) blk: {
-                if (!self.sameType(ty, updated.?.ty)) Common.invariant("record parser field payload type differed from slot payload type");
-                break :blk try self.localExpr(updated.?.local, updated.?.ty);
-            } else try self.localExpr(local, ty);
+            values[payload_offset + index] = try self.localExpr(local, ty);
         }
         const presence_offset = payload_offset + record_slots.payload_locals.len;
         for (record_slots.presence_locals, record_slots.presence_tys, 0..) |local, ty, index| {
-            values[presence_offset + index] = if (updated != null and index == recordPresenceWordIndex(updated.?.index))
-                try self.recordPresenceWithBit(local, ty, recordPresenceMask(updated.?.index))
-            else
-                try self.localExpr(local, ty);
+            values[presence_offset + index] = try self.localExpr(local, ty);
         }
         return try self.continueWith(.{ .sealed = ret_ty }, values);
     }
@@ -25205,6 +26877,7 @@ const BodyContext = struct {
     /// otherwise ask `parse_record_after_field` whether more entries follow.
     fn lowerParseRecordEntryEnd(
         self: *BodyContext,
+        shape_ty: Type.TypeId,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
@@ -25212,7 +26885,7 @@ const BodyContext = struct {
         entry_state_local: DraftLocalId,
         record_slots: ParseRecordSlots,
         ctl: RecordLoopCtl,
-        updated: ?UpdatedFieldSlot,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const false_expr = try self.boolLiteral(false, ctl.bool_ty);
@@ -25227,7 +26900,6 @@ const BodyContext = struct {
             remaining_minus_one,
             record_slots,
             ctl,
-            updated,
         );
 
         const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
@@ -25236,7 +26908,7 @@ const BodyContext = struct {
             "parse_record_after_field",
             &.{ encoding_expr, try self.localExpr(entry_state_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            shape_ty,
             after_try_ty,
         );
         const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
@@ -25256,7 +26928,6 @@ const BodyContext = struct {
             remaining_expr,
             record_slots,
             ctl,
-            updated,
         );
 
         const done_tag = self.monoTagByText(after_event_ty, "Done");
@@ -25273,7 +26944,6 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             record_slots,
             ctl,
-            updated,
         );
 
         const branches = [_]DraftBranch{
@@ -25284,7 +26954,7 @@ const BodyContext = struct {
             .scrutinee = try self.localExpr(after_event_local, after_event_ty),
             .branches = try self.addBranchSpan(&branches),
         } } });
-        const uncounted_body = try self.sequenceTry(after_try, after_try_ty, after_event_local, after_match, ret_ty);
+        const uncounted_body = try self.sequenceTryTo(after_try, after_try_ty, after_event_local, after_match, ret_ty, error_join);
 
         return try self.ifExpr(
             try self.localExpr(ctl.counted_local, ctl.bool_ty),
@@ -25296,14 +26966,9 @@ const BodyContext = struct {
 
     fn lowerParseRecordNamedFieldEvent(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
@@ -25320,17 +26985,12 @@ const BodyContext = struct {
         const key_local = try self.addLocal(self.builder.symbols.fresh(), str_ty);
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const body = try self.lowerRecordNamedFieldDispatchBody(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             key_local,
             str_ty,
             rest_local,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
@@ -25356,7 +27016,7 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
-        const counted_body = try self.continueRecordLoop(ret_ty, cursor_expr, false_expr, remaining_minus_one, record_slots, ctl, null);
+        const counted_body = try self.continueRecordLoop(ret_ty, cursor_expr, false_expr, remaining_minus_one, record_slots, ctl);
         const uncounted_body = try self.continueRecordLoop(
             ret_ty,
             cursor_expr,
@@ -25364,7 +27024,6 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             record_slots,
             ctl,
-            null,
         );
         return try self.ifExpr(
             try self.localExpr(ctl.counted_local, ctl.bool_ty),
@@ -25389,7 +27048,6 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             record_slots,
             ctl,
-            null,
         );
     }
 
@@ -25405,6 +27063,7 @@ const BodyContext = struct {
         record_slots: ParseRecordSlots,
         renamed_field_locals: []const DraftLocalId,
         rest_expr: DraftExprId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const record_try_ty = try self.tryTypeLike(ret_ty, shape_ty, ret_info.err_ty);
@@ -25417,6 +27076,7 @@ const BodyContext = struct {
             rest_expr,
             state_ty,
             renamed_field_locals,
+            error_join,
         );
         const record_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
         const ok_body = try self.parseResultOk(
@@ -25425,19 +27085,14 @@ const BodyContext = struct {
             rest_expr,
             state_ty,
         );
-        return try self.sequenceTry(record_expr, record_try_ty, record_local, ok_body, ret_ty);
+        return try self.sequenceTryTo(record_expr, record_try_ty, record_local, ok_body, ret_ty, error_join);
     }
 
     fn lowerParseRecordDirectFieldEvent(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         field_payload_local: DraftLocalId,
         field_payload_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -25447,82 +27102,50 @@ const BodyContext = struct {
         const field_local = try self.addLocal(self.builder.symbols.fresh(), field_ty);
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const body = try self.lowerRecordDirectFieldDispatchBody(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             field_local,
             field_ty,
             rest_local,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
         );
         return try self.wrapLet(field_local, field_ty, field_expr, try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty), ret_ty);
     }
 
     fn lowerRecordDirectFieldDispatchBody(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         field_local: DraftLocalId,
         field_ty: Type.TypeId,
         rest_local: DraftLocalId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
     ) Allocator.Error!DraftExprId {
-        const fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.shapeContent(shape_ty)) {
-            .record => |span| self.typeStore().fieldSpan(span),
-            .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record direct field dispatch requested for a non-record shape"),
-        });
-        defer self.allocator.free(fields);
-        if (fields.len != record_slots.fieldCount()) Common.invariant("record direct field dispatch state arity differed from field count");
-
-        if (fields.len == 0) {
-            return try self.lowerSkipRecordFieldNext(
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                ret_ty,
-                rest_local,
-                record_slots,
-                ctl,
-            );
-        }
+        if (continuations.field_joins.len == 0) return try self.jumpToGeneratedJoin(
+            continuations.skip_join,
+            &.{try self.localExpr(rest_local, state_ty)},
+            &.{},
+            &.{},
+            ret_ty,
+        );
 
         const u64_ty = try self.primitiveType(.u64);
         const index_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
-        var body = try self.lowerParseMatchedRecordFieldNext(
-            fields[fields.len - 1],
-            fields.len - 1,
-            encoding_expr,
-            encoding_ty,
-            state_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
-            rest_local,
+        var body = try self.jumpToGeneratedJoin(
+            continuations.field_joins[continuations.field_joins.len - 1],
+            &.{try self.localExpr(rest_local, state_ty)},
+            &.{},
+            &.{},
             ret_ty,
         );
-        var index = fields.len - 1;
+        var index = continuations.field_joins.len - 1;
         while (index > 0) {
             index -= 1;
-            const matched = try self.lowerParseMatchedRecordFieldNext(
-                fields[index],
-                index,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                record_slots,
-                ctl,
-                precomputed_plan,
-                rest_local,
+            const matched = try self.jumpToGeneratedJoin(
+                continuations.field_joins[index],
+                &.{try self.localExpr(rest_local, state_ty)},
+                &.{},
+                &.{},
                 ret_ty,
             );
             const index_expr = try self.localExpr(index_local, u64_ty);
@@ -25537,62 +27160,43 @@ const BodyContext = struct {
 
     fn lowerRecordNamedFieldDispatchBody(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         key_local: DraftLocalId,
         key_ty: Type.TypeId,
         rest_local: DraftLocalId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
         mode: RecordFieldMatchMode,
     ) Allocator.Error!DraftExprId {
-        const fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.shapeContent(shape_ty)) {
-            .record => |span| self.typeStore().fieldSpan(span),
-            .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record named field dispatch requested for a non-record shape"),
-        });
-        defer self.allocator.free(fields);
-        if (fields.len != record_slots.fieldCount()) Common.invariant("record named field dispatch state arity differed from field count");
-        if (fields.len != renamed_field_locals.len) Common.invariant("record named field dispatch renamed field arity differed from field count");
+        if (continuations.field_joins.len != renamed_field_locals.len) Common.invariant("record named field dispatch renamed field arity differed from field count");
         if (renamed_field_lengths) |lengths| {
-            if (fields.len != lengths.len) Common.invariant("record named field dispatch renamed length arity differed from field count");
+            if (continuations.field_joins.len != lengths.len) Common.invariant("record named field dispatch renamed length arity differed from field count");
         }
         if (renamed_field_texts) |texts| {
-            if (fields.len != texts.len) Common.invariant("record named field dispatch renamed text arity differed from field count");
+            if (continuations.field_joins.len != texts.len) Common.invariant("record named field dispatch renamed text arity differed from field count");
         }
 
-        const matched_bodies = try self.allocator.alloc(DraftExprId, fields.len);
+        const matched_bodies = try self.allocator.alloc(DraftExprId, continuations.field_joins.len);
         defer self.allocator.free(matched_bodies);
-        for (fields, 0..) |field, index| {
-            matched_bodies[index] = try self.lowerParseMatchedRecordFieldNext(
-                field,
-                index,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                record_slots,
-                ctl,
-                precomputed_plan,
-                rest_local,
+        for (continuations.field_joins, 0..) |target, index| {
+            matched_bodies[index] = try self.jumpToGeneratedJoin(
+                target,
+                &.{try self.localExpr(rest_local, state_ty)},
+                &.{},
+                &.{},
                 ret_ty,
             );
         }
 
-        const unknown_body = try self.lowerSkipRecordFieldNext(
-            encoding_expr,
-            encoding_ty,
-            state_ty,
+        const unknown_body = try self.jumpToGeneratedJoin(
+            continuations.skip_join,
+            &.{try self.localExpr(rest_local, state_ty)},
+            &.{},
+            &.{},
             ret_ty,
-            rest_local,
-            record_slots,
-            ctl,
         );
 
         return try self.lowerParseRecordNamedDispatchBody(
@@ -25615,13 +27219,14 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         rest_local: DraftLocalId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
+        entry_end_join: DraftExprId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const skip_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
-        const lookup = try self.methodLookupForTypeName(encoding_ty, "skip_record_field");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ encoding_ty, state_ty }, skip_try_ty);
+        const prepared = try self.frozenFormatCodecCall(.parser, "skip_record_field");
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const skip_fn = self.functionShape(callable_mono_ty, "skip_record_field target method was not a function");
         const arg_tys = self.typeStore().span(skip_fn.args);
         if (arg_tys.len != 2) Common.invariant("skip_record_field target method had an unexpected arity");
@@ -25631,23 +27236,20 @@ const BodyContext = struct {
         const skip_expr = try self.addExpr(.{
             .ty = skip_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, try self.localExpr(rest_local, state_ty) }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
         const skipped_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const ok_body = try self.lowerParseRecordEntryEnd(
-            encoding_expr,
-            encoding_ty,
-            state_ty,
+        const ok_body = try self.jumpToGeneratedJoin(
+            entry_end_join,
+            &.{try self.localExpr(skipped_local, state_ty)},
+            &.{},
+            &.{},
             ret_ty,
-            skipped_local,
-            record_slots,
-            ctl,
-            null,
         );
-        return try self.sequenceTry(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty);
+        return try self.sequenceTryTo(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty, error_join);
     }
 
     fn lowerParseMatchedRecordFieldNext(
@@ -25658,10 +27260,11 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
         rest_local: DraftLocalId,
         ret_ty: Type.TypeId,
+        entry_end_join: DraftExprId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const maybe_missing_try = try self.missingTryInfo(field.ty);
@@ -25696,18 +27299,41 @@ const BodyContext = struct {
             try self.localExpr(parsed_value_local, field_parse_ty);
         const field_value_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
         const parsed_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const ok_body = try self.lowerParseRecordEntryEnd(
-            encoding_expr,
-            encoding_ty,
-            state_ty,
+        const presence_word = recordPresenceWordIndex(field_index);
+        const loop_params = [_]BodyTypedLocal{
+            .{ .local = record_slots.payload_locals[field_index], .ty = record_slots.payload_tys[field_index] },
+            .{ .local = record_slots.presence_locals[presence_word], .ty = record_slots.presence_tys[presence_word] },
+        };
+        // Payload replacement must precede marking the slot initialized. ARC
+        // cleanup of a duplicate field therefore tests the previous presence
+        // bit and never decrefs an uninitialized payload.
+        const loop_values = [_]DraftExprId{
+            try self.localExpr(field_value_local, field.ty),
+            try self.recordPresenceWithBit(
+                record_slots.presence_locals[presence_word],
+                record_slots.presence_tys[presence_word],
+                recordPresenceMask(field_index),
+            ),
+        };
+        const ok_body = try self.jumpToGeneratedJoin(
+            entry_end_join,
+            &.{try self.localExpr(parsed_rest_local, state_ty)},
+            &loop_params,
+            &loop_values,
             ret_ty,
-            parsed_rest_local,
-            record_slots,
-            ctl,
-            .{ .local = field_value_local, .ty = field.ty, .index = field_index },
         );
         const with_field_value = try self.wrapLet(field_value_local, field.ty, field_value, ok_body, ret_ty);
-        return try self.sequenceTryRecord(parse_expr, parse_ret_ty, parsed_value_local, value_name, parsed_rest_local, rest_name, with_field_value, ret_ty);
+        return try self.sequenceTryRecordTo(
+            parse_expr,
+            parse_ret_ty,
+            parsed_value_local,
+            value_name,
+            parsed_rest_local,
+            rest_name,
+            with_field_value,
+            ret_ty,
+            error_join,
+        );
     }
 
     fn lowerParseShapeHelperCall(
@@ -25845,9 +27471,9 @@ const BodyContext = struct {
             .box => |payload_ty| return try self.lowerParseBoxFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
             .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
         }
-        if (try self.customParserLookup(shape_ty)) |raw_lookup| {
+        if (self.frozenCustomCodecCallForShape(.parser, shape_ty)) |prepared| {
             return try self.lowerCustomParserFromState(
-                try self.withLocalProcContext(raw_lookup),
+                prepared.*,
                 shape_ty,
                 encoding_expr,
                 encoding_ty,
@@ -25889,7 +27515,7 @@ const BodyContext = struct {
             "parse_tuple_start",
             &.{ encoding_expr, state_expr, len_expr },
             &.{ encoding_ty, state_ty, u64_ty },
-            encoding_ty,
+            tuple_ty,
             state_try_ty,
         );
         const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -25931,7 +27557,7 @@ const BodyContext = struct {
                 "parse_tuple_end",
                 &.{ encoding_expr, try self.localExpr(cursor_local, state_ty), len_expr },
                 &.{ encoding_ty, state_ty, u64_ty },
-                encoding_ty,
+                tuple_ty,
                 state_try_ty,
             );
             const end_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -25995,7 +27621,7 @@ const BodyContext = struct {
             "parse_tuple_next",
             &.{ encoding_expr, try self.localExpr(cursor_local, state_ty), index_expr, len_expr },
             &.{ encoding_ty, state_ty, u64_ty, u64_ty },
-            encoding_ty,
+            tuple_ty,
             state_try_ty,
         );
         const separated_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -26115,7 +27741,7 @@ const BodyContext = struct {
             "parse_list_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            list_ty,
             start_try_ty,
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
@@ -26278,7 +27904,7 @@ const BodyContext = struct {
             "parse_dict_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            dict_ty,
             start_try_ty,
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
@@ -26402,7 +28028,7 @@ const BodyContext = struct {
             "parse_dict_next",
             &.{ encoding_expr, try self.localExpr(cursor_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            dict_ty,
             event_try_ty,
         );
         const event_local = try self.addLocal(self.builder.symbols.fresh(), event_ty);
@@ -26567,7 +28193,7 @@ const BodyContext = struct {
             "parse_dict_after_key",
             &.{ encoding_expr, try self.localExpr(after_key_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            dict_ty,
             separator_try_ty,
         );
         const value_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -26603,7 +28229,7 @@ const BodyContext = struct {
                     "parse_dict_after_entry",
                     &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
                     &.{ encoding_ty, state_ty },
-                    encoding_ty,
+                    dict_ty,
                     after_try_ty,
                 );
                 const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
@@ -26680,7 +28306,7 @@ const BodyContext = struct {
                 method_name,
                 &.{ encoding_expr, state_expr },
                 &.{ encoding_ty, state_ty },
-                encoding_ty,
+                key_ty,
                 ret_ty,
             );
         }
@@ -26696,7 +28322,7 @@ const BodyContext = struct {
             "parse_key_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            key_ty,
             start_try_ty,
         );
         const opened_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -26733,7 +28359,7 @@ const BodyContext = struct {
             "parse_key_str",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            str_ty,
             key_parse_ret_ty,
         );
         const key_local = try self.addLocal(self.builder.symbols.fresh(), str_ty);
@@ -26785,7 +28411,7 @@ const BodyContext = struct {
             "parse_list_next",
             &.{ encoding_expr, try self.localExpr(cursor_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            list_ty,
             next_try_ty,
         );
         const event_local = try self.addLocal(self.builder.symbols.fresh(), next_event_ty);
@@ -26984,7 +28610,7 @@ const BodyContext = struct {
             "parse_list_after_item",
             &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            list_ty,
             after_try_ty,
         );
         const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
@@ -27107,8 +28733,9 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const null_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
-        const parse_null_lookup = try self.methodLookupForTypeName(encoding_ty, "parse_null");
-        const parse_null_mono_ty = try self.methodTargetMonoTypeFromArgs(parse_null_lookup, &.{ encoding_ty, state_ty }, null_try_ty);
+        const prepared = try self.frozenFormatCodecCall(.parser, "parse_null");
+        const parse_null_lookup = prepared.lookup;
+        const parse_null_mono_ty = prepared.callable_ty;
         const parse_null_fn = self.functionShape(parse_null_mono_ty, "parse_null target method was not a function");
         const parse_null_arg_tys = self.typeStore().span(parse_null_fn.args);
         if (parse_null_arg_tys.len != 2) Common.invariant("parse_null target method had an unexpected arity");
@@ -27119,7 +28746,7 @@ const BodyContext = struct {
         const parse_null_expr = try self.addExpr(.{
             .ty = null_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_null_lookup, parse_null_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(parse_null_lookup),
             } },
@@ -27175,7 +28802,7 @@ const BodyContext = struct {
 
     fn lowerCustomParserFromState(
         self: *BodyContext,
-        lookup: MethodLookup,
+        prepared: FrozenPreparedCodecCall,
         shape_ty: Type.TypeId,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
@@ -27183,7 +28810,6 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const prepared = self.frozenCustomCodecCall(.parser, shape_ty, lookup);
         const callable_mono_ty = prepared.callable_ty;
         const parse_fn = self.functionShape(callable_mono_ty, "custom parser target was not a function");
         const parse_arg_tys = self.typeStore().span(parse_fn.args);
@@ -27225,7 +28851,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
-                .captures = try self.methodTargetCaptureSpan(lookup),
+                .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
         });
         const source_result = try self.addExpr(.{
@@ -27513,6 +29139,7 @@ const BodyContext = struct {
         rest_value: DraftExprId,
         state_ty: Type.TypeId,
         renamed_field_locals: []const DraftLocalId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         if (!self.sameType(ret_info.ok_ty, record_ty)) Common.invariant("record finish Try Ok type differed from record type");
@@ -27531,38 +29158,10 @@ const BodyContext = struct {
 
         const out_fields = try self.allocator.alloc(DraftFieldExpr, record_fields.len);
         defer self.allocator.free(out_fields);
-        const field_tries = try self.allocator.alloc(?DraftExprId, record_fields.len);
-        defer self.allocator.free(field_tries);
-        @memset(field_tries, null);
-        const field_try_tys = try self.allocator.alloc(?Type.TypeId, record_fields.len);
-        defer self.allocator.free(field_try_tys);
-        @memset(field_try_tys, null);
         const field_locals = try self.allocator.alloc(DraftLocalId, record_fields.len);
         defer self.allocator.free(field_locals);
         for (record_fields, 0..) |field, index| {
             field_locals[index] = try self.addLocal(self.builder.symbols.fresh(), field.ty);
-            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null or
-                self.optionalFieldSlot(field.ty) != null or
-                self.parserFieldDefaultFor(record_ty, field.name) != null;
-            if (!field_can_be_missing) {
-                const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
-                field_try_tys[index] = field_try_ty;
-                const presence_word = recordPresenceWordIndex(index);
-                const is_present = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]);
-                field_tries[index] = try self.parseRecordFieldFromPresencePayload(
-                    is_present,
-                    recordPresenceMask(index),
-                    record_slots.payload_locals[index],
-                    record_slots.payload_tys[index],
-                    field,
-                    field_try_ty,
-                    renamed_field_locals[index],
-                    encoding_expr,
-                    encoding_ty,
-                    rest_expr,
-                    state_ty,
-                );
-            }
             out_fields[index] = .{
                 .name = field.name,
                 .value = try self.localExpr(field_locals[index], field.ty),
@@ -27601,13 +29200,52 @@ const BodyContext = struct {
                     field_locals[field_index],
                 )
             else
-                try self.sequenceTry(
-                    field_tries[field_index] orelse Common.invariant("required record field was missing finish Try"),
-                    field_try_tys[field_index] orelse Common.invariant("required record field was missing finish Try type"),
+                try self.wrapLet(
                     field_locals[field_index],
+                    record_fields[field_index].ty,
+                    try self.localExpr(record_slots.payload_locals[field_index], record_slots.payload_tys[field_index]),
                     body,
                     ret_ty,
                 );
+        }
+
+        // Validate every required presence bit before consuming any payload.
+        // Consequently every failure edge reaches the shared error body with
+        // the same ownership environment, and ARC emits its O(N) cleanup once.
+        field_index = record_fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            const field = record_fields[field_index];
+            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null or
+                self.optionalFieldSlot(field.ty) != null or
+                self.parserFieldDefaultFor(record_ty, field.name) != null;
+            if (field_can_be_missing) continue;
+
+            const renamed_field_ty = try self.localType(renamed_field_locals[field_index]);
+            const missing_error = try self.missingRequiredFieldError(
+                try self.localExpr(renamed_field_locals[field_index], renamed_field_ty),
+                encoding_expr,
+                rest_expr,
+                encoding_ty,
+                state_ty,
+                ret_info.err_ty,
+            );
+            const missing_body = try self.jumpToGeneratedJoin(
+                error_join,
+                &.{missing_error},
+                &.{},
+                &.{},
+                ret_ty,
+            );
+            const presence_word = recordPresenceWordIndex(field_index);
+            body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .if_initialized_payload = .{
+                .cond = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]),
+                .cond_mask = recordPresenceMask(field_index),
+                .payload = record_slots.payload_locals[field_index],
+                .uninitialized_is_cold = true,
+                .initialized = body,
+                .uninitialized = missing_body,
+            } } });
         }
         return try self.wrapLet(rest_local, state_ty, rest_value, body, ret_ty);
     }
@@ -28120,6 +29758,7 @@ const BodyContext = struct {
 
     fn renamedRecordFieldNameExpr(
         self: *BodyContext,
+        kind: CodecKind,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
         field: Type.Field,
@@ -28127,8 +29766,9 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const field_text = self.nameStore().recordFieldLabelText(field.name);
         const field_expr = try self.stringExpr(field_text, str_ty);
-        const lookup = try self.methodLookupForTypeName(encoding_ty, "rename_field");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ encoding_ty, str_ty }, str_ty);
+        const prepared = try self.frozenFormatCodecCall(kind, "rename_field");
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const rename_fn = self.functionShape(callable_mono_ty, "rename_field target method was not a function");
         const arg_tys = self.typeStore().span(rename_fn.args);
         if (arg_tys.len != 2) Common.invariant("rename_field target method had an unexpected arity");
@@ -28138,7 +29778,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = str_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, field_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -28184,6 +29824,57 @@ const BodyContext = struct {
             .bind = try self.bindPat(local, ty),
             .value = value,
             .rest = rest,
+        } } });
+    }
+
+    /// Reserve the expression that owns a compiler-generated join id. The
+    /// producer fills it only after every body that can jump to the join has
+    /// been built, so forward edges never require guessed or reconstructed
+    /// control-flow metadata.
+    fn reserveGeneratedJoinPoint(self: *BodyContext, ret_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        return try self.addExprWithTypeCell(.{ .sealed = ret_ty }, .pending_deferred);
+    }
+
+    fn completeGeneratedJoinPoint(
+        self: *BodyContext,
+        reservation: DraftExprId,
+        params: []const BodyTypedLocal,
+        retained: []const BodyTypedLocal,
+        body: DraftExprId,
+        remainder: DraftExprId,
+    ) Allocator.Error!void {
+        const reserved = &self.draft.exprs.items[@intFromEnum(reservation)];
+        if (reserved.data != .pending_deferred) {
+            Common.invariant("compiler-generated join reservation was filled more than once");
+        }
+        const data: BodyExprData = .{ .join_point = .{
+            .id = reservation,
+            .params = try self.addTypedLocalSpan(params),
+            .retained = try self.addTypedLocalSpan(retained),
+            .body = body,
+            .remainder = remainder,
+        } };
+        reserved.data = data;
+        self.draft.expr_impossibility_proofs.items[@intFromEnum(reservation)] =
+            try self.exprDataImpossibilityProof(reserved.ty, data);
+    }
+
+    fn jumpToGeneratedJoin(
+        self: *BodyContext,
+        target: DraftExprId,
+        args: []const DraftExprId,
+        loop_params: []const BodyTypedLocal,
+        loop_values: []const DraftExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (loop_params.len != loop_values.len) {
+            Common.invariant("compiler-generated jump loop-update arity differed");
+        }
+        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .jump = .{
+            .target = target,
+            .args = try self.addExprSpan(args),
+            .loop_params = try self.addTypedLocalSpan(loop_params),
+            .loop_values = try self.addExprSpan(loop_values),
         } } });
     }
 
@@ -28284,6 +29975,7 @@ const BodyContext = struct {
             call_ctx.current_fn_key = self.current_fn_key;
             call_ctx.source_region_override = self.source_region_override;
             call_ctx.current_entry_root = self.current_entry_root;
+            call_ctx.in_deferred_body = self.in_deferred_body;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
             var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
@@ -28368,6 +30060,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
             call.source_fn_ty_payload,
@@ -29069,10 +30762,13 @@ const BodyContext = struct {
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
             .selected_hoisted_const => |selected| {
-                // A selected hoisted constant has a local binder only while
-                // lowering its own root. Every other use consumes the
+                // A selected hoisted constant's binder has a local only while
+                // its own root is lowered or while a recursive restore of the
+                // constant is active; every other use consumes the
                 // checker-selected ConstStore entry directly.
-                if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                if (self.binders.get(selected.local.binder) == null) {
+                    if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                }
             },
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
         }
@@ -29165,7 +30861,11 @@ const BodyContext = struct {
             .pattern_binder,
             => {},
             .selected_hoisted_const => |selected| {
-                if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                // A local for the binder is consumed instead of the constant
+                // (see `lookupCallArgumentMonoType`).
+                if (self.binders.get(selected.local.binder) == null) {
+                    if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                }
             },
             .local_param,
             .local_mutable_version,
@@ -29354,6 +31054,7 @@ const BodyContext = struct {
             call_ctx.current_fn_key = self.current_fn_key;
             call_ctx.source_region_override = self.source_region_override;
             call_ctx.current_entry_root = self.current_entry_root;
+            call_ctx.in_deferred_body = self.in_deferred_body;
 
             const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
                 call.source_fn_ty_payload,
@@ -29399,6 +31100,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
         var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
             source_fn_ty,
             self,
@@ -29440,12 +31142,14 @@ const BodyContext = struct {
                 source_fn_key,
                 request_fn_node,
                 evidence,
+                record.recursive_reference,
+                null,
             ) },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null),
+            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null, record.recursive_reference),
             .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(
                 proc.procedure,
                 source_fn_ty,
@@ -29453,6 +31157,7 @@ const BodyContext = struct {
                 request_fn_node,
                 evidence,
                 proc.root_evidence,
+                record.recursive_reference,
             ),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
         };
@@ -29466,6 +31171,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        recursive_reference: bool,
     ) Allocator.Error!DraftFnSlot {
         const template_ref = self.builder.templateRefForProcedureUse(proc);
         const requested_evidence = if (root_evidence) |producer_evidence|
@@ -29479,8 +31185,9 @@ const BodyContext = struct {
             source_fn_key,
             request_fn_node,
             requested_evidence,
-            .resolved,
+            if (recursive_reference) .recursive_reference else .instantiation,
             if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
+            null,
         );
     }
 
@@ -29493,6 +31200,8 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
+        recursive_reference: bool,
+        codec_contract_anchor: ?CheckedCodecContractAnchor,
     ) Allocator.Error!DraftFnTarget {
         const context = self.validateLocalProcContext(
             context_id,
@@ -29567,7 +31276,9 @@ const BodyContext = struct {
             capture_entry_guards,
             requested_evidence,
             local.dispatch_scope,
+            recursive_reference,
             .independent_roots,
+            codec_contract_anchor,
         );
     }
 
@@ -29793,7 +31504,22 @@ const BodyContext = struct {
     fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
         const owner = switch (const_use.owner) {
             .top_level_binding => |owner| owner,
-            .hoisted_expr => return null,
+            // A hoisted extraction root binds its result pattern. A reference
+            // to that binder from a lambda inside the root's own scrutinee
+            // recurses through it the way a top-level constant's lambda
+            // recurses through the constant.
+            .hoisted_expr => |hoisted| {
+                if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
+                    Common.invariant("hoisted const template referenced a different checked module");
+                }
+                const entry = store_view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null;
+                const pattern = entry.pattern orelse return null;
+                const raw_pattern = @intFromEnum(pattern);
+                if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
+                    Common.invariant("hoisted const result pattern was outside the binder index");
+                }
+                return store_view.bodies.pattern_binder_by_pattern[raw_pattern];
+            },
         };
         if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
             Common.invariant("top-level const template referenced a different checked module");
@@ -29918,12 +31644,12 @@ const BodyContext = struct {
 
         const owner_scope = try self.draft.enterOwner(active.owner);
         defer owner_scope.leave();
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = self.draft.expr_locs.items[@intFromEnum(source)];
-        self.builder.program.current_region = self.draft.expr_regions.items[@intFromEnum(source)];
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = self.draft.expr_locs.items[@intFromEnum(source)];
+        self.builder.current_region = self.draft.expr_regions.items[@intFromEnum(source)];
 
         const wrapped = try self.wrapRecursiveConstLocalAtTypeCell(active.local, active.cell, source);
         self.copyActiveConstReservation(active.reservation, wrapped);
@@ -30040,7 +31766,12 @@ const BodyContext = struct {
             .pattern_binder,
             => {},
             .selected_hoisted_const => |selected| {
-                if (try self.restoreSelectedHoistedConstAtType(selected, ty)) |restored| return restored;
+                // A local for the binder is the root's own in-progress value
+                // or an active recursive restore of the constant; it is
+                // consumed below instead of restoring the constant again.
+                if (self.binders.get(selected.local.binder) == null) {
+                    if (try self.restoreSelectedHoistedConstAtType(selected, ty)) |restored| return restored;
+                }
             },
             .local_param,
             .local_mutable_version,
@@ -30160,6 +31891,8 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     request_fn_node,
                     try self.evidenceForUseSite(record.expr),
+                    record.recursive_reference,
+                    null,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                 break :blk try self.addExprWithTypeCell(
@@ -30177,8 +31910,8 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null),
-            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence),
+            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null, record.recursive_reference),
+            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference),
             .top_level_const,
             .imported_const,
             .platform_required_const,
@@ -30268,6 +32001,8 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     expected_node,
                     try self.evidenceForUseSite(record.expr),
+                    record.recursive_reference,
+                    null,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, expected_node);
                 return try self.addExprWithTypeCell(
@@ -30293,12 +32028,14 @@ const BodyContext = struct {
                 expected_node,
                 try self.evidenceForUseSite(record.expr),
                 null,
+                record.recursive_reference,
             ),
             .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(
                 proc.procedure,
                 expected_node,
                 try self.evidenceForUseSite(record.expr),
                 proc.root_evidence,
+                record.recursive_reference,
             ),
             // The required def failed checking, so its type never resolves;
             // crash at the use site instead of materializing the expected node.
@@ -30323,7 +32060,12 @@ const BodyContext = struct {
         switch (provenance) {
             .declared => switch (const_use.const_ref.owner) {
                 .top_level_binding => {},
-                .hoisted_expr => Common.invariant("hoisted const use reached a declared deferred boundary"),
+                // An exposed name bound by a top-level destructure is a
+                // hoisted extraction root in its own module and a declared
+                // value to every importer.
+                .hoisted_expr => if (moduleBytesEqual(checked.constModuleId(const_use.const_ref).bytes, self.view.key.bytes)) {
+                    Common.invariant("hoisted const use reached a declared deferred boundary");
+                },
             },
             .hoisted => |entry| {
                 switch (const_use.const_ref.owner) {
@@ -30374,6 +32116,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        recursive_reference: bool,
     ) Allocator.Error!DraftExprId {
         if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             return try self.lowerCallableEvalBindingValueAtNode(
@@ -30392,6 +32135,7 @@ const BodyContext = struct {
             request_fn_node,
             evidence,
             root_evidence,
+            recursive_reference,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
         const fn_node = try self.draftFnSlotTypeNode(slot, request_fn_node);
@@ -30518,7 +32262,12 @@ const BodyContext = struct {
             );
             if (active_root.graph == self.graph and
                 active_root.family.sameRecursiveCallable(family) and
-                specEvidenceVectorEql(active_root.evidence, spec.evidence))
+                specEvidenceVectorEql(active_root.evidence, spec.evidence) and
+                optionalDraftCodecContractContextEql(
+                    self.graph,
+                    active_root.codec_contract,
+                    spec.codec_contract,
+                ))
             {
                 return current_node;
             }
@@ -30526,7 +32275,21 @@ const BodyContext = struct {
         if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
+        if (self.builder.spec_job_parallel_callback) {
+            // This path consumes a callee's solved private iterator
+            // representation immediately and still performs coordinator-owned
+            // reservation/body completion. Leave the frozen worker result
+            // uncommitted and re-run this uncommon job on the serial executor.
+            self.builder.spec_job_requires_serial_retry = true;
+            return error.OutOfMemory;
+        }
         const coordinator_request_fn_ty = try self.commitGraphType(request_fn_ty);
+        const codec_contract: ?SealedCodecContractContext = if (spec.codec_contract) |contract| .{
+            .anchor = contract.anchor,
+            .constructor_ty = try self.commitGraphType(
+                try self.activeTypeFromNode(contract.constructor_node),
+            ),
+        } else null;
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
         try self.builder.resolveDeferredTemplateSpecAtType(
@@ -30535,6 +32298,7 @@ const BodyContext = struct {
             request_fn_ty,
             coordinator_request_fn_ty,
             .immediate,
+            codec_contract,
         );
         self.draft.template_specs.items[spec_index].eager_resolution = .{
             .request_fn_node = spec.request_fn_node,
@@ -30670,12 +32434,12 @@ const BodyContext = struct {
             },
             .unimplemented => |declaration| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
-                self.builder.program.current_region = declaration.region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(declaration.region);
+                self.builder.current_region = declaration.region;
                 break :blk try self.runtimeCrashExpr(ty, Common.unimplemented_declaration_crash);
             },
         };
@@ -30737,12 +32501,12 @@ const BodyContext = struct {
             },
             .unimplemented => |declaration| blk: {
                 try self.graph.unify(try self.instNode(requested_ty), request_node);
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
-                self.builder.program.current_region = declaration.region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(declaration.region);
+                self.builder.current_region = declaration.region;
                 break :blk try self.runtimeCrashExprAtCell(
                     DraftTypeCell.fromGraphNode(request_node),
                     Common.unimplemented_declaration_crash,
@@ -31729,7 +33493,9 @@ const BodyContext = struct {
                     &.{},
                     fn_ctx.evidence,
                     null,
+                    false,
                     .exact_graph,
+                    null,
                 );
             },
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
@@ -31739,8 +33505,9 @@ const BodyContext = struct {
                 source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
-                .resolved,
+                .instantiation,
                 .independent_roots,
+                null,
             )),
         };
     }
@@ -31890,7 +33657,9 @@ const BodyContext = struct {
                 capture_entry_guards,
                 fn_ctx.evidence,
                 null,
+                false,
                 .exact_graph,
+                null,
             ),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
@@ -31926,7 +33695,7 @@ const BodyContext = struct {
         if (fn_value.fn_def == .encoder_for_runtime) {
             return try self.restoreConstEncoderForRuntimeFn(store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
-        const template = try self.builder.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
+        const template = try self.builder.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty, false);
         if (fn_value.evidence_frames.len == 0 or fn_value.evidence_frame_head == null) {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
@@ -32071,7 +33840,9 @@ const BodyContext = struct {
                 capture_entry_guards,
                 fn_ctx.evidence,
                 null,
+                false,
                 .exact_graph,
+                null,
             ),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
@@ -32113,6 +33884,7 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
@@ -32129,6 +33901,7 @@ const BodyContext = struct {
         if (runtime_arg_tys.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
@@ -32254,6 +34027,7 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
@@ -32280,6 +34054,7 @@ const BodyContext = struct {
         const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
@@ -32365,8 +34140,8 @@ const BodyContext = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
-            .const_evidence = try self.builder.program.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = try fn_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try fn_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
         } });
@@ -32430,6 +34205,7 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
@@ -32446,6 +34222,7 @@ const BodyContext = struct {
         if (runtime_arg_tys.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
@@ -32588,6 +34365,7 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
@@ -32616,6 +34394,7 @@ const BodyContext = struct {
         const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
@@ -32725,8 +34504,8 @@ const BodyContext = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
-            .const_evidence = try self.builder.program.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = try fn_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try fn_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
         } });
@@ -33017,6 +34796,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const source_fn_ty = if (call.direct_target) |target|
             self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload)
@@ -33598,13 +35378,13 @@ const BodyContext = struct {
         expr_diverges: bool,
     ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(checked_expr);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const region = self.sourceRegionForExpr(expr);
-        self.builder.program.current_loc = try self.sourceLocFor(region);
-        self.builder.program.current_region = region;
+        self.builder.current_loc = try self.sourceLocFor(region);
+        self.builder.current_region = region;
         return switch (cell) {
             .sealed => |ty| blk: {
                 const lowered = if (expr_diverges)
@@ -35626,7 +37406,9 @@ const BodyContext = struct {
             capture_entry_guards,
             nested_evidence.chain,
             nested_evidence.owned_scope,
+            false,
             .exact_graph,
+            null,
         );
     }
 
@@ -35757,7 +37539,9 @@ const BodyContext = struct {
             &.{},
             nested_evidence.chain,
             nested_evidence.owned_scope,
+            false,
             .exact_graph,
+            null,
         );
     }
 
@@ -35936,6 +37720,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
             callable_plan,
@@ -35948,11 +37733,12 @@ const BodyContext = struct {
             Common.invariant("runtime method call had no CheckedCallResolution evidence");
         switch (resolution) {
             .target => |initial_lookup| {
+                const relation_lookup = initial_lookup;
                 if (direct_parametric_low_level == null and !direct_graph_call) {
-                    const target_node = try self.methodTargetNodeFromPlan(initial_lookup, &call_ctx, plan.callable_ty);
+                    const target_node = try self.methodTargetNodeFromPlan(relation_lookup, &call_ctx, plan.callable_ty);
                     try relateFunctionRequestInterface(self.graph, target_node, callable_node);
                     if (try self.generatedIteratorMethodRequestNode(
-                        initial_lookup,
+                        relation_lookup,
                         target_node,
                         callable_node,
                         plan_args,
@@ -35961,7 +37747,7 @@ const BodyContext = struct {
                     }
                 }
                 callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                    initial_lookup,
+                    relation_lookup,
                     callable_node,
                     plan,
                     direct_graph_call,
@@ -36268,8 +38054,9 @@ const BodyContext = struct {
                 lookup.view.types.rootKey(source_fn_ty),
                 callable_node,
                 evidence_vector,
-                .resolved,
+                .instantiation,
                 .independent_roots,
+                null,
             );
             const draft_spec: ?u32 = switch (created) {
                 .local => |local| switch (local) {
@@ -36467,6 +38254,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
 
@@ -36883,8 +38671,9 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         list_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(set_ty, "from_list");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{list_ty}, set_ty);
+        const prepared = try self.frozenFormatCodecCallForShape(.parser, "from_list", set_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const from_list_fn = self.functionShape(callable_mono_ty, "Set.from_list target method was not a function");
         const arg_tys = self.typeStore().span(from_list_fn.args);
         if (arg_tys.len != 1) Common.invariant("Set.from_list target method had an unexpected arity");
@@ -36894,7 +38683,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = set_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{list_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -36907,8 +38696,9 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         set_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(set_ty, "to_list");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{set_ty}, list_ty);
+        const prepared = try self.frozenFormatCodecCallForShape(.encoder, "to_list", set_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const to_list_fn = self.functionShape(callable_mono_ty, "Set.to_list target method was not a function");
         const arg_tys = self.typeStore().span(to_list_fn.args);
         if (arg_tys.len != 1) Common.invariant("Set.to_list target method had an unexpected arity");
@@ -36918,7 +38708,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = list_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{set_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -36931,8 +38721,9 @@ const BodyContext = struct {
         capacity_expr: DraftExprId,
         capacity_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(dict_ty, "with_capacity");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{capacity_ty}, dict_ty);
+        const prepared = try self.frozenFormatCodecCallForShape(.parser, "with_capacity", dict_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const with_capacity_fn = self.functionShape(callable_mono_ty, "Dict.with_capacity target method was not a function");
         const arg_tys = self.typeStore().span(with_capacity_fn.args);
         if (arg_tys.len != 1) Common.invariant("Dict.with_capacity target method had an unexpected arity");
@@ -36942,7 +38733,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = dict_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{capacity_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -36958,8 +38749,9 @@ const BodyContext = struct {
         key_expr: DraftExprId,
         value_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(dict_ty, "insert");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ dict_ty, key_ty, value_ty }, dict_ty);
+        const prepared = try self.frozenFormatCodecCallForShape(.parser, "insert", dict_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const insert_fn = self.functionShape(callable_mono_ty, "Dict.insert target method was not a function");
         const arg_tys = self.typeStore().span(insert_fn.args);
         if (arg_tys.len != 3) Common.invariant("Dict.insert target method had an unexpected arity");
@@ -36971,7 +38763,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = dict_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -36984,8 +38776,9 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         dict_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(dict_ty, "to_list");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{dict_ty}, list_ty);
+        const prepared = try self.frozenFormatCodecCallForShape(.encoder, "to_list", dict_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const to_list_fn = self.functionShape(callable_mono_ty, "Dict.to_list target method was not a function");
         const arg_tys = self.typeStore().span(to_list_fn.args);
         if (arg_tys.len != 1) Common.invariant("Dict.to_list target method had an unexpected arity");
@@ -36995,7 +38788,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = list_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{dict_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -37256,6 +39049,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const plan_args = callable_plan.operands;
         var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
@@ -37269,10 +39063,11 @@ const BodyContext = struct {
             Common.invariant("runtime method result had no CheckedCallResolution evidence");
         switch (resolution) {
             .target => |lookup| {
-                const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
+                const relation_lookup = lookup;
+                const target_node = try self.methodTargetNodeFromPlan(relation_lookup, &call_ctx, plan.callable_ty);
                 try relateFunctionRequestInterface(self.graph, target_node, callable_node);
                 if (try self.generatedIteratorMethodRequestNode(
-                    lookup,
+                    relation_lookup,
                     target_node,
                     callable_node,
                     plan_args,
@@ -37281,7 +39076,7 @@ const BodyContext = struct {
                 }
                 if (phase == .expression_lowering) {
                     callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                        lookup,
+                        relation_lookup,
                         callable_node,
                         plan,
                         self.dispatchUsesDirectGraphCallee(plan),
@@ -37433,7 +39228,7 @@ const BodyContext = struct {
         if (frames.len == 0 or head != frames.len - 1) {
             Common.invariant("stored function evidence head did not name its final frame");
         }
-        const owner = templateForConstFnDef(fn_value.fn_def);
+        const owner = ownerTemplateForConstFnDef(fn_value.fn_def);
         const owner_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(owner));
         var cursor: usize = 0;
         const arena = self.builder.evidence_arena.allocator();
@@ -37575,7 +39370,29 @@ const BodyContext = struct {
                     };
                     break :blk .{ .target = materialized };
                 },
-                .structural => |kind| .{ .structural = .{ .derivation = kind } },
+                .structural => |stored_structural| blk: {
+                    const restored_checked: ?CheckedSpecStructuralEvidence = if (stored_structural.checked) |stored_checked| restored: {
+                        const view = self.builder.moduleForDigest(stored_checked.view);
+                        if (!std.meta.eql(view.types.rootKey(stored_checked.dispatcher_ty), stored_checked.dispatcher_key) or
+                            !std.meta.eql(view.types.rootKey(stored_checked.callable_ty), stored_checked.callable_key))
+                        {
+                            Common.invariant("stored structural evidence checked type identity changed during restoration");
+                        }
+                        break :restored .{
+                            .view = view,
+                            .evidence = static_dispatch.StructuralEvidence{
+                                .derivation = stored_structural.derivation,
+                                .dispatcher_ty = stored_checked.dispatcher_ty,
+                                .callable_ty = stored_checked.callable_ty,
+                                .generated_codec_derivation = stored_checked.generated_codec_derivation,
+                            },
+                        };
+                    } else null;
+                    break :blk .{ .structural = .{
+                        .derivation = stored_structural.derivation,
+                        .checked = restored_checked,
+                    } };
+                },
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
@@ -37621,7 +39438,7 @@ const BodyContext = struct {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("method target selected non-target checked evidence"),
+                    .structural, .unreachable_value, .checked_error => Common.invariant("method target selected unresolved or non-target checked evidence"),
                 };
             },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
@@ -37650,7 +39467,7 @@ const BodyContext = struct {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("iterator target selected non-target checked evidence"),
+                    .structural, .unreachable_value, .checked_error => Common.invariant("iterator target selected unresolved or non-target checked evidence"),
                 };
             },
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
@@ -37699,10 +39516,69 @@ const BodyContext = struct {
                     .unreachable_value, .checked_error => null,
                 };
             },
-            .structural => |derivation| return .{ .structural = .{ .derivation = derivation } },
+            .structural => |derivation| return .{ .structural = .{
+                .derivation = derivation,
+                .checked = switch (derivation.kind()) {
+                    .parser, .encoder => .{
+                        .view = self.view,
+                        .evidence = .{
+                            .derivation = derivation,
+                            .dispatcher_ty = plan.dispatcher_ty,
+                            .callable_ty = plan.callable_ty,
+                            .generated_codec_derivation = plan.generated_codec_derivation orelse
+                                Common.invariant("direct structural codec plan had no checked derivation contract"),
+                        },
+                    },
+                    .equality, .hash, .map, .map_effectful => null,
+                },
+            } },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .checked_error, .@"unreachable" => return null,
         }
+    }
+
+    /// Restore the exact lexical dispatch vector captured with a generated
+    /// runtime function. A direct structural source plan needs no vector: its
+    /// checked plan itself owns the structural evidence and codec contract.
+    fn restoreGeneratedRuntimeEvidence(
+        self: *BodyContext,
+        fn_value: check.ConstStore.ConstFn,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!void {
+        if (fn_value.evidence_frames.len != 0) {
+            self.evidence = try self.materializeConstFnEvidence(fn_value);
+            try self.replayStoredEvidenceRelations(self.evidence);
+            return;
+        }
+        if (fn_value.evidence.len != 0 or fn_value.evidence_frame_head != null) {
+            Common.invariant("stored generated runtime had malformed evidence topology");
+        }
+        switch (plan.resolution) {
+            .structural => {},
+            .evidence_dependent => Common.invariant("evidence-dependent stored generated runtime had no retained evidence"),
+            .direct_closed, .direct_parametric => Common.invariant("stored generated runtime source plan resolved to a callable target"),
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .checked_error, .@"unreachable" => Common.invariant("stored generated runtime had a rejected dispatch plan"),
+        }
+    }
+
+    fn activateCodecContractForPlan(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_node: NodeId,
+        shape_node: NodeId,
+    ) Allocator.Error!void {
+        const resolution = self.evidenceResolution(plan) orelse
+            Common.invariant("generated runtime source plan had no structural evidence");
+        const structural = switch (resolution) {
+            .structural => |structural| structural,
+            .target => Common.invariant("generated runtime source plan resolved to a callable target"),
+        };
+        self.active_codec_contract = try self.instantiateCodecContract(
+            structural,
+            callable_node,
+            shape_node,
+        );
     }
 
     const DispatchCrashReason = enum { unreachable_value, checked_error };
@@ -37954,17 +39830,6 @@ const BodyContext = struct {
         return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
     }
 
-    fn methodLookupForTypeName(
-        self: *BodyContext,
-        owner_ty: Type.TypeId,
-        method_name: []const u8,
-    ) Allocator.Error!MethodLookup {
-        const owner = methodOwnerFromType(self.typeStore(), owner_ty) orelse
-            Common.invariant("parser format type did not have a method owner");
-        return try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked method registry is missing parser format method"));
-    }
-
     fn withLocalProcContext(self: *BodyContext, lookup: MethodLookup) Allocator.Error!MethodLookup {
         var contextual = lookup;
         switch (lookup.target.kind) {
@@ -38057,6 +39922,11 @@ const BodyContext = struct {
         const out = try arena.alloc(SpecEvidence, params.len);
         for (params, 0..) |param, i| {
             const path = view.templates.evidenceParamPath(param);
+            switch (param.source) {
+                .constraint_callable => Common.invariant("hidden dispatcher evidence was synthesized from a sealed callable type instead of the target's checked scheme"),
+                .use_site_only => Common.invariant("checked use-site-only evidence reached template synthesis without checked use-site evidence"),
+                .scheme_callable, .explicit_default, .erased_row_remainder => {},
+            }
             const component_ty = if (path.len == 0)
                 try self.defaultedEvidenceParamType(param)
             else
@@ -38085,8 +39955,10 @@ const BodyContext = struct {
     }
 
     fn defaultedEvidenceParamPrimitive(param: static_dispatch.EvidenceParamRecord) Type.Primitive {
-        const phase = param.pathless_default_phase orelse
-            Common.invariant("compiler-generated method edge did not contain a dispatcher path");
+        const phase = switch (param.source) {
+            .explicit_default => |phase| phase,
+            .scheme_callable, .constraint_callable, .use_site_only, .erased_row_remainder => Common.invariant("compiler-generated method edge did not contain an explicit default"),
+        };
         const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
             Common.invariant("checking-finalized pathless evidence param reached Monotype synthesis");
         return switch (target) {
@@ -38099,15 +39971,39 @@ const BodyContext = struct {
     /// that authored them. The returned nodes remain live across subsequent
     /// target/request relations and therefore acquire the concrete component
     /// types without re-walking the path over a differently shaped request.
+    /// Whether any evidence parameter's dispatcher is reachable only through a
+    /// constraint callable. Such a dispatcher has no component in the concrete
+    /// callable type, so a compiler-generated edge derives it from the target's
+    /// checked scheme instead of from a path over the request.
+    fn evidenceParamsHaveHiddenDispatcher(params: []const static_dispatch.EvidenceParamRecord) bool {
+        for (params) |param| {
+            if (param.source == .constraint_callable) return true;
+        }
+        return false;
+    }
+
+    /// The live graph node of each evidence parameter's dispatcher at a
+    /// compiler-generated edge. Callable-reachable dispatchers are the checked
+    /// path's component of `target_root_node`; a hidden dispatcher is the
+    /// target scheme's own checked variable, instantiated in `target_ctx` (the
+    /// context that instantiated `target_root_node`) so it shares every cell
+    /// the scheme relates it to.
     fn projectEvidenceComponentNodes(
         self: *BodyContext,
         view: ModuleView,
         params: []const static_dispatch.EvidenceParamRecord,
         target_root_node: NodeId,
+        target_ctx: ?*BodyContext,
     ) Allocator.Error![]NodeId {
         const out = try self.allocator.alloc(NodeId, params.len);
         errdefer self.allocator.free(out);
         for (params, 0..) |param, i| {
+            if (param.source == .constraint_callable) {
+                const scheme_ctx = target_ctx orelse
+                    Common.invariant("hidden dispatcher evidence was projected without its target scheme context");
+                out[i] = try scheme_ctx.instNode(param.dispatcher_ty);
+                continue;
+            }
             const path = view.templates.evidenceParamPath(param);
             out[i] = if (path.len == 0)
                 try self.defaultedEvidenceParamNode(param)
@@ -38117,6 +40013,28 @@ const BodyContext = struct {
                 };
         }
         return out;
+    }
+
+    /// Dispatcher nodes for a checker-classified direct target's evidence at a
+    /// compiler-generated edge. The request already is the target's exact
+    /// callable, so callable-reachable dispatchers project from it directly;
+    /// only a hidden dispatcher needs the target scheme instantiated and
+    /// related to the request.
+    fn projectDirectTargetEvidenceComponentNodes(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        params: []const static_dispatch.EvidenceParamRecord,
+        target_root_ty: checked.CheckedTypeId,
+        request_fn_node: NodeId,
+    ) Allocator.Error![]NodeId {
+        if (!evidenceParamsHaveHiddenDispatcher(params)) {
+            return try self.projectEvidenceComponentNodes(lookup.view, params, request_fn_node, null);
+        }
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        const target_root_node = try target_ctx.instNode(target_root_ty);
+        try relateFunctionRequestInterface(self.graph, target_root_node, request_fn_node);
+        return try self.projectEvidenceComponentNodes(lookup.view, params, target_root_node, &target_ctx);
     }
 
     fn synthesizeEvidenceAtComponentNodes(
@@ -38133,6 +40051,12 @@ const BodyContext = struct {
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, params.len);
         for (params, component_nodes, 0..) |param, component_node, i| {
+            // A hidden dispatcher that the related target scheme left open has
+            // no edge to pin it: it commits to its checked specialization
+            // default here, exactly as an unpinned literal leaf does.
+            if (param.source == .constraint_callable and !try self.graph.typeIsResolved(component_node)) {
+                self.graph.materializeLiteralDefault(component_node);
+            }
             out[i] = try self.synthesizeComponentEvidenceAtNode(
                 view,
                 param.method,
@@ -38461,11 +40385,17 @@ const BodyContext = struct {
         const evidence: SpecEvidenceVector = switch (evidence_vector) {
             .resolved => evidence_vector,
             .synthesize => switch (lookup.target.kind) {
-                .procedure => |procedure| .{ .resolved = try self.synthesizeTargetEvidence(
-                    lookup,
-                    procedure.template,
-                    callable_mono_ty,
-                ) },
+                .procedure => |procedure| blk: {
+                    const template = lookup.view.templates.get(procedure.template.template);
+                    if (evidenceParamsHaveHiddenDispatcher(lookup.view.templates.evidenceParams(&template))) {
+                        return try self.methodTargetCalleeAtNode(lookup, callable_node, .synthesize);
+                    }
+                    break :blk .{ .resolved = try self.synthesizeTargetEvidence(
+                        lookup,
+                        procedure.template,
+                        callable_mono_ty,
+                    ) };
+                },
                 .local_proc => .{ .resolved = &.{} },
                 .structural => Common.invariant("structural method registry result has no callable procedure body"),
             },
@@ -38487,15 +40417,7 @@ const BodyContext = struct {
     }
 
     fn methodLookupEql(_: *BodyContext, left: MethodLookup, right: MethodLookup) bool {
-        if (!moduleBytesEqual(left.view.key.bytes, right.view.key.bytes)) return false;
-        if (!std.meta.eql(left.target, right.target)) return false;
-        if (left.local_proc_context != right.local_proc_context) return false;
-        if (left.instantiation) |left_instantiation| {
-            const right_instantiation = right.instantiation orelse return false;
-            return moduleBytesEqual(left_instantiation.view.key.bytes, right_instantiation.view.key.bytes) and
-                left_instantiation.callable_ty == right_instantiation.callable_ty;
-        }
-        return right.instantiation == null;
+        return methodLookupIdentityEql(left, right);
     }
 
     fn frozenCodecCallableFromArgs(
@@ -38527,44 +40449,6 @@ const BodyContext = struct {
         return null;
     }
 
-    fn frozenCodecCallableForShape(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        shape_ty: Type.TypeId,
-    ) Allocator.Error!?Type.TypeId {
-        const prepared_calls = self.frozen_codec_calls orelse return null;
-        for (prepared_calls.calls) |prepared| {
-            if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
-            if (try self.typeStore().typeEql(
-                self.nameStore(),
-                prepared.shape_ty,
-                shape_ty,
-            )) return prepared.callable_ty;
-        }
-        return null;
-    }
-
-    fn frozenCodecCallableForLookup(
-        self: *BodyContext,
-        lookup: MethodLookup,
-    ) Allocator.Error!?Type.TypeId {
-        const prepared_calls = self.frozen_codec_calls orelse return null;
-        var found: ?Type.TypeId = null;
-        for (prepared_calls.calls) |prepared| {
-            if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
-            if (found) |previous| {
-                if (!try self.typeStore().typeEql(
-                    self.nameStore(),
-                    previous,
-                    prepared.callable_ty,
-                )) Common.invariant("prepared codec lookup had multiple callable interfaces");
-            } else {
-                found = prepared.callable_ty;
-            }
-        }
-        return found;
-    }
-
     fn frozenCodecCallee(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -38582,60 +40466,52 @@ const BodyContext = struct {
         return null;
     }
 
-    fn frozenCustomCodecCall(
+    fn frozenCustomCodecCallForShape(
         self: *BodyContext,
         kind: CodecKind,
         shape_ty: Type.TypeId,
-        lookup: MethodLookup,
-    ) FrozenPreparedCodecCall {
+    ) ?*const FrozenPreparedCodecCall {
         const prepared_calls = self.frozen_codec_calls orelse
-            Common.invariant("custom codec emission had no prepared call plan");
-        const prepared = prepared_calls.customCall(kind, shape_ty) orelse
-            Common.invariant("custom codec emission reached a shape without a prepared call");
-        if (!self.methodLookupEql(prepared.lookup, lookup)) {
-            Common.invariant("prepared custom codec call resolved to a different method target");
-        }
-        return prepared.*;
+            Common.invariant("sealed custom-codec query had no prepared call plan");
+        return prepared_calls.customCall(kind, shape_ty);
     }
 
-    fn preparedCodecCalleeAtNode(
+    fn frozenFormatCodecCall(
         self: *BodyContext,
-        lookup: MethodLookup,
-        callable_node: NodeId,
-    ) Allocator.Error!?DraftFnSlot {
-        for (self.draft.prepared_codec_calls.items) |prepared| {
-            if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
-            if (self.graph.sameFunctionInterface(prepared.callable_node, callable_node)) {
-                return prepared.callee;
-            }
-            if (try self.graph.typeIsResolved(prepared.callable_node) and
-                try self.graph.typeIsResolved(callable_node))
-            {
-                const prepared_ty = try self.activeTypeFromNode(prepared.callable_node);
-                const callable_ty = try self.activeTypeFromNode(callable_node);
-                if (try self.typeStore().typeEql(
-                    self.nameStore(),
-                    prepared_ty,
-                    callable_ty,
-                )) return prepared.callee;
-            }
-        }
-        return null;
+        kind: CodecKind,
+        method_name: []const u8,
+    ) Allocator.Error!*const FrozenPreparedCodecCall {
+        return try self.frozenFormatCodecCallInner(kind, method_name, null);
+    }
+
+    fn frozenFormatCodecCallForShape(
+        self: *BodyContext,
+        kind: CodecKind,
+        method_name: []const u8,
+        shape_ty: Type.TypeId,
+    ) Allocator.Error!*const FrozenPreparedCodecCall {
+        return try self.frozenFormatCodecCallInner(kind, method_name, shape_ty);
+    }
+
+    fn frozenFormatCodecCallInner(
+        self: *BodyContext,
+        kind: CodecKind,
+        method_name: []const u8,
+        shape_ty: ?Type.TypeId,
+    ) Allocator.Error!*const FrozenPreparedCodecCall {
+        const prepared_calls = self.frozen_codec_calls orelse
+            Common.invariant("sealed format-method query had no prepared call plan");
+        return try prepared_calls.formatCall(
+            self.typeStore(),
+            self.nameStore(),
+            kind,
+            method_name,
+            shape_ty,
+        ) orelse Common.invariant("sealed structural codec requested a format method absent from its checked contract");
     }
 
     /// Instantiate the exact checked procedure root whose evidence paths are
     /// stored in CheckedProcedureTemplate.
-    fn procedureTargetRootNode(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        template_ref: names.ProcTemplate,
-    ) Allocator.Error!NodeId {
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const template = lookup.view.templates.get(template_ref.template);
-        return try target_ctx.instNode(template.checked_fn_root);
-    }
-
     /// Apply a checked target root to its live call request after any
     /// checker-authored evidence paths have retained their component nodes.
     fn relateEvidenceTargetRootToRequest(
@@ -38656,21 +40532,53 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         evidence_vector: SpecEvidenceVector,
     ) Allocator.Error!DraftFnSlot {
+        return try self.methodTargetCalleeAtNodeInner(
+            raw_lookup,
+            request_fn_node,
+            evidence_vector,
+            null,
+        );
+    }
+
+    fn methodTargetCalleeAtNodeForCodec(
+        self: *BodyContext,
+        raw_lookup: MethodLookup,
+        request_fn_node: NodeId,
+        evidence_vector: SpecEvidenceVector,
+        codec_contract_anchor: CheckedCodecContractAnchor,
+    ) Allocator.Error!DraftFnSlot {
+        return try self.methodTargetCalleeAtNodeInner(
+            raw_lookup,
+            request_fn_node,
+            evidence_vector,
+            codec_contract_anchor,
+        );
+    }
+
+    fn methodTargetCalleeAtNodeInner(
+        self: *BodyContext,
+        raw_lookup: MethodLookup,
+        request_fn_node: NodeId,
+        evidence_vector: SpecEvidenceVector,
+        codec_contract_anchor: ?CheckedCodecContractAnchor,
+    ) Allocator.Error!DraftFnSlot {
         const lookup = try self.withLocalProcContext(raw_lookup);
-        if (try self.preparedCodecCalleeAtNode(lookup, request_fn_node)) |prepared| return prepared;
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
                 const params = lookup.view.templates.evidenceParams(&template);
-                const target_root_node = try self.procedureTargetRootNode(lookup, procedure.template);
+                var target_ctx = try self.methodTargetContext(lookup);
+                defer target_ctx.deinit();
+                const target_root_node = try target_ctx.instNode(template.checked_fn_root);
                 const projected_components: ?[]NodeId = switch (evidence_vector) {
                     .resolved => null,
                     .synthesize => try self.projectEvidenceComponentNodes(
                         lookup.view,
                         params,
                         target_root_node,
+                        &target_ctx,
                     ),
                 };
                 defer if (projected_components) |components| self.allocator.free(components);
@@ -38690,11 +40598,9 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
-                    switch (evidence_vector) {
-                        .resolved => .resolved,
-                        .synthesize => .synthesized,
-                    },
+                    .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
+                    codec_contract_anchor,
                 );
                 break :blk slot;
             },
@@ -38710,6 +40616,7 @@ const BodyContext = struct {
                             lookup.view,
                             params,
                             target_root_node,
+                            &target_ctx,
                         );
                         defer self.allocator.free(projected_components);
                         try self.relateEvidenceTargetRootToRequest(target_root_node, request_fn_node);
@@ -38733,6 +40640,8 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    false,
+                    codec_contract_anchor,
                 ) };
             },
             .structural => Common.invariant("structural method registry result has no callable procedure body"),
@@ -38751,7 +40660,6 @@ const BodyContext = struct {
         evidence_vector: SpecEvidenceVector,
     ) Allocator.Error!DraftFnSlot {
         const lookup = try self.withLocalProcContext(raw_lookup);
-        if (try self.preparedCodecCalleeAtNode(lookup, request_fn_node)) |prepared| return prepared;
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
         return switch (lookup.target.kind) {
@@ -38761,9 +40669,10 @@ const BodyContext = struct {
                 const evidence = switch (evidence_vector) {
                     .resolved => |resolved| resolved,
                     .synthesize => blk_evidence: {
-                        const components = try self.projectEvidenceComponentNodes(
-                            lookup.view,
+                        const components = try self.projectDirectTargetEvidenceComponentNodes(
+                            lookup,
                             params,
+                            template.checked_fn_root,
                             request_fn_node,
                         );
                         defer self.allocator.free(components);
@@ -38781,11 +40690,9 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
-                    switch (evidence_vector) {
-                        .resolved => .resolved,
-                        .synthesize => .synthesized,
-                    },
+                    .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
+                    null,
                 );
             },
             .local_proc => |local| blk: {
@@ -38793,9 +40700,10 @@ const BodyContext = struct {
                 const evidence = switch (evidence_vector) {
                     .resolved => |resolved| resolved,
                     .synthesize => blk_evidence: {
-                        const components = try self.projectEvidenceComponentNodes(
-                            lookup.view,
+                        const components = try self.projectDirectTargetEvidenceComponentNodes(
+                            lookup,
                             params,
+                            source_fn_ty,
                             request_fn_node,
                         );
                         defer self.allocator.free(components);
@@ -38819,6 +40727,8 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    false,
+                    null,
                 ) };
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
@@ -39065,12 +40975,16 @@ const BodyContext = struct {
             .value, .equality, .hash, .map, .map_effectful => Common.invariant("non-codec result mode reached structural serialization deferral"),
         };
         const previous_contract = self.active_codec_contract;
-        defer self.active_codec_contract = previous_contract;
-        self.active_codec_contract = .{
-            .structural = structural,
-            .callable_node = callable_node,
-            .shape_node = shape_node,
-        };
+        const previous_call_count = self.instantiated_codec_calls.items.len;
+        defer {
+            self.active_codec_contract = previous_contract;
+            self.instantiated_codec_calls.shrinkRetainingCapacity(previous_call_count);
+        }
+        self.active_codec_contract = try self.instantiateCodecContract(
+            structural,
+            callable_node,
+            shape_node,
+        );
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         _ = try self.prepareCustomCodecCallsAtNode(expr, kind, shape_node, callable_node, &seen);
@@ -39500,9 +41414,9 @@ const BodyContext = struct {
             },
             .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
         }
-        if (try self.customEncoderForLookup(shape_ty)) |raw_lookup| {
+        if (self.frozenCustomCodecCallForShape(.encoder, shape_ty)) |prepared| {
             return try self.lowerCustomEncoderForState(
-                try self.withLocalProcContext(raw_lookup),
+                prepared.*,
                 shape_ty,
                 value_expr,
                 encoding_expr,
@@ -39513,7 +41427,7 @@ const BodyContext = struct {
             );
         }
         if (self.encodeScalarMethodName(shape_ty)) |method_name| {
-            return try self.lowerEncodeFormatMethod(method_name, &.{ value_expr, state_expr }, &.{ shape_ty, state_ty }, encoding_ty, ret_ty);
+            return try self.lowerEncodeFormatMethod(method_name, &.{ value_expr, state_expr }, &.{ shape_ty, state_ty }, shape_ty, ret_ty);
         }
         // A nominal opaque with a scalar backing and no custom encoder (e.g. `Username := Str`)
         // encodes as its backing: unwrap one nominal layer and encode the scalar.
@@ -39565,6 +41479,7 @@ const BodyContext = struct {
 
     const EncodeContainerMethod = struct {
         lookup: MethodLookup,
+        callee: DraftFnSlot,
         callable_ty: Type.TypeId,
         state_ty: Type.TypeId,
         result_ty: Type.TypeId,
@@ -39578,13 +41493,12 @@ const BodyContext = struct {
         self: *BodyContext,
         method_name: []const u8,
         kind: EncodeContainerKind,
-        encoding_ty: Type.TypeId,
+        shape_ty: Type.TypeId,
         state_ty: Type.TypeId,
         result_ty: Type.TypeId,
     ) Allocator.Error!EncodeContainerMethod {
-        const lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
-        const callable_ty = try self.frozenCodecCallableForLookup(lookup) orelse
-            Common.invariant("container encoder callable was not prepared before graph sealing");
+        const prepared = try self.frozenFormatCodecCallForShape(.encoder, method_name, shape_ty);
+        const callable_ty = prepared.callable_ty;
         const method_fn = self.functionShape(callable_ty, "container encoder method was not a function");
         const method_args = self.typeStore().span(method_fn.args);
         const expected_arity: usize = if (kind == .tag) 4 else 3;
@@ -39642,7 +41556,8 @@ const BodyContext = struct {
         if (!self.sameType(value_writer_fn.ret, result_ty)) Common.invariant("container encoder value writer result type differed from the encoder result type");
 
         return .{
-            .lookup = lookup,
+            .lookup = prepared.lookup,
+            .callee = prepared.callee,
             .callable_ty = callable_ty,
             .state_ty = state_ty,
             .result_ty = result_ty,
@@ -39661,7 +41576,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = method.result_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(method.lookup, method.callable_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(method.callee),
                 .args = try self.addExprSpan(args),
                 .captures = try self.methodTargetCaptureSpan(method.lookup),
             } },
@@ -39854,14 +41769,14 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_tuple", .tuple, encoding_ty, state_ty, ret_ty);
+        const tuple_ty = try self.exprType(value_expr);
+        const method = try self.resolveEncodeContainerMethod("encode_tuple", .tuple, tuple_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const body = blk: {
-            const value_ty = try self.exprType(value_expr);
             const demand_scope = try self.enterCallableBodyDemandScope(
                 &.{ method.container_state_ty, method.writer_ty },
-                &.{ value_ty, encoding_ty },
+                &.{ tuple_ty, encoding_ty },
             );
             defer demand_scope.leave();
             break :blk try self.lowerEncodeTupleItemsFromState(
@@ -39954,7 +41869,8 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_list", .list, encoding_ty, state_ty, ret_ty);
+        const list_ty = try self.exprType(value_expr);
+        const method = try self.resolveEncodeContainerMethod("encode_list", .list, list_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const len_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
@@ -39962,10 +41878,9 @@ const BodyContext = struct {
         const loop_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const len_value = try self.lowLevelExpr(.list_len, &.{value_expr}, u64_ty);
         const loop_expr = blk: {
-            const value_ty = try self.exprType(value_expr);
             const demand_scope = try self.enterCallableBodyDemandScope(
                 &.{ method.container_state_ty, method.writer_ty },
-                &.{ value_ty, encoding_ty, u64_ty },
+                &.{ list_ty, encoding_ty, u64_ty },
             );
             defer demand_scope.leave();
             const loop_body = try self.lowerEncodeListLoopBody(
@@ -40044,7 +41959,7 @@ const BodyContext = struct {
         const entries_expr = try self.lowerDictToList(dict_ty, entries_ty, value_expr);
         const entries_local = try self.addLocal(self.builder.symbols.fresh(), entries_ty);
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_dict", .dict, encoding_ty, state_ty, ret_ty);
+        const method = try self.resolveEncodeContainerMethod("encode_dict", .dict, dict_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const field_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const len_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
@@ -40257,7 +42172,7 @@ const BodyContext = struct {
                 method_name,
                 &.{ encoding_expr, key_expr, state_expr },
                 &.{ encoding_ty, key_ty, state_ty },
-                encoding_ty,
+                key_ty,
                 ret_ty,
             );
         }
@@ -40268,7 +42183,7 @@ const BodyContext = struct {
                 "encode_key_str",
                 &.{ encoding_expr, key_string, state_expr },
                 &.{ encoding_ty, str_ty, state_ty },
-                encoding_ty,
+                str_ty,
                 ret_ty,
             );
         }
@@ -40280,7 +42195,7 @@ const BodyContext = struct {
             "encode_key_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            encoding_ty,
+            null,
             ret_ty,
         );
         const opened_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -40454,7 +42369,7 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{null_payload_pat}),
         } } });
         const err_pat = try self.addPat(.{ .ty = shape_ty, .data = .{ .nominal = err_backing_pat } });
-        const err_body = try self.lowerEncodeFormatMethod("encode_null", &.{state_expr}, &.{state_ty}, encoding_ty, ret_ty);
+        const err_body = try self.lowerEncodeFormatMethod("encode_null", &.{state_expr}, &.{state_ty}, null, ret_ty);
 
         const branches = [_]DraftBranch{
             .{ .pat = ok_pat, .body = ok_body },
@@ -40504,13 +42419,13 @@ const BodyContext = struct {
             owned_renamed_field_values = values;
             for (record_fields, 0..) |field, index| {
                 locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
-                values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
+                values[index] = try self.renamedRecordFieldNameExpr(.encoder, encoding_expr, encoding_ty, field, str_ty);
             }
             break :blk locals;
         };
 
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_record", .record, encoding_ty, state_ty, ret_ty);
+        const method = try self.resolveEncodeContainerMethod("encode_record", .record, shape_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const field_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const fields_body = blk: {
@@ -40917,6 +42832,7 @@ const BodyContext = struct {
             branches[tag_index] = .{
                 .pat = pat,
                 .body = try self.lowerEncodeTagUnionBranchToState(
+                    value_ty,
                     tag,
                     payload_exprs,
                     payload_tys,
@@ -40938,6 +42854,7 @@ const BodyContext = struct {
 
     fn lowerEncodeTagUnionBranchToState(
         self: *BodyContext,
+        tag_union_ty: Type.TypeId,
         tag: Type.Tag,
         payload_exprs: []const DraftExprId,
         payload_tys: []const Type.TypeId,
@@ -40952,7 +42869,7 @@ const BodyContext = struct {
 
         const tag_name_expr = try self.stringExpr(self.nameStore().tagLabelText(tag.name), try self.primitiveType(.str));
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_tag", .tag, encoding_ty, state_ty, ret_ty);
+        const method = try self.resolveEncodeContainerMethod("encode_tag", .tag, tag_union_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const body = blk: {
@@ -41115,7 +43032,7 @@ const BodyContext = struct {
 
     fn lowerCustomEncoderForState(
         self: *BodyContext,
-        lookup: MethodLookup,
+        prepared: FrozenPreparedCodecCall,
         shape_ty: Type.TypeId,
         value_expr: DraftExprId,
         encoding_expr: DraftExprId,
@@ -41124,7 +43041,6 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const prepared = self.frozenCustomCodecCall(.encoder, shape_ty, lookup);
         const runtime_fn_ty = try self.functionType(&.{ shape_ty, state_ty }, ret_ty);
         const callable_mono_ty = prepared.callable_ty;
         const encode_fn = self.functionShape(callable_mono_ty, "custom encoder_for target was not a function");
@@ -41138,7 +43054,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
-                .captures = try self.methodTargetCaptureSpan(lookup),
+                .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
         });
         return try self.addExpr(.{
@@ -41155,11 +43071,14 @@ const BodyContext = struct {
         method_name: []const u8,
         arg_exprs: []const DraftExprId,
         arg_tys: []const Type.TypeId,
-        encoding_ty: Type.TypeId,
+        subject_ty: ?Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, arg_tys, ret_ty);
+        const prepared = if (subject_ty) |shape_ty|
+            try self.frozenFormatCodecCallForShape(.encoder, method_name, shape_ty)
+        else
+            try self.frozenFormatCodecCall(.encoder, method_name);
+        const callable_mono_ty = prepared.callable_ty;
         const encode_fn = self.functionShape(callable_mono_ty, "encoder_for target method was not a function");
         const actual_arg_tys = self.typeStore().span(encode_fn.args);
         if (actual_arg_tys.len != arg_tys.len) Common.invariant("encoder_for target method had an unexpected arity");
@@ -41172,9 +43091,9 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(arg_exprs),
-                .captures = try self.methodTargetCaptureSpan(lookup),
+                .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
         });
     }
@@ -41184,11 +43103,14 @@ const BodyContext = struct {
         method_name: []const u8,
         arg_exprs: []const DraftExprId,
         arg_tys: []const Type.TypeId,
-        encoding_ty: Type.TypeId,
+        subject_ty: ?Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, arg_tys, ret_ty);
+        const prepared = if (subject_ty) |shape_ty|
+            try self.frozenFormatCodecCallForShape(.parser, method_name, shape_ty)
+        else
+            try self.frozenFormatCodecCall(.parser, method_name);
+        const callable_mono_ty = prepared.callable_ty;
         const parse_fn = self.functionShape(callable_mono_ty, "parser_for target method was not a function");
         const actual_arg_tys = self.typeStore().span(parse_fn.args);
         if (actual_arg_tys.len != arg_tys.len) Common.invariant("parser_for target method had an unexpected arity");
@@ -41201,9 +43123,9 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(arg_exprs),
-                .captures = try self.methodTargetCaptureSpan(lookup),
+                .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
         });
     }
@@ -41391,7 +43313,7 @@ const BodyContext = struct {
     }
 
     fn missingTryInfo(self: *BodyContext, try_ty: Type.TypeId) Allocator.Error!?TryInfo {
-        if (try self.typeHasParserForTarget(try_ty)) return null;
+        if (self.frozenCustomCodecCallForShape(.parser, try_ty) != null) return null;
         const info = self.tryInfoOptional(try_ty) orelse return null;
         return if (self.typeIsExactUnitTagUnion(info.err_ty, "Missing")) info else null;
     }
@@ -41491,6 +43413,18 @@ const BodyContext = struct {
         ok_body: DraftExprId,
         out_try_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        return try self.sequenceTryTo(try_expr, try_ty, ok_local, ok_body, out_try_ty, null);
+    }
+
+    fn sequenceTryTo(
+        self: *BodyContext,
+        try_expr: DraftExprId,
+        try_ty: Type.TypeId,
+        ok_local: DraftLocalId,
+        ok_body: DraftExprId,
+        out_try_ty: Type.TypeId,
+        err_target: ?DraftExprId,
+    ) Allocator.Error!DraftExprId {
         const info = self.tryInfo(try_ty);
         const out_info = self.tryInfo(out_try_ty);
         if (!self.sameType(info.err_ty, out_info.err_ty)) Common.invariant("sequenced Try error type differed from output Try error type");
@@ -41499,6 +43433,7 @@ const BodyContext = struct {
             .try_expr = try_expr,
             .ok_local = ok_local,
             .err_is_cold = true,
+            .err_target = err_target,
             .ok_body = ok_body,
         } } });
     }
@@ -41556,6 +43491,31 @@ const BodyContext = struct {
         ok_body: DraftExprId,
         out_try_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        return try self.sequenceTryRecordTo(
+            try_expr,
+            try_ty,
+            value_local,
+            value_field,
+            rest_local,
+            rest_field,
+            ok_body,
+            out_try_ty,
+            null,
+        );
+    }
+
+    fn sequenceTryRecordTo(
+        self: *BodyContext,
+        try_expr: DraftExprId,
+        try_ty: Type.TypeId,
+        value_local: DraftLocalId,
+        value_field: names.RecordFieldNameId,
+        rest_local: DraftLocalId,
+        rest_field: names.RecordFieldNameId,
+        ok_body: DraftExprId,
+        out_try_ty: Type.TypeId,
+        err_target: ?DraftExprId,
+    ) Allocator.Error!DraftExprId {
         const info = self.tryInfo(try_ty);
         const out_info = self.tryInfo(out_try_ty);
         if (!self.sameType(info.err_ty, out_info.err_ty)) Common.invariant("sequenced Try record error type differed from output Try error type");
@@ -41573,6 +43533,7 @@ const BodyContext = struct {
             .rest_local = rest_local,
             .rest_field = rest_field,
             .err_is_cold = true,
+            .err_target = err_target,
             .ok_body = ok_body,
         } } });
     }
@@ -41604,7 +43565,7 @@ const BodyContext = struct {
         if (self.tryNullInfo(ty)) |info| {
             return try self.parseFieldTypeIsSupported(info.ok_payload_ty, false);
         }
-        if ((try self.customParserLookup(ty)) != null) return true;
+        if (self.frozenCustomCodecCallForShape(.parser, ty) != null) return true;
         if (self.nominalExprBackingType(ty)) |backing_ty| {
             if (self.parseScalarMethodName(backing_ty) != null) return true;
         }
@@ -41655,7 +43616,7 @@ const BodyContext = struct {
         if (self.tryNullInfo(ty)) |info| {
             return try self.encodeFieldTypeIsSupported(info.ok_payload_ty, encoding_ty);
         }
-        if ((try self.customEncoderForLookup(ty)) != null) return true;
+        if (self.frozenCustomCodecCallForShape(.encoder, ty) != null) return true;
         if (self.nominalExprBackingType(ty)) |backing_ty| {
             if (self.encodeScalarMethodName(backing_ty) != null) return true;
         }
@@ -41686,56 +43647,6 @@ const BodyContext = struct {
             .tag_union => |tags_span| try self.encodeTagUnionTypeIsSupported(tags_span, encoding_ty),
             .zst => true,
             .primitive, .named, .func, .erased => false,
-        };
-    }
-
-    fn customParserLookup(self: *BodyContext, ty: Type.TypeId) Allocator.Error!?MethodLookup {
-        const named = switch (self.typeStore().get(ty)) {
-            .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-        };
-        if (named.builtin_owner != null) return null;
-        switch (named.kind) {
-            .nominal, .@"opaque" => {},
-            .alias => return null,
-        }
-        const owner = methodOwnerFromType(self.typeStore(), ty) orelse
-            Common.invariant("custom named parser type had no method owner");
-        const lookup = (try self.lookupMethodTargetByName(owner, "parser_for")) orelse
-            Common.invariant("checked method registry is missing custom parser_for target");
-        return switch (lookup.target.kind) {
-            .structural => |kind| if (kind == .parser) null else Common.invariant("parser_for lookup resolved to a different structural target"),
-            .procedure, .local_proc => lookup,
-        };
-    }
-
-    fn customCodecLookupAtNode(
-        self: *BodyContext,
-        node: NodeId,
-        kind: CodecKind,
-    ) Allocator.Error!?MethodLookup {
-        const named = switch (self.graph.content(node)) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-        };
-        if (named.builtin_owner != null) return null;
-        switch (named.kind) {
-            .nominal, .@"opaque" => {},
-            .alias => return null,
-        }
-        const owner = self.methodOwnerFromNode(node) orelse
-            Common.invariant("custom codec graph node had no checked method owner");
-        const method_name = switch (kind) {
-            .parser => "parser_for",
-            .encoder => "encoder_for",
-        };
-        const lookup = (try self.lookupMethodTargetByName(owner, method_name)) orelse return null;
-        return switch (lookup.target.kind) {
-            .structural => |structural_kind| switch (kind) {
-                .parser => if (structural_kind == .parser) null else Common.invariant("parser_for lookup resolved to a different structural target"),
-                .encoder => if (structural_kind == .encoder) null else Common.invariant("encoder_for lookup resolved to a different structural target"),
-            },
-            .procedure, .local_proc => lookup,
         };
     }
 
@@ -41803,15 +43714,40 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         kind: CodecKind,
-        shape_node: NodeId,
-        lookup: MethodLookup,
+        purpose: CodecCallPurpose,
+        method_name: []const u8,
+        contract_view: [32]u8,
+        contract_derivation: static_dispatch.GeneratedCodecDerivationId,
+        method_role: u32,
     ) bool {
         for (self.draft.prepared_codec_calls.items) |prepared| {
-            if (prepared.boundary_expr != boundary_expr or prepared.kind != kind) continue;
-            if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
-            if (self.graph.sameClass(prepared.shape_node, shape_node)) return true;
+            if (prepared.boundary_expr != boundary_expr or
+                prepared.kind != kind or
+                prepared.purpose != purpose or
+                prepared.contract_derivation != contract_derivation or
+                prepared.method_role != method_role or
+                !moduleBytesEqual(prepared.contract_view, contract_view) or
+                !std.mem.eql(u8, prepared.method_name, method_name)) continue;
+            return true;
         }
         return false;
+    }
+
+    fn preparedRequiredCodecCallExists(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        kind: CodecKind,
+        exact: anytype,
+    ) bool {
+        return self.preparedCodecCallExists(
+            boundary_expr,
+            kind,
+            .format,
+            exact.method_name,
+            exact.anchor.view.key.bytes,
+            exact.anchor.derivation,
+            exact.method_role,
+        );
     }
 
     /// Phase-A relation production for one `??` field default reachable from
@@ -41851,18 +43787,49 @@ const BodyContext = struct {
         shape_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
+        const active = self.active_codec_contract orelse
+            Common.invariant("structural codec preparation had no checker-authored contract");
+        if (active.kind != kind) {
+            Common.invariant("structural codec preparation used a contract of the wrong kind");
+        }
+        for (self.codec_contract_expansion_stack.items) |ancestor| {
+            if (ancestor.derivation != active.derivation or
+                !moduleBytesEqual(ancestor.view, active.view.key.bytes) or
+                !self.graph.sameClass(ancestor.shape_node, shape_node)) continue;
+            return false;
+        }
+        const ancestry_len = self.codec_contract_expansion_stack.items.len;
+        try self.codec_contract_expansion_stack.append(self.allocator, .{
+            .view = active.view.key.bytes,
+            .derivation = active.derivation,
+            .shape_node = shape_node,
+        });
+        defer self.codec_contract_expansion_stack.shrinkRetainingCapacity(ancestry_len);
+
         var added_relation = false;
         if (kind == .parser) {
             var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer required_error_seen.deinit();
-            if (try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
-                added_relation = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
-            }
+            const needs_missing_required_field = try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen);
+            const missing_required_field_ready = if (needs_missing_required_field) blk: {
+                const added_missing = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
+                added_relation = added_missing;
+                const has_missing = try self.graphRowHasTag(
+                    (try self.graphParserResultNodes((try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret)).ret)).err,
+                    "MissingRequiredField",
+                );
+                break :blk added_missing or has_missing;
+            } else true;
             const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
             const outer_result = try self.graphParserResultNodes(runtime.ret);
             var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer invalid_value_seen.deinit();
-            if (try self.graphParserShapeNeedsInvalidValue(shape_node, outer_result.err, &invalid_value_seen)) {
+            if (try self.graphParserShapeNeedsInvalidValue(
+                shape_node,
+                outer_result.err,
+                missing_required_field_ready,
+                &invalid_value_seen,
+            )) {
                 added_relation = try self.prepareParserInvalidValueCodecCall(
                     boundary_expr,
                     shape_node,
@@ -41872,13 +43839,15 @@ const BodyContext = struct {
         }
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
-        return try self.prepareCustomCodecCallsAtNode(
+        const added = try self.prepareCustomCodecCallsAtNode(
             boundary_expr,
             kind,
             shape_node,
             boundary_callable_node,
             &seen,
         ) or added_relation;
+        self.debugVerifyGeneratedCodecContractConsumed(active);
+        return added;
     }
 
     /// `ParseTagUnionSpec.parse` decodes only the selected tag's payloads; the
@@ -41908,16 +43877,16 @@ const BodyContext = struct {
                     if (!missing_required_field_ready) {
                         const added_missing = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
                         added_relation = added_missing or added_relation;
-                        missing_required_field_ready = added_missing or try self.graphRowHasTag(err_node, "MissingRequiredField");
-                        if (!missing_required_field_ready) {
-                            // Checker-closed row without the report: emission
-                            // crash-maps this decode, so no format-method
-                            // relations may widen it.
-                            return false;
-                        }
+                        const has_missing = try self.graphRowHasTag(err_node, "MissingRequiredField");
+                        missing_required_field_ready = added_missing or has_missing;
                     }
                 }
-                if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, &invalid_value_seen)) {
+                if (try self.graphParserShapeNeedsInvalidValue(
+                    payload,
+                    err_node,
+                    missing_required_field_ready,
+                    &invalid_value_seen,
+                )) {
                     added_relation = try self.prepareParserInvalidValueCodecCall(
                         boundary_expr,
                         payload,
@@ -41948,13 +43917,23 @@ const BodyContext = struct {
             try out.append(self.allocator, .{
                 .kind = prepared.kind,
                 .purpose = prepared.purpose,
+                .method_name = prepared.method_name,
+                .method_role = prepared.method_role,
+                .subject_bearing = prepared.subject_bearing,
+                .contract_view = prepared.contract_view,
+                .contract_derivation = prepared.contract_derivation,
                 .shape_ty = try sealer.sealNode(prepared.shape_node),
                 .lookup = prepared.lookup,
                 .callable_ty = try sealer.sealNode(prepared.callable_node),
                 .callee = prepared.callee,
             });
         }
-        return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
+        return try FrozenPreparedCodecCalls.init(
+            self.allocator,
+            self.typeStore(),
+            self.nameStore(),
+            try out.toOwnedSlice(self.allocator),
+        );
     }
 
     fn sealedPreparedFieldDefaultsForBoundary(
@@ -41986,52 +43965,267 @@ const BodyContext = struct {
             try out.append(self.allocator, .{
                 .kind = prepared.kind,
                 .purpose = prepared.purpose,
+                .method_name = prepared.method_name,
+                .method_role = prepared.method_role,
+                .subject_bearing = prepared.subject_bearing,
+                .contract_view = prepared.contract_view,
+                .contract_derivation = prepared.contract_derivation,
                 .shape_ty = try self.currentPhaseTypeForNode(prepared.shape_node),
                 .lookup = prepared.lookup,
                 .callable_ty = try self.currentPhaseTypeForNode(prepared.callable_node),
                 .callee = prepared.callee,
             });
         }
-        return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
+        return try FrozenPreparedCodecCalls.init(
+            self.allocator,
+            self.typeStore(),
+            self.nameStore(),
+            try out.toOwnedSlice(self.allocator),
+        );
     }
 
-    const CheckedGeneratedCodecCallee = struct {
-        lookup: MethodLookup,
-        callable_node: NodeId,
-        evidence: []const SpecEvidence,
-    };
-
-    /// Resolve one generated-codec method call from the exact contract emitted
-    /// by checking. The contract's snapshot types all instantiate in one graph
-    /// context, so its subject identity selects the precise call even when the
-    /// same method occurs at several nested shapes.
-    fn checkedGeneratedCodecCallee(
+    fn instantiateCodecContract(
         self: *BodyContext,
-        method_name: []const u8,
-        subject_node: NodeId,
-        expected_lookup: MethodLookup,
-    ) Allocator.Error!?CheckedGeneratedCodecCallee {
-        const active = self.active_codec_contract orelse return null;
-        const checked_structural = active.structural.checked orelse return null;
+        structural: SpecStructuralEvidence,
+        callable_node: NodeId,
+        shape_node: NodeId,
+    ) Allocator.Error!ActiveCodecContract {
+        const checked_structural = structural.checked orelse
+            Common.invariant("structural codec reached Monotype without its checked derivation contract");
         const derivation_id = checked_structural.evidence.generated_codec_derivation orelse
             Common.invariant("checked structural codec evidence had no generated derivation contract");
         if (@intFromEnum(derivation_id) >= checked_structural.view.static_dispatch_plans.generated_codec_derivations.len) {
             Common.invariant("checked structural codec evidence referenced a missing generated derivation");
         }
         const derivation = checked_structural.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
-        const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (active.structural.derivation.kind()) {
+        const kind: CodecKind = switch (structural.derivation.kind()) {
             .parser => .parser,
             .encoder => .encoder,
             .equality, .hash, .map, .map_effectful => Common.invariant("non-codec structural evidence carried a generated codec contract"),
         };
-        if (derivation.kind != expected_kind) {
+        const checked_kind: static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
+            .parser => .parser,
+            .encoder => .encoder,
+        };
+        if (derivation.kind != checked_kind or checked_structural.evidence.derivation.kind() != structural.derivation.kind()) {
             Common.invariant("checked structural codec evidence referenced a derivation of the wrong kind");
+        }
+
+        return try self.instantiateCheckedCodecContract(
+            checked_structural.view,
+            derivation_id,
+            kind,
+            .{ .callable_node = callable_node, .shape_node = shape_node },
+        );
+    }
+
+    fn instantiateCodecContractAtCall(
+        self: *BodyContext,
+        anchor: CheckedCodecContractAnchor,
+        constructor_node: NodeId,
+    ) Allocator.Error!void {
+        if (@intFromEnum(anchor.derivation) >= anchor.view.static_dispatch_plans.generated_codec_derivations.len) {
+            Common.invariant("checked codec call anchor referenced a missing derivation");
+        }
+        const derivation = anchor.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(anchor.derivation)];
+        if (anchor.call_index >= derivation.calls.len) {
+            Common.invariant("checked codec call anchor referenced a missing generated call");
+        }
+        const shape_node = try self.codecShapeNodeFromConstructor(anchor.kind, constructor_node);
+        var active = try self.instantiateCheckedCodecContract(
+            anchor.view,
+            anchor.derivation,
+            anchor.kind,
+            .{ .callable_node = constructor_node, .shape_node = shape_node },
+        );
+        active.grounding_call_index = anchor.call_index;
+        self.active_codec_contract = active;
+    }
+
+    fn codecShapeNodeFromConstructor(
+        self: *BodyContext,
+        kind: CodecKind,
+        constructor_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const constructor = try self.graph.functionNodes(constructor_node);
+        if (constructor.args.len != 1) {
+            Common.invariant("generated codec boundary constructor did not have one encoding argument");
+        }
+        const runtime = try self.graph.functionNodes(constructor.ret);
+        return switch (kind) {
+            .parser => blk: {
+                if (runtime.args.len != 1) {
+                    Common.invariant("generated parser boundary runtime did not have one state argument");
+                }
+                break :blk (try self.graphParserResultNodes(runtime.ret)).value;
+            },
+            .encoder => blk: {
+                if (runtime.args.len != 2) {
+                    Common.invariant("generated encoder boundary runtime did not have value and state arguments");
+                }
+                break :blk runtime.args[0];
+            },
+        };
+    }
+
+    /// Select the checker-authored subject role for a container reached while
+    /// walking one active generated body. Only the active declaration-backed
+    /// boundary is validated against its structural body shape; nested named
+    /// containers are validated against their own public shape.
+    fn codecContractSubjectNode(
+        self: *BodyContext,
+        shape_node: NodeId,
+        structural_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const active = self.active_codec_contract orelse
+            Common.invariant("generated codec subject selection had no active contract");
+        const derivation = active.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(active.derivation)];
+        if (derivation.body_shape_ty == derivation.shape_ty) return shape_node;
+        const boundary_shape_node = try self.codecShapeNodeFromConstructor(active.kind, active.constructor_node);
+        return if (self.graph.sameClass(boundary_shape_node, shape_node)) structural_node else shape_node;
+    }
+
+    fn bindCheckedCodecContractType(
+        self: *BodyContext,
+        contract_ctx: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        const scoped_ty = contract_ctx.scopedCheckedType(checked_ty);
+        if (contract_ctx.scopedNode(scoped_ty)) |existing| {
+            try relateRequestComponent(self.graph, existing, node);
+        } else {
+            try contract_ctx.putScopedNode(scoped_ty, node);
+        }
+    }
+
+    /// Instantiate a checked contract component before relating it to the
+    /// specialization boundary. Unlike a root substitution, this preserves
+    /// the checked IDs of nested row fragments and container children, which
+    /// are the exact subject identities carried by generated-call slots.
+    fn relateCheckedCodecContractType(
+        self: *BodyContext,
+        contract_ctx: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        const scoped_ty = contract_ctx.scopedCheckedType(checked_ty);
+        const checked_node = try contract_ctx.instNode(checked_ty);
+        try relateCheckedNodeToMono(self.graph, checked_node, node);
+        // The recursive relation above preserves every nested checked ID.
+        // Rebind this component root to the specialization's authoritative
+        // node so a generated call that names the same checked role receives
+        // that exact node instead of the checked representation wrapper.
+        try contract_ctx.putScopedNode(scoped_ty, node);
+    }
+
+    fn bindCodecContractBoundary(
+        self: *BodyContext,
+        contract_ctx: *BodyContext,
+        derivation: static_dispatch.GeneratedCodecDerivation,
+        kind: CodecKind,
+        callable_node: NodeId,
+        shape_node: NodeId,
+    ) Allocator.Error!void {
+        const constructor = try self.graph.functionNodes(callable_node);
+        if (constructor.args.len != 1) {
+            Common.invariant("generated codec boundary constructor did not have one encoding argument");
+        }
+        const runtime = try self.graph.functionNodes(constructor.ret);
+        const source_has_distinct_body_shape = derivation.source_body_shape_ty != derivation.source_shape_ty;
+        const frozen_has_distinct_body_shape = derivation.body_shape_ty != derivation.shape_ty;
+        if (source_has_distinct_body_shape != frozen_has_distinct_body_shape) {
+            Common.invariant("generated codec source and frozen body-shape roles disagreed");
+        }
+        const body_shape_node = if (source_has_distinct_body_shape) blk: {
+            const named = switch (self.graph.content(shape_node)) {
+                .named => |named| named,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
+            };
+            break :blk (named.backing orelse
+                Common.invariant("generated codec nominal boundary had no body-shape backing")).node;
+        } else shape_node;
+        const state_node, const error_node = switch (kind) {
+            .parser => blk: {
+                if (runtime.args.len != 1) {
+                    Common.invariant("generated parser boundary runtime did not have one state argument");
+                }
+                const result = try self.graphParserResultNodes(runtime.ret);
+                try relateRequestComponent(self.graph, result.value, shape_node);
+                try relateRequestComponent(self.graph, result.rest, runtime.args[0]);
+                break :blk .{ runtime.args[0], result.err };
+            },
+            .encoder => blk: {
+                if (runtime.args.len != 2) {
+                    Common.invariant("generated encoder boundary runtime did not have value and state arguments");
+                }
+                try relateRequestComponent(self.graph, runtime.args[0], shape_node);
+                const result = try self.graphTryPayloads(runtime.ret);
+                try relateRequestComponent(self.graph, result.ok, runtime.args[1]);
+                break :blk .{ runtime.args[1], result.err };
+            },
+        };
+
+        // The source and frozen producer roles together are the codec
+        // contract's complete substitution interface. Most calls were
+        // validated against the frozen snapshot; a conditional parser
+        // `invalid_value` edge is validated later against the settled source
+        // boundary. Binding both sets here gives every checker-authored edge
+        // the same authoritative boundary nodes without rediscovering or
+        // widening a type in Monotype.
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_constructor_ty, callable_node);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_runtime_ty, constructor.ret);
+        try self.relateCheckedCodecContractType(contract_ctx, derivation.source_shape_ty, shape_node);
+        try self.relateCheckedCodecContractType(contract_ctx, derivation.source_body_shape_ty, body_shape_node);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_encoding_ty, constructor.args[0]);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_state_ty, state_node);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_error_ty, error_node);
+        if (derivation.constructor_ty != derivation.source_constructor_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.constructor_ty, callable_node);
+        }
+        if (derivation.runtime_ty != derivation.source_runtime_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.runtime_ty, constructor.ret);
+        }
+        if (derivation.shape_ty != derivation.source_shape_ty) {
+            try self.relateCheckedCodecContractType(contract_ctx, derivation.shape_ty, shape_node);
+        }
+        if (derivation.body_shape_ty != derivation.source_body_shape_ty) {
+            try self.relateCheckedCodecContractType(contract_ctx, derivation.body_shape_ty, body_shape_node);
+        }
+        if (derivation.encoding_ty != derivation.source_encoding_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.encoding_ty, constructor.args[0]);
+        }
+        if (derivation.state_ty != derivation.source_state_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.state_ty, state_node);
+        }
+        if (derivation.error_ty != derivation.source_error_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.error_ty, error_node);
+        }
+    }
+
+    fn instantiateCheckedCodecContract(
+        self: *BodyContext,
+        checked_view: ModuleView,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+        kind: CodecKind,
+        boundary: CodecContractBoundary,
+    ) Allocator.Error!ActiveCodecContract {
+        if (@intFromEnum(derivation_id) >= checked_view.static_dispatch_plans.generated_codec_derivations.len) {
+            Common.invariant("checked codec anchor referenced a missing generated derivation");
+        }
+        const derivation = checked_view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        const checked_kind: static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
+            .parser => .parser,
+            .encoder => .encoder,
+        };
+        if (derivation.kind != checked_kind) {
+            Common.invariant("checked codec anchor referenced a derivation of the wrong kind");
         }
 
         var contract_ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
-            checked_structural.view,
+            checked_view,
             self.method_scope,
             self.owner_template,
             self.graph,
@@ -42039,54 +44233,435 @@ const BodyContext = struct {
         );
         defer contract_ctx.deinit();
         contract_ctx.evidence = self.evidence;
-        try relateFunctionRequestInterface(
-            self.graph,
-            try contract_ctx.instNode(derivation.constructor_ty),
-            active.callable_node,
-        );
-        try relateRequestComponent(
-            self.graph,
-            try contract_ctx.instNode(derivation.shape_ty),
-            active.shape_node,
+        try self.bindCodecContractBoundary(
+            &contract_ctx,
+            derivation,
+            kind,
+            boundary.callable_node,
+            boundary.shape_node,
         );
 
-        var selected: ?static_dispatch.GeneratedCodecCall = null;
-        for (derivation.callsSlice(checked_structural.view.static_dispatch_plans)) |candidate| {
-            if (!std.mem.eql(u8, checked_structural.view.names.methodNameText(candidate.method), method_name)) continue;
-            const subject_ty = candidate.subject_ty orelse continue;
-            if (!self.graph.sameClass(try contract_ctx.instNode(subject_ty), subject_node)) continue;
-            if (selected != null) {
-                Common.invariant("checked generated codec contract had ambiguous subject method calls");
-            }
-            selected = candidate;
+        const calls_start = self.instantiated_codec_calls.items.len;
+        errdefer self.instantiated_codec_calls.shrinkRetainingCapacity(calls_start);
+        for (derivation.callsSlice(checked_view.static_dispatch_plans), 0..) |call, call_index| {
+            const instantiated_callable = try contract_ctx.instNode(call.callable_ty);
+            try self.instantiated_codec_calls.append(self.allocator, .{
+                .view = checked_view,
+                .call_index = @intCast(call_index),
+                .checked = call,
+                .dispatcher_node = try contract_ctx.instNode(call.dispatcher_ty),
+                .callable_node = instantiated_callable,
+                .subject_node = if (call.subject_ty) |subject_ty| try contract_ctx.instNode(subject_ty) else null,
+                .resolution = switch (call.resolution) {
+                    .callable => |node_id| .{ .callable = node_id },
+                    .structural => |nested| .{ .structural = nested },
+                    .pending => Common.invariant("unlinked generated codec call reached Monotype"),
+                    .checked_error => Common.invariant("rejected generated codec call reached Monotype"),
+                },
+            });
         }
-        const call = selected orelse
-            Common.invariant("checked generated codec contract was missing its subject method call");
-        const dispatcher_node = try contract_ctx.instNode(call.dispatcher_ty);
-        const owner = self.methodOwnerFromNode(dispatcher_node) orelse
-            Common.invariant("checked generated codec call dispatcher had no method owner");
-        const exact_lookup = (try self.lookupMethodTarget(
-            owner,
-            checked_structural.view,
-            call.method,
-        )) orelse Common.invariant("checked generated codec call target was absent from the method registry");
-        if (!moduleBytesEqual(exact_lookup.view.key.bytes, expected_lookup.view.key.bytes) or
-            !std.meta.eql(exact_lookup.target, expected_lookup.target))
+        const instantiated_calls = self.instantiated_codec_calls.items[calls_start..];
+        return .{
+            .view = checked_view,
+            .derivation = derivation_id,
+            .kind = kind,
+            .evidence = self.evidence,
+            .calls_start = calls_start,
+            .calls_len = self.instantiated_codec_calls.items.len - calls_start,
+            .method_call_slots = try self.codecMethodCallSlots(instantiated_calls),
+            .grounding_call_index = null,
+            .constructor_node = boundary.callable_node,
+        };
+    }
+
+    fn activeCodecCalls(self: *const BodyContext) []const InstantiatedGeneratedCodecCall {
+        const active = self.active_codec_contract orelse return &.{};
+        if (active.calls_start > self.instantiated_codec_calls.items.len or
+            active.calls_len > self.instantiated_codec_calls.items.len - active.calls_start)
         {
-            Common.invariant("checked generated codec call target disagreed with graph method lookup");
+            Common.invariant("active generated codec contract referenced an invalid instantiated-call span");
         }
-        var lookup = expected_lookup;
-        lookup.instantiation = .{
-            .view = checked_structural.view,
-            .callable_ty = call.callable_ty,
+        return self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len];
+    }
+
+    fn codecMethodCallSlots(
+        self: *BodyContext,
+        calls: []const InstantiatedGeneratedCodecCall,
+    ) Allocator.Error![]CodecMethodCallSlot {
+        // At most one slot per call is needed. The returned prefix excludes
+        // duplicate roles; the backing storage is graph-arena owned because
+        // active contracts can survive through deferred Phase-A preparation.
+        const slots = try self.graph.arena().alloc(CodecMethodCallSlot, calls.len);
+        var len: usize = 0;
+        for (calls, 0..) |call, call_index| {
+            var exists = false;
+            for (slots[0..len]) |slot| {
+                if (slot.method != call.checked.method or
+                    slot.method_role != call.checked.method_role) continue;
+                if ((slot.subject_node == null) != (call.subject_node == null)) {
+                    Common.invariant("checked generated codec role mixed subject-bearing and reusable calls");
+                }
+                exists = true;
+                break;
+            }
+            if (exists) continue;
+            if (call_index > std.math.maxInt(u32)) {
+                Common.invariant("checked generated codec call index exceeded its identity range");
+            }
+            slots[len] = .{
+                .method = call.checked.method,
+                .method_role = call.checked.method_role,
+                .subject_node = call.subject_node,
+                .call_index = @intCast(call_index),
+            };
+            len += 1;
+        }
+        return slots[0..len];
+    }
+
+    fn activeCodecContractContainsLocalTarget(self: *const BodyContext) bool {
+        for (self.activeCodecCalls()) |call| switch (call.resolution) {
+            .structural => {},
+            .callable => |node_id| switch (call.view.static_dispatch_plans.evidenceNode(node_id).target.kind) {
+                .local_proc => return true,
+                .procedure, .structural => {},
+            },
+        };
+        return false;
+    }
+
+    fn activeCodecContractContext(self: *BodyContext) ?DraftCodecContractContext {
+        const active = self.active_codec_contract orelse return null;
+        const grounding_index = active.grounding_call_index orelse return null;
+        for (self.activeCodecCalls()) |call| {
+            if (call.call_index != grounding_index) continue;
+            return .{
+                .anchor = .{
+                    .view = active.view,
+                    .derivation = active.derivation,
+                    .call_index = grounding_index,
+                    .kind = active.kind,
+                },
+                .constructor_node = active.constructor_node,
+            };
+        }
+        Common.invariant("active generated codec contract lost its grounding call");
+    }
+
+    fn activeCodecContractContextForAnchor(
+        self: *BodyContext,
+        anchor: CheckedCodecContractAnchor,
+    ) DraftCodecContractContext {
+        const active = self.active_codec_contract orelse
+            Common.invariant("generated codec call specialization had no active contract");
+        if (!moduleBytesEqual(active.view.key.bytes, anchor.view.key.bytes) or
+            active.derivation != anchor.derivation or
+            active.kind != anchor.kind or
+            anchor.call_index >= active.calls_len)
+        {
+            Common.invariant("generated codec call anchor disagreed with its active contract");
+        }
+        return .{ .anchor = anchor, .constructor_node = active.constructor_node };
+    }
+
+    fn retainActiveCodecContract(self: *BodyContext) Allocator.Error!RetainedCodecContract {
+        const active = self.active_codec_contract orelse
+            Common.invariant("generated codec intrinsic was deferred outside a generated codec contract");
+        const calls = try self.allocator.dupe(InstantiatedGeneratedCodecCall, self.activeCodecCalls());
+        errdefer self.allocator.free(calls);
+        const method_call_slots = try self.allocator.dupe(CodecMethodCallSlot, active.method_call_slots);
+        return .{
+            .view = active.view,
+            .derivation = active.derivation,
+            .kind = active.kind,
+            .evidence = active.evidence,
+            .calls = calls,
+            .method_call_slots = method_call_slots,
+            .grounding_call_index = active.grounding_call_index,
+            .constructor_node = active.constructor_node,
+        };
+    }
+
+    fn installRetainedCodecContract(
+        self: *BodyContext,
+        retained: RetainedCodecContract,
+    ) Allocator.Error!void {
+        if (self.active_codec_contract != null or self.instantiated_codec_calls.items.len != 0) {
+            Common.invariant("retained generated codec contract was installed into a nonempty context");
+        }
+        try self.instantiated_codec_calls.appendSlice(self.allocator, retained.calls);
+        self.active_codec_contract = .{
+            .view = retained.view,
+            .derivation = retained.derivation,
+            .kind = retained.kind,
+            .evidence = retained.evidence,
+            .calls_start = 0,
+            .calls_len = retained.calls.len,
+            .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, retained.method_call_slots),
+            .grounding_call_index = retained.grounding_call_index,
+            .constructor_node = retained.constructor_node,
+        };
+    }
+
+    fn generatedCodecCall(
+        self: *BodyContext,
+        method_name: []const u8,
+        subject_node: ?NodeId,
+    ) ?InstantiatedGeneratedCodecCall {
+        const active = self.active_codec_contract orelse return null;
+        if (active.calls_start > self.instantiated_codec_calls.items.len or
+            active.calls_len > self.instantiated_codec_calls.items.len - active.calls_start)
+        {
+            Common.invariant("active generated codec contract referenced an invalid instantiated-call span");
+        }
+        const requested_has_subject = subject_node != null;
+        const calls = self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len];
+        var selected: ?CodecMethodCallSlot = null;
+        for (active.method_call_slots) |slot| {
+            if (!std.mem.eql(u8, active.view.names.methodNameText(slot.method), method_name) or
+                (slot.subject_node != null) != requested_has_subject) continue;
+            if (subject_node) |requested_subject| {
+                if (!self.sameCodecSubject(slot.subject_node.?, requested_subject)) continue;
+            }
+            if (selected != null) {
+                Common.invariant("checked generated codec contract had overlapping direct call roles");
+            }
+            selected = slot;
+        }
+        const slot = selected orelse return null;
+        if (slot.call_index >= calls.len) {
+            Common.invariant("checked generated codec direct call slot was out of bounds");
+        }
+        if (@import("builtin").mode == .Debug) {
+            for (calls) |*candidate| {
+                if (candidate.checked.method != slot.method or
+                    candidate.checked.method_role != slot.method_role or
+                    (candidate.subject_node != null) != requested_has_subject) continue;
+                candidate.debug_consumed = true;
+            }
+        }
+        return calls[slot.call_index];
+    }
+
+    fn sameCodecSubject(self: *BodyContext, checked_subject: NodeId, requested_subject: NodeId) bool {
+        if (self.graph.sameClass(checked_subject, requested_subject)) return true;
+        // A declaration-backed nominal opens its backing in a declaration
+        // scope, independently from the checked codec contract's snapshot.
+        // Closed primitives and named applications still have exact constant-
+        // time identities even when those two producer paths allocate distinct
+        // graph nodes; no wider structural comparison is permitted here.
+        const checked_content = self.graph.content(checked_subject);
+        const requested_content = self.graph.content(requested_subject);
+        switch (checked_content) {
+            .primitive => |checked_primitive| return switch (requested_content) {
+                .primitive => |requested_primitive| checked_primitive == requested_primitive,
+                .redirect, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            },
+            .redirect, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+        }
+        const checked_named = switch (checked_content) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        const requested_named = switch (requested_content) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        if (!sameNamedValueDefinition(checked_named, requested_named)) return false;
+        for (checked_named.args, requested_named.args) |checked_arg, requested_arg| {
+            if (!self.graph.sameClass(checked_arg, requested_arg)) return false;
+        }
+        return true;
+    }
+
+    fn debugVerifyGeneratedCodecContractConsumed(
+        self: *BodyContext,
+        active: ActiveCodecContract,
+    ) void {
+        if (@import("builtin").mode != .Debug or active.grounding_call_index != null) return;
+        if (active.calls_start > self.instantiated_codec_calls.items.len or
+            active.calls_len > self.instantiated_codec_calls.items.len - active.calls_start)
+        {
+            Common.invariant("generated codec consumption audit received an invalid call span");
+        }
+        for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |call| {
+            if (!call.debug_consumed and !call.checked.conditional) {
+                std.debug.panic(
+                    "postcheck invariant violated: Monotype did not consume checker-required generated codec call {s} role {} (subject: {s})",
+                    .{
+                        call.view.names.methodNameText(call.checked.method),
+                        call.checked.method_role,
+                        if (call.checked.subject_ty == null) "none" else "present",
+                    },
+                );
+            }
+        }
+    }
+
+    fn generatedCodecBoundaryCall(
+        self: *BodyContext,
+        kind: CodecKind,
+        shape_node: NodeId,
+    ) ?InstantiatedGeneratedCodecCall {
+        const method_name = switch (kind) {
+            .parser => "parser_for",
+            .encoder => "encoder_for",
+        };
+        const active = self.active_codec_contract orelse return null;
+        const request_named = switch (self.graph.content(shape_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        };
+        var selected: ?InstantiatedGeneratedCodecCall = null;
+        for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |*candidate| {
+            if (!std.mem.eql(u8, candidate.view.names.methodNameText(candidate.checked.method), method_name)) continue;
+            const candidate_subject = candidate.subject_node orelse
+                Common.invariant("checked generated codec boundary call had no nominal subject");
+            const candidate_named = switch (self.graph.content(candidate_subject)) {
+                .named => |named| named,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("checked generated codec boundary subject was not nominal"),
+            };
+            if (!sameNamedValueDefinition(candidate_named, request_named)) continue;
+            var args_match = true;
+            for (candidate_named.args, request_named.args) |candidate_arg, request_arg| {
+                if (!self.graph.sameClass(candidate_arg, request_arg)) {
+                    args_match = false;
+                    break;
+                }
+            }
+            if (!args_match) continue;
+            if (selected) |previous| {
+                if (!self.graph.sameFunctionInterface(previous.callable_node, candidate.callable_node) or
+                    !std.meta.eql(previous.checked.resolution, candidate.checked.resolution))
+                {
+                    Common.invariant("checked generated codec contract had ambiguous nominal boundary calls");
+                }
+                if (@import("builtin").mode == .Debug) candidate.debug_consumed = true;
+                continue;
+            }
+            if (@import("builtin").mode == .Debug) candidate.debug_consumed = true;
+            selected = candidate.*;
+        }
+        return selected;
+    }
+
+    fn requiredGeneratedCodecTarget(
+        self: *BodyContext,
+        method_name: []const u8,
+        subject_node: ?NodeId,
+    ) Allocator.Error!struct {
+        lookup: MethodLookup,
+        method_name: []const u8,
+        method_role: u32,
+        subject_bearing: bool,
+        callable_node: NodeId,
+        evidence: []const SpecEvidence,
+        anchor: CheckedCodecContractAnchor,
+    } {
+        const call = self.generatedCodecCall(method_name, subject_node) orelse
+            std.debug.panic(
+                "postcheck invariant violated: checked generated codec contract was missing required method call {s} (subject: {s})",
+                .{ method_name, if (subject_node == null) "none" else "present" },
+            );
+        const target = switch (call.resolution) {
+            .callable => try self.materializeGeneratedCodecCallTarget(call),
+            .structural => Common.invariant("generated codec format call resolved to a structural derivation"),
         };
         return .{
-            .lookup = lookup,
-            .callable_node = try contract_ctx.instNode(call.callable_ty),
-            .evidence = try contract_ctx.materializeEvidence(
-                checked_structural.view.static_dispatch_plans.generatedCodecCallEvidence(call),
-            ),
+            .lookup = .{
+                .view = target.view,
+                .target = target.target,
+                // The instantiated callable is carried by `callable_node`.
+                // Keeping it out of the lookup identity lets frozen emission
+                // match the same target without re-instantiating checked types.
+                .instantiation = null,
+                .local_proc_context = target.local_proc_context,
+            },
+            .method_name = call.view.names.methodNameText(call.checked.method),
+            .method_role = call.checked.method_role,
+            .subject_bearing = call.subject_node != null,
+            .callable_node = call.callable_node,
+            .evidence = switch (target.nested) {
+                .resolved => |evidence| evidence,
+                .synthesize => Common.invariant("checked generated codec call had no resolved nested evidence"),
+            },
+            .anchor = blk: {
+                const active = self.active_codec_contract orelse
+                    Common.invariant("generated codec call had no active checker contract");
+                if (!moduleBytesEqual(active.view.key.bytes, call.view.key.bytes)) {
+                    Common.invariant("generated codec call belonged to a different active checker contract");
+                }
+                break :blk .{
+                    .view = active.view,
+                    .derivation = active.derivation,
+                    .call_index = call.call_index,
+                    .kind = active.kind,
+                };
+            },
         };
+    }
+
+    /// Materialize a generated call's exact checked evidence in the artifact
+    /// view that owns it. The consuming BodyContext can belong to a different
+    /// module (for example, a generic encoder boundary calling an app-defined
+    /// nominal encoder), while evidence-node spans and checked type ids are
+    /// intentionally local to the contract's artifact.
+    fn materializeGeneratedCodecCallTarget(
+        self: *BodyContext,
+        call: InstantiatedGeneratedCodecCall,
+    ) Allocator.Error!*const SpecEvidenceTarget {
+        const node_id = switch (call.resolution) {
+            .callable => |node_id| node_id,
+            .structural => Common.invariant("structural generated codec call had no callable evidence target"),
+        };
+        const previous_view = self.view;
+        const previous_source_file_id = self.source_file_id;
+        const previous_evidence = self.evidence;
+        const active = self.active_codec_contract orelse
+            Common.invariant("generated codec call materialized outside its active contract");
+        if (!moduleBytesEqual(active.view.key.bytes, call.view.key.bytes)) {
+            Common.invariant("generated codec call materialized through a different active contract");
+        }
+        self.view = call.view;
+        self.source_file_id = try self.draft.sourceFileIdFor(call.view);
+        self.evidence = active.evidence;
+        defer {
+            self.view = previous_view;
+            self.source_file_id = previous_source_file_id;
+            self.evidence = previous_evidence;
+        }
+        return try self.materializeEvidenceTarget(
+            call.view.static_dispatch_plans.evidenceNode(node_id),
+            .body_lowering,
+        );
+    }
+
+    fn activateNestedCodecContract(
+        self: *BodyContext,
+        call: InstantiatedGeneratedCodecCall,
+        shape_node: NodeId,
+    ) Allocator.Error!ActiveCodecContract {
+        const nested_id = switch (call.resolution) {
+            .structural => |nested| nested,
+            .callable => Common.invariant("callable generated codec target reached nested structural activation"),
+        };
+        const derivation: static_dispatch.StructuralDerivation = switch ((self.active_codec_contract orelse
+            Common.invariant("nested codec activation had no parent contract")).kind) {
+            .parser => .parser,
+            .encoder => .encoder,
+        };
+        return try self.instantiateCodecContract(.{
+            .derivation = derivation,
+            .checked = .{
+                .view = call.view,
+                .evidence = .{
+                    .derivation = derivation,
+                    .dispatcher_ty = call.checked.dispatcher_ty,
+                    .callable_ty = call.checked.callable_ty,
+                    .generated_codec_derivation = nested_id,
+                },
+            },
+        }, call.callable_node, shape_node);
     }
 
     fn prepareCustomCodecCall(
@@ -42095,23 +44670,40 @@ const BodyContext = struct {
         kind: CodecKind,
         shape_node: NodeId,
         boundary_callable_node: NodeId,
-        lookup: MethodLookup,
+        checked_call: InstantiatedGeneratedCodecCall,
     ) Allocator.Error!bool {
-        if (self.preparedCodecCallExists(boundary_expr, kind, shape_node, lookup)) return false;
+        const target_evidence = switch (checked_call.resolution) {
+            .callable => try self.materializeGeneratedCodecCallTarget(checked_call),
+            .structural => Common.invariant("structural generated codec call reached callable preparation"),
+        };
+        const lookup = MethodLookup{
+            .view = target_evidence.view,
+            .target = target_evidence.target,
+            .instantiation = null,
+            .local_proc_context = target_evidence.local_proc_context,
+        };
+        const active = self.active_codec_contract orelse
+            Common.invariant("custom codec call had no active checker contract");
+        if (!moduleBytesEqual(active.view.key.bytes, checked_call.view.key.bytes)) {
+            Common.invariant("custom codec call belonged to a different active checker contract");
+        }
+        const method_name = checked_call.view.names.methodNameText(checked_call.checked.method);
+        if (self.preparedCodecCallExists(
+            boundary_expr,
+            kind,
+            .custom,
+            method_name,
+            active.view.key.bytes,
+            active.derivation,
+            checked_call.checked.method_role,
+        )) return false;
 
         const boundary_callable = try self.graph.functionNodes(boundary_callable_node);
         if (boundary_callable.args.len != 1) Common.invariant("structural codec constructor did not have one encoding argument");
         const encoding_node = boundary_callable.args[0];
         const runtime = try self.graph.functionNodes(boundary_callable.ret);
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
-        if (lookup.instantiation) |instantiation| {
-            var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
-            defer edge_ctx.deinit();
-            try relateFunctionRequestInterface(self.graph, target_node, try edge_ctx.instNode(instantiation.callable_ty));
-        }
+        const target_node = checked_call.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 1) Common.invariant("custom codec target did not have one encoding argument");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -42138,28 +44730,32 @@ const BodyContext = struct {
                 try relateRequestComponent(self.graph, target_runtime.ret, runtime.ret);
             },
         }
-        const checked_call = try self.checkedGeneratedCodecCallee(
-            switch (kind) {
-                .parser => "parser_for",
-                .encoder => "encoder_for",
-            },
-            shape_node,
+        const callee = try self.methodTargetCalleeAtNodeForCodec(
             lookup,
+            target_node,
+            switch (target_evidence.nested) {
+                .resolved => |evidence| .{ .resolved = evidence },
+                .synthesize => Common.invariant("checked generated codec call had no resolved nested evidence"),
+            },
+            .{
+                .view = active.view,
+                .derivation = active.derivation,
+                .call_index = checked_call.call_index,
+                .kind = active.kind,
+            },
         );
-        const callee = if (checked_call) |exact| blk: {
-            break :blk try self.methodTargetCalleeAtNode(
-                exact.lookup,
-                exact.callable_node,
-                .{ .resolved = exact.evidence },
-            );
-        } else try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
             .purpose = .custom,
+            .method_name = method_name,
+            .method_role = checked_call.checked.method_role,
+            .subject_bearing = checked_call.subject_node != null,
+            .contract_view = active.view.key.bytes,
+            .contract_derivation = active.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
-            .callable_node = if (checked_call) |exact| exact.callable_node else target_node,
+            .callable_node = target_node,
             .callee = callee,
         });
         return true;
@@ -42175,15 +44771,11 @@ const BodyContext = struct {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
         if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
         const encoding_node = boundary.args[0];
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "rename_field")) orelse
-            Common.invariant("checked parser encoding registry was missing rename_field"));
-        if (self.preparedCodecCallExists(boundary_expr, kind, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget("rename_field", null);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, kind, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("rename_field target did not have two arguments");
         const str_node = try self.graph.newNode(.{ .primitive = .str });
@@ -42191,10 +44783,20 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], str_node);
         try relateRequestComponent(self.graph, target.ret, str_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(
+            lookup,
+            target_node,
+            .{ .resolved = exact.evidence },
+            exact.anchor,
+        );
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -42207,6 +44809,7 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
     ) Allocator.Error!bool {
@@ -42214,26 +44817,31 @@ const BodyContext = struct {
         if (boundary.args.len != 1) Common.invariant("structural encoder constructor did not have one encoding argument");
         const runtime = try self.graph.functionNodes(boundary.ret);
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
-        const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural encoder encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked encoder registry was missing a container method"));
-        if (self.preparedCodecCallExists(boundary_expr, .encoder, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len < 1) Common.invariant("container encoder target had no state argument");
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(
+            lookup,
+            target_node,
+            .{ .resolved = exact.evidence },
+            exact.anchor,
+        );
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -42242,8 +44850,6 @@ const BodyContext = struct {
         return true;
     }
 
-    /// The one shape a derived codec reads out of a builtin keyed container:
-    /// a dict's value, or a set's element. Null for anything else.
     /// The shapes a derived codec reads out of a builtin keyed container: a
     /// dict's value and its key, or a set's element. Empty for anything else.
     ///
@@ -42330,7 +44936,22 @@ const BodyContext = struct {
             const payloads = try self.graphTryPayloads(node);
             return try self.appendGraphParserRecordShapes(payloads.ok, shapes, seen);
         }
-        if ((try self.customCodecLookupAtNode(node, .parser)) != null) return;
+        const previous_contract = self.active_codec_contract;
+        const previous_call_count = self.instantiated_codec_calls.items.len;
+        var nested_contract_active = false;
+        defer if (nested_contract_active) {
+            self.active_codec_contract = previous_contract;
+            self.instantiated_codec_calls.shrinkRetainingCapacity(previous_call_count);
+        };
+        if (self.generatedCodecBoundaryCall(.parser, node)) |codec_call| {
+            switch (codec_call.resolution) {
+                .callable => return,
+                .structural => {
+                    self.active_codec_contract = try self.activateNestedCodecContract(codec_call, node);
+                    nested_contract_active = true;
+                },
+            }
+        }
 
         switch (self.graph.content(node)) {
             .list, .box => |elem| try self.appendGraphParserRecordShapes(elem, shapes, seen),
@@ -42338,7 +44959,7 @@ const BodyContext = struct {
             .record => {
                 try shapes.append(self.allocator, node);
                 for ((try self.graph.recordNodes(node)).fields) |field|
-                    try self.appendGraphParserRecordShapes(field.ty, shapes, seen);
+                    try self.appendGraphParserRecordShapes(self.graph.codecFieldValueNode(field), shapes, seen);
             },
             .tag_union => {
                 for ((try self.graph.tagRowNodes(node)).tags) |tag|
@@ -42506,7 +45127,11 @@ const BodyContext = struct {
     fn prepareParseRecordFieldCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
+        // Emission indexes the prepared call by the public value shape, while
+        // the checker-authored method edge names the exact structural backing
+        // whose generated record body calls `parse_record_field`.
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
@@ -42516,15 +45141,11 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "parse_record_field")) orelse
-            Common.invariant("checked parser encoding registry was missing parse_record_field"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget("parse_record_field", contract_subject_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 3) Common.invariant("parse_record_field target did not have three arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -42583,10 +45204,15 @@ const BodyContext = struct {
             &.{ encoding_node, fields_node, state_node },
             result_node,
         );
-        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, request_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = request_node,
@@ -42608,15 +45234,11 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "skip_record_field")) orelse
-            Common.invariant("checked parser encoding registry was missing skip_record_field"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget("skip_record_field", null);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("skip_record_field target did not have two arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -42625,10 +45247,15 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -42640,7 +45267,10 @@ const BodyContext = struct {
     fn prepareParseTagUnionCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
+        // Emission uses the public value shape; the contract subject is the
+        // checker-authored role selected for this generated body.
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
@@ -42651,15 +45281,11 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
 
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "parse_tag_union")) orelse
-            Common.invariant("checked parser encoding registry was missing parse_tag_union"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget("parse_tag_union", contract_subject_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 3) Common.invariant("parse_tag_union target did not have three arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -42680,10 +45306,15 @@ const BodyContext = struct {
             &.{ encoding_node, private_spec, state_node },
             target.ret,
         );
-        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, request_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = request_node,
@@ -42832,15 +45463,11 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked parser encoding registry was missing a scalar parser method"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, shape_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("scalar parser target did not have two arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -42850,10 +45477,15 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
         try relateRequestComponent(self.graph, target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -42866,6 +45498,7 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: ?NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
         result_is_state: bool,
@@ -42877,15 +45510,11 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked parser encoding registry was missing a format-control method"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("parser format-control target did not have encoding and state arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -42894,10 +45523,15 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.err, outer_result.err);
         if (result_is_state) try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -42919,25 +45553,26 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "invalid_value")) orelse
-            Common.invariant("checked parser encoding registry was missing invalid_value"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget("invalid_value", null);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("invalid_value target did not have encoding and state arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -42956,26 +45591,26 @@ const BodyContext = struct {
         if (boundary.args.len != 1) Common.invariant("structural encoder constructor did not have one encoding argument");
         const runtime = try self.graph.functionNodes(boundary.ret);
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
-        const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural encoder encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "encode_null")) orelse
-            Common.invariant("checked encoder registry was missing encode_null"));
-        if (self.preparedCodecCallExists(boundary_expr, .encoder, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget("encode_null", null);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 1) Common.invariant("encode_null target did not have one state argument");
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -43000,16 +45635,17 @@ const BodyContext = struct {
         switch (kind) {
             .parser => {
                 if (self.graphJsonParseObjectKeyMethodName(key_node)) |method_name| {
-                    return try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, key_node, boundary_callable_node, method_name);
+                    return try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
                 if (self.graphNodeIsStringRenderedDictKey(key_node)) {
                     const str_node = try self.graph.newNode(.{ .primitive = .str });
-                    var added = try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, str_node, boundary_callable_node, "parse_key_str");
+                    var added = try self.prepareParseObjectKeyCodecCall(boundary_expr, str_node, boundary_callable_node, "parse_key_str");
                     added = try self.prepareParserInvalidValueCodecCall(boundary_expr, key_node, boundary_callable_node) or added;
                     return added;
                 }
                 var added = try self.prepareParseFormatControlCodecCall(
                     boundary_expr,
+                    key_node,
                     key_node,
                     boundary_callable_node,
                     "parse_key_start",
@@ -43020,11 +45656,11 @@ const BodyContext = struct {
             },
             .encoder => {
                 if (self.graphJsonEncodeObjectKeyMethodName(key_node)) |method_name| {
-                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, key_node, boundary_callable_node, method_name);
+                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
                 if (self.graphNodeIsStringRenderedDictKey(key_node)) {
                     const str_node = try self.graph.newNode(.{ .primitive = .str });
-                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, str_node, boundary_callable_node, "encode_key_str");
+                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, str_node, boundary_callable_node, "encode_key_str");
                 }
                 var added = try self.prepareEncodeKeyStartCodecCall(boundary_expr, key_node, boundary_callable_node);
                 added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, key_node, boundary_callable_node, seen) or added;
@@ -43045,25 +45681,26 @@ const BodyContext = struct {
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural encoder encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "encode_key_start")) orelse
-            Common.invariant("checked encoder registry was missing encode_key_start"));
-        if (self.preparedCodecCallExists(boundary_expr, .encoder, key_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget("encode_key_start", key_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("encode_key_start target did not have encoding and state arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = key_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -43076,11 +45713,13 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         var added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_start",
             false,
@@ -43088,6 +45727,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_next",
             false,
@@ -43095,6 +45735,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_after_key",
             true,
@@ -43102,6 +45743,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_after_entry",
             false,
@@ -43113,11 +45755,13 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         var added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_list_start",
             false,
@@ -43125,6 +45769,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_list_next",
             false,
@@ -43132,6 +45777,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_list_after_item",
             false,
@@ -43145,11 +45791,13 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         var added = try self.prepareParseTupleFormatCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_tuple_start",
             1,
@@ -43157,6 +45805,7 @@ const BodyContext = struct {
         added = try self.prepareParseTupleFormatCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_tuple_next",
             2,
@@ -43164,6 +45813,7 @@ const BodyContext = struct {
         added = try self.prepareParseTupleFormatCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_tuple_end",
             1,
@@ -43175,6 +45825,7 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
         arity_arg_count: usize,
@@ -43186,15 +45837,11 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked parser encoding registry was missing a tuple format method"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2 + arity_arg_count) Common.invariant("parser tuple format target had an unexpected arity");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -43207,10 +45854,15 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.err, outer_result.err);
         try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -43222,7 +45874,6 @@ const BodyContext = struct {
     fn prepareParseObjectKeyCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
-        key_node: NodeId,
         value_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
@@ -43234,15 +45885,11 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked parser encoding registry was missing an object-key method"));
-        if (self.preparedCodecCallExists(boundary_expr, .parser, key_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, value_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("object-key parser target did not have encoding and state arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -43252,11 +45899,16 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_result.rest, state_node);
         try relateRequestComponent(self.graph, target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
-            .shape_node = key_node,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
+            .shape_node = value_node,
             .lookup = lookup,
             .callable_node = target_node,
             .callee = callee,
@@ -43267,7 +45919,6 @@ const BodyContext = struct {
     fn prepareEncodeObjectKeyCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
-        key_node: NodeId,
         value_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
@@ -43279,15 +45930,11 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
         const outer_try = try self.graphTryPayloads(runtime.ret);
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural encoder encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked encoder registry was missing an object-key method"));
-        if (self.preparedCodecCallExists(boundary_expr, .encoder, key_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, value_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 3) Common.invariant("object-key encoder target did not have encoding, key, and state arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -43297,11 +45944,16 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_try.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
-            .shape_node = key_node,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
+            .shape_node = value_node,
             .lookup = lookup,
             .callable_node = target_node,
             .callee = callee,
@@ -43320,27 +45972,27 @@ const BodyContext = struct {
         if (boundary.args.len != 1) Common.invariant("structural encoder constructor did not have one encoding argument");
         const runtime = try self.graph.functionNodes(boundary.ret);
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
-        const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
-        const owner = self.methodOwnerFromNode(encoding_node) orelse
-            Common.invariant("structural encoder encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked encoder registry was missing a scalar method"));
-        if (self.preparedCodecCallExists(boundary_expr, .encoder, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, shape_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("scalar encoder target did not have value and state arguments");
         try relateRequestComponent(self.graph, target.args[0], shape_node);
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -43359,15 +46011,11 @@ const BodyContext = struct {
         arg_nodes: []const NodeId,
         ret_node: NodeId,
     ) Allocator.Error!bool {
-        const owner = self.methodOwnerFromNode(owner_node) orelse
-            Common.invariant("generated codec helper owner had no checked method owner");
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, method_name)) orelse
-            Common.invariant("checked method registry was missing a generated codec helper"));
-        if (self.preparedCodecCallExists(boundary_expr, kind, shape_node, lookup)) return false;
+        const exact = try self.requiredGeneratedCodecTarget(method_name, owner_node);
+        const lookup = exact.lookup;
+        if (self.preparedRequiredCodecCallExists(boundary_expr, kind, exact)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != arg_nodes.len) Common.invariant("generated codec helper target had an unexpected arity");
         for (target.args, arg_nodes) |target_arg, request_arg| {
@@ -43375,10 +46023,15 @@ const BodyContext = struct {
         }
         try relateRequestComponent(self.graph, target.ret, ret_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, .{ .resolved = exact.evidence }, exact.anchor);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
+            .method_name = exact.method_name,
+            .method_role = exact.method_role,
+            .subject_bearing = exact.subject_bearing,
+            .contract_view = exact.anchor.view.key.bytes,
+            .contract_derivation = exact.anchor.derivation,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -43475,7 +46128,7 @@ const BodyContext = struct {
         if (entry.found_existing) return false;
 
         if (self.graphNodeHasJsonScalarParser(node)) return false;
-        if ((try self.customCodecLookupAtNode(node, .parser)) != null) return false;
+        if (self.generatedCodecBoundaryCall(.parser, node) != null) return false;
         if (self.graphNodeIsBuiltinTry(node)) {
             const payloads = try self.graphTryPayloads(node);
             if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing") or
@@ -43496,16 +46149,16 @@ const BodyContext = struct {
             },
             .record => blk: {
                 for ((try self.graph.recordNodes(node)).fields) |field| {
-                    if (try self.graphMissingTryOkNode(field.ty)) |payload| {
+                    const value_node = self.graph.codecFieldValueNode(field);
+                    if (try self.graphMissingTryOkNode(value_node)) |payload| {
                         if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
-                    } else if (try self.graphOptionalFieldSlotPayload(field.ty)) |payload| {
-                        // `?:` slot: an absent key parses to `#Missing`.
-                        if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
-                    } else if (field.default != null) {
-                        // `??` field: an absent key fills the archived default.
-                        if (try self.graphParserShapeNeedsRequiredFieldError(field.ty, seen)) break :blk true;
-                    } else {
-                        break :blk true;
+                        continue;
+                    }
+                    switch (self.graph.codecFieldKind(field)) {
+                        .optional, .defaulted => {
+                            if (try self.graphParserShapeNeedsRequiredFieldError(value_node, seen)) break :blk true;
+                        },
+                        .required => break :blk true,
                     }
                 }
                 break :blk false;
@@ -43546,6 +46199,7 @@ const BodyContext = struct {
         self: *BodyContext,
         raw_node: NodeId,
         err_node: NodeId,
+        missing_required_field_ready: bool,
         seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = raw_node;
@@ -43553,36 +46207,36 @@ const BodyContext = struct {
         if (entry.found_existing) return false;
 
         if (self.graphNodeHasJsonScalarParser(node)) return false;
-        if ((try self.customCodecLookupAtNode(node, .parser)) != null) return false;
+        if (self.generatedCodecBoundaryCall(.parser, node) != null) return false;
         if (self.graphNodeIsBuiltinTry(node)) {
             const payloads = try self.graphTryPayloads(node);
             if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing") or
                 try self.graphErrorIsExactUnitTag(payloads.err, "Null"))
             {
-                return try self.graphParserShapeNeedsInvalidValue(payloads.ok, err_node, seen);
+                return try self.graphParserShapeNeedsInvalidValue(payloads.ok, err_node, missing_required_field_ready, seen);
             }
             return false;
         }
 
         return switch (self.graph.content(node)) {
-            .list, .box => |payload| try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen),
+            .list, .box => |payload| try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen),
             .tuple => true,
             .record => blk: {
                 const has_missing_required_field = try self.graphRowHasTag(err_node, "MissingRequiredField");
                 for ((try self.graph.recordNodes(node)).fields) |field| {
-                    if (try self.graphMissingTryOkNode(field.ty)) |payload| {
-                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
-                    } else if (try self.graphOptionalFieldSlotPayload(field.ty)) |payload| {
-                        // `?:` slot: absence is well-defined, only the present
-                        // payload's shape can demand more error tags.
-                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
-                    } else if (field.default != null) {
-                        // `??` field: absence fills the default; the value
-                        // shape parses at the inline type.
-                        if (try self.graphParserShapeNeedsInvalidValue(field.ty, err_node, seen)) break :blk true;
-                    } else {
-                        if (!has_missing_required_field) break :blk true;
-                        if (try self.graphParserShapeNeedsInvalidValue(field.ty, err_node, seen)) break :blk true;
+                    const value_node = self.graph.codecFieldValueNode(field);
+                    if (try self.graphMissingTryOkNode(value_node)) |payload| {
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen)) break :blk true;
+                        continue;
+                    }
+                    switch (self.graph.codecFieldKind(field)) {
+                        .optional, .defaulted => {
+                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, missing_required_field_ready, seen)) break :blk true;
+                        },
+                        .required => {
+                            if (!missing_required_field_ready and !has_missing_required_field) break :blk true;
+                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, missing_required_field_ready, seen)) break :blk true;
+                        },
                     }
                 }
                 break :blk false;
@@ -43590,21 +46244,31 @@ const BodyContext = struct {
             .tag_union => blk: {
                 for ((try self.graph.tagRowNodes(node)).tags) |tag| {
                     for (tag.payloads) |payload| {
-                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen)) break :blk true;
                     }
                 }
                 break :blk false;
             },
             .named => |named| blk: {
                 if (named.builtin_owner == .set and named.args.len == 1) {
-                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], err_node, seen);
+                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], err_node, missing_required_field_ready, seen);
                 }
                 if (named.builtin_owner == .dict and named.args.len == 2) {
-                    if (try self.graphNodeIsUnitTagUnion(named.args[0])) break :blk true;
-                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[1], err_node, seen);
+                    if (self.graphJsonParseObjectKeyMethodName(named.args[0]) != null) {
+                        // A builtin scalar key is decoded directly by its
+                        // exact `parse_key_*` method.
+                    } else if (self.graphNodeIsStringRenderedDictKey(named.args[0])) {
+                        if (try self.graphNodeIsUnitTagUnion(named.args[0])) break :blk true;
+                    } else if (try self.graphParserShapeNeedsInvalidValue(
+                        named.args[0],
+                        err_node,
+                        missing_required_field_ready,
+                        seen,
+                    )) break :blk true;
+                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[1], err_node, missing_required_field_ready, seen);
                 }
                 if (named.backing) |backing| {
-                    break :blk try self.graphParserShapeNeedsInvalidValue(backing.node, err_node, seen);
+                    break :blk try self.graphParserShapeNeedsInvalidValue(backing.node, err_node, missing_required_field_ready, seen);
                 }
                 break :blk false;
             },
@@ -43618,34 +46282,6 @@ const BodyContext = struct {
             .zst,
             => false,
         };
-    }
-
-    /// The `#Present` payload node when `raw_node` is an optional field's
-    /// tagged slot (`[#Missing, #Present(payload)]`), mirroring
-    /// `Builder.optionalFieldSlot` over graph nodes. Labels are matched by
-    /// exact text in the compiler-reserved `#` namespace, so this is a
-    /// lossless read-back of the `?:` slot encoding, not a shape guess.
-    fn graphOptionalFieldSlotPayload(self: *BodyContext, raw_node: NodeId) Allocator.Error!?NodeId {
-        const node = self.graphShapeNode(raw_node);
-        if (self.graph.content(node) != .tag_union) return null;
-        const tags = (try self.graph.tagRowNodes(node)).tags;
-        if (tags.len != 2) return null;
-        var present_payload: ?NodeId = null;
-        var saw_missing = false;
-        for (tags) |tag| {
-            const text = self.nameStore().tagLabelText(tag.name);
-            if (std.mem.eql(u8, text, Builder.optional_slot_missing_tag)) {
-                if (tag.payloads.len != 0) return null;
-                saw_missing = true;
-            } else if (std.mem.eql(u8, text, Builder.optional_slot_present_tag)) {
-                if (tag.payloads.len != 1) return null;
-                present_payload = tag.payloads[0];
-            } else {
-                return null;
-            }
-        }
-        if (!saw_missing) return null;
-        return present_payload;
     }
 
     fn graphNodeIsUnitTagUnion(self: *BodyContext, raw_node: NodeId) Allocator.Error!bool {
@@ -43700,8 +46336,9 @@ const BodyContext = struct {
             .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => Common.invariant("structural parser error evidence was not a tag-union row"),
         }
         // A row whose extension chain already terminated in a concrete empty
-        // union is checker-closed; the generated body crash-maps the missing
-        // required-field path instead of widening checked output.
+        // union is checker-closed; the generated body maps the missing-field
+        // path through its checker-validated `invalid_value` slot instead of
+        // widening checked output.
         var row_probe = outer_result.err;
         probe: while (true) {
             switch (self.graph.content(row_probe)) {
@@ -43750,14 +46387,31 @@ const BodyContext = struct {
         const seen_entry = try seen.getOrPut(shape_node);
         if (seen_entry.found_existing) return false;
 
-        if (try self.customCodecLookupAtNode(shape_node, kind)) |raw_lookup| {
-            return try self.prepareCustomCodecCall(
-                boundary_expr,
-                kind,
-                shape_node,
-                boundary_callable_node,
-                try self.withLocalProcContext(raw_lookup),
-            );
+        if (self.generatedCodecBoundaryCall(kind, shape_node)) |codec_call| {
+            switch (codec_call.resolution) {
+                .callable => return try self.prepareCustomCodecCall(
+                    boundary_expr,
+                    kind,
+                    shape_node,
+                    boundary_callable_node,
+                    codec_call,
+                ),
+                .structural => {
+                    const previous_contract = self.active_codec_contract;
+                    const previous_call_count = self.instantiated_codec_calls.items.len;
+                    defer {
+                        self.active_codec_contract = previous_contract;
+                        self.instantiated_codec_calls.shrinkRetainingCapacity(previous_call_count);
+                    }
+                    self.active_codec_contract = try self.activateNestedCodecContract(codec_call, shape_node);
+                    return try self.prepareStructuralCodecCallsAtNode(
+                        boundary_expr,
+                        kind,
+                        shape_node,
+                        codec_call.callable_node,
+                    );
+                },
+            }
         }
 
         if (kind == .parser) {
@@ -43801,6 +46455,7 @@ const BodyContext = struct {
                     .parser => try self.prepareParseFormatControlCodecCall(
                         boundary_expr,
                         shape_node,
+                        null,
                         boundary_callable_node,
                         "parse_null",
                         true,
@@ -43825,10 +46480,11 @@ const BodyContext = struct {
             .named => |named| if (named.builtin_owner) |owner| switch (owner) {
                 .set => {
                     if (named.args.len != 1) Common.invariant("builtin Set graph node had an unexpected arity");
+                    const list_node = try self.graph.newNode(.{ .list = named.args[0] });
                     var added = if (kind == .parser)
-                        try self.prepareParseListFormatCodecCalls(boundary_expr, shape_node, boundary_callable_node)
+                        try self.prepareParseListFormatCodecCalls(boundary_expr, list_node, shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, boundary_callable_node, "encode_list");
+                        try self.prepareEncodeContainerCodecCall(boundary_expr, list_node, shape_node, boundary_callable_node, "encode_list");
                     added = try self.prepareSetCollectionCodecCall(
                         boundary_expr,
                         kind,
@@ -43841,9 +46497,9 @@ const BodyContext = struct {
                 .dict => {
                     if (named.args.len != 2) Common.invariant("builtin Dict graph node had an unexpected arity");
                     var added = if (kind == .parser)
-                        try self.prepareParseDictFormatCodecCalls(boundary_expr, shape_node, boundary_callable_node)
+                        try self.prepareParseDictFormatCodecCalls(boundary_expr, shape_node, shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, boundary_callable_node, "encode_dict");
+                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, shape_node, boundary_callable_node, "encode_dict");
                     added = try self.prepareDictKeyCodecCalls(
                         boundary_expr,
                         kind,
@@ -43888,18 +46544,21 @@ const BodyContext = struct {
 
         var added = false;
         const structural_node = self.graphShapeNode(shape_node);
+        const contract_subject_node = try self.codecContractSubjectNode(shape_node, structural_node);
         switch (self.graph.content(structural_node)) {
             .list => |elem| {
                 if (kind == .parser) {
                     added = try self.prepareParseListFormatCodecCalls(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                     ) or added;
                 } else {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_list",
                     ) or added;
@@ -43912,12 +46571,14 @@ const BodyContext = struct {
                     added = try self.prepareParseTupleFormatCodecCalls(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                     ) or added;
                 } else {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_tuple",
                     ) or added;
@@ -43936,6 +46597,7 @@ const BodyContext = struct {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_record",
                     ) or added;
@@ -43957,11 +46619,13 @@ const BodyContext = struct {
                     added = try self.prepareParseRecordFieldCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                     ) or added;
                     added = try self.prepareParseFormatControlCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "parse_record_start",
                         false,
@@ -43969,6 +46633,7 @@ const BodyContext = struct {
                     added = try self.prepareParseFormatControlCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "parse_record_after_field",
                         false,
@@ -43987,7 +46652,13 @@ const BodyContext = struct {
                             added = try self.prepareDefaultedFieldValue(boundary_expr, default, field.ty) or added;
                         }
                     }
-                    added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field.ty, boundary_callable_node, seen) or added;
+                    added = try self.prepareCustomCodecCallsAtNode(
+                        boundary_expr,
+                        kind,
+                        self.graph.codecFieldValueNode(field),
+                        boundary_callable_node,
+                        seen,
+                    ) or added;
                 }
             },
             .tag_union => {
@@ -43995,12 +46666,18 @@ const BodyContext = struct {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_tag",
                     ) or added;
                 }
                 if (kind == .parser) {
-                    added = try self.prepareParseTagUnionCodecCall(boundary_expr, shape_node, boundary_callable_node) or added;
+                    added = try self.prepareParseTagUnionCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        contract_subject_node,
+                        boundary_callable_node,
+                    ) or added;
                 }
                 for ((try self.graph.tagRowNodes(structural_node)).tags) |tag| {
                     for (tag.payloads) |payload|
@@ -44012,37 +46689,6 @@ const BodyContext = struct {
             .unresolved, .primitive, .empty_tag_union, .func, .erased => {},
         }
         return added;
-    }
-
-    fn typeHasParserForTarget(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
-        const named = switch (self.typeStore().get(ty)) {
-            .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
-        };
-        if (self.builder.isBuiltinTryDef(self.nameStore(), named.def)) return false;
-        if (named.builtin_owner != null) return false;
-        const owner = methodOwnerFromType(self.typeStore(), ty) orelse return false;
-        return (try self.lookupMethodTargetByName(owner, "parser_for")) != null;
-    }
-
-    fn customEncoderForLookup(self: *BodyContext, ty: Type.TypeId) Allocator.Error!?MethodLookup {
-        const named = switch (self.typeStore().get(ty)) {
-            .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-        };
-        if (named.builtin_owner != null) return null;
-        switch (named.kind) {
-            .nominal, .@"opaque" => {},
-            .alias => return null,
-        }
-        const owner = methodOwnerFromType(self.typeStore(), ty) orelse
-            Common.invariant("custom named encoder_for type had no method owner");
-        const lookup = (try self.lookupMethodTargetByName(owner, "encoder_for")) orelse
-            Common.invariant("checked method registry is missing custom encoder_for target");
-        return switch (lookup.target.kind) {
-            .structural => |kind| if (kind == .encoder) null else Common.invariant("encoder_for lookup resolved to a different structural target"),
-            .procedure, .local_proc => lookup,
-        };
     }
 
     fn tryNullInfo(self: *BodyContext, ty: Type.TypeId) ?TryNullInfo {
@@ -44178,50 +46824,6 @@ const BodyContext = struct {
         return try self.wrapLet(field_local, field_ty, field_value, next_body, ret_ty);
     }
 
-    fn parseRecordFieldFromPresencePayload(
-        self: *BodyContext,
-        is_present_expr: DraftExprId,
-        is_present_mask: u64,
-        payload_local: DraftLocalId,
-        payload_ty: Type.TypeId,
-        field: Type.Field,
-        field_try_ty: Type.TypeId,
-        renamed_field_local: DraftLocalId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_expr: DraftExprId,
-        state_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const field_ty = field.ty;
-        const field_try_info = self.tryInfo(field_try_ty);
-        if (!self.sameType(field_try_info.ok_ty, field_ty)) Common.invariant("structural parser field Try Ok type differed from field type");
-        const renamed_field_ty = try self.localType(renamed_field_local);
-        if (!self.typeHasBuiltinOwner(renamed_field_ty, .str)) Common.invariant("record parser renamed field local was not Str");
-        const renamed_field_expr = try self.localExpr(renamed_field_local, renamed_field_ty);
-
-        if (!self.sameType(payload_ty, field_ty)) {
-            Common.invariant("generated record parse payload type differed from parsed field type");
-        }
-        const present_body = try self.tryOk(field_try_ty, try self.localExpr(payload_local, payload_ty));
-        const absent_body = try self.tryErr(field_try_ty, try self.missingRequiredFieldError(
-            renamed_field_expr,
-            encoding_expr,
-            state_expr,
-            encoding_ty,
-            state_ty,
-            field_try_info.err_ty,
-        ));
-
-        return try self.addExpr(.{ .ty = field_try_ty, .data = .{ .if_initialized_payload = .{
-            .cond = is_present_expr,
-            .cond_mask = is_present_mask,
-            .payload = payload_local,
-            .uninitialized_is_cold = true,
-            .initialized = present_body,
-            .uninitialized = absent_body,
-        } } });
-    }
-
     /// Whether parsing `ty` from source text can report a missing required
     /// record field. Mirrors the checker's derived-parse analysis over the
     /// materialized monotype.
@@ -44240,7 +46842,7 @@ const BodyContext = struct {
         if (self.tryNullInfo(ty)) |info| {
             return try self.parserShapeNeedsRequiredFieldError(info.ok_payload_ty, visited);
         }
-        if ((try self.customParserLookup(ty)) != null) return false;
+        if (self.frozenCustomCodecCallForShape(.parser, ty) != null) return false;
         if (self.setPayloadType(ty)) |payload_ty| {
             return try self.parserShapeNeedsRequiredFieldError(payload_ty, visited);
         }
@@ -44350,8 +46952,9 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         err_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = try self.methodLookupForTypeName(encoding_ty, "invalid_value");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ encoding_ty, state_ty }, err_ty);
+        const prepared = try self.frozenFormatCodecCall(.parser, "invalid_value");
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
         const invalid_fn = self.functionShape(callable_mono_ty, "invalid_value target method was not a function");
         const arg_tys = self.typeStore().span(invalid_fn.args);
         if (arg_tys.len != 2) Common.invariant("invalid_value target method had an unexpected arity");
@@ -44362,7 +46965,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = err_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
                 .is_cold = true,
@@ -47974,12 +50577,12 @@ const BodyContext = struct {
         lowered: *LoweredStatements,
     ) Allocator.Error!bool {
         const statement = self.view.bodies.statement(statement_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
-        self.builder.program.current_region = statement.source_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.current_region = statement.source_region;
         const pattern, const expr = switch (statement.data) {
             .decl => |decl| blk: {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return false;
@@ -48725,6 +51328,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const initial_plan_fn = try self.graph.functionNodes(callable_node);
@@ -48881,7 +51485,7 @@ const BodyContext = struct {
                         target.instantiation,
                     .local_proc_context = target.local_proc_context,
                 },
-                .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a callable target"),
+                .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
             } else Common.invariant("iterator method evidence was absent from its lexical chain"),
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
             .structural, .checked_error, .@"unreachable" => Common.invariant("iterator dispatch plan resolution was not a callable target"),
@@ -49609,12 +52213,12 @@ const BodyContext = struct {
         statement_diverges: bool,
     ) Allocator.Error!LoweredStatement {
         const statement = self.view.bodies.statement(statement_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
-        self.builder.program.current_region = statement.source_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.current_region = statement.source_region;
         var termination: StatementTermination = .none;
         const stmt: DraftStmt = switch (statement.data) {
             .pending,
@@ -51228,6 +53832,8 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     var diagnostics: Diagnostics = .{};
     var builder: Builder = undefined;
     builder.active_graph = null;
+    builder.active_body_draft = null;
+    builder.post_check_executor = null;
     builder.pending_spec_jobs = .empty;
     defer builder.pending_spec_jobs.deinit(allocator);
     builder.pending_spec_jobs_head = 0;
@@ -51262,6 +53868,8 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .method_scope = .{},
                 .source_fn_ty_digest = .{},
                 .evidence_digest = .{},
+                .codec_contract_digest = .{},
+                .codec_contract = null,
                 .request_fn_ty_digest = .{},
                 .request_fn_ty = ty_,
             };
@@ -51297,6 +53905,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .fn_ty = ty_,
                 .evidence = &.{},
                 .signature_relation = .independent_roots,
+                .codec_contract = null,
             };
         }
     }.make;
@@ -51410,8 +54019,6 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expectEqual(@as(u32, 2), frames.depth);
 
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
-    const initial_arg_classes = try graph.snapshotFunctionArgumentClasses(active_fn);
-    try std.testing.expect(try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, recursive_fn));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, false));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, true, false));
     try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, true));
@@ -51425,7 +54032,6 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = shared_ret,
     } });
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
-    try std.testing.expect(!try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, independent_fn));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
 
@@ -51592,6 +54198,7 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
 
     var builder: Builder = undefined;
     builder.program = &program;
+    builder.active_body_draft = null;
     var ctx: BodyContext = undefined;
     ctx.allocator = std.testing.allocator;
     ctx.builder = &builder;
@@ -51621,6 +54228,7 @@ test "body context inspects graph-owned types despite program TypeId collisions"
     defer draft.deinit();
     var builder: Builder = undefined;
     builder.program = &program;
+    builder.active_body_draft = null;
     builder.bool_ty = program_ty;
     builder.timing = null;
     var ctx: BodyContext = undefined;
@@ -51648,6 +54256,74 @@ test "body context inspects graph-owned types despite program TypeId collisions"
         }),
     });
     try std.testing.expect(try ctx.typeIsProvenUninhabited(repeated_impossible_payload));
+}
+
+test "frozen codec format index resolves equivalent TypeIds only for agreeing role targets" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const first_str = try type_store.add(.{ .primitive = .str });
+    const first_shape = try type_store.add(.{ .record = try type_store.addRecordFields(&name_store, &.{
+        .{ .name = field_name, .ty = first_str, .default = null },
+    }) });
+    const second_str = try type_store.add(.{ .primitive = .str });
+    const second_shape = try type_store.add(.{ .record = try type_store.addRecordFields(&name_store, &.{
+        .{ .name = field_name, .ty = second_str, .default = null },
+    }) });
+    try std.testing.expect(first_shape != second_shape);
+    try std.testing.expect(try type_store.typeEql(&name_store, first_shape, second_shape));
+
+    var view: ModuleView = undefined;
+    view.key = .{};
+    // These opaque ids are deliberate synthetic identities: this unit only
+    // compares call targets for equality and never dereferences their source
+    // tables. Keep the identities explicit instead of manufacturing dummy
+    // table entries unrelated to the format-index behavior under test.
+    const target: static_dispatch.MethodTarget = .{
+        .module_idx = 0,
+        .def_idx = @enumFromInt(1),
+        .kind = .{ .procedure = .{
+            .proc = .{ .proc_base = @enumFromInt(2) },
+            .template = .{ .proc_base = @enumFromInt(2), .template = @enumFromInt(3) },
+        } },
+        .callable_ty = @enumFromInt(4),
+    };
+    const lookup = MethodLookup{ .view = view, .target = target };
+    const callee = DraftFnSlot{ .local = .{ .draft = @enumFromInt(5) } };
+    const calls = try gpa.alloc(FrozenPreparedCodecCall, 2);
+    calls[0] = .{
+        .kind = .parser,
+        .purpose = .format,
+        .method_name = "parse_record_field",
+        .method_role = 0,
+        .subject_bearing = true,
+        .contract_view = [_]u8{0} ** 32,
+        .contract_derivation = @enumFromInt(6),
+        .shape_ty = first_shape,
+        .lookup = lookup,
+        .callable_ty = first_str,
+        .callee = callee,
+    };
+    calls[1] = calls[0];
+    calls[1].method_role = 1;
+    calls[1].shape_ty = second_shape;
+    calls[1].callable_ty = second_str;
+
+    var frozen = try FrozenPreparedCodecCalls.init(gpa, &type_store, &name_store, calls);
+    defer frozen.deinit(gpa);
+    const selected = (try frozen.formatCall(
+        &type_store,
+        &name_store,
+        .parser,
+        "parse_record_field",
+        second_shape,
+    )).?;
+    try std.testing.expectEqual(@as(u32, 0), selected.method_role);
 }
 
 test "graph constructor representation follows aliases and preserves nominal layers" {
@@ -52597,7 +55273,14 @@ fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) checked.Chec
 fn ownerTemplateForConstFnDef(fn_def: anytype) names.ProcTemplate {
     return switch (fn_def) {
         .nested => |nested| nested.owner,
-        .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function must have a nested owner template"),
+        .parser_runtime => |runtime| runtime.owner,
+        .encoder_for_runtime => |runtime| runtime.owner,
+        .local_template,
+        .imported_template,
+        .local_hosted,
+        .imported_hosted,
+        .checked_generated,
+        => |template| template,
     };
 }
 
@@ -52719,6 +55402,11 @@ fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
 }
 
 fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
+    const plan_id = dispatchPlanIdForRuntimeExpr(view, expr_id);
+    return view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+}
+
+fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchPlanId {
     const expr = view.bodies.expr(expr_id);
     const plan_id = switch (expr.data) {
         .dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
@@ -52727,7 +55415,7 @@ fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) 
     };
     const plan_raw = @intFromEnum(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
-    return view.static_dispatch_plans.plans[plan_raw];
+    return plan_id;
 }
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
@@ -52865,6 +55553,18 @@ fn moduleBytesEqual(a: [32]u8, b: [32]u8) bool {
     return std.mem.eql(u8, a[0..], b[0..]);
 }
 
+fn methodLookupIdentityEql(left: MethodLookup, right: MethodLookup) bool {
+    if (!moduleBytesEqual(left.view.key.bytes, right.view.key.bytes)) return false;
+    if (!std.meta.eql(left.target, right.target)) return false;
+    if (left.local_proc_context != right.local_proc_context) return false;
+    if (left.instantiation) |left_instantiation| {
+        const right_instantiation = right.instantiation orelse return false;
+        return moduleBytesEqual(left_instantiation.view.key.bytes, right_instantiation.view.key.bytes) and
+            left_instantiation.callable_ty == right_instantiation.callable_ty;
+    }
+    return right.instantiation == null;
+}
+
 fn constUseEql(a: checked.ConstLocator, b: checked.ConstLocator) bool {
     const left_checked_module = checked.constModuleId(a);
     const right_checked_module = checked.constModuleId(b);
@@ -52994,6 +55694,7 @@ test "hosted Try adapter narrows requested private representations by declared l
     var builder: Builder = undefined;
     builder.allocator = allocator;
     builder.program = &program;
+    builder.active_body_draft = null;
 
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xA7} ** 32));
     const opaque_def = Type.TypeDef{
@@ -53130,6 +55831,7 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
     var builder: Builder = undefined;
     builder.allocator = allocator;
     builder.program = &program;
+    builder.active_body_draft = null;
 
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xB2} ** 32));
     const try_def = Type.TypeDef{
@@ -53240,6 +55942,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
     var builder: Builder = undefined;
     builder.allocator = allocator;
     builder.program = &program;
+    builder.active_body_draft = null;
 
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
     const try_def = Type.TypeDef{

@@ -26,10 +26,34 @@ processItems = |items| {
 }
 ~~~
 # EXPECTED
+VAR NAME MISSING `$` - can_var_scoping_regular_var.md:3:6:3:12
+VAR NAME MISSING `$` - can_var_scoping_regular_var.md:4:6:4:12
 VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 # PROBLEMS
+── ● var name missing `$` ─────────────────── can_var_scoping_regular_var.md:3:6
+
+The mutable binding count_ is declared with var but its name does not start
+with $.
+
+var count_ = 0
+    ^^^^^^
+
+Rename this binding and all of its uses to $count_. The name is only a
+convention; mutability comes from the var declaration.
+
+── ● var name missing `$` ─────────────────── can_var_scoping_regular_var.md:4:6
+
+The mutable binding total_ is declared with var but its name does not start
+with $.
+
+var total_ = 0
+    ^^^^^^
+
+Rename this binding and all of its uses to $total_. The name is only a
+convention; mutability comes from the var declaration.
+
 ── ✗ var reassignment error ────────────────────────────────────────────────────
 
 Cannot reassign a var from outside the function where it was declared.
@@ -136,25 +160,25 @@ NO CHANGE
 				(p-assign (ident "items")))
 			(e-block
 				(s-var
-					(p-assign (ident "count_"))
+					(p-var-assign (ident "count_"))
 					(e-num (value "0")))
 				(s-var
-					(p-assign (ident "total_"))
+					(p-var-assign (ident "total_"))
 					(e-num (value "0")))
 				(s-reassign
-					(p-assign (ident "count_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 263)
+					(p-var-assign (ident "count_"))
+					(e-dispatch-call (method "plus") (constraint-fn-var 265)
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "count_"))))
+								(p-var-assign (ident "count_"))))
 						(args
 							(e-num (value "1")))))
 				(s-reassign
-					(p-assign (ident "total_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 272)
+					(p-var-assign (ident "total_"))
+					(e-dispatch-call (method "plus") (constraint-fn-var 274)
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "total_"))))
+								(p-var-assign (ident "total_"))))
 						(args
 							(e-num (value "10")))))
 				(s-let
@@ -167,23 +191,23 @@ NO CHANGE
 								(p-underscore))
 							(e-block
 								(s-reassign
-									(p-assign (ident "count_"))
+									(p-var-assign (ident "count_"))
 									(e-runtime-error (tag "var_across_function_boundary")))
 								(s-reassign
-									(p-assign (ident "total_"))
+									(p-var-assign (ident "total_"))
 									(e-runtime-error (tag "var_across_function_boundary")))
 								(e-lookup-local
-									(p-assign (ident "count_")))))))
+									(p-var-assign (ident "count_")))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 276)
+					(e-call (constraint-fn-var 278)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))
-				(e-dispatch-call (method "plus") (constraint-fn-var 277)
+				(e-dispatch-call (method "plus") (constraint-fn-var 279)
 					(receiver
 						(e-lookup-local
-							(p-assign (ident "total_"))))
+							(p-var-assign (ident "total_"))))
 					(args
 						(e-lookup-local
 							(p-assign (ident "result")))))))))

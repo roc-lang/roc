@@ -137,6 +137,11 @@ pub const Solution = struct {
     leader: []u32,
     /// Source local of each pure same-value alias, or `no_local`.
     alias_source: []u32,
+    /// Immediate lender of each solved-borrowed local: the local whose value
+    /// it borrows through (its alias source, the container of its field or
+    /// payload read, or the argument a borrowed call result borrows from), or
+    /// `no_local` for owned bindings and borrowed parameters.
+    borrow_source: []u32,
     /// Solved ownership signature per proc.
     sigs: []arc_sig.RcSig,
     /// Flat complete outcome rows referenced by `RcSig.outcomes`.
@@ -205,6 +210,7 @@ pub const Solution = struct {
         self.borrowed_call_result.deinit(self.allocator);
         self.allocator.free(self.leader);
         self.allocator.free(self.alias_source);
+        self.allocator.free(self.borrow_source);
         self.allocator.free(self.sigs);
         self.allocator.free(self.outcomes);
         self.allocator.free(self.available_outcome_spans);
@@ -304,15 +310,28 @@ pub const Solution = struct {
     /// aliases already have their own retained unit, and field/payload borrows
     /// are not the same value as their liveness leader.
     pub fn unitLocalOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
-        if (!self.isBorrowed(local)) return local;
         var cursor = @intFromEnum(local);
         var steps: usize = 0;
-        while (cursor < self.alias_source.len and self.alias_source[cursor] != no_local) {
+        // Every owned binding has an independent unit, even when its value
+        // came from another local. Only borrowed links forward that unit.
+        while (cursor < self.alias_source.len and
+            self.isBorrowed(@enumFromInt(cursor)) and
+            self.alias_source[cursor] != no_local)
+        {
             cursor = self.alias_source[cursor];
             steps += 1;
             if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
         }
         return @enumFromInt(cursor);
+    }
+
+    /// The local a solved-borrowed local borrows its value through, or null
+    /// for owned bindings and borrowed parameters.
+    pub fn borrowSourceOf(self: *const Solution, local: LIR.LocalId) ?LIR.LocalId {
+        const index = @intFromEnum(local);
+        if (index >= self.borrow_source.len) return null;
+        const source = self.borrow_source[index];
+        return if (source == no_local) null else @enumFromInt(source);
     }
 
     pub fn sigTable(self: *const Solution) arc_sig.SigTable {
@@ -930,6 +949,8 @@ pub fn solve(
     errdefer allocator.free(leader);
     const alias_source = try allocator.alloc(u32, local_count);
     errdefer allocator.free(alias_source);
+    const borrow_source = try allocator.alloc(u32, local_count);
+    errdefer allocator.free(borrow_source);
     const maybe_uninitialized_condition = try allocator.alloc(u32, local_count);
     errdefer allocator.free(maybe_uninitialized_condition);
     const maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count);
@@ -940,10 +961,17 @@ pub fn solve(
     errdefer maybe_uninitialized_join_param.deinit(allocator);
     for (leader, 0..) |*entry, index| entry.* = @intCast(index);
     @memset(alias_source, no_local);
+    @memset(borrow_source, no_local);
     @memset(maybe_uninitialized_condition, no_local);
     @memset(maybe_uninitialized_condition_mask, 0);
     for (domain.arc_to_local, 0..) |local_index, arc_index| {
-        if (binding.borrowed.isSet(arc_index)) borrowed.set(local_index);
+        if (binding.borrowed.isSet(arc_index)) {
+            borrowed.set(local_index);
+            switch (solver.defs[arc_index]) {
+                .borrow_capable => |lender| borrow_source[local_index] = domain.localAt(lender),
+                .none, .multi, .fresh => {},
+            }
+        }
         leader[local_index] = domain.localAt(binding.leader[arc_index]);
         const source = solver.alias_source[arc_index];
         if (source != no_local) alias_source[local_index] = domain.localAt(source);
@@ -965,6 +993,7 @@ pub fn solve(
         .borrowed_call_result = borrowed_call_result,
         .leader = leader,
         .alias_source = alias_source,
+        .borrow_source = borrow_source,
         .sigs = solver.sigs,
         .outcomes = &.{},
         .available_outcome_spans = try allocator.alloc(arc_sig.OutcomeSpan, proc_count),
@@ -1000,6 +1029,7 @@ pub fn solve(
         solution.borrowed_call_result.deinit(allocator);
         allocator.free(solution.leader);
         allocator.free(solution.alias_source);
+        allocator.free(solution.borrow_source);
         allocator.free(solution.sigs);
         allocator.free(solution.outcomes);
         allocator.free(solution.available_outcome_spans);
@@ -1781,7 +1811,7 @@ fn buildTailCallTable(
         for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
             const argument = solver.domain.indexOf(GuardedList.at(args, position)) orelse continue;
             if (!binding.borrowed.isSet(argument)) continue;
-            fact.carriers[position] = tailArgumentCarrier(solver, argument);
+            fact.carriers[position] = tailArgumentCarrier(solver, binding, argument);
             const leader = binding.leader[argument];
             if (!paramIsBorrowed(solver, leader)) continue;
             if (solver.param_proc[leader] != call.caller) continue;
@@ -1810,10 +1840,10 @@ fn tailCallLifetimeLessThan(_: void, left: TailCallLifetime, right: TailCallLife
 /// Mirrors `Solution.unitLocalOf` in the dense solver domain. Borrowed pure
 /// aliases transfer their source's unit; other borrowed definitions need an
 /// owned override on their own binding when a tail-call lifetime escapes.
-fn tailArgumentCarrier(solver: *const Solver, argument: u32) u32 {
+fn tailArgumentCarrier(solver: *const Solver, binding: *const BindingResult, argument: u32) u32 {
     var cursor = argument;
     var steps: usize = 0;
-    while (solver.alias_source[cursor] != no_local) {
+    while (binding.borrowed.isSet(cursor) and solver.alias_source[cursor] != no_local) {
         cursor = solver.alias_source[cursor];
         steps += 1;
         if (steps > solver.alias_source.len) solveInvariant("ARC tail-call carrier alias chain contained a cycle");

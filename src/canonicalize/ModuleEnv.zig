@@ -733,12 +733,14 @@ pub const GeneratedCodecDerivation = extern struct {
     source_constraint_fn_var: u32,
     source_runtime_fn_var: u32,
     source_shape_var: u32,
+    source_body_shape_var: u32,
     source_encoding_var: u32,
     source_state_var: u32,
     source_error_var: u32,
     constraint_fn_var: u32,
     runtime_fn_var: u32,
     shape_var: u32,
+    body_shape_var: u32,
     encoding_var: u32,
     state_var: u32,
     error_var: u32,
@@ -756,6 +758,9 @@ pub const GeneratedCodecDerivation = extern struct {
 /// One exact method callable used inside a checked generated codec.
 pub const GeneratedCodecCall = extern struct {
     method_ident: u32,
+    /// Nonzero when checking proved this call as an available specialization
+    /// capability rather than an unconditional generated-body edge.
+    conditional: u32,
     dispatcher_var: u32,
     callable_var: u32,
     /// Exact generated callable relation whose dispatch-target record owns the
@@ -845,6 +850,22 @@ pub const RecordOmittedDefault = extern struct {
 /// lookup.
 pub const BindingScheme = extern struct {
     node_idx: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// One generated-codec dispatch relation that remains part of a binding's
+/// scheme across checked-module boundaries. `scheme_root` preserves alias
+/// identity when a cached checked environment is rechecked, and
+/// `constraint_index` names the exact `StaticDispatchConstraint` in this
+/// environment's serialized `TypeStore`; import copying therefore preserves
+/// the complete callable graph and metadata without reconstructing either from
+/// the receiver's final shape.
+pub const BindingSchemeCodecRequirement = extern struct {
+    node_idx: u32,
+    scheme_root: u32,
+    receiver_var: u32,
+    constraint_index: u32,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -986,6 +1007,9 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
+/// Generated-codec relations carried by those schemes. Sorted by source node;
+/// multiple requirements for one binding occupy one contiguous run.
+binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
 /// Generated codec derivations validated by checking and consumed by checked
 /// artifact publication.
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
@@ -1124,6 +1148,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
     self.binding_schemes.relocate(offset);
+    self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
 
@@ -1225,6 +1250,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
+        .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
@@ -1256,6 +1282,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -1359,6 +1386,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -1845,19 +1873,17 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .underscore_in_type_declaration => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{data.declared.label()});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "Underscore In Type Alias", headline, .runtime_error);
+            var report = try Report.init(allocator, data.declared.underscoreReportTitle(), data.declared.underscoreHeadline(), .runtime_error);
 
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
             try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
 
             try report.document.addLineBreak();
-            const explanation = try std.fmt.allocPrint(allocator, "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.", .{});
-            defer allocator.free(explanation);
-            const owned_explanation = try report.addOwnedString(explanation);
-            try report.document.addReflowingText(owned_explanation);
+            switch (data.declared) {
+                .alias, .where_alias => try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead."),
+                .nominal, .@"opaque" => try report.document.addReflowingText("A bare underscore in a type annotation means \"I don't care about this type\", so it does not declare a type parameter. If this parameter is intentionally phantom, give it an underscore-prefixed name like `_a` instead."),
+            }
 
             break :blk report;
         },
@@ -2397,6 +2423,66 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
 
+            break :blk report;
+        },
+        .binding_name_does_not_match_mutability => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const title = switch (data.mutability) {
+                .mutable => "Var Name Missing `$`",
+                .immutable => "Dollar Prefix Without `var`",
+            };
+            var report = try Report.init(allocator, title, "", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+
+            switch (data.mutability) {
+                .mutable => {
+                    try report.headline.addReflowingText("The mutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" is declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(" but its name does not start with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = try std.fmt.allocPrint(allocator, "${s}", .{ident_name});
+                    defer allocator.free(suggested);
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(". The name is only a convention; mutability comes from the ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" declaration.");
+                },
+                .immutable => {
+                    try report.headline.addReflowingText("The immutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" starts with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(" but is not declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = if (ident_name.len > 0) ident_name[1..] else ident_name;
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Either rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(", or declare it with ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" if it should be mutable.");
+                },
+            }
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
             break :blk report;
         },
         .empty_tuple => |data| blk: {
@@ -3593,6 +3679,98 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .trailing_try_suffix => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Trailing `?`", "", .warning);
+            try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
+            try report.headline.addAnnotated("?", .inline_code);
+            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
+
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("This is because ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" is syntax sugar for doing a ");
+            try report.document.addAnnotated("match", .inline_code);
+            try report.document.addReflowingText(" on a ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" value like this:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.startAnnotation(.code_block);
+            try report.document.addIndent(1);
+            try report.document.addKeyword("match");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("value_before_question_mark");
+            try report.document.addText(" {");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Ok");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addKeyword("return");
+            try report.document.addText(" ");
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(")");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("}");
+            try report.document.endAnnotation();
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("When you use ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" on the value at the end of a function, it changes \"implicitly return this ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" value\" to \"return this ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" value if it's an ");
+            try report.document.addAnnotated("Err", .inline_code);
+            try report.document.addReflowingText(", but if it's ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(", unwrap its ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(" payload and return that instead\" - which can only possibly type-check when returning ");
+            try report.document.addAnnotated("Try(Try(..., ...), ...)", .inline_code);
+            try report.document.addReflowingText(", which is so unusual that using ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is almost always a mistake in practice.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Usually removing the ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ");
+            try report.document.addAnnotated("match", .inline_code);
+            try report.document.addReflowingText(" instead of the ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" syntax sugar.");
+
+            break :blk report;
+        },
         .return_outside_fn => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3841,6 +4019,7 @@ pub const Serialized = extern struct {
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
+    binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
@@ -3956,6 +4135,7 @@ pub const Serialized = extern struct {
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
+        try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
@@ -4026,6 +4206,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -4096,6 +4277,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -4168,6 +4350,7 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
@@ -4294,6 +4477,23 @@ fn sortedNodeSlot(comptime T: type, entries: []const T, raw_node: u32) usize {
     return low;
 }
 
+/// First index whose `node_idx` is greater than `raw_node` in a node-sorted
+/// table. This is the end of the contiguous run returned for multi-entry
+/// source-node metadata.
+fn sortedNodeEndSlot(comptime T: type, entries: []const T, raw_node: u32) usize {
+    var low: usize = 0;
+    var high: usize = entries.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (entries[mid].node_idx <= raw_node) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low;
+}
+
 /// Insert or replace `entry` in a node-sorted SafeList. Appends are O(1) when
 /// entries arrive in increasing node order (the common case—recording
 /// follows node allocation); out-of-order inserts shift the tail.
@@ -4342,6 +4542,61 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
         self.binding_schemes.items.items,
         @intFromEnum(node_idx),
     ) != null;
+}
+
+/// Record one exact generated-codec relation owned by a source binding scheme.
+/// Duplicate aliases are harmless but duplicate relations for the same alias
+/// would create redundant imported work, so exact entries are coalesced here.
+pub fn recordBindingSchemeCodecRequirement(
+    self: *Self,
+    node_idx: Node.Idx,
+    scheme_root: TypeVar,
+    receiver_var: TypeVar,
+    constraint_index: u32,
+) std.mem.Allocator.Error!void {
+    const entry = BindingSchemeCodecRequirement{
+        .node_idx = @intFromEnum(node_idx),
+        .scheme_root = @intFromEnum(scheme_root),
+        .receiver_var = @intFromEnum(receiver_var),
+        .constraint_index = constraint_index,
+    };
+    const entries = self.binding_scheme_codec_requirements.items.items;
+    const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
+    const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
+    for (entries[start..end]) |existing| {
+        if (existing.scheme_root == entry.scheme_root and
+            existing.receiver_var == entry.receiver_var and
+            existing.constraint_index == entry.constraint_index)
+        {
+            return;
+        }
+    }
+
+    if (end == entries.len) {
+        _ = try self.binding_scheme_codec_requirements.append(self.gpa, entry);
+        return;
+    }
+    _ = try self.binding_scheme_codec_requirements.append(self.gpa, entry);
+    const grown = self.binding_scheme_codec_requirements.items.items;
+    std.mem.copyBackwards(
+        BindingSchemeCodecRequirement,
+        grown[end + 1 ..],
+        grown[end .. grown.len - 1],
+    );
+    grown[end] = entry;
+}
+
+/// Return all generated-codec relations belonging to `node_idx`. The borrowed
+/// slice is allocation-free and remains valid until the table is mutated.
+pub fn bindingSchemeCodecRequirementsForNode(
+    self: *const Self,
+    node_idx: Node.Idx,
+) []const BindingSchemeCodecRequirement {
+    const entries = self.binding_scheme_codec_requirements.items.items;
+    const raw_node = @intFromEnum(node_idx);
+    const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, raw_node);
+    const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, raw_node);
+    return entries[start..end];
 }
 
 /// Return the digits before the decimal point for a recorded numeral.
@@ -4440,12 +4695,14 @@ pub fn recordGeneratedCodecDerivation(
     source_constraint_fn_var: TypeVar,
     source_runtime_fn_var: TypeVar,
     source_shape_var: TypeVar,
+    source_body_shape_var: TypeVar,
     source_encoding_var: TypeVar,
     source_state_var: TypeVar,
     source_error_var: TypeVar,
     constraint_fn_var: TypeVar,
     runtime_fn_var: TypeVar,
     shape_var: TypeVar,
+    body_shape_var: TypeVar,
     encoding_var: TypeVar,
     state_var: TypeVar,
     error_var: TypeVar,
@@ -4474,12 +4731,14 @@ pub fn recordGeneratedCodecDerivation(
         .source_constraint_fn_var = @intFromEnum(source_constraint_fn_var),
         .source_runtime_fn_var = @intFromEnum(source_runtime_fn_var),
         .source_shape_var = @intFromEnum(source_shape_var),
+        .source_body_shape_var = @intFromEnum(source_body_shape_var),
         .source_encoding_var = @intFromEnum(source_encoding_var),
         .source_state_var = @intFromEnum(source_state_var),
         .source_error_var = @intFromEnum(source_error_var),
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
         .runtime_fn_var = @intFromEnum(runtime_fn_var),
         .shape_var = @intFromEnum(shape_var),
+        .body_shape_var = @intFromEnum(body_shape_var),
         .encoding_var = @intFromEnum(encoding_var),
         .state_var = @intFromEnum(state_var),
         .error_var = @intFromEnum(error_var),

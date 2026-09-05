@@ -71,6 +71,7 @@ pub const TypedLocal = struct {
 pub const JoinPointExpr = struct {
     id: JoinPointId,
     params: Span(TypedLocal),
+    retained: Span(TypedLocal) = Span(TypedLocal).empty(),
     body: ExprId,
     remainder: ExprId,
 };
@@ -79,6 +80,10 @@ pub const JoinPointExpr = struct {
 pub const JumpExpr = struct {
     target: JoinPointId,
     args: Span(ExprId),
+    /// Explicit sparse rebinding of lexically enclosing loop parameters before
+    /// the jump. Both spans are parallel and use simultaneous assignment.
+    loop_params: Span(TypedLocal) = Span(TypedLocal).empty(),
+    loop_values: Span(ExprId) = Span(ExprId).empty(),
 };
 
 /// Record field expression entry.
@@ -141,6 +146,9 @@ pub const TrySequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for shared generated-code error
+    /// propagation. Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -156,6 +164,9 @@ pub const TryRecordSequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for shared generated-code error
+    /// propagation. Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -224,6 +235,11 @@ pub const StaticDataCandidate = struct {
     runtime_expr: ExprId,
 };
 
+/// Explicit producer-to-consumer result relation preserved after Lambda Solved.
+pub const TypedBoundary = struct {
+    value: ExprId,
+};
+
 /// Lambda Mono expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
@@ -238,6 +254,7 @@ pub const ExprData = union(enum) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

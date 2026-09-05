@@ -97,13 +97,14 @@ NO CHANGE
 		(e-empty_list))
 	(d-let
 		(p-assign (ident "nums"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-lookup-local
+			(p-assign (ident "bare")))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-runtime-error (tag "erroneous_value_use"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "Str") (builtin)))))
@@ -118,13 +119,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "List(U64)"))
+		(patt (type "List(U64)"))
 		(patt (type "List(Str)"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "List(U64)"))
+		(expr (type "List(U64)"))
 		(expr (type "List(Str)"))
 		(expr (type "_arg -> {}"))))
 ~~~

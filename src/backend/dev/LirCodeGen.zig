@@ -1006,6 +1006,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// boxy runtime (via `roc_boxy_init_embedded`) before running procs.
         boxy_runtime_used: bool = false,
 
+        /// Exact dense LIR proc ids reachable through Boxy method slots.
+        boxy_worker_procs: []const lir.LIR.LirProcSpecId,
+
         /// Native addresses of the boxy runtime wrappers for in-process
         /// execution. When set, `native_execution` boxy calls dispatch through
         /// these; otherwise boxy codegen requires the shim or object-file symbol
@@ -1284,6 +1287,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             store: *const LirStore,
             layout_store_opt: *const LayoutStore,
             static_strings: []const StaticStringData.Entry,
+            boxy_worker_procs: []const lir.LIR.LirProcSpecId,
             float_nan_mode: builtins.float_bits.NanMode,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
@@ -1294,6 +1298,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 static_strings,
                 &.{},
                 &.{},
+                boxy_worker_procs,
                 float_nan_mode,
                 cpu_level,
             );
@@ -1306,6 +1311,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             static_strings: []const StaticStringData.Entry,
             erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
             erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+            boxy_worker_procs: []const lir.LIR.LirProcSpecId,
             float_nan_mode: builtins.float_bits.NanMode,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
@@ -1322,6 +1328,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static_data_symbol_names = .empty,
                 .erased_arg_desc_offsets = erased_arg_desc_offsets,
                 .erased_arg_desc_params = erased_arg_desc_params,
+                .boxy_worker_procs = boxy_worker_procs,
+                .boxy_runtime_used = boxy_worker_procs.len != 0,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .vector_local_by_reg = .initFill(null),
                 .vector_local_mask = 0,
@@ -10337,10 +10345,140 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.collectStmtLocals(stmt_id, &locals, &visited);
 
+            // Immutable scalar aliases may share their source's authoritative
+            // location. Prove immutability from the complete reachable
+            // definition inventory: mutable destinations, join parameters,
+            // and multiply-defined locals always retain independent slots.
+            var definition_counts = std.AutoHashMap(u32, u32).init(self.allocator);
+            defer definition_counts.deinit();
+            var alias_sources = std.AutoHashMap(u32, LocalId).init(self.allocator);
+            defer alias_sources.deinit();
+            var mutable = std.AutoHashMap(u32, void).init(self.allocator);
+            defer mutable.deinit();
+
+            var stmt_it = visited.keyIterator();
+            while (stmt_it.next()) |raw_stmt| {
+                const reachable: CFStmtId = @enumFromInt(raw_stmt.*);
+                switch (self.store.getCFStmt(reachable)) {
+                    .assign_ref => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.op == .local) try alias_sources.put(localKey(assign.target), assign.op.local);
+                    },
+                    .assign_literal => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_call => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.out_desc) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_call_erased => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.out_desc) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_packed_erased_fn => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_desc_ref => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_dict_ref => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_box => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_reuse_box => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_unbox => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_boxy_adapt => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_boxy_inspect => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_eq => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_tag => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc.localOrNull()) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_boxy_tag_payload => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_call_dict => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_low_level => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_list => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_struct => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_tag => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .init_uninitialized => |uninit| try mutable.put(localKey(uninit.target), {}),
+                    .set_local => |assign| try mutable.put(localKey(assign.target), {}),
+                    .store_struct => |assign| try mutable.put(localKey(assign.dest), {}),
+                    .store_tag => |assign| try mutable.put(localKey(assign.dest), {}),
+                    .str_match => |str_match| {
+                        const steps = self.store.getStrMatchSteps(str_match.steps);
+                        for (0..steps.len) |step_index| switch (GuardedList.at(steps, step_index).capture) {
+                            .discard => {},
+                            .view => |local| try mutable.put(localKey(local), {}),
+                        };
+                    },
+                    .str_match_set => |str_match_set| {
+                        const arms = self.store.getStrMatchArms(str_match_set.arms);
+                        for (0..arms.len) |arm_index| {
+                            const steps = self.store.getStrMatchSteps(GuardedList.at(arms, arm_index).steps);
+                            for (0..steps.len) |step_index| switch (GuardedList.at(steps, step_index).capture) {
+                                .discard => {},
+                                .view => |local| try mutable.put(localKey(local), {}),
+                            };
+                        }
+                    },
+                    .join => |join| {
+                        const params = self.store.getLocalSpan(join.params);
+                        for (0..params.len) |param_index| {
+                            try mutable.put(localKey(GuardedList.at(params, param_index)), {});
+                        }
+                    },
+                    .boxy_tag_match,
+                    .debug,
+                    .expect_err,
+                    .expect,
+                    .comptime_branch_taken,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .jump,
+                    .ret,
+                    .crash,
+                    .loop_continue,
+                    .loop_break,
+                    => {},
+                }
+            }
+
+            var alias_it = alias_sources.iterator();
+            while (alias_it.next()) |entry| {
+                const target_key = entry.key_ptr.*;
+                const source = entry.value_ptr.*;
+                const source_key = localKey(source);
+                if ((definition_counts.get(target_key) orelse 0) != 1) continue;
+                if (definition_counts.get(source_key)) |count| if (count > 1) continue;
+                if (mutable.contains(target_key) or mutable.contains(source_key)) continue;
+
+                const alias_local: LocalId = @enumFromInt(target_key);
+                const target_layout = self.localLayout(alias_local);
+                const source_layout = self.localLayout(source);
+                const target_rep = self.runtimeRepresentationLayoutIdx(target_layout);
+                if (target_rep != self.runtimeRepresentationLayoutIdx(source_layout)) continue;
+                if (target_rep == .f32 or target_rep == .f64) continue;
+                if (self.simdKindForLayout(target_rep) != null) continue;
+                _ = locals.remove(localKey(alias_local));
+            }
+
             var it = locals.valueIterator();
             while (it.next()) |local| {
                 try self.ensureStableLocationForLocal(local.*);
             }
+        }
+
+        fn noteDefinition(counts: *std.AutoHashMap(u32, u32), local: LocalId) Allocator.Error!void {
+            const entry = try counts.getOrPut(localKey(local));
+            if (!entry.found_existing) entry.value_ptr.* = 0;
+            entry.value_ptr.* += 1;
         }
 
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
@@ -20317,31 +20455,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.patchPendingCalls();
             try self.patchPendingProcAddrs();
 
-            // Emit a dictionary-dispatch thunk for each worker a boxy method
-            // slot can dispatch to, once every procedure has a resolved code
-            // address. Programs without boxy dictionary dispatch never emit a
-            // dictionary call, so the runtime flag stays clear and no thunks
-            // are produced.
-            if (self.boxy_runtime_used) {
-                try self.generateBoxyDictProcThunks(proc_specs);
-            }
+            // Emit a dictionary-dispatch thunk for each exact worker named by
+            // the producer-owned Boxy worker list, once every procedure has a
+            // resolved code address.
+            try self.generateBoxyDictProcThunks();
         }
 
-        /// Generate one dictionary-dispatch thunk per non-hosted `.roc`
-        /// procedure and record its code offset. `roc_boxy_call_dict` resolves
-        /// a worker slot to a procedure id and invokes the registered thunk,
-        /// which marshals the procedure's explicit argument layouts from the
-        /// worker call's argument-pointer array.
-        fn generateBoxyDictProcThunks(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
-            for (proc_specs, 0..) |proc, i| {
-                // Erased-callable adapters carry their own uniform ABI and are
-                // dispatched through `roc_boxy_call_erased`; hosted procedures
-                // resolve through the host dispatch table. Neither is a boxy
-                // dictionary worker.
-                if (proc.abi == .erased_callable or proc.hosted != null) continue;
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
-                const compiled = self.proc_registry.get(@intFromEnum(proc_id)) orelse continue;
-                if (compiled.code_start == unresolved_proc_code_start) continue;
+        /// Generate the exact dictionary/inspect worker thunks named by LIR.
+        fn generateBoxyDictProcThunks(self: *Self) Allocator.Error!void {
+            for (self.boxy_worker_procs) |proc_id| {
+                const proc = self.store.getProcSpec(proc_id);
+                if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
+                    }
+                    unreachable;
+                }
+                const compiled = self.proc_registry.get(@intFromEnum(proc_id)) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} was not compiled", .{@intFromEnum(proc_id)});
+                    }
+                    unreachable;
+                };
+                if (compiled.code_start == unresolved_proc_code_start) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had no code address", .{@intFromEnum(proc_id)});
+                    }
+                    unreachable;
+                }
                 const thunk_offset = try self.generateBoxyDictProcThunk(proc_id);
                 try self.boxy_dict_thunks.put(@intFromEnum(proc_id), thunk_offset);
             }
@@ -24472,17 +24613,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// the boxy runtime is installed so the runtime's proc table is
         /// populated before any dictionary dispatch.
         fn emitBoxyDictProcRegistrations(self: *Self) Allocator.Error!void {
-            var it = self.boxy_dict_thunks.iterator();
-            while (it.next()) |entry| {
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(entry.key_ptr.*);
-                const thunk_offset = entry.value_ptr.*;
+            for (self.boxy_worker_procs) |proc_id| {
+                const proc_index = @intFromEnum(proc_id);
+                const thunk_offset = self.boxy_dict_thunks.get(proc_index) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had no generated dispatch thunk", .{proc_index});
+                    }
+                    unreachable;
+                };
                 const proc = self.store.getProcSpec(proc_id);
                 const ret_layout = self.runtimeRepresentationLayoutIdx(proc.ret_layout);
 
                 const addr_reg = try self.allocTempGeneral();
                 try self.emitInternalCodeAddress(thunk_offset, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(entry.key_ptr.*));
+                try builder.addImmArg(@intCast(proc_index));
                 try builder.addRegArg(addr_reg);
                 try builder.addImmArg(@intFromEnum(ret_layout));
                 try builder.addImmArg(@bitCast(proc.rc_borrowed_params));
@@ -25433,7 +25578,7 @@ fn compileRootWithFloatNanMode(
     const allocator = std.testing.allocator;
     // The callers of this run the code they get back, so it is held to what
     // the machine running the tests executes.
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -25597,8 +25742,50 @@ test "code generator initialization" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
+}
+
+test "Boxy dictionary thunks are emitted only for producer-named workers" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const ordinary_proc = try addLiteralProc(
+        &store,
+        .{ .i64_literal = .{ .value = 41, .layout_idx = .u64 } },
+        .u64,
+    );
+    const worker_proc = try addLiteralProc(
+        &store,
+        .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .u64,
+    );
+
+    var codegen = try HostLirCodeGen.initWithBoxyMetadata(
+        allocator,
+        &store,
+        &test_state.layout_store,
+        &.{},
+        &.{},
+        &.{},
+        &.{worker_proc},
+        .preserve,
+        roc_target_mod.host_cpu.level(),
+    );
+    defer codegen.deinit();
+
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    try std.testing.expectEqual(@as(usize, 1), codegen.boxy_dict_thunks.count());
+    try std.testing.expect(codegen.boxy_dict_thunks.contains(@intFromEnum(worker_proc)));
+    try std.testing.expect(!codegen.boxy_dict_thunks.contains(@intFromEnum(ordinary_proc)));
 }
 
 test "vector spill residency is independent of scalar local count" {
@@ -25612,7 +25799,7 @@ test "vector spill residency is independent of scalar local count" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const vector_local = try addLocal(&store, .u8x16);
@@ -25677,7 +25864,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     } });
     const args = try store.addLocalSpan(&.{ start, end });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const HostCodeGen = @TypeOf(codegen.codegen);
@@ -25697,6 +25884,80 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "immutable aliases share storage but aliases of mutable locals do not" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const source = try addLocal(&store, .u64);
+    const alias1 = try addLocal(&store, .u64);
+    const alias2 = try addLocal(&store, .u64);
+    const mutable_source = try addLocal(&store, .u64);
+    const mutable_alias = try addLocal(&store, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias2 } });
+    const mutate = try store.addCFStmt(.{ .set_local = .{
+        .target = mutable_source,
+        .value = source,
+        .mode = .initialize_join_param,
+        .next = ret,
+    } });
+    const mutable_alias_stmt = try store.addCFStmt(.{ .assign_ref = .{
+        .target = mutable_alias,
+        .op = .{ .local = mutable_source },
+        .next = mutate,
+    } });
+    const mutable_source_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = mutable_source,
+        .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
+        .next = mutable_alias_stmt,
+    } });
+    const alias2_stmt = try store.addCFStmt(.{ .assign_ref = .{
+        .target = alias2,
+        .op = .{ .local = alias1 },
+        .next = mutable_source_stmt,
+    } });
+    const alias1_stmt = try store.addCFStmt(.{ .assign_ref = .{
+        .target = alias1,
+        .op = .{ .local = source },
+        .next = alias2_stmt,
+    } });
+    const source_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = source,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = alias1_stmt,
+    } });
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    defer codegen.deinit();
+    const HostCodeGen = @TypeOf(codegen.codegen);
+    if (comptime builtin.cpu.arch == .aarch64) {
+        codegen.codegen.stack_offset = 16 + HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    } else {
+        codegen.codegen.stack_offset = -HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    }
+
+    try codegen.ensureStableLocationsForStmtLocals(source_stmt);
+    const source_loc = codegen.local_locations.get(@intFromEnum(source)).?;
+    try std.testing.expect(codegen.local_locations.get(@intFromEnum(alias1)) == null);
+    try std.testing.expect(codegen.local_locations.get(@intFromEnum(alias2)) == null);
+    const mutable_source_loc = codegen.local_locations.get(@intFromEnum(mutable_source)).?;
+    const mutable_alias_loc = codegen.local_locations.get(@intFromEnum(mutable_alias)).?;
+    try std.testing.expect(!std.meta.eql(mutable_source_loc, mutable_alias_loc));
+
+    try codegen.bindAssignedLocal(source, .{ .immediate_i64 = 1 });
+    try codegen.bindAssignedLocal(alias1, try codegen.generateLookup(source));
+    try codegen.bindAssignedLocal(alias2, try codegen.generateLookup(alias1));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias1)).?));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias2)).?));
 }
 
 test "Windows internal proc ABI reads stack arguments after shadow space" {
@@ -25719,7 +25980,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const list = try addLocal(&store, list_layout);
     const args = try store.addLocalSpan(&.{ a, b, c, d, list });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -25745,7 +26006,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
     const arg_plan = try store.internErasedCallArgsPlan(&test_state.layout_store, &.{.u64});
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -25780,7 +26041,7 @@ test "Windows dictionary thunk ABI reads result descriptor pointer from caller s
     const proc = store.getProcSpec(proc_id);
 
     const WinCodeGen = LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.proc_registry.put(@intFromEnum(proc_id), .{
@@ -25818,7 +26079,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const stack_arg = try addLocal(&store, .u64);
     const args = try store.addLocalSpan(&.{ a0, a1, a2, a3, a4, a5, a6, a7, stack_arg });
 
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -25842,7 +26103,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     defer test_state.deinit();
 
     const ArmCodeGen = LirCodeGen(.arm64mac);
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
@@ -26747,7 +27008,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
@@ -26774,7 +27035,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
         test_state.layout_store.getLayout(.f32),
     });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));

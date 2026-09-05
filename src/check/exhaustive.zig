@@ -59,7 +59,13 @@ fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
 /// so their seen-sets never converge.
 pub const NominalOpenCache = struct {
     entries: std.ArrayListUnmanaged(Entry) = .empty,
+    /// Resolved argument roots of every entry, contiguous per entry.
     args: std.ArrayListUnmanaged(Var) = .empty,
+    /// Entry index per (declaration, resolved argument roots), hashed and
+    /// compared through `entries` and `args`. The walkers never unify, so a
+    /// root resolved when its entry was recorded is still that argument's
+    /// root for the rest of the entry point.
+    index: std.HashMapUnmanaged(u32, void, EntryContext, std.hash_map.default_max_load_percentage) = .empty,
     allocator: std.mem.Allocator,
 
     const Entry = struct {
@@ -69,15 +75,91 @@ pub const NominalOpenCache = struct {
         opened: Var,
     };
 
+    /// One opening request: a declaration and its resolved argument roots.
+    const Key = struct {
+        decl: types.NominalDecl.Idx,
+        args: []const Var,
+    };
+
+    fn hashKey(key: Key) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.decl);
+        for (key.args) |arg| std.hash.autoHash(&hasher, arg);
+        return hasher.final();
+    }
+
+    fn entryKey(self: *const NominalOpenCache, entry_index: u32) Key {
+        const entry = self.entries.items[entry_index];
+        return .{
+            .decl = entry.decl,
+            .args = self.args.items[entry.args_start..][0..entry.args_len],
+        };
+    }
+
+    fn keysEql(lhs: Key, rhs: Key) bool {
+        if (lhs.decl != rhs.decl) return false;
+        if (lhs.args.len != rhs.args.len) return false;
+        for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
+            if (lhs_arg != rhs_arg) return false;
+        }
+        return true;
+    }
+
+    const EntryContext = struct {
+        cache: *const NominalOpenCache,
+
+        pub fn hash(self: EntryContext, entry_index: u32) u64 {
+            return hashKey(self.cache.entryKey(entry_index));
+        }
+
+        pub fn eql(self: EntryContext, lhs: u32, rhs: u32) bool {
+            return keysEql(self.cache.entryKey(lhs), self.cache.entryKey(rhs));
+        }
+    };
+
+    const KeyContext = struct {
+        cache: *const NominalOpenCache,
+
+        pub fn hash(_: KeyContext, key: Key) u64 {
+            return hashKey(key);
+        }
+
+        pub fn eql(self: KeyContext, key: Key, entry_index: u32) bool {
+            return keysEql(key, self.cache.entryKey(entry_index));
+        }
+    };
+
     /// An empty cache; owns nothing until an opening is recorded.
     pub fn init(allocator: std.mem.Allocator) NominalOpenCache {
         return .{ .allocator = allocator };
     }
 
-    /// Free the cache's entry and argument lists.
+    /// Free the cache's entry and argument lists and its index.
     pub fn deinit(self: *NominalOpenCache) void {
+        self.index.deinit(self.allocator);
         self.entries.deinit(self.allocator);
         self.args.deinit(self.allocator);
+    }
+
+    /// The recorded opening for a declaration applied to these resolved
+    /// argument roots, if one exists.
+    fn lookup(self: *const NominalOpenCache, key: Key) ?Var {
+        const entry_index = self.index.getKeyAdapted(key, KeyContext{ .cache = self }) orelse return null;
+        return self.entries.items[entry_index].opened;
+    }
+
+    /// Record an opening whose resolved argument roots already occupy
+    /// `args[args_start..]`.
+    fn record(self: *NominalOpenCache, decl: types.NominalDecl.Idx, args_start: u32, opened: Var) std.mem.Allocator.Error!void {
+        const entry_index: u32 = @intCast(self.entries.items.len);
+        try self.entries.append(self.allocator, .{
+            .decl = decl,
+            .args_start = args_start,
+            .args_len = @intCast(self.args.items.len - args_start),
+            .opened = opened,
+        });
+        errdefer _ = self.entries.pop();
+        try self.index.putNoClobberContext(self.allocator, entry_index, {}, EntryContext{ .cache = self });
     }
 };
 
@@ -635,7 +717,7 @@ pub fn convertPattern(
 
     return switch (pattern) {
         // Simple binding patterns match anything
-        .assign, .underscore => .anything,
+        .assign, .var_assign, .underscore => .anything,
 
         // As patterns: convert the inner pattern
         .as => |p| convertPattern(allocator, store, numeral_keys, p.pattern),
@@ -912,22 +994,19 @@ fn openNominalBacking(
 
     // One opening per (declaration, resolved arg roots) per entry point, so
     // recursive backings converge onto a fixed graph the walkers' seen-sets
-    // can terminate on.
-    memo_check: for (cache.entries.items) |entry| {
-        if (entry.decl != decl_idx) continue;
-        if (entry.args_len != args.len) continue;
-        const memo_args = cache.args.items[entry.args_start..][0..entry.args_len];
-        for (memo_args, args) |memo_arg, arg| {
-            if (type_store.resolveVar(memo_arg).var_ != type_store.resolveVar(arg).var_) {
-                continue :memo_check;
-            }
-        }
-        return entry.opened;
-    }
-
+    // can terminate on. The resolved roots are staged at the end of the
+    // cache's argument list so a hit costs no separate allocation.
     const args_start: u32 = @intCast(cache.args.items.len);
     for (args) |arg| {
         try cache.args.append(cache.allocator, type_store.resolveVar(arg).var_);
+    }
+    const key: NominalOpenCache.Key = .{
+        .decl = decl_idx,
+        .args = cache.args.items[args_start..],
+    };
+    if (cache.lookup(key)) |opened| {
+        cache.args.shrinkRetainingCapacity(args_start);
+        return opened;
     }
 
     var var_map = std.AutoHashMap(Var, Var).init(type_store.gpa);
@@ -941,12 +1020,7 @@ fn openNominalBacking(
         .outermost,
     );
 
-    try cache.entries.append(cache.allocator, .{
-        .decl = decl_idx,
-        .args_start = args_start,
-        .args_len = @intCast(args.len),
-        .opened = opened,
-    });
+    try cache.record(decl_idx, args_start, opened);
 
     return opened;
 }
@@ -3013,6 +3087,16 @@ fn specializeByConstructorSketched(
         .tag, .opaque_type, .tuple, .guard => null,
     };
 
+    // Constructor ids by name once per specialization, so each row resolves
+    // its constructor in constant time.
+    var tag_ids_by_name: std.AutoHashMapUnmanaged(u29, TagId) = .empty;
+    try tag_ids_by_name.ensureTotalCapacity(allocator, @intCast(union_info.alternatives.len));
+    for (union_info.alternatives) |alt| {
+        const alt_ident = ctorNameIdent(alt.name) orelse continue;
+        const gop = tag_ids_by_name.getOrPutAssumeCapacity(alt_ident.idx);
+        if (!gop.found_existing) gop.value_ptr.* = alt.tag_id;
+    }
+
     for (matrix.rows) |row| {
         if (row.len == 0) continue;
 
@@ -3021,7 +3105,7 @@ fn specializeByConstructorSketched(
 
         switch (first) {
             .ctor => |c| {
-                const pat_tag_id = findTagId(union_info, c.tag_name) orelse continue;
+                const pat_tag_id = tag_ids_by_name.get(c.tag_name.idx) orelse continue;
                 if (@intFromEnum(pat_tag_id) == @intFromEnum(tag_id)) {
                     const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
                     @memcpy(new_row[0..c.args.len], c.args);

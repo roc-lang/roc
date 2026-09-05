@@ -2807,6 +2807,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     for (can_diagnostics) |diagnostic| {
         const diagnostic_tag = std.meta.activeTag(diagnostic);
         if (diagnostic_tag != .shadowing_warning and
+            diagnostic_tag != .binding_name_does_not_match_mutability and
             diagnostic_tag != .unreachable_string_pattern_capture) error_count += 1;
     }
 
@@ -2815,6 +2816,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         for (can_diagnostics) |diagnostic| {
             const diagnostic_tag = std.meta.activeTag(diagnostic);
             if (diagnostic_tag != .shadowing_warning and
+                diagnostic_tag != .binding_name_does_not_match_mutability and
                 diagnostic_tag != .unreachable_string_pattern_capture)
             {
                 std.log.err("  - {s}", .{@tagName(diagnostic)});
@@ -4041,6 +4043,7 @@ fn processDevObjectSnapshot(
                 lowered.lir_result.store.getProcSpecs(),
                 lowered.lir_result.boxy_erased_arg_desc_offsets.items,
                 lowered.lir_result.boxy_erased_arg_desc_params.items,
+                lowered.lir_result.boxy_worker_procs.items,
                 target,
             )) |result| {
                 var hasher = Blake3.init(.{});
