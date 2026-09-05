@@ -13,13 +13,14 @@
 //! it, so that a refactor which quietly drops one of those checks fails here
 //! rather than in a released compiler.
 //!
-//! The last two tests are positive controls, and the suite needs them: every
+//! The last three tests are positive controls, and the suite needs them: every
 //! test above would also "pass" against a compiler that simply rejected
 //! everything. One shows a package may still *receive* an effectful function
 //! from the app and call it, since capability passing is the sanctioned way
-//! for a package to perform effects. The other shows a genuine headerless app
-//! still gets `echo!`, since the boundary is drawn by withholding that from
-//! everything which is not the entry module.
+//! for a package to perform effects. The other two show a genuine headerless
+//! app still gets `echo!` -- pointed at directly, and pointed at while an
+//! owning `main.roc` supplies its packages -- since the boundary is drawn by
+//! withholding that from everything which is not the entry module.
 //!
 //! Six more cases live in `test/package-effect-boundary/` instead of here: a
 //! package naming a platform as a dependency, a package header using the
@@ -225,8 +226,22 @@ fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8
 /// `compileApp` above cannot stand in for this. It drives the coordinator
 /// through `discoverAppFromPath`, which insists on a real `app` header and
 /// skips package resolution and module discovery; a headerless root and a
-/// package's own module graph are exactly what these two fixtures need.
+/// package's own module graph are exactly what these fixtures need.
 fn buildRoot(gpa: std.mem.Allocator, files: []const File, root_rel: []const u8) BuildHarnessError!Outcome {
+    return buildRootWithMain(gpa, files, root_rel, null);
+}
+
+/// The same, except that `main_rel` supplies the dependency graph: the build's
+/// root module is then that `main.roc`, while `root_rel` stays the file the
+/// compiler was pointed at. `roc test --main` takes this route, as does the
+/// language server when a checked file's packages come from an owning
+/// `main.roc`.
+fn buildRootWithMain(
+    gpa: std.mem.Allocator,
+    files: []const File,
+    root_rel: []const u8,
+    main_rel: ?[]const u8,
+) BuildHarnessError!Outcome {
     const io = std.testing.io;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -242,7 +257,13 @@ fn buildRoot(gpa: std.mem.Allocator, files: []const File, root_rel: []const u8) 
     var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build_env.deinit();
 
-    try build_env.build(root_path);
+    if (main_rel) |main| {
+        const main_path = try tmp_dir.dir.realPathFileAlloc(io, main, gpa);
+        defer gpa.free(main_path);
+        try build_env.buildWithMain(root_path, main_path);
+    } else {
+        try build_env.build(root_path);
+    }
 
     const drained = try build_env.drainReports();
     defer build_env.freeDrainedReports(drained);
@@ -447,6 +468,42 @@ test "package cannot gain echo! by shipping a platformless app header" {
     try outcome.expectBlocked("Name Not In Scope");
 }
 
+test "a package module with main! stays pure when --main supplies the graph" {
+    // `--main` splits the two things the build's root usually is: the file
+    // whose header names the packages, and the file the compiler was pointed
+    // at. Entry status follows the second, and only it -- a module the package
+    // ships is still reached through imports, so its `main!` is still just a
+    // name.
+    var outcome = try buildRootWithMain(std.testing.allocator, &.{
+        .{ .path = "main.roc", .data = "package [Sneaky] {}" },
+        .{
+            .path = "Sneaky.roc",
+            .data =
+            \\Sneaky := [].{
+            \\    pwn! : Str => {}
+            \\    pwn! = |s| echo!(s)
+            \\}
+            \\
+            \\main! = |_args| {
+            \\    Ok({})
+            \\}
+            ,
+        },
+        .{
+            .path = "target.roc",
+            .data =
+            \\Target := [].{
+            \\    answer : U64
+            \\    answer = 42
+            \\}
+            ,
+        },
+    }, "target.roc", "main.roc");
+    defer outcome.deinit();
+
+    try outcome.expectBlocked("Name Not In Scope");
+}
+
 test "pure package function cannot call an effectful capability" {
     // Capability passing is the sanctioned route for a package to cause
     // effects, and the type system is what keeps it honest: a package that
@@ -558,5 +615,41 @@ test "a genuine headerless app still gets echo!" {
         std.debug.print("a headerless app should still get echo!, got:\n", .{});
         for (outcome.titles.items) |title| std.debug.print("  - {s}\n", .{title});
         return error.HeaderlessAppLostEcho;
+    }
+}
+
+test "a headerless app still gets echo! when --main supplies its packages" {
+    // Third positive control, for the other half of the gate. `roc test --main`
+    // and the language server both point the compiler at one file while an
+    // owning `main.roc` supplies the packages, which leaves the pointed-at file
+    // off the build's root. Entry status has to follow it there, or asking to
+    // test a default app in a workspace costs it `echo!`.
+    var outcome = try buildRootWithMain(std.testing.allocator, &.{
+        .{ .path = "main.roc", .data = "package [Helper] {}" },
+        .{
+            .path = "Helper.roc",
+            .data =
+            \\Helper := [].{
+            \\    double : U64 -> U64
+            \\    double = |x| x * 2
+            \\}
+            ,
+        },
+        .{
+            .path = "hello.roc",
+            .data =
+            \\main! = |_args| {
+            \\    echo!("Hello, World!")
+            \\    Ok({})
+            \\}
+            ,
+        },
+    }, "hello.roc", "main.roc");
+    defer outcome.deinit();
+
+    if (outcome.has_user_errors) {
+        std.debug.print("a headerless app pointed at through --main should still get echo!, got:\n", .{});
+        for (outcome.titles.items) |title| std.debug.print("  - {s}\n", .{title});
+        return error.TargetedHeaderlessAppLostEcho;
     }
 }
