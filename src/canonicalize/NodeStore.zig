@@ -321,8 +321,8 @@ pub const LiteralDispatchPlan = extern struct {
     node_idx: u32,
     target_var: u32,
     fn_var: u32,
-    kind: u32,
-    resolution: u32,
+    kind_and_resolution: u32,
+    pattern_failure_expr: u32,
 
     pub const Kind = enum(u32) {
         numeral,
@@ -337,14 +337,34 @@ pub const LiteralDispatchPlan = extern struct {
         checked_error,
     };
 
+    const resolution_shift = 1;
+
+    fn packKindAndResolution(kind: Kind, resolution: Resolution) u32 {
+        return @intFromEnum(kind) | (@intFromEnum(resolution) << resolution_shift);
+    }
+
     pub fn dispatchKind(self: LiteralDispatchPlan) Kind {
-        return @enumFromInt(self.kind);
+        return @enumFromInt(self.kind_and_resolution & 1);
     }
 
     pub fn dispatchResolution(self: LiteralDispatchPlan) Resolution {
-        return @enumFromInt(self.resolution);
+        return @enumFromInt(self.kind_and_resolution >> resolution_shift);
+    }
+
+    pub fn patternFailureExpr(self: LiteralDispatchPlan) ?u32 {
+        return if (self.pattern_failure_expr == std.math.maxInt(u32)) null else self.pattern_failure_expr;
+    }
+
+    fn setResolution(self: *LiteralDispatchPlan, resolution: Resolution) void {
+        self.kind_and_resolution = packKindAndResolution(self.dispatchKind(), resolution);
     }
 };
+
+comptime {
+    if (@sizeOf(LiteralDispatchPlan) != 5 * @sizeOf(u32)) {
+        @compileError("LiteralDispatchPlan must remain five words");
+    }
+}
 
 /// Canonical and checked data owned by a compiler-created interpolation expression.
 /// Optional type variables use zero for null and otherwise store `@intFromEnum(var) + 1`.
@@ -943,6 +963,7 @@ pub fn recordLiteralDispatchPlan(
     kind: LiteralDispatchPlan.Kind,
     target_var: types.Var,
     fn_var: types.Var,
+    pattern_failure_expr: ?u32,
 ) Allocator.Error!void {
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
@@ -951,12 +972,12 @@ pub fn recordLiteralDispatchPlan(
         .node_idx = @intFromEnum(node_idx),
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
-        .kind = @intFromEnum(kind),
-        .resolution = @intFromEnum(LiteralDispatchPlan.Resolution.unresolved),
+        .kind_and_resolution = LiteralDispatchPlan.packKindAndResolution(kind, .unresolved),
+        .pattern_failure_expr = pattern_failure_expr orelse std.math.maxInt(u32),
     };
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one != 0) {
-        plan.resolution = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).resolution;
+        plan.setResolution(store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).dispatchResolution());
         store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
         return;
     }
@@ -986,7 +1007,7 @@ pub fn finalizeLiteralDispatchResolution(
             .{ @intFromEnum(node_idx), @tagName(previous), @tagName(resolution) },
         );
     }
-    plan.resolution = @intFromEnum(resolution);
+    plan.setResolution(resolution);
     store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
 }
 
@@ -1014,17 +1035,18 @@ pub fn literalDispatchPlans(store: *const NodeStore) []const LiteralDispatchPlan
     return store.literal_dispatch_plans.items.items;
 }
 
-/// Retire the literal plan owned by `node_idx`, if any. Error recovery calls
-/// this for every expression discarded with a replaced subtree, so no plan can
-/// outlive the source node that would execute it.
-pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
+/// Retire and return the literal plan owned by `node_idx`, if any. Error
+/// recovery calls this for every expression discarded with a replaced subtree,
+/// so no live plan can outlive the source node that would execute it.
+pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) ?LiteralDispatchPlan {
     const node = store.nodes.get(node_idx);
     const plan_plus_one = literalDispatchPlanPlusOne(node);
-    if (plan_plus_one == 0) return;
+    if (plan_plus_one == 0) return null;
 
     const plan_index: usize = plan_plus_one - 1;
     const plans = &store.literal_dispatch_plans.items;
     std.debug.assert(plans.items[plan_index].node_idx == @intFromEnum(node_idx));
+    const retired = plans.items[plan_index];
     const last_index = plans.items.len - 1;
     setLiteralDispatchPlanPlusOne(store, node_idx, 0);
     if (plan_index != last_index) {
@@ -1033,6 +1055,7 @@ pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
         setLiteralDispatchPlanPlusOne(store, @enumFromInt(moved.node_idx), @intCast(plan_index + 1));
     }
     _ = plans.pop();
+    return retired;
 }
 
 /// Helper function to get a region by pattern index
@@ -2166,7 +2189,7 @@ pub fn replaceExprWithRuntimeError(
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    store.retireLiteralDispatchPlan(node_idx);
+    _ = store.retireLiteralDispatchPlan(node_idx);
     var node = Node.init(.malformed);
     node.setPayload(.{ .diag_single_value = .{
         .value = @intFromEnum(diagnostic_idx),
@@ -6432,7 +6455,7 @@ test "NodeStore basic CompactWriter roundtrip" {
         },
     });
     const node1_idx = try original.nodes.append(gpa, node1);
-    try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9));
+    try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9), 11);
     original.finalizeLiteralDispatchResolution(node1_idx, .builtin_direct);
 
     // Add a region
@@ -6484,6 +6507,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
     try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
     try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
+    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureExpr());
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
@@ -6513,12 +6537,14 @@ test "literal dispatch plans are retired with their owning nodes" {
         .quote,
         @enumFromInt(1),
         @enumFromInt(2),
+        null,
     );
     try store.recordLiteralDispatchPlan(
         @enumFromInt(@intFromEnum(numeral_expr)),
         .numeral,
         @enumFromInt(3),
         @enumFromInt(4),
+        17,
     );
     try testing.expectEqual(@as(usize, 2), store.literalDispatchPlans().len);
 
@@ -6532,6 +6558,7 @@ test "literal dispatch plans are retired with their owning nodes" {
 
     const numeral_plan = store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(numeral_expr))).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, numeral_plan.dispatchKind());
+    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureExpr());
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
     try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
 

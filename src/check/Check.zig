@@ -36,6 +36,7 @@ const Ident = base.Ident;
 const Region = base.Region;
 const DeferredConstraintCheck = unifier.DeferredConstraintCheck;
 const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
+const LiteralDispatchPlan = can.NodeStore.LiteralDispatchPlan;
 const InterpolationPartMetadata = types_mod.InterpolationPartMetadata;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
@@ -771,6 +772,11 @@ open_literal_vars: std.ArrayListUnmanaged(Var),
 /// a concrete number type, so range validation does not depend on flex content
 /// still being present in the union-find root.
 open_numeral_literals: std.ArrayListUnmanaged(OpenNumeralLiteral),
+/// Literal plans retired with an erroneous expression subtree. They are no
+/// longer publishable checked evidence, but later diagnostics in the same
+/// constraint pass still need their exact source regions. This list grows only
+/// on error-recovery paths and is consulted only for diagnostic source data.
+retired_literal_dispatch_plans: std.ArrayListUnmanaged(LiteralDispatchPlan),
 /// Literal receivers committed to their documented head default after
 /// validation failed—every numeric candidate rejected for numerals, the
 /// single Str candidate rejected for quotes. The dispatch pass reports each
@@ -2624,6 +2630,7 @@ fn initAssumePrepared(
         .default_materializations = .empty,
         .open_literal_vars = .empty,
         .open_numeral_literals = .empty,
+        .retired_literal_dispatch_plans = .empty,
         .pending_tuple_accesses = .empty,
         .pinnable_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_dispatch_vars = std.AutoHashMap(Var, void).init(gpa),
@@ -2809,6 +2816,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_evidence_pair_set.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
+    self.retired_literal_dispatch_plans.deinit(self.gpa);
     self.conflicted_default_literal_vars.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
     self.pinnable_vars.deinit();
@@ -3726,7 +3734,9 @@ fn markHoistInvalidatedExpr(
 ) Allocator.Error!void {
     const entry = try self.hoist_invalidated_exprs.getOrPut(self.gpa, expr);
     if (entry.found_existing) return;
-    self.cir.store.retireLiteralDispatchPlan(ModuleEnv.nodeIdxFrom(expr));
+    if (self.cir.store.retireLiteralDispatchPlan(ModuleEnv.nodeIdxFrom(expr))) |plan| {
+        try self.retired_literal_dispatch_plans.append(self.gpa, plan);
+    }
     try work.append(self.gpa, expr);
 }
 
@@ -7359,7 +7369,8 @@ fn contentConstraintRange(content: Content) ?StaticDispatchConstraint.SafeList.R
 fn mkFlexWithFromNumeralConstraint(
     self: *Self,
     source_node: ?CIR.Node.Idx,
-    failure_expr: ?CIR.Expr.Idx,
+    occurrence_failure_expr: ?CIR.Expr.Idx,
+    pattern_failure_expr: ?CIR.Expr.Idx,
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
 ) Allocator.Error!Var {
@@ -7433,9 +7444,9 @@ fn mkFlexWithFromNumeralConstraint(
     try self.unifyWith(flex_var, flex_content, env);
 
     if (source_node) |node_idx| {
-        try self.cir.recordNumeralDispatchPlan(node_idx, flex_var, fn_var);
+        try self.cir.recordNumeralDispatchPlan(node_idx, flex_var, fn_var, pattern_failure_expr);
     }
-    try self.recordOpenLiteralVar(flex_var, &.{constraint}, failure_expr);
+    try self.recordOpenLiteralVar(flex_var, &.{constraint}, occurrence_failure_expr);
 
     return flex_var;
 }
@@ -7447,6 +7458,7 @@ fn mkFlexWithFromQuoteConstraint(
     self: *Self,
     source_node: ?CIR.Node.Idx,
     region: Region,
+    pattern_failure_expr: ?CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -7494,7 +7506,7 @@ fn mkFlexWithFromQuoteConstraint(
     };
     const fn_var = try self.freshFromContent(func_content, env, region);
     if (source_node) |node_idx| {
-        try self.cir.recordQuoteDispatchPlan(node_idx, flex_var, fn_var);
+        try self.cir.recordQuoteDispatchPlan(node_idx, flex_var, fn_var, pattern_failure_expr);
     }
 
     const constraint = types_mod.StaticDispatchConstraint{
@@ -7551,6 +7563,7 @@ fn checkNumeralLiteral(
     occurrence_var: Var,
     region: Region,
     comptime occurrence: NumeralOccurrence,
+    pattern_failure_expr: ?CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!void {
     const suffix_target = self.cir.numericSuffixTargetForNode(node_idx);
@@ -7558,7 +7571,7 @@ fn checkNumeralLiteral(
     var num_literal_info = try self.exactNumeralInfoForLiteral(literal, region);
     const failure_expr: ?CIR.Expr.Idx = switch (occurrence) {
         .expression => @enumFromInt(@intFromEnum(node_idx)),
-        .pattern => null,
+        .pattern => pattern_failure_expr,
     };
     const is_int_unbound = switch (occurrence) {
         .expression => blk: {
@@ -7574,7 +7587,13 @@ fn checkNumeralLiteral(
     };
 
     num_literal_info.explicit_suffix = suffix_target != null;
-    const flex_var = try self.mkFlexWithFromNumeralConstraint(node_idx, failure_expr, num_literal_info, env);
+    const flex_var = try self.mkFlexWithFromNumeralConstraint(
+        node_idx,
+        failure_expr,
+        pattern_failure_expr,
+        num_literal_info,
+        env,
+    );
     if (is_int_unbound) {
         try self.int_unbound_vars.put(self.types.resolveVar(flex_var).var_, {});
     }
@@ -9958,21 +9977,122 @@ fn constraintSourceExpr(
     if (constraintIntroExpr(constraint)) |expr_idx| return expr_idx;
     const literal_kind = constraint.origin.literalKind() orelse return null;
     if (literal_kind == .interpolation) return null;
-
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    var pattern_failure_expr: ?CIR.Expr.Idx = null;
+
     for (self.cir.store.literalDispatchPlans()) |plan| {
-        const kind_matches = switch (literal_kind) {
-            .numeral => plan.dispatchKind() == .numeral,
-            .quote => plan.dispatchKind() == .quote,
-            .interpolation => unreachable,
-        };
-        if (!kind_matches) continue;
-        if (self.types.resolveVar(@enumFromInt(plan.target_var)).var_ != dispatcher_root) continue;
+        if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
-        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-        return @enumFromInt(plan.node_idx);
+        if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
+            return @enumFromInt(plan.node_idx);
+        }
+        if (pattern_failure_expr == null) {
+            if (plan.patternFailureExpr()) |raw| pattern_failure_expr = @enumFromInt(raw);
+        }
+    }
+    return pattern_failure_expr;
+}
+
+fn literalDispatchPlanMatchesConstraint(
+    self: *Self,
+    plan: LiteralDispatchPlan,
+    constraint: StaticDispatchConstraint,
+    dispatcher_root: Var,
+) bool {
+    const literal_kind = constraint.origin.literalKind() orelse return false;
+    // The raw callable is the literal occurrence's stable identity. Distinct
+    // occurrences may share both a receiver root and a callable equivalence
+    // class after unification, so either resolved root would conflate owners.
+    return plan.fn_var == @intFromEnum(constraint.fn_var) and
+        self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root);
+}
+
+fn literalDispatchPlanMatches(
+    self: *Self,
+    plan: LiteralDispatchPlan,
+    literal_kind: StaticDispatchConstraint.LiteralKind,
+    dispatcher_root: Var,
+) bool {
+    const kind_matches = switch (literal_kind) {
+        .numeral => plan.dispatchKind() == .numeral,
+        .quote => plan.dispatchKind() == .quote,
+        .interpolation => unreachable,
+    };
+    return kind_matches and
+        self.types.resolveVar(@enumFromInt(plan.target_var)).var_ == dispatcher_root;
+}
+
+fn matchingLiteralDispatchPlan(
+    self: *Self,
+    plans: []const LiteralDispatchPlan,
+    literal_kind: StaticDispatchConstraint.LiteralKind,
+    dispatcher_root: Var,
+) ?LiteralDispatchPlan {
+    for (plans) |plan| {
+        if (self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) return plan;
     }
     return null;
+}
+
+fn literalPatternFailureExprForConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+) ?CIR.Expr.Idx {
+    const literal_kind = constraint.origin.literalKind() orelse return null;
+    if (literal_kind == .interpolation) return null;
+    const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    for (self.cir.store.literalDispatchPlans()) |plan| {
+        if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
+        const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+        if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+        const raw = plan.patternFailureExpr() orelse continue;
+        return @enumFromInt(raw);
+    }
+    return null;
+}
+
+/// Poison every source occurrence represented by a merged literal relation.
+/// The scan is failure-only: successful dispatch never pays for occurrence
+/// recovery. Collect owners before rewriting any of them because invalidating
+/// an expression subtree retires its literal plans from the dense plan list.
+fn poisonLiteralFailureOwners(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    failed_constraint: StaticDispatchConstraint,
+) Allocator.Error!bool {
+    const dispatcher_root = self.types.resolveVar(deferred.var_).var_;
+    var owners: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer owners.deinit(self.gpa);
+
+    for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
+        const literal_kind = literal_constraint.origin.literalKind() orelse continue;
+        if (literal_kind == .interpolation) continue;
+        const literal_fn_root = self.types.resolveVar(literal_constraint.fn_var).var_;
+
+        for (self.cir.store.literalDispatchPlans()) |plan| {
+            if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
+            if (self.types.resolveVar(@enumFromInt(plan.fn_var)).var_ != literal_fn_root) continue;
+            const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+            const owner: CIR.Expr.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
+                @enumFromInt(plan.node_idx)
+            else
+                @enumFromInt(plan.patternFailureExpr() orelse continue);
+            var already_recorded = false;
+            for (owners.items) |recorded| {
+                if (recorded == owner) {
+                    already_recorded = true;
+                    break;
+                }
+            }
+            if (!already_recorded) try owners.append(self.gpa, owner);
+        }
+    }
+
+    for (owners.items) |owner| {
+        try self.poisonConstraintFailureSource(deferred.var_, failed_constraint, owner);
+    }
+    return owners.items.len != 0;
 }
 
 fn poisonConstraintSourceExpr(
@@ -9983,7 +10103,17 @@ fn poisonConstraintSourceExpr(
     return self.poisonConstraintFailureSource(dispatcher_var, constraint, null);
 }
 
-fn deferredConstraintFailureExpr(deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
+fn deferredConstraintFailureExpr(self: *Self, deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
+    if (deferred.failure_expr.get()) |raw| return @enumFromInt(raw);
+
+    for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
+        if (constraint.origin.literalKind() == null) continue;
+        if (self.literalPatternFailureExprForConstraint(deferred.var_, constraint)) |expr_idx| return expr_idx;
+    }
+    return null;
+}
+
+fn explicitDeferredConstraintFailureExpr(deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
     const raw = deferred.failure_expr.get() orelse return null;
     return @enumFromInt(raw);
 }
@@ -10037,15 +10167,22 @@ fn poisonConstraintFailure(
     const fn_root = self.types.resolveVar(constraint.fn_var).var_;
     var found_owner = false;
     for (env.deferred_static_dispatch_constraints.items.items) |deferred| {
-        const owner_expr = deferredConstraintFailureExpr(deferred) orelse continue;
         if (self.types.resolveVar(deferred.var_).var_ != dispatcher_root) continue;
 
+        var owns_relation = false;
         for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |candidate| {
             if (!candidate.fn_name.eql(constraint.fn_name)) continue;
             if (self.types.resolveVar(candidate.fn_var).var_ != fn_root) continue;
+            owns_relation = true;
+            break;
+        }
+        if (!owns_relation) continue;
+
+        if (explicitDeferredConstraintFailureExpr(deferred)) |owner_expr| {
             try self.poisonConstraintFailureSource(dispatcher_var, constraint, owner_expr);
             found_owner = true;
-            break;
+        } else if (try self.poisonLiteralFailureOwners(deferred, constraint)) {
+            found_owner = true;
         }
     }
 
@@ -12782,7 +12919,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         try self.setVarRank(def_var, env);
         try self.setVarRank(ptrn_var, env);
 
-        const def_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(def.pattern)) .match_branch else .bound;
+        const def_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(def.pattern)) .{ .match_branch = null } else .bound;
 
         // Check the pattern
         try self.checkPattern(def.pattern, def_pattern_ctx, env);
@@ -13319,7 +13456,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             const member_def = self.cir.store.getDef(member_def_idx);
             try self.setVarRank(ModuleEnv.varFrom(member_def_idx), env);
             try self.setVarRank(ModuleEnv.varFrom(member_def.pattern), env);
-            const member_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(member_def.pattern)) .match_branch else .bound;
+            const member_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(member_def.pattern)) .{ .match_branch = null } else .bound;
             try self.checkPattern(member_def.pattern, member_pattern_ctx, env);
         }
 
@@ -16271,17 +16408,24 @@ const Polarity = enum { open, closed };
 /// The context that this pattern is being called in
 /// This determines if, for tag unions & records, they should be inferred
 /// as open or closed
-const PatternCtx = enum {
+const PatternCtx = union(enum) {
     bound,
     fn_arg,
     from_annotation,
     for_,
-    match_branch,
+    match_branch: ?CIR.Expr.Idx,
 
     fn toPolarity(self: PatternCtx) Polarity {
         return switch (self) {
             .bound, .fn_arg, .for_ => .closed,
             .from_annotation, .match_branch => .open,
+        };
+    }
+
+    fn failureExpr(self: PatternCtx) ?CIR.Expr.Idx {
+        return switch (self) {
+            .match_branch => |expr_idx| expr_idx,
+            .bound, .fn_arg, .from_annotation, .for_ => null,
         };
     }
 };
@@ -16331,7 +16475,13 @@ fn checkPatternHelp(
             // A literal pattern converts through from_quote and compares the
             // matched value against the converted constant, so the type also
             // needs equality.
-            const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_region, env);
+            const failure_expr = ctx.failureExpr();
+            const flex_var = try self.mkFlexWithFromQuoteConstraint(
+                ModuleEnv.nodeIdxFrom(pattern_idx),
+                pattern_region,
+                failure_expr,
+                env,
+            );
             _ = try self.unify(pattern_var, flex_var, env);
             try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
         },
@@ -16625,12 +16775,12 @@ fn checkPatternHelp(
         },
         // nums //
         .num_from_numeral_literal => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env);
         },
         .num_literal => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env),
+                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env),
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(num.kind), env),
             }
@@ -16648,7 +16798,7 @@ fn checkPatternHelp(
                 // Explicit suffix like `3.14dec` - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env);
             }
         },
         .small_dec_literal => |dec| {
@@ -16656,7 +16806,7 @@ fn checkPatternHelp(
                 // Explicit suffix - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env);
             }
         },
         .runtime_error => {
@@ -17589,7 +17739,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } else {
                 // A plain literal converts to its target type through from_quote,
                 // defaulting to Str if nothing pins it.
-                const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, env);
+                const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, null, env);
                 if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx))) |suffix_target| {
                     // Explicit type suffix, e.g. `"foo".MyType`.
                     try self.unifyLiteralWithSuffixTarget(flex_var, suffix_target, expr_region, env);
@@ -17601,25 +17751,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_num => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env),
+                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env),
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(num.kind), env),
             }
         },
         .e_num_from_numeral => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
             }
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
             }
         },
         .e_dec => |frac| {
@@ -17629,7 +17779,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
             }
         },
         .e_dec_small => |frac| {
@@ -17639,19 +17789,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
             }
         },
         .e_typed_int => {
             // Typed integer literal like 123.U64
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
         },
         .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
         },
         .e_typed_num_from_numeral => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
         },
         // list //
         .e_empty_list => {
@@ -20751,7 +20901,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const decl_fn_frame = decl_is_fn and !decl_predeclared;
                 if (decl_fn_frame) try env.var_pool.pushRank();
 
-                const decl_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(decl_stmt.pattern)) .match_branch else .bound;
+                const decl_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(decl_stmt.pattern)) .{ .match_branch = null } else .bound;
 
                 // Check the pattern
                 try self.checkPattern(decl_stmt.pattern, decl_pattern_ctx, env);
@@ -20861,7 +21011,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
-                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
+                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .{ .match_branch = null } else .bound;
 
                 // Check the pattern
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
@@ -20906,7 +21056,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var_uninitialized => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
-                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
+                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .{ .match_branch = null } else .bound;
 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
@@ -20940,7 +21090,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // The pattern occurrence itself must therefore always be
                 // checked here so its structural type and any fresh binders are
                 // established explicitly before we unify it with the RHS.
-                const reassign_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(reassign.pattern_idx)) .match_branch else .bound;
+                const reassign_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(reassign.pattern_idx)) .{ .match_branch = null } else .bound;
                 try self.checkPattern(reassign.pattern_idx, reassign_pattern_ctx, env);
                 self.discardHoistBindingCandidate(reassign.pattern_idx);
 
@@ -22034,7 +22184,7 @@ fn checkMatchExpr(
         // pattern unifications short-circuit rather than cascading.)
         for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
+            try self.checkPattern(branch_ptrn.pattern, .{ .match_branch = expr_idx }, env);
 
             if (!cond_always_crashes) {
                 const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
@@ -22107,7 +22257,7 @@ fn checkMatchExpr(
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
+            try self.checkPattern(branch_ptrn.pattern, .{ .match_branch = expr_idx }, env);
 
             // Check the pattern against the cond
             if (!cond_always_crashes) {
@@ -22180,7 +22330,7 @@ fn checkMatchExpr(
                     for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                         // Check the pattern's sub types
                         const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-                        try self.checkPattern(other_branch_ptrn.pattern, .match_branch, env);
+                        try self.checkPattern(other_branch_ptrn.pattern, .{ .match_branch = expr_idx }, env);
 
                         // Check the pattern against the cond
                         if (!cond_always_crashes) {
@@ -23085,7 +23235,7 @@ fn checkIteratorForLoop(
     var does_fx = false;
     const child_expected = expected.forStatement();
 
-    const pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(pattern)) .match_branch else .for_;
+    const pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(pattern)) .{ .match_branch = null } else .for_;
     try self.checkPattern(pattern, pattern_ctx, env);
     const item_var: Var = ModuleEnv.varFrom(pattern);
 
@@ -29893,9 +30043,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
-        const failure_expr = deferredConstraintFailureExpr(deferred_constraint);
+        const failure_expr = explicitDeferredConstraintFailureExpr(deferred_constraint);
         const deferred_children_start = env.deferred_static_dispatch_constraints.items.items.len;
-        defer inheritDeferredConstraintFailureExpr(env, deferred_children_start, deferred_constraint.failure_expr);
+        defer {
+            if (env.deferred_static_dispatch_constraints.items.items.len > deferred_children_start) {
+                const child_failure_expr = self.deferredConstraintFailureExpr(deferred_constraint);
+                inheritDeferredConstraintFailureExpr(
+                    env,
+                    deferred_children_start,
+                    if (child_failure_expr) |expr_idx| .from(@intFromEnum(expr_idx)) else .none,
+                );
+            }
+        }
 
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
@@ -30086,7 +30245,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     if (staticDispatchBindingIsDerivedMarker(method_lookup)) {
                         if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                             if (!try self.nominalSupportsStructuralDerive(nominal_type, .equality)) {
-                                try self.reportEqualityError(deferred_constraint.var_, constraint, env);
+                                try self.reportEqualityError(
+                                    deferred_constraint.var_,
+                                    constraint,
+                                    env,
+                                    failure_expr,
+                                );
                                 continue;
                             }
                             try self.satisfyDerivedIsEqConstraint(
@@ -30446,6 +30610,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     deferred_constraint.var_,
                                     constraint,
                                     env,
+                                    failure_expr,
                                 );
                             }
                             continue;
@@ -30743,6 +30908,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             );
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
@@ -30927,6 +31093,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             );
                         } else {
                             try self.reportConstraintError(
@@ -38331,14 +38498,17 @@ fn markStaticDispatchFnRejected(self: *Self, fn_var: Var) Allocator.Error!void {
 fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstraint, dispatcher_var: Var) ?Region {
     const kind = constraint.origin.literalKind() orelse return null;
     if (kind != .quote) return null;
-    const resolved_dispatcher = self.types.resolveVar(dispatcher_var).var_;
-    for (self.cir.store.literalDispatchPlans()) |plan| {
-        if (plan.dispatchKind() != .quote) continue;
-        const target: Var = @enumFromInt(plan.target_var);
-        if (self.types.resolveVar(target).var_ != resolved_dispatcher) continue;
-        return self.cir.store.getNodeRegion(@enumFromInt(plan.node_idx));
-    }
-    return null;
+    const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    const plan = self.matchingLiteralDispatchPlan(
+        self.cir.store.literalDispatchPlans(),
+        kind,
+        dispatcher_root,
+    ) orelse self.matchingLiteralDispatchPlan(
+        self.retired_literal_dispatch_plans.items,
+        kind,
+        dispatcher_root,
+    ) orelse return null;
+    return self.cir.store.getNodeRegion(@enumFromInt(plan.node_idx));
 }
 
 const ReportedConstraintError = struct {
@@ -38432,6 +38602,7 @@ fn reportEqualityError(
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
+    failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
@@ -38443,7 +38614,7 @@ fn reportEqualityError(
     } };
     _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
 
-    try self.poisonConstraintFailure(dispatcher_var, constraint, env, null);
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
 }
 
