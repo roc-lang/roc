@@ -24099,7 +24099,7 @@ const BodyContext = struct {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
             .numeric_range_delegate => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_to, .numeric_until => {},
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_to, .numeric_until => {},
         };
 
         switch (procedure) {
@@ -24196,7 +24196,7 @@ const BodyContext = struct {
                 );
             },
             .iter_map, .iter_keep_if, .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_take_first, .iter_drop_first, .iter_append => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_take_first, .iter_drop_first, .iter_append, .iter_with_index, .iter_step_by => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
             .iter_concat => {
                 if (checked_args.len != 2 or request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
@@ -51456,7 +51456,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
         }
     }
 
