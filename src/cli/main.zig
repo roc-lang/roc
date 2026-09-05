@@ -15965,7 +15965,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15989,6 +15989,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]
         .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
         .{ .name = "Nominal backing lookups", .count = graph.nominal_backing_lookups },
         .{ .name = "Nominal backing instances scanned", .count = graph.nominal_backing_instances_scanned },
+        .{ .name = "Nominal backing tombstone deletions", .count = graph.nominal_backing_tombstone_deletions },
         .{ .name = "Union-find resolutions", .count = graph.union_find_resolutions },
     };
 }
@@ -16122,6 +16123,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
@@ -16138,6 +16140,8 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
     try std.testing.expectEqualStrings("Generated-private nodes visited", graph[16].name);
     try std.testing.expectEqual(@as(u64, 202), graph[16].count);
+    try std.testing.expectEqualStrings("Nominal backing tombstone deletions", graph[21].name);
+    try std.testing.expectEqual(@as(u64, 203), graph[21].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);

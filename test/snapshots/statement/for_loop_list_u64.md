@@ -17,9 +17,19 @@ sum = {
 expect sum == 15
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_list_u64.md:3:6:3:12
 # PROBLEMS
-NIL
+── ● var name missing `$` ───────────────────────────── for_loop_list_u64.md:3:6
+
+The mutable binding total_ is declared with var but its name does not start
+with $.
+
+var total_ = 0
+    ^^^^^^
+
+Rename this binding and all of its uses to $total_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -78,7 +88,7 @@ NO CHANGE
 		(p-assign (ident "sum"))
 		(e-block
 			(s-var
-				(p-assign (ident "total_"))
+				(p-var-assign (ident "total_"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -91,17 +101,17 @@ NO CHANGE
 						(e-num (value "5"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "total_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 320)
+						(p-var-assign (ident "total_"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 321)
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "total_"))))
+									(p-var-assign (ident "total_"))))
 							(args
 								(e-lookup-local
 									(p-assign (ident "n"))))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "total_"))))
+				(p-var-assign (ident "total_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
