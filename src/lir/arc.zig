@@ -9697,6 +9697,32 @@ test "RC tag_payload_access: complete payload moves parent unit into return" {
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
 }
 
+test "RC complete payload transfer with retained aliases" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const root = try f.local(f.tag_str);
+    const owned_alias = try f.local(f.tag_str);
+    const borrowed_alias = try f.local(f.tag_str);
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const stored = try f.local(try f.layouts.insertList(f.tag_str));
+    const ignored = try f.local(.i64);
+    const ret = try f.ret(pair);
+    const consume = try f.assignCall(ignored, &.{stored}, ret);
+    const result = try f.assignStruct(pair, &.{ first, second }, consume);
+    const extract_second = try f.assignTagPayload(second, borrowed_alias, result);
+    const borrow = try f.assignRefLocal(borrowed_alias, owned_alias, extract_second);
+    const extract_first = try f.assignTagPayload(first, root, borrow);
+    const store = try f.assignList(stored, &.{owned_alias}, extract_first);
+    const own = try f.assignRefLocal(owned_alias, root, store);
+    const tag = try f.assignTag(root, 1, payload, own);
+    const body = try f.assignStr(payload, "extract", tag);
+    _ = try f.addProc(&.{}, body, f.pair_str);
+    try f.run();
+}
+
 test "RC tag_payload_access: complete payload retains when parent remains live" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
