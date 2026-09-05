@@ -150,9 +150,9 @@ main! = |_| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "({}) => {}"))
-		(patt (type "_arg => ({}, Error)")))
+		(patt (type "_arg => ({}, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "({}) => {}"))
-		(expr (type "_arg => ({}, Error)"))))
+		(expr (type "_arg => ({}, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~
