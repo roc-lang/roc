@@ -11,9 +11,9 @@ grow = |iter, remaining|
 main! : U64 => Str
 main! = |_seed| {
     iter = grow([0.U64].iter(), 2)
-    var sum = 0.U64
+    var $sum = 0.U64
     for item in iter {
-        sum = sum + item
+        $sum = $sum + item
     }
-    if sum == 3 { "ok" } else { "bad" }
+    if $sum == 3 { "ok" } else { "bad" }
 }

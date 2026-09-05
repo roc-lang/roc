@@ -369,7 +369,7 @@ platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.Solu
 /// sequentially scoped), so this is always a single self/enclosing chain.
 local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
 
-/// Every local binding root (`x = ..` / `var x = ..` statement pattern)
+/// Every local binding root (`x = ..` / `var $x = ..` statement pattern)
 /// encountered while checking, in solve order. The settled-state occurs sweep
 /// checks these alongside the top-level defs: a local binding's cyclic type
 /// may never be reachable from the enclosing def's root type, and checking
@@ -3143,7 +3143,7 @@ fn recordHoistPatternProvenance(
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
 
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {},
+        .assign, .var_assign => {},
         .as,
         .tuple,
         .record_destructure,
@@ -3193,7 +3193,7 @@ fn recordHoistPatternValidationCandidate(
 
 fn patternIntroducesValueBinding(self: *const Self, pattern: CIR.Pattern.Idx) bool {
     return switch (self.cir.store.getPattern(pattern)) {
-        .assign, .as => true,
+        .assign, .var_assign, .as => true,
         .tuple => |tuple| blk: {
             for (self.cir.store.slicePatterns(tuple.patterns)) |child| {
                 if (self.patternIntroducesValueBinding(child)) break :blk true;
@@ -3248,6 +3248,7 @@ fn patternIntroducesValueBinding(self: *const Self, pattern: CIR.Pattern.Idx) bo
 fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
     return switch (self.cir.store.getPattern(pattern)) {
         .assign,
+        .var_assign,
         .as,
         => true,
         .tuple,
@@ -3292,6 +3293,7 @@ fn recordHoistSingleBranchMatchPatternProvenance(
 fn patternIsIrrefutableForHoistExtraction(self: *Self, pattern: CIR.Pattern.Idx) bool {
     return switch (self.cir.store.getPattern(pattern)) {
         .assign,
+        .var_assign,
         .underscore,
         => true,
         .as => |as_pattern| self.patternIsIrrefutableForHoistExtraction(as_pattern.pattern),
@@ -3356,7 +3358,7 @@ fn recordHoistPatternExtractionProvenanceHelp(
     selection: HoistPatternExtractionSelection,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {
+        .assign, .var_assign => {
             try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern);
             if (selection == .immediate) {
                 _ = try self.ensureHoistedBindingRoot(pattern);
@@ -3442,7 +3444,7 @@ fn recordHoistContextualPatternBindings(
     owner_frame_index: usize,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {
+        .assign, .var_assign => {
             try self.recordHoistContextualBinding(pattern, owner_frame_index);
         },
         .as => |as_pattern| {
@@ -4724,7 +4726,6 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
 const OpenNumeralLiteral = struct {
     var_: Var,
     constraint: StaticDispatchConstraint,
-    source_node: ?CIR.Node.Idx,
 };
 
 const PendingTupleAccess = struct {
@@ -6457,14 +6458,15 @@ fn instantiateVarHelp(
                             has_other_constraint = true;
                         }
                     }
+                    const instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
                     if (has_literal_constraint) {
-                        try self.recordOpenLiteralVar(fresh_var, constraints, null);
+                        try self.recordOpenLiteralVar(fresh_var, constraints, instantiation_expr);
                     }
                     if (has_other_constraint) {
                         try self.registerInstantiatedAttachedDispatch(
                             fresh_var,
                             flex.constraints,
-                            self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
+                            instantiation_expr,
                         );
                     }
                 }
@@ -7304,7 +7306,7 @@ fn recordOpenLiteralVar(
     self: *Self,
     literal_var: Var,
     constraints: []const StaticDispatchConstraint,
-    source_node: ?CIR.Node.Idx,
+    failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     var has_literal = false;
     for (constraints) |constraint| {
@@ -7316,11 +7318,20 @@ fn recordOpenLiteralVar(
         // value to validate.
         switch (constraint.origin) {
             .from_literal => |lit| switch (lit) {
-                .numeral => try self.open_numeral_literals.append(self.gpa, .{
-                    .var_ = literal_var,
-                    .constraint = constraint,
-                    .source_node = source_node,
-                }),
+                .numeral => {
+                    // This worklist entry owns one exact literal occurrence.
+                    // Keep its failure site in the constraint's already-paid
+                    // provenance word rather than a parallel node field. The
+                    // type-store constraint remains pristine: a generalized
+                    // copy fails at its use, not at the source literal inside
+                    // the reusable definition.
+                    var occurrence_constraint = constraint;
+                    occurrence_constraint.provenance = constraintProvenance(failure_expr);
+                    try self.open_numeral_literals.append(self.gpa, .{
+                        .var_ = literal_var,
+                        .constraint = occurrence_constraint,
+                    });
+                },
                 .quote, .interpolation => {},
             },
             .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
@@ -7348,6 +7359,7 @@ fn contentConstraintRange(content: Content) ?StaticDispatchConstraint.SafeList.R
 fn mkFlexWithFromNumeralConstraint(
     self: *Self,
     source_node: ?CIR.Node.Idx,
+    failure_expr: ?CIR.Expr.Idx,
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
 ) Allocator.Error!Var {
@@ -7423,7 +7435,7 @@ fn mkFlexWithFromNumeralConstraint(
     if (source_node) |node_idx| {
         try self.cir.recordNumeralDispatchPlan(node_idx, flex_var, fn_var);
     }
-    try self.recordOpenLiteralVar(flex_var, &.{constraint}, source_node);
+    try self.recordOpenLiteralVar(flex_var, &.{constraint}, failure_expr);
 
     return flex_var;
 }
@@ -7501,7 +7513,7 @@ fn mkFlexWithFromQuoteConstraint(
         },
     };
     try self.unifyWith(flex_var, flex_content, env);
-    try self.recordOpenLiteralVar(flex_var, &.{constraint}, source_node);
+    try self.recordOpenLiteralVar(flex_var, &.{constraint}, null);
 
     return flex_var;
 }
@@ -7544,6 +7556,10 @@ fn checkNumeralLiteral(
     const suffix_target = self.cir.numericSuffixTargetForNode(node_idx);
     const literal = self.recordedNumeralLiteralForNode(node_idx);
     var num_literal_info = try self.exactNumeralInfoForLiteral(literal, region);
+    const failure_expr: ?CIR.Expr.Idx = switch (occurrence) {
+        .expression => @enumFromInt(@intFromEnum(node_idx)),
+        .pattern => null,
+    };
     const is_int_unbound = switch (occurrence) {
         .expression => blk: {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(node_idx));
@@ -7558,7 +7574,7 @@ fn checkNumeralLiteral(
     };
 
     num_literal_info.explicit_suffix = suffix_target != null;
-    const flex_var = try self.mkFlexWithFromNumeralConstraint(node_idx, num_literal_info, env);
+    const flex_var = try self.mkFlexWithFromNumeralConstraint(node_idx, failure_expr, num_literal_info, env);
     if (is_int_unbound) {
         try self.int_unbound_vars.put(self.types.resolveVar(flex_var).var_, {});
     }
@@ -9268,7 +9284,7 @@ fn hoistedTopLevelDefForNode(
 /// The walk is an explicit worklist (zero-recursion policy).
 fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.Node.Idx) bool {
     if (ModuleEnv.nodeIdxFrom(root) == node) return true;
-    if (module.store.getPattern(root) == .assign) return false;
+    if (module.store.getPattern(root) == .assign or module.store.getPattern(root) == .var_assign) return false;
 
     var stack_allocator_state = std.heap.stackFallback(2048, module.gpa);
     const stack_allocator = stack_allocator_state.get();
@@ -9279,7 +9295,7 @@ fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.N
     while (pending.pop()) |current| {
         if (ModuleEnv.nodeIdxFrom(current) == node) return true;
         switch (module.store.getPattern(current)) {
-            .assign => {},
+            .assign, .var_assign => {},
             .as => |as_pattern| pending.append(stack_allocator, as_pattern.pattern) catch return false,
             .applied_tag => |tag| {
                 for (module.store.slicePatterns(tag.args)) |arg| {
@@ -9600,6 +9616,7 @@ fn hoistedRootPatternSelectedDependenciesAreKept(
 
     return switch (self.cir.store.getPattern(pattern)) {
         .assign,
+        .var_assign,
         .underscore,
         .runtime_error,
         .num_literal,
@@ -9661,7 +9678,7 @@ fn hoistedRootPatternBindersAreConcrete(
     pattern: CIR.Pattern.Idx,
 ) Allocator.Error!bool {
     return switch (self.cir.store.getPattern(pattern)) {
-        .assign => try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern)),
+        .assign, .var_assign => try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern)),
         .as => |as_pattern| (try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) and
             try self.hoistedRootPatternBindersAreConcrete(as_pattern.pattern),
         .tuple => |tuple| blk: {
@@ -9726,7 +9743,7 @@ fn appendHoistedDependencyPatternBinders(
     kind: HoistedDependencyBindingKind,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {
+        .assign, .var_assign => {
             try context.append(self.gpa, pattern, kind);
         },
         .as => |as_pattern| {
@@ -9918,10 +9935,12 @@ fn finishAmbiguityPinnableSets(
     }
 }
 
-/// The introducing dispatch expression recorded in a constraint's provenance,
-/// or null for a synthetic constraint with no source expression. Provenance is
-/// set at creation and copied verbatim by instantiation and unification, so it
-/// travels with the constraint instead of alongside it in a var-keyed map.
+/// The expression recorded in a constraint's provenance, or null for a
+/// synthetic constraint with no source expression. Type-store constraints set
+/// this at creation and copy it verbatim through instantiation and unification.
+/// A checker-local open-numeral worklist copy instead records the exact use
+/// owned by that occurrence; it never writes that occurrence back to the type
+/// store.
 fn constraintIntroExpr(constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
     const raw = constraint.provenance.intro_expr.get() orelse return null;
     return @enumFromInt(raw);
@@ -9929,7 +9948,8 @@ fn constraintIntroExpr(constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
 
 /// The source expression whose checked value becomes invalid when this
 /// dispatch constraint fails. Ordinary dispatch records it in provenance;
-/// literal conversions own it through their checked literal plan.
+/// source literal conversions own it through their checked literal plan, and
+/// instantiated numeral worklist entries carry their exact use in provenance.
 fn constraintSourceExpr(
     self: *Self,
     dispatcher_var: Var,
@@ -13781,7 +13801,7 @@ fn replayPredeclaredSchemeUse(
                         has_other_constraint = true;
                     }
                 }
-                if (has_literal_constraint) try self.recordOpenLiteralVar(fresh_var, constraints, null);
+                if (has_literal_constraint) try self.recordOpenLiteralVar(fresh_var, constraints, pending.source_expr);
                 if (has_other_constraint) {
                     try self.registerInstantiatedAttachedDispatch(
                         fresh_var,
@@ -16298,7 +16318,7 @@ fn checkPatternHelp(
     };
 
     switch (pattern) {
-        .assign => {
+        .assign, .var_assign => {
             // Assigned variables start out as flex (initialized in preflight),
             // and their type is refined by usage. Reassignments reuse the same
             // pattern var, so never overwrite existing constraints here.
@@ -16651,6 +16671,7 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = self.cir.store.getPattern(ptrn_idx);
     switch (pattern) {
         .assign => |assign| return assign.ident,
+        .var_assign => |assign| return assign.ident,
         .as => |as_pattern| return as_pattern.ident,
         .applied_tag,
         .nominal,
@@ -16681,6 +16702,7 @@ const CirPatternRefutabilityAdapter = struct {
         const pattern = self.checker.cir.store.getPattern(pattern_idx);
         return switch (pattern) {
             .assign,
+            .var_assign,
             .underscore,
             .runtime_error,
             => .cannot_miss,
@@ -16711,6 +16733,7 @@ const CirPatternRefutabilityAdapter = struct {
             .nominal => |nominal| nominal.backing_pattern,
             .nominal_external => |nominal| nominal.backing_pattern,
             .assign,
+            .var_assign,
             .applied_tag,
             .record_destructure,
             .list,
@@ -16734,6 +16757,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .tuple => |tuple| self.checker.cir.store.slicePatterns(tuple.patterns).len,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16759,6 +16783,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .tuple => |tuple| self.checker.cir.store.slicePatterns(tuple.patterns)[index],
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16784,6 +16809,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .record_destructure => |destructure| self.checker.cir.store.sliceRecordDestructs(destructure.destructs).len,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16813,6 +16839,7 @@ const CirPatternRefutabilityAdapter = struct {
                 break :blk destruct.kind.toPatternIdx();
             },
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16838,6 +16865,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .list => |list| self.checker.cir.store.slicePatterns(list.patterns).len,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16863,6 +16891,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .list => |list| list.rest_info != null,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16888,6 +16917,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .list => |list| list.rest_info.?.pattern,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16964,6 +16994,7 @@ fn collectPatternBindings(
     const pattern = self.cir.store.getPattern(pattern_idx);
     switch (pattern) {
         .assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
+        .var_assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
         .as => |as_pat| {
             try out.append(self.gpa, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx });
             try self.collectPatternBindings(as_pat.pattern, out);
@@ -19710,8 +19741,9 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
     if (func_expr != .e_lookup_local) return null;
     // Get the pattern that defines this identifier
     const pattern = self.cir.store.getPattern(func_expr.e_lookup_local.pattern_idx);
-    if (pattern != .assign) return null;
-    return pattern.assign.ident;
+    if (pattern == .assign) return pattern.assign.ident;
+    if (pattern == .var_assign) return pattern.var_assign.ident;
+    return null;
 }
 
 fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
@@ -20161,13 +20193,14 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
     const tag = module_env.store.nodes.get(ModuleEnv.nodeIdxFrom(def_idx)).tag;
     const pattern_idx: CIR.Pattern.Idx = if (tag == .def)
         module_env.store.getDef(def_idx).pattern
-    else if (tag == .pattern_identifier or tag == .pattern_as)
+    else if (tag == .pattern_identifier or tag == .pattern_var_identifier or tag == .pattern_as)
         @enumFromInt(@intFromEnum(def_idx))
     else
         return null;
     const pattern = module_env.store.getPattern(pattern_idx);
     return switch (pattern) {
         .assign => |assign| assign.ident,
+        .var_assign => |assign| assign.ident,
         .as => |as_pattern| as_pattern.ident,
         .applied_tag,
         .nominal,
@@ -23460,7 +23493,7 @@ fn mkInterpolationConstraint(
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
 
-    try self.recordOpenLiteralVar(constrained_var, &.{constraint}, ModuleEnv.nodeIdxFrom(expr_idx));
+    try self.recordOpenLiteralVar(constrained_var, &.{constraint}, null);
 
     return constraint_fn_var;
 }
@@ -30347,13 +30380,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         break :fn_result probed_result;
                     };
-                    if (fn_result.isEstablished()) {
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                    } else {
-                        if (fn_result.isProblem()) {
+                    switch (fn_result) {
+                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        }
-                        try self.markStaticDispatchRejected(constraint);
+                            try self.markStaticDispatchRejected(constraint);
+                        },
                     }
                 }
                 break :dispatch_resolution;
@@ -30671,13 +30703,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
-                    if (fn_result.isEstablished()) {
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                    } else {
-                        if (fn_result.isProblem()) {
+                    switch (fn_result) {
+                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        }
-                        try self.markStaticDispatchRejected(constraint);
+                            try self.markStaticDispatchRejected(constraint);
+                        },
                     }
                 }
                 break :dispatch_resolution;
@@ -32652,7 +32683,7 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     num_kind: CIR.NumKind,
-    env: *Env,
+    _: *Env,
 ) Allocator.Error!bool {
     const num_literal = constraint.origin.numeralInfo() orelse return false;
     if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
@@ -32661,35 +32692,32 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     // table retains the source literal responsible for a concrete rejection.
     const rejected_entry = self.firstRejectedOpenNumeral(
         dispatcher_var,
+        constraint,
         num_kind,
     );
     const rejected_constraint = if (rejected_entry) |entry| entry.constraint else constraint;
-    const rejected_literal = rejected_constraint.origin.numeralInfo().?;
-    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, rejected_literal, env)) return false;
-
-    const rejected_expr: ?CIR.Expr.Idx = if (rejected_entry) |entry| if (entry.source_node) |node_idx|
-        if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) @enumFromInt(@intFromEnum(node_idx)) else null
-    else
-        null else null;
-    try self.poisonConstraintFailureSource(dispatcher_var, rejected_constraint, rejected_expr);
-    try self.markStaticDispatchRejected(rejected_constraint);
-    return true;
+    return try self.rejectInvalidBuiltinNumeralOccurrence(dispatcher_var, rejected_constraint, num_kind);
 }
 
 fn firstRejectedOpenNumeral(
     self: *Self,
     dispatcher_var: Var,
+    requested_constraint: StaticDispatchConstraint,
     num_kind: CIR.NumKind,
 ) ?OpenNumeralLiteral {
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    var first_rejected: ?OpenNumeralLiteral = null;
     for (self.open_numeral_literals.items) |entry| {
         if (self.types.resolveVar(entry.var_).var_ != dispatcher_root) continue;
         const info = entry.constraint.origin.numeralInfo() orelse continue;
         if (validateBuiltinFromNumeralLiteral(num_kind, info) != null) {
-            return entry;
+            // Raw constraint fn vars retain occurrence identity even when
+            // unification puts several callables in one rejected class.
+            if (entry.constraint.fn_var == requested_constraint.fn_var) return entry;
+            if (first_rejected == null) first_rejected = entry;
         }
     }
-    return null;
+    return first_rejected;
 }
 
 fn reportInvalidBuiltinFromNumeralInfo(
@@ -32699,9 +32727,17 @@ fn reportInvalidBuiltinFromNumeralInfo(
     num_literal: types_mod.NumeralInfo,
     _: *Env,
 ) Allocator.Error!bool {
-    const literal_problem = validateBuiltinFromNumeralLiteral(num_kind, num_literal);
-    if (literal_problem == null) return false;
+    if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
+    try self.appendInvalidBuiltinNumeralProblem(dispatcher_var, num_literal);
+    try self.markErroneous(dispatcher_var);
+    return true;
+}
 
+fn appendInvalidBuiltinNumeralProblem(
+    self: *Self,
+    dispatcher_var: Var,
+    num_literal: types_mod.NumeralInfo,
+) Allocator.Error!void {
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
         .literal_var = dispatcher_var,
@@ -32709,8 +32745,32 @@ fn reportInvalidBuiltinFromNumeralInfo(
         .is_fractional = num_literal.is_fractional,
         .region = num_literal.region,
     } });
+}
 
-    try self.markErroneous(dispatcher_var);
+/// Reject one exact literal-conversion occurrence. A concrete receiver remains
+/// valid type information when an expression owns the failure: the rejected
+/// dispatch edge becomes a runtime error at that expression instead of making
+/// every other occurrence sharing the receiver's class erroneous.
+fn rejectInvalidBuiltinNumeralOccurrence(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    num_kind: CIR.NumKind,
+) Allocator.Error!bool {
+    const num_literal = constraint.origin.numeralInfo() orelse return false;
+    if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
+    const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
+    if (self.staticDispatchConstraintIsInactive(constraint)) {
+        try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
+        return true;
+    }
+
+    try self.appendInvalidBuiltinNumeralProblem(dispatcher_var, num_literal);
+    try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
+    try self.markStaticDispatchRejected(constraint);
+    if (failure_expr == null) {
+        try self.markErroneous(dispatcher_var);
+    }
     return true;
 }
 
@@ -32722,6 +32782,11 @@ fn reportUnmaterializableNumeralLiteral(
 ) Allocator.Error!bool {
     const num_literal = constraint.origin.numeralInfo() orelse return false;
     if (num_literal.can_materialize_numeral) return false;
+    const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
+    if (self.staticDispatchConstraintIsInactive(constraint)) {
+        try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
+        return true;
+    }
 
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
@@ -32731,9 +32796,11 @@ fn reportUnmaterializableNumeralLiteral(
         .region = num_literal.region,
     } });
 
-    try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-    try self.markErroneous(dispatcher_var);
+    try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
     try self.markStaticDispatchRejected(constraint);
+    if (failure_expr == null) {
+        try self.markErroneous(dispatcher_var);
+    }
     return true;
 }
 
@@ -32771,14 +32838,7 @@ fn validateResolvedOpenNumeralLiterals(
         const entry = self.open_numeral_literals.items[i];
         const resolved = self.types.resolveVar(entry.var_);
         if (resolved.desc.content == .err) continue;
-        if (try self.reportUnmaterializableNumeralLiteral(resolved.var_, entry.constraint, env)) {
-            if (entry.source_node) |node_idx| {
-                if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
-                    try self.erroneous_value_exprs.put(self.gpa, @enumFromInt(@intFromEnum(node_idx)), {});
-                }
-            }
-            continue;
-        }
+        if (try self.reportUnmaterializableNumeralLiteral(resolved.var_, entry.constraint, env)) continue;
 
         const nominal_type = switch (resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
@@ -32798,7 +32858,7 @@ fn validateResolvedOpenNumeralLiterals(
             .flex, .rigid, .alias, .field_presence => continue,
         };
         const num_kind = self.builtinNumKindFromNominalType(nominal_type) orelse continue;
-        _ = try self.reportInvalidBuiltinFromNumeralInfo(resolved.var_, num_kind, entry.constraint.origin.numeralInfo().?, env);
+        _ = try self.rejectInvalidBuiltinNumeralOccurrence(resolved.var_, entry.constraint, num_kind);
     }
 }
 

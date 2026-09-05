@@ -717,7 +717,7 @@ pub fn convertPattern(
 
     return switch (pattern) {
         // Simple binding patterns match anything
-        .assign, .underscore => .anything,
+        .assign, .var_assign, .underscore => .anything,
 
         // As patterns: convert the inner pattern
         .as => |p| convertPattern(allocator, store, numeral_keys, p.pattern),
