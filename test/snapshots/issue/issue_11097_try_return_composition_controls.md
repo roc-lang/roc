@@ -751,14 +751,14 @@ NO CHANGE
 		(patt (type "(c -> Try(ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(patt (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err), ..]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(patt (type "(c -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(patt (type "(c -> Try(ok, err)), (d -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
+		(patt (type "(c -> Try(ok, [PersistFailed(err), ..d])), (f -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..d]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), f.from_quote : Str -> Try(f, [BadQuotedBytes(Str)])]"))
 		(patt (type "(c -> Try(ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(patt (type "(Str -> Try({}, e)) -> Try({}, [PersistFailed(e), ..e])")))
 	(expressions
 		(expr (type "(c -> Try(ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(expr (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err), ..]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(expr (type "(c -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(expr (type "(c -> Try(ok, err)), (d -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
+		(expr (type "(c -> Try(ok, [PersistFailed(err), ..d])), (f -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..d]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), f.from_quote : Str -> Try(f, [BadQuotedBytes(Str)])]"))
 		(expr (type "(c -> Try(ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(expr (type "(Str -> Try({}, e)) -> Try({}, [PersistFailed(e), ..e])"))))
 ~~~

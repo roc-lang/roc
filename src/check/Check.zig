@@ -28846,6 +28846,69 @@ fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
     }
 }
 
+/// Whether `needle` is already a structural part of `root`. Static-dispatch
+/// constraints on flex/rigid variables are deliberately not structure: the
+/// occurs check permits them to be self-referential, and ordinary unification
+/// does not turn them into children of the variable's type.
+fn typeStructurallyContainsVar(self: *Self, root: Var, needle: Var) std.mem.Allocator.Error!bool {
+    const needle_root = self.types.resolveVar(needle).var_;
+    self.var_set.clearRetainingCapacity();
+    defer self.var_set.clearRetainingCapacity();
+
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    try stack.append(self.gpa, root);
+
+    while (stack.items.len > stack_base) {
+        const current = stack.pop().?;
+        const resolved = self.types.resolveVar(current);
+        if (resolved.var_ == needle_root) return true;
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .record_unbound => |fields_range| {
+                    const fields = self.types.getRecordFieldsSlice(fields_range);
+                    for (fields.items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    }
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+    return false;
+}
+
 /// The first `?` that produces the value of `expr_idx`, following tail
 /// positions through blocks and through `if` and `match` branches. For a
 /// function body, such a `?` unwraps the `Try` the body would otherwise return.
@@ -29013,10 +29076,10 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
             if (had_problem) try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
         }
 
-        // A bare `?` contributes its whole error row to the residual extension,
-        // not to the complete row. Relating it to the complete row would form
-        // `e = [Wrapped(e), ..]` when the same monomorphic callee is also used
-        // by a wrapping `?`.
+        // Preserve the ordinary full-row equality for a bare `?` unless its
+        // error is already embedded in the composed row. Only that latter
+        // relation would form `e = [Wrapped(e), ..]`; its exact non-recursive
+        // representation relates `e` to the residual extension instead.
         for (constraints) |constraint| {
             if (constraint.kind != .try_suffix) continue;
             const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
@@ -29025,8 +29088,15 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
                 .none, .tagged => continue,
                 .tail => |tail_var| tail_var,
             };
+            const expected_root = self.types.resolveVar(expected.err).var_;
+            const tail_root = self.types.resolveVar(tail).var_;
+            const relation_target = if (expected_root != tail_root and
+                try self.typeStructurallyContainsVar(expected.err, tail))
+                self.tryReturnErrorTail(expected.err)
+            else
+                expected.err;
             const result = try self.unifyInContext(
-                self.tryReturnErrorTail(expected.err),
+                relation_target,
                 tail,
                 env,
                 constraint.kind.problemContext(body_tail_try),
