@@ -3159,6 +3159,8 @@ test "procedure boundary keeps a deeper single-use helper inline" {
 }
 
 test "escaping single-call block helper is not inlined" {
+    // The annotation makes this callable-containing data value an explicit
+    // compile-time root for the inline-plan pipeline exercised by this test.
     try expectInlinePlanDecision(
         \\helper : List(U64), U64 -> List(U64)
         \\helper = |xs, i| {
@@ -3166,6 +3168,7 @@ test "escaping single-call block helper is not inlined" {
         \\    a.set(1, i) ?? a
         \\}
         \\
+        \\main : (List(U64), (List(U64), U64 -> List(U64)))
         \\main = (helper([0.U64, 0], 1), helper)
     , "helper", false);
 }

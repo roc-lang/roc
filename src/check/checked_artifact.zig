@@ -1826,6 +1826,36 @@ test "compile-time roots reject undetermined record field kinds" {
     try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root));
 }
 
+test "compile-time data roots with reachable callables require producer type evidence" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const leaf: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+
+    const callable: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .function = .{
+        .kind = .pure,
+        .ret = leaf,
+    } }));
+
+    const root: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    const fields = try allocator.alloc(CheckedRecordField, 1);
+    fields[0] = .{
+        .name = testIndexId(canonical.RecordFieldLabelId, 7),
+        .ty = callable,
+        .kind = .required,
+    };
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{
+        .fields = fields,
+        .ext = leaf,
+    } }));
+
+    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root));
+    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root));
+}
+
 fn checkedTagsAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
@@ -24837,7 +24867,7 @@ pub const CompileTimeRootTable = struct {
             );
         }
 
-        try publishCompileTimeRootRequestEligibility(allocator, checked_types, checked_bodies, roots.items);
+        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, checked_bodies, roots.items);
 
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
@@ -24987,17 +25017,52 @@ pub const CompileTimeRootTable = struct {
 
 fn publishCompileTimeRootRequestEligibility(
     allocator: Allocator,
+    module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
     checked_bodies: *const CheckedBodyStore,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
     for (roots) |*root| {
-        const concrete = try checkedTypeIsConcreteCompileTimeRoot(allocator, &checked_types.store, root.checked_type);
+        const producer_callable_type_is_fixed = switch (root.kind) {
+            .callable_binding => true,
+            .constant => switch (root.source) {
+                .def => |def_idx| module.def(def_idx).data.annotation != null,
+                .expr, .statement, .hoisted, .required_binding => false,
+            },
+            .hoisted_constant,
+            .hoisted_validation,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            .repl_expr,
+            => false,
+        };
+        const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
+            allocator,
+            &checked_types.store,
+            producer_callable_type_is_fixed,
+            root.checked_type,
+        );
         // The checker already owns this diagnostic; evaluating the root would
         // only add a secondary compile-time crash for its replacement node.
-        const eligible = concrete and !checked_bodies.exprContainsDiagnosticError(root.expr);
+        const eligible = context_free and !checked_bodies.exprContainsDiagnosticError(root.expr);
         root.request_eligibility = if (eligible) .eligible else .ineligible;
     }
+}
+
+fn checkedTypeIsContextFreeCompileTimeRoot(
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    producer_callable_type_is_fixed: bool,
+    root: CheckedTypeId,
+) Allocator.Error!bool {
+    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root)) return false;
+
+    // A callable root or an annotated data producer fixes its callable graph at
+    // the producer. An unannotated data root can instead receive callable type
+    // relations from a use site, so it must not seal a context-free graph first.
+    return producer_callable_type_is_fixed or
+        try checkedTypeHasNoReachableCallableSlots(allocator, checked_types, root);
 }
 
 fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) void {
