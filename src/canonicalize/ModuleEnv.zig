@@ -925,8 +925,10 @@ external_decls: CIR.ExternalDecl.SafeList,
 imports: CIR.Import.Store,
 /// Source-relative file imports read while canonicalizing this module.
 file_dependencies: FileDependency.SafeList,
-/// The module's name as a string
-/// This is needed for import resolution to match import names to modules
+/// The module's source-visible final path segment, such as `Foo` for the
+/// logical module path `Folder/Foo`.
+/// Used for type-module main types and associated-name construction; logical
+/// import paths remain in coordinator state.
 module_name: []const u8,
 /// The module's bare name as an interned identifier (e.g., "Color").
 /// Used for display, type module validation, and method name construction.
@@ -4093,7 +4095,7 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) std.mem.Allocator.Error!*Self {
         // Allocate a fresh ModuleEnv on the heap
         const env = try gpa.create(Self);
@@ -4122,7 +4124,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4153,6 +4155,8 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
 
+        env.debugAssertModuleBasename();
+
         return env;
     }
 
@@ -4164,13 +4168,13 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) error{CorruptSerializedModuleEnv}!Self {
         if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
 
-        return Self{
+        const env = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
             .types = self.types.deserializeInto(base_addr, gpa),
@@ -4193,7 +4197,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = CIR.Import.Store.init(),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4223,6 +4227,9 @@ pub const Serialized = extern struct {
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
+
+        env.debugAssertModuleBasename();
+        return env;
     }
 
     /// Deserialize with mutable type store and node store for cache modules.
@@ -4234,7 +4241,7 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) std.mem.Allocator.Error!*Self {
         // Allocate a fresh ModuleEnv on the heap
         const env = try gpa.create(Self);
@@ -4264,7 +4271,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4297,9 +4304,25 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
 
+        env.debugAssertModuleBasename();
+
         return env;
     }
 };
+
+/// Assert that the runtime-only module basename agrees with its serialized
+/// identifier. The basename is supplied by the cache consumer because its
+/// slice is not relocatable; it must never be replaced with a logical path.
+fn debugAssertModuleBasename(self: *const Self) void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(!self.display_module_name_idx.isNone());
+        std.debug.assert(std.mem.eql(
+            u8,
+            self.module_name,
+            self.getIdent(self.display_module_name_idx),
+        ));
+    }
+}
 
 /// Convert a type into a node index
 pub fn nodeIdxFrom(idx: anytype) Node.Idx {
