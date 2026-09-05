@@ -19,22 +19,73 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const ReverseCompletionExecutor = struct {
     inner: base.post_check_task_executor.Executor,
+    completion_buffer: []base.post_check_task_executor.Completion,
+    inner_session: ?base.post_check_task_executor.Session = null,
+    inner_outstanding: usize = 0,
+    buffered_len: usize = 0,
 
-    fn run(
+    fn begin(context: *anyopaque) void {
+        const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
+        std.debug.assert(self.inner_session == null);
+        std.debug.assert(self.completion_buffer.len >= self.inner.worker_count);
+        self.inner_session = self.inner.begin();
+        self.inner_outstanding = 0;
+        self.buffered_len = 0;
+    }
+
+    fn submit(
         context: *anyopaque,
-        tasks: []const base.post_check_task_executor.Task,
-        completions: []base.post_check_task_executor.Completion,
+        task: base.post_check_task_executor.Task,
     ) std.mem.Allocator.Error!void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
-        try self.inner.run(tasks, completions);
-        std.mem.reverse(base.post_check_task_executor.Completion, completions);
+        if (self.inner_session) |*session| {
+            try session.submit(task);
+            self.inner_outstanding += 1;
+        } else {
+            @panic("reverse post-check executor submitted outside a session");
+        }
+    }
+
+    fn receive(context: *anyopaque) base.post_check_task_executor.Completion {
+        const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
+        if (self.buffered_len == 0) {
+            if (self.inner_session) |*session| {
+                std.debug.assert(self.inner_outstanding > 0);
+                std.debug.assert(self.inner_outstanding <= self.completion_buffer.len);
+                while (self.inner_outstanding > 0) {
+                    self.completion_buffer[self.buffered_len] = session.receive();
+                    self.buffered_len += 1;
+                    self.inner_outstanding -= 1;
+                }
+            } else {
+                @panic("reverse post-check executor received outside a session");
+            }
+        }
+
+        self.buffered_len -= 1;
+        return self.completion_buffer[self.buffered_len];
+    }
+
+    fn end(context: *anyopaque) void {
+        const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
+        std.debug.assert(self.buffered_len == 0);
+        std.debug.assert(self.inner_outstanding == 0);
+        if (self.inner_session) |*session| {
+            session.end();
+        } else {
+            @panic("reverse post-check executor ended outside a session");
+        }
+        self.inner_session = null;
     }
 
     fn executor(self: *ReverseCompletionExecutor) base.post_check_task_executor.Executor {
         return .{
             .context = self,
             .worker_count = self.inner.worker_count,
-            .runFn = ReverseCompletionExecutor.run,
+            .beginFn = ReverseCompletionExecutor.begin,
+            .submitFn = ReverseCompletionExecutor.submit,
+            .receiveFn = ReverseCompletionExecutor.receive,
+            .endFn = ReverseCompletionExecutor.end,
         };
     }
 };
@@ -135,7 +186,7 @@ pub const LirLoweringOptions = struct {
     timing_out: ?*lir.CheckedPipeline.TimingSnapshot = null,
     /// Receives deterministic solved-LIR body-shard task counts.
     solved_lir_parallel_metrics_out: ?*lir.CheckedPipeline.SolvedLirParallelMetrics = null,
-    /// Deliver post-check completions in reverse order after callbacks finish.
+    /// Drain each active post-check group and report it in reverse arrival order.
     reverse_post_check_completions: bool = false,
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
@@ -276,9 +327,8 @@ pub const prepared_finite_capture_free_direct_call_fixture =
 
 /// Assert that prepared finite capture-free direct calls lower identically
 /// serially, in two and four worker lanes, and when worker completions are
-/// committed in reverse order. The direct callees discovered by the first
-/// eligible epoch form a later epoch; every submitted shard commits without a
-/// retry.
+/// reported in reversed groups. The direct callees discovered by the first
+/// eligible epoch form later work; every submitted shard commits without a retry.
 pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
@@ -658,8 +708,16 @@ fn lowerAppPathToLir(
         coord.postCheckExecutor()
     else
         null;
+    const reverse_completion_buffer: []base.post_check_task_executor.Completion = if (coordinator_executor != null and opts.reverse_post_check_completions)
+        try gpa.alloc(base.post_check_task_executor.Completion, coordinator_executor.?.worker_count)
+    else
+        &.{};
+    defer if (reverse_completion_buffer.len != 0) gpa.free(reverse_completion_buffer);
     var reverse_executor = if (coordinator_executor) |executor|
-        ReverseCompletionExecutor{ .inner = executor }
+        ReverseCompletionExecutor{
+            .inner = executor,
+            .completion_buffer = reverse_completion_buffer,
+        }
     else
         undefined;
     const post_check_executor = if (coordinator_executor) |executor|
