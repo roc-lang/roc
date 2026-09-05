@@ -10807,8 +10807,8 @@ whole.
 A container qualifies for dismantling when all of the following hold:
 
 - its committed layout is a struct containing at least one refcounted field
-- its binding is owned and bound exactly once; a join parameter qualifies only
-  when the CFG contains exactly one explicit `initialize_join_param` write
+- its binding is owned and bound exactly once, or is a join parameter whose
+  definitions are explicit `initialize_join_param` writes
 - every occurrence of it is a field read (directly or through a borrowed
   pure same-value alias whose own occurrences are all field reads) or an
   operand-position whole use: moved into an aggregate or a call, returned,
@@ -10822,14 +10822,21 @@ arguments select. Dismantle analysis outputs the exact per-procedure `u16`
 parameter-benefit mask consumed by variant admission; the caller does not
 rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched.
+Admission of those mandatory owned variants uses the same definition-sensitive
+ownership-place query as complete payload transfers: scalar shell reads and
+uses after an explicit rebind do not retain the argument's old stored units.
+A terminal crash or failed expectation observes only its explicit message
+operand; it does not implicitly use every live ownership place.
 
-A join cell with exactly one reachable `initialize_join_param` write has one
-definition rather than a merge. Dismantle analysis uses that explicit count to
-treat the write as the container definition and starts field-take flow at its
-successor. A prospective take that reaches `loop_continue` or `loop_break` is
-rejected because the implicit boundary keeps the join definition live. A join
-cell with zero or multiple incoming definitions remains ineligible; the pass
-never guesses which incoming ownership place it denotes.
+Each reachable `initialize_join_param` write defines a fresh container value.
+Dismantle analysis starts field-take flow at every such write's successor,
+with all fields available. A later write first checks its value operand against
+the previous definition's take state, then starts the new definition with all
+fields available. This includes loop back edges: the join cell has no global
+incoming ownership origin, and each explicit write supplies its own intact unit.
+A prospective take that reaches `loop_continue` or `loop_break` is rejected
+because the implicit boundary keeps the join definition live. Join cells with
+no explicit initializer or with any other kind of definition remain ineligible.
 
 Ownership-complete aggregate reads extend that schedule across wrappers without
 scalarizing them. An aggregate read is ownership-complete when, for the
@@ -10866,6 +10873,10 @@ allocation without holding a unit of their own. Owned bindings hold their own
 retained unit and are their own leaders, so their later uses never keep the
 place live; binding an owned pure alias of a member does count as a use,
 because that bind retains through the place. This use
+query follows the explicit borrow-source chain through every alias and payload
+read to the nearest binding made owned by the current ARC variant. Descendants
+of that binding belong to its new place, not its former lender's place.
+The use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
 the following jump belong to the newly written join value and cannot keep the
@@ -10949,7 +10960,15 @@ Without that variant the caller must manufacture a second unit, which changes
 the runtime ownership schedule rather than merely foregoing optional inlining
 or uniqueness seeding.
 
-Which consuming reads become takes is decided per field by a forward
+An owned read that has a later observation of the same stored field before
+reinitialization or an explicit outcome receipt keeps its ordinary retain.
+This does not prevent a later read from taking the field: an early read passed
+to an owned lookup can retain and release its own unit before a final mutation
+takes the container's unit. Candidate selection proves the absence of later
+observations over the explicit CFG, including borrowed descendants and whole
+container uses; it never guesses from operation names.
+
+Which remaining consuming reads become takes is decided per field by a forward
 dataflow from the container's definition over the control-flow graph,
 tracking for each refcounted field whether it may and whether it must have
 been taken on the paths reaching each point. A consuming read is a take only
@@ -10965,8 +10984,9 @@ lent from it). Every operand mention of any of those bindings is therefore a
 borrow observation of the field at that statement, so a take the mention
 could follow is rejected exactly like a borrowing read placed there. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
-that edge is walked; this is the only transition that can clear a
-`may-taken` bit. Merges meet pointwise, and a loop poisons its own takes: a
+that edge is walked. An explicit join-cell reinitialization starts a new
+definition after observing its value operand and clears that definition's
+take state. Merges meet pointwise, and a loop poisons its own takes: a
 take inside one reaches itself as possibly-taken unless an exact receipt
 dominates every repeated entry. Exclusive branches may leave different
 residual masks; the ARC join equations below normalize their exact

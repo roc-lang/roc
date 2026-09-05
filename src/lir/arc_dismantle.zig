@@ -333,6 +333,7 @@ const MentionEdge = struct {
 const Candidate = struct {
     def_stmt: LIR.CFStmtId = @enumFromInt(no_index),
     def_count: u32 = 0,
+    join_starts: std.ArrayList(LIR.CFStmtId) = .empty,
     disqualified: bool = false,
     reads: std.ArrayList(Read) = .empty,
     /// Statements consuming or observing the container as one value—moved
@@ -363,9 +364,9 @@ const Analysis = struct {
     /// Canonical projected struct binding for repeated complete reads of the
     /// same root and committed layout.
     projected_container: []const u32,
-    /// Join cells with exactly one explicit initialization edge can be treated
-    /// as definition-sensitive containers rather than merged loop state.
-    single_init_join: []const bool,
+    /// Join cells with explicit initialization edges. Each edge supplies a
+    /// fresh intact container independently of the other incoming values.
+    explicit_init_join: []const bool,
     /// Solved-borrowed bindings whose value reaches an explicitly owned
     /// direct-call or low-level operand. Field-take variants override exactly
     /// these bindings to owned instead of manufacturing a retain at that
@@ -384,6 +385,7 @@ const Analysis = struct {
         var it = self.candidates.valueIterator();
         while (it.next()) |candidate| {
             candidate.reads.deinit(self.gpa);
+            candidate.join_starts.deinit(self.gpa);
             candidate.whole_uses.deinit(self.gpa);
         }
         self.candidates.deinit(self.gpa);
@@ -427,7 +429,7 @@ const Analysis = struct {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index) return false;
-        if (self.solution.isJoinParam(local) and !self.single_init_join[local_index]) return false;
+        if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
         const info = self.layouts.getStructInfo(local_layout);
@@ -509,8 +511,8 @@ const Analysis = struct {
         try candidate.whole_uses.append(self.gpa, stmt);
     }
 
-    /// A definition of `local` by `stmt`. Candidates must be bound exactly
-    /// once by a value-producing assignment.
+    /// A definition of `local` by `stmt`: one value-producing assignment,
+    /// or an explicit initialization edge of a join cell.
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         const index = @intFromEnum(local);
         if (self.projected_container[index] != no_index and self.projected_container[index] != index) return;
@@ -522,8 +524,16 @@ const Analysis = struct {
             return;
         }
         const candidate = (try self.entryOf(local)) orelse return;
+        if (self.solution.isJoinParam(local)) {
+            const definition = self.store.getCFStmt(stmt);
+            if (definition != .set_local or definition.set_local.mode != .initialize_join_param) {
+                candidate.disqualified = true;
+                return;
+            }
+            try candidate.join_starts.append(self.gpa, definition.set_local.next);
+        }
         candidate.def_count += 1;
-        if (candidate.def_count > 1) {
+        if (candidate.def_count > 1 and !self.solution.isJoinParam(local)) {
             candidate.disqualified = true;
         } else {
             candidate.def_stmt = stmt;
@@ -574,6 +584,57 @@ const Analysis = struct {
         }
     }
 };
+
+/// Proves whether a stored field is observed again in this definition. Every
+/// reachable statement is visited once; explicit reinitialization and outcome
+/// restitution end the old field lifetime on their respective edges.
+fn fieldObservedAfter(
+    gpa: Allocator,
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    local: LIR.LocalId,
+    bit: u64,
+    start: LIR.CFStmtId,
+    reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
+    joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+    receipts: []const FieldRestitution,
+) Error!bool {
+    var seen = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
+    defer seen.deinit(gpa);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(gpa);
+    try work.append(gpa, start);
+    while (work.pop()) |cursor| {
+        if ((try seen.getOrPut(gpa, cursor)).found_existing) continue;
+        if (reads.get(cursor)) |read| {
+            if (read.bit & bit != 0) return true;
+        }
+        switch (store.getCFStmt(cursor)) {
+            .set_local => |stmt| {
+                if (stmt.target != local) try work.append(gpa, stmt.next);
+            },
+            .join => |stmt| try work.append(gpa, stmt.remainder),
+            .jump => |stmt| {
+                if (joins.get(@intFromEnum(stmt.target))) |body| try work.append(gpa, body);
+            },
+            .switch_stmt => |stmt| {
+                const branches = store.getCFSwitchBranches(stmt.branches);
+                for (0..GuardedList.borrowLen(branches)) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (restoredFieldMaskForBranch(solution, receipts, cursor, branch.value) & bit == 0) {
+                        try work.append(gpa, branch.body);
+                    }
+                }
+                if (restoredFieldMaskForDefault(solution, store, receipts, cursor) & bit == 0) {
+                    try work.append(gpa, stmt.default_branch);
+                }
+            },
+            .loop_continue, .loop_break => if (solution.isJoinParam(local)) return true,
+            else => try body_clone.appendSuccessors(@constCast(store), &work, cursor),
+        }
+    }
+    return false;
+}
 
 /// Per-field take dataflow state at one point in a candidate's region. The
 /// may/must pair rejects double takes and post-take observations. Divergent
@@ -809,10 +870,10 @@ pub fn compute(
             join_init_counts[@intFromEnum(stmt.set_local.target)] += 1;
         }
     }
-    const single_init_join = try gpa.alloc(bool, store.localCount());
-    defer gpa.free(single_init_join);
+    const explicit_init_join = try gpa.alloc(bool, store.localCount());
+    defer gpa.free(explicit_init_join);
     for (join_init_counts, 0..) |count, index| {
-        single_init_join[index] = count == 1;
+        explicit_init_join[index] = count != 0;
     }
 
     const projected_root = try gpa.alloc(u32, store.localCount());
@@ -914,7 +975,7 @@ pub fn compute(
         .is_param = is_param,
         .projected_root = projected_root,
         .projected_container = projected_container,
-        .single_init_join = single_init_join,
+        .explicit_init_join = explicit_init_join,
         .owned_demand = try gpa.alloc(bool, store.localCount()),
         .mention_heads = try gpa.alloc(u32, store.localCount()),
     };
@@ -1138,7 +1199,7 @@ pub fn compute(
             },
             .set_local => |stmt| {
                 try analysis.useWholeAt(stmt.value, current);
-                if (stmt.mode == .initialize_join_param and analysis.single_init_join[@intFromEnum(stmt.target)]) {
+                if (stmt.mode == .initialize_join_param and analysis.explicit_init_join[@intFromEnum(stmt.target)]) {
                     try analysis.noteDef(stmt.target, current);
                 } else {
                     try analysis.useWhole(current, stmt.target);
@@ -1303,11 +1364,13 @@ pub fn compute(
         // An ownership-complete projected struct can receive its root's exact
         // unit in an owned emission. Other reference-defined containers remain
         // excluded: they have no independent certifier unit to dismantle.
-        const spine_start: LIR.CFStmtId = if (candidate.def_count == 1)
+        const spine_start: LIR.CFStmtId = if (candidate.join_starts.items.len != 0)
+            candidate.join_starts.items[0]
+        else if (candidate.def_count == 1)
             switch (store.getCFStmt(candidate.def_stmt)) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                 .assign_ref => |stmt| if (analysis.projected_root[@intFromEnum(local)] != no_index) stmt.next else continue :candidates,
-                .set_local => |stmt| if (stmt.mode == .initialize_join_param and analysis.single_init_join[@intFromEnum(local)]) stmt.next else continue :candidates,
+                .set_local => continue :candidates,
                 .init_uninitialized,
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
@@ -1374,8 +1437,8 @@ pub fn compute(
         // only if the field cannot have been taken yet at that point, a
         // borrow of a taken field must run before every take that could
         // reach it. Divergent residuals remain exact per path in ARC. Loops
-        // poison themselves: a take inside one reaches itself as
-        // possibly-taken.
+        // poison themselves unless an explicit reinitialization or outcome
+        // receipt supplies the field again before the next take.
         read_kinds.clearRetainingCapacity();
         field_restitutions.clearRetainingCapacity();
         for (candidate.reads.items) |read| {
@@ -1486,9 +1549,27 @@ pub fn compute(
             const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
             if (stmt == .join) try join_bodies.put(gpa, @intFromEnum(stmt.join.id), stmt.join.body);
         }
+        for (candidate.reads.items) |read| {
+            const kind = read_kinds.getPtr(read.stmt) orelse continue;
+            if (!kind.consuming) continue;
+            const definition = store.getCFStmt(read.stmt).assign_ref;
+            if (try fieldObservedAfter(gpa, store, solution, local, kind.bit, definition.next, &read_kinds, &join_bodies, field_restitutions.items)) {
+                kind.consuming = false;
+            }
+        }
+        candidate_mask = 0;
+        for (candidate.reads.items) |read| {
+            const kind = read_kinds.get(read.stmt) orelse continue;
+            if (kind.consuming) candidate_mask |= kind.bit;
+        }
+        if (candidate_mask == 0) continue;
         body_states.clearRetainingCapacity();
         flow_frames.clearRetainingCapacity();
         try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
+        for (candidate.join_starts.items, 0..) |start, index| {
+            if (index == 0) continue;
+            try flow_frames.append(gpa, .{ .cursor = start, .state = .{ .may = 0, .must = 0 } });
+        }
         var steps: usize = 0;
         // Each statement is re-walked at most once per lattice step of its
         // reaching state; 2 bits per tracked field bound the lattice height.
@@ -1517,7 +1598,14 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    .set_local => |stmt| {
+                        // The value operand above still observes the old
+                        // definition. Only the explicit write starts a fresh
+                        // intact field domain for the next loop iteration.
+                        if (stmt.target == local) state = .{ .may = 0, .must = 0 };
+                        cursor = stmt.next;
+                    },
                     .join => |stmt| {
                         try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
@@ -1633,6 +1721,7 @@ pub fn compute(
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (taken_mask & bit == 0) continue;
+            if (!(read_kinds.get(read.stmt) orelse continue).consuming) continue;
             if (solution.isBorrowed(read.target) and !analysis.owned_demand[@intFromEnum(read.target)]) continue;
             const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
@@ -1650,6 +1739,7 @@ pub fn compute(
         }
         for (field_restitutions.items) |receipt| {
             if ((receipt.field_mask & taken_mask) == 0) continue;
+            if (!(read_kinds.get(receipt.projection) orelse continue).consuming) continue;
             const slot = try result.field_restitution_args.getOrPut(gpa, receipt.call_arg);
             if (slot.found_existing) {
                 if (slot.value_ptr.place.root != local or

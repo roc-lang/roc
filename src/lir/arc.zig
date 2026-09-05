@@ -2666,8 +2666,9 @@ const Inserter = struct {
                 },
                 .set_local => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const old_release = self.releaseDecisionFrom(&segment.owned, assign.target);
                     const transfer = try self.transferForSetLocal(&segment.owned, assign.target, assign.value, assign.mode, assign.next, segment.ctx.loop_keep);
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.pre_release = if (transfer.release_old_target) old_release else null;
                     step.retain_set_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
@@ -5149,11 +5150,24 @@ const Inserter = struct {
     /// An owned binding holds its own retained unit and is its own leader,
     /// so its later uses never depend on the place.
     fn localInOwnershipPlace(self: *const Inserter, local: LIR.LocalId, place: LIR.LocalId) bool {
-        if (self.owned_binding_override.contains(local)) return local == place;
-        if (self.dismantles.projectionAliasRoot(local)) |root| {
-            if (self.owned_binding_override.contains(root)) return root == place;
+        return self.ownershipPlaceLeader(local) == place;
+    }
+
+    fn ownershipPlaceLeader(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
+        var cursor = local;
+        var steps: usize = 0;
+        while (true) {
+            if (self.owned_binding_override.contains(cursor)) return cursor;
+            if (self.dismantles.projectionAliasRoot(cursor)) |root| {
+                cursor = root;
+            } else if (self.solution.borrowSourceOf(cursor)) |source| {
+                cursor = source;
+            } else {
+                return self.solution.leaderOf(cursor);
+            }
+            steps += 1;
+            if (steps > self.store.localCount()) arcInvariant("ARC ownership-place borrow chain contained a cycle");
         }
-        return self.solution.leaderOf(local) == place;
     }
 
     fn spanUsesOwnershipPlace(self: *const Inserter, span: LIR.LocalSpan, place: LIR.LocalId) bool {
@@ -5176,7 +5190,7 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         root: LIR.LocalId,
     ) ResourceError!bool {
-        const place = self.solution.leaderOf(root);
+        const place = self.ownershipPlaceLeader(root);
         const seen = &self.place_query_seen;
         const visited = &self.place_query_visited;
         const stack = &self.place_query_stack;
@@ -5366,7 +5380,12 @@ const Inserter = struct {
                     try stack.append(self.emission_allocator, joins[join_index].body);
                 },
                 .ret => |stmt| if (self.localInOwnershipPlace(stmt.value, place)) return true,
-                .crash, .expect_err => return true,
+                .crash => |stmt| {
+                    if (stmt.msg.localId()) |message| {
+                        if (self.localInOwnershipPlace(message, place)) return true;
+                    }
+                },
+                .expect_err => |stmt| if (self.localInOwnershipPlace(stmt.message, place)) return true,
                 // An implicit loop boundary hands the kept value to either
                 // the next iteration or the code after the loop. A root
                 // rebind encountered earlier stopped this path before it
@@ -5550,8 +5569,11 @@ const Inserter = struct {
                 // schedules, so their variants are mandatory. General return
                 // and born-unique specialization remains opt-in.
                 if (!self.variants.enabled and !enables_field_take and !requires_tail_transfer) continue;
-                const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const owner = self.unitOf(local);
+                const used_after_call = local != target and (if (enables_field_take)
+                    try self.ownershipPlaceUsedInPath(next, owner)
+                else
+                    try self.groupUsedInPath(next, local, loop_keep));
                 const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
                     self.groupSharesOtherOperand(locals, position, local);
                 const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
@@ -10080,6 +10102,61 @@ test "RC single-incoming join parameter dismantles its fields" {
     try testing.expectEqual(@as(usize, 0), f.countRc(state, .decref));
 }
 
+test "RC loop join reinitialization supplies fresh field units" {
+    try testLoopJoinFieldUnits(true);
+}
+
+test "RC loop join without reinitialization preserves repeated field reads" {
+    try testLoopJoinFieldUnits(false);
+}
+
+fn testLoopJoinFieldUnits(reinitialize: bool) !void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_list);
+    const cond = try f.local(.bool);
+    const state = try f.local(f.pair_list);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const changed = try f.local(f.list_i64);
+    const next_pair = try f.local(f.pair_list);
+    const early_field = try f.local(f.list_i64);
+    const early_result = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(state);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const next = if (reinitialize)
+        try f.setLocal(state, next_pair, .initialize_join_param, jump)
+    else
+        jump;
+    const make_pair = try f.assignStruct(next_pair, &.{ first, changed }, next);
+    const reverse = try f.assignLowLevel(changed, &.{second}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), make_pair);
+    const read_second = try f.assignRefField(second, state, 1, reverse);
+    const read_first = try f.assignRefField(first, state, 0, read_second);
+    const early_use = try f.assignLowLevel(early_result, &.{early_field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_first);
+    const early_read = try f.assignRefField(early_field, state, 0, early_use);
+    const branch = try f.switchStmt(cond, early_read, ret, null);
+    const initialize = try f.setLocal(state, pair, .initialize_join_param, jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = branch,
+        .remainder = initialize,
+    } });
+    _ = try f.addProc(&.{ pair, cond }, join, f.pair_list);
+
+    try f.run();
+    try testing.expect(f.countRc(early_field, .incref) != 0);
+    if (reinitialize) {
+        try testing.expectEqual(@as(usize, 0), f.countRc(first, .incref));
+        try testing.expectEqual(@as(usize, 0), f.countRc(second, .incref));
+    } else {
+        try testing.expect(f.countRc(first, .incref) != 0);
+        try testing.expect(f.countRc(second, .incref) != 0);
+    }
+}
+
 test "RC join body keeps local born in remainder" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -12871,6 +12948,9 @@ test "RC field takes through repeated dominating complete projections" {
     const changed_second = try f.local(f.list_i64);
     const extracted_first = try f.local(f.list_i64);
     const result = try f.local(f.pair_list);
+    const cond = try f.local(.bool);
+    const view_alias = try f.local(f.pair_list);
+    const view_alias_again = try f.local(f.pair_list);
 
     const ret = try f.ret(result);
     const make_result = try f.assignStruct(result, &.{ extracted_first, changed_second }, ret);
@@ -12882,19 +12962,23 @@ test "RC field takes through repeated dominating complete projections" {
         LIR.LowLevel.RcEffect.runtimeUniqueness(1),
         project_again,
     );
-    const read_second = try f.assignRefField(extracted_second, first_view, 1, reverse);
-    const project_first = try f.assignRefField(first_view, wrapper, 0, read_second);
+    const read_second = try f.assignRefField(extracted_second, view_alias_again, 1, reverse);
+    const branch = try f.switchStmt(cond, read_second, try f.crash("stop"), null);
+    const alias_again = try f.assignRefLocal(view_alias_again, view_alias, branch);
+    const alias = try f.assignRefLocal(view_alias, first_view, alias_again);
+    const project_first = try f.assignRefField(first_view, wrapper, 0, alias);
     const make_wrapper = try f.assignStruct(wrapper, &.{ pair, scalar }, project_first);
     const assign_scalar = try f.assignI64(scalar, 0, make_wrapper);
     const make_pair = try f.assignStruct(pair, &.{ first, second }, assign_scalar);
     const make_second = try f.assignList(second, &.{}, make_pair);
     const body = try f.assignList(first, &.{}, make_second);
-    _ = try f.addProc(&.{}, body, f.pair_list);
+    _ = try f.addProc(&.{cond}, body, f.pair_list);
 
     try f.run();
 
     // The later projection is materialized as an explicit alias of the first.
     // Both list fields move from that projected container without retains.
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_view, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_first, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_second, .incref));
     const second_projection_stmt = f.store.getCFStmt(project_again);
