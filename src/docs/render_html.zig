@@ -23,6 +23,7 @@ const langref_sidebar_id = "__lang_ref__";
 /// Site-absolute so they also resolve in local previews of the whole site.
 const tutorial_url = "https://github.com/roc-lang/roc/blob/main/docs/mini-tutorial-new-compiler.md";
 const faq_url = "/faq";
+const examples_url = "https://roc-lang.org/examples/";
 
 // Static assets embedded at compile time
 const embedded_css = @embedFile("static/styles.css");
@@ -912,7 +913,7 @@ fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("            </ul>\n");
     try w.writeAll("        </form>\n");
 
-    // Prose-guide links (Tutorial, FAQ, Language Reference)—the same links
+    // Prose-guide links (Language Reference, Examples, Tutorial, FAQ)—the same links
     // shown in the sidebar. Written into every docs page (gated only on
     // langref, not on page type) because this element is part of the
     // persistent chrome search.js carries across soft navigations, alongside
@@ -929,6 +930,9 @@ fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         try w.writeAll("            <li><a href=\"");
         try w.writeAll(base);
         try w.writeAll("langref/\">Language Reference</a></li>\n");
+        try w.writeAll("            <li><a href=\"");
+        try w.writeAll(examples_url);
+        try w.writeAll("\">Examples</a></li>\n");
         try w.writeAll("            <li><a href=\"");
         try w.writeAll(tutorial_url);
         try w.writeAll("\">Tutorial</a></li>\n");
@@ -1538,6 +1542,11 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     // also work in local previews of the site). Platforms are covered by the
     // langref's own "Platforms" article, so they need no separate link here.
     if (ctx.langref != null) {
+        try w.writeAll("                <li class=\"sidebar-entry\">\n");
+        try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" href=\"");
+        try w.writeAll(examples_url);
+        try w.writeAll("\"><span>Examples</span></a>\n");
+        try w.writeAll("                </li>\n");
         try w.writeAll("                <li class=\"sidebar-entry\">\n");
         try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" href=\"");
         try w.writeAll(tutorial_url);
