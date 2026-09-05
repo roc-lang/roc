@@ -98,6 +98,28 @@ test "source-forward annotated recursive use records the complete body scheme" {
     try std.testing.expect(found_complete_forward_use);
 }
 
+test "recursive reference provenance marks the annotated self use but not an external call" {
+    const source =
+        \\grow : U64 -> U64
+        \\grow = |n| if n == 0 { 0 } else { grow(n - 1) }
+        \\main = grow(2)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("main", "U64");
+
+    const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse unreachable;
+    const env = test_env.module_env;
+    var recursive_records: usize = 0;
+    for (env.scheme_uses.items.items) |record| {
+        if (record.slot_kind != @intFromEnum(Slot.recursive_reference)) continue;
+        recursive_records += 1;
+        const region = env.store.getNodeRegion(@enumFromInt(record.node_idx));
+        try std.testing.expectEqual(@as(u32, @intCast(self_use_offset)), region.start.offset);
+    }
+    try std.testing.expectEqual(@as(usize, 1), recursive_records);
+}
+
 test "discharging a dispatch constraint onto a constrained method target records dispatch_target evidence" {
     const source =
         \\Thing := [Val(Str)].{
