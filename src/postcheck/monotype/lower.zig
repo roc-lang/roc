@@ -11037,9 +11037,7 @@ const Builder = struct {
         const declared_try = (try self.hostedTryInfoOrNull(hosted_try, declared.ret)) orelse return null;
         const requested_try = (try self.hostedTryInfoOrNull(hosted_try, requested.ret)) orelse return null;
 
-        const declared_args = self.program.types.span(declared.args);
-        const requested_args = self.program.types.span(requested.args);
-        if (declared_args.len != requested_args.len) {
+        if (declared.args.len != requested.args.len) {
             Common.invariant("hosted function use changed arity from the declared ABI");
         }
 
@@ -11076,9 +11074,7 @@ const Builder = struct {
         defer transaction_result.deinit();
         const narrowed_err_ty = transaction_result.root;
         const narrowed_try_ty = try self.hostedTryTypeLike(hosted_try, requested.ret, requested_try.ok_ty, narrowed_err_ty);
-        const source_args = try GuardedList.dupe(self.allocator, Type.TypeId, requested_args);
-        defer self.allocator.free(source_args);
-        return try self.closedFunctionType(source_args, narrowed_try_ty);
+        return try self.program.types.internFuncFromSpan(&self.program.names, requested.args, narrowed_try_ty);
     }
 
     fn hostedTryAdapterBody(

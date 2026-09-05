@@ -276,6 +276,10 @@ pub const GraphDiagnostics = struct {
     /// 10978 hit exactly that).
     nominal_backing_lookups: u64 = 0,
     nominal_backing_instances_scanned: u64 = 0,
+    /// Nominal-backing deletions that leave tombstones in the lookup index.
+    /// This must remain zero: rekeying cannot make lookup cost depend on the
+    /// graph's history of root migrations.
+    nominal_backing_tombstone_deletions: u64 = 0,
     /// Union-find resolutions across all graph operations: the broadest
     /// deterministic proxy for total solver work.
     union_find_resolutions: u64 = 0,
@@ -367,6 +371,13 @@ const NominalBackingKeyContext = struct {
             std.mem.eql(NodeId, left.args, right.args);
     }
 };
+
+const NominalBackingIndex = collections.RekeyingHashMap(
+    NominalBackingKey,
+    NominalBackingInstanceId,
+    NominalBackingKeyContext,
+    80,
+);
 
 const NominalBackingLookup = struct {
     declaration: NominalBackingDeclaration,
@@ -555,7 +566,7 @@ pub const InstGraph = struct {
     /// Exact declaration-plus-current-argument-roots index for instantiated
     /// nominal backings. Keys point into the stable argument storage owned by
     /// `nominal_backing_instances`.
-    nominal_backing_index: std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80),
+    nominal_backing_index: NominalBackingIndex,
     nominal_backing_instances: std.ArrayList(NominalBackingInstance),
     /// Argument positions by their current root. This is the precise
     /// invalidation index used to rekey affected instances in `union_`.
@@ -650,7 +661,7 @@ pub const InstGraph = struct {
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .provisional_view_shareable = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
-            .nominal_backing_index = std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80).init(allocator),
+            .nominal_backing_index = NominalBackingIndex.init(allocator, .{}),
             .nominal_backing_instances = .empty,
             .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
             .nominal_backing_affected = .empty,
@@ -690,6 +701,12 @@ pub const InstGraph = struct {
     fn countDiagnosticBy(self: *InstGraph, comptime field: []const u8, amount: usize) void {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics, field) += @intCast(amount);
+        }
+    }
+
+    fn countNominalBackingIndexRemoval(self: *InstGraph) void {
+        if (NominalBackingIndex.removal_leaves_tombstones) {
+            self.countDiagnostic("nominal_backing_tombstone_deletions");
         }
     }
 
@@ -1930,6 +1947,7 @@ pub const InstGraph = struct {
             };
             const removed = self.nominal_backing_index.fetchRemove(old_key) orelse
                 Common.invariant("active nominal backing instance was absent from its index");
+            self.countNominalBackingIndexRemoval();
             if (removed.value != instance_id) {
                 Common.invariant("nominal backing key referenced the wrong instance");
             }
@@ -1971,6 +1989,7 @@ pub const InstGraph = struct {
                 if (retained_id == instance_id) {
                     const removed = self.nominal_backing_index.fetchRemove(new_key) orelse
                         Common.invariant("colliding nominal backing key disappeared during migration");
+                    self.countNominalBackingIndexRemoval();
                     if (removed.value != existing_id) {
                         Common.invariant("colliding nominal backing key referenced the wrong instance");
                     }

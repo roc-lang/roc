@@ -188,6 +188,12 @@ const ParserTypeDeclState = union(enum) {
     rejected,
 };
 
+const ForwardTypeScopeStep = union(enum) {
+    done,
+    parent: AST.DeclIndex.ScopeIdx,
+    ineligible,
+};
+
 const TypeDeclRegistration = union(enum) {
     registered: Statement.Idx,
     redeclared: Statement.Idx,
@@ -315,6 +321,9 @@ import_indices: std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx),
 parser_type_decl_states: std.AutoHashMapUnmanaged(AST.Statement.Idx, ParserTypeDeclState) = .{},
 /// Type declarations whose CIR statements were prepared by a forward reference.
 forward_prepared_type_decls: std.ArrayListUnmanaged(Statement.Idx) = .empty,
+/// Whether an associated parser scope belongs to the selected occurrence of each
+/// enclosing type declaration. Populated only by nested forward type lookup.
+forward_type_scope_eligibility: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, bool) = .{},
 /// All canonical type-declaration statements produced by this module.
 type_decl_statements: std.ArrayListUnmanaged(Statement.Idx) = .empty,
 /// Parser alias-cycle members keyed by the AST alias statement, with the member
@@ -684,6 +693,7 @@ pub fn deinit(
     self.builtin_auto_imported_types.deinit(gpa);
     self.parser_type_decl_states.deinit(gpa);
     self.forward_prepared_type_decls.deinit(gpa);
+    self.forward_type_scope_eligibility.deinit(gpa);
     self.type_decl_statements.deinit(gpa);
     self.alias_cycle_references.deinit(gpa);
     self.alias_cycle_scopes.deinit(gpa);
@@ -1561,6 +1571,71 @@ fn firstUsableParserTypeDecl(self: *const Self, bucket: AST.DeclIndex.NameBucket
         if (self.parserTypeDeclCanPrepare(decl)) return decl_idx;
     }
     return null;
+}
+
+fn parserTypeDeclIsSelected(self: *const Self, decl_idx: AST.DeclIndex.DeclIdx) bool {
+    const decl_index = &self.parse_ir.decl_index;
+    const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+    const path = decl.type_path orelse return false;
+    const selected = self.firstUsableParserTypeDecl(decl_index.typeDeclsForPath(path)) orelse return false;
+    return selected == decl_idx;
+}
+
+fn forwardTypeScopeStep(
+    self: *const Self,
+    scope_idx: AST.DeclIndex.ScopeIdx,
+) ForwardTypeScopeStep {
+    const decl_index = &self.parse_ir.decl_index;
+    const scope = decl_index.scopes.items[@intFromEnum(scope_idx)];
+    switch (scope.kind) {
+        .module, .block => return .done,
+        .associated => {},
+    }
+    const owner_statement = switch (scope.owner) {
+        .associated_type_decl => |statement| statement,
+        .none, .file, .expr => return .ineligible,
+    };
+    const owner_decl_idx = decl_index.declForStatement(owner_statement) orelse return .ineligible;
+    if (!self.parserTypeDeclIsSelected(owner_decl_idx)) return .ineligible;
+    const owner_decl = decl_index.decls.items[@intFromEnum(owner_decl_idx)];
+    return .{ .parent = owner_decl.scope };
+}
+
+fn parserScopeCanSupplyForwardTypeDecl(
+    self: *Self,
+    start_scope: AST.DeclIndex.ScopeIdx,
+) std.mem.Allocator.Error!bool {
+    switch (self.parse_ir.decl_index.scopes.items[@intFromEnum(start_scope)].kind) {
+        .module, .block => return true,
+        .associated => {},
+    }
+
+    var scope_idx = start_scope;
+    const eligible = while (true) {
+        if (self.forward_type_scope_eligibility.get(scope_idx)) |cached| break cached;
+        switch (self.forwardTypeScopeStep(scope_idx)) {
+            .done => break true,
+            .parent => |parent| scope_idx = parent,
+            .ineligible => break false,
+        }
+    };
+
+    scope_idx = start_scope;
+    while (!self.forward_type_scope_eligibility.contains(scope_idx)) {
+        switch (self.forwardTypeScopeStep(scope_idx)) {
+            .done => break,
+            .parent => |parent| {
+                try self.forward_type_scope_eligibility.put(self.env.gpa, scope_idx, eligible);
+                scope_idx = parent;
+            },
+            .ineligible => {
+                try self.forward_type_scope_eligibility.put(self.env.gpa, scope_idx, false);
+                break;
+            },
+        }
+    }
+
+    return eligible;
 }
 
 fn activeWholeScopeBindingForDeclScope(
@@ -2873,6 +2948,8 @@ fn ensureParserTypeDeclBinding(
     const decl_index = &self.parse_ir.decl_index;
     const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
     if (!self.parserTypeDeclCanPrepare(decl)) return null;
+    if (!self.parserTypeDeclIsSelected(decl_idx)) return null;
+    if (!try self.parserScopeCanSupplyForwardTypeDecl(decl.scope)) return null;
     const kind = declIndexTypeKind(decl.kind) orelse return null;
     const name_ident = decl.name_ident orelse return null;
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
@@ -20213,7 +20290,7 @@ fn canonicalizeTypeAnnoBasicType(
         // Check if this is a module alias
         const module_info = (try self.scopeLookupOrPrepareModule(module_alias)) orelse {
             // Module is not in current scope - but check if it's a type name first
-            if (try self.scopeLookupTypeBinding(module_alias)) |_| {
+            if (try self.scopeLookupOrPrepareTypeBinding(module_alias)) |_| {
                 // This is in scope as a type/value, but doesn't expose the nested type being requested
                 if (self.internalBuiltinTypeKind(module_alias, self.env.getIdent(qualified_name_ident))) |kind| {
                     return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
@@ -20390,14 +20467,25 @@ fn recordTypeHeaderParameter(
     return false;
 }
 
-/// The declarations whose parameters may not be underscore-prefixed, and how to
-/// name them in that diagnostic. Nominal and opaque declarations allow them
-/// because their parameters can be phantom.
-fn declaredTypeKindRejectingUnderscores(type_kind: AST.TypeDeclKind) ?CIR.DeclaredTypeKind {
+/// The declarations whose parameters may not have underscore-prefixed names.
+/// Nominal and opaque declarations allow them because their parameters can be
+/// phantom.
+fn declaredTypeKindRejectingNamedUnderscores(type_kind: AST.TypeDeclKind) ?CIR.DeclaredTypeKind {
     return switch (type_kind) {
         .alias => .alias,
         .where_alias => .where_alias,
         .nominal, .@"opaque" => null,
+    };
+}
+
+/// The user-facing declaration kind for diagnostics that apply to every type
+/// declaration kind.
+fn declaredTypeKind(type_kind: AST.TypeDeclKind) CIR.DeclaredTypeKind {
+    return switch (type_kind) {
+        .alias => .alias,
+        .where_alias => .where_alias,
+        .nominal => .nominal,
+        .@"opaque" => .@"opaque",
     };
 }
 
@@ -20478,7 +20566,7 @@ fn canonicalizeTypeHeader(
                 // Only reject underscore-prefixed names for type aliases, not nominal/opaque types
                 const param_name = self.parse_ir.env.getIdent(param_ident);
                 if (param_name.len > 0 and param_name[0] == '_') {
-                    if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                    if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                         try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                             .declared = declared,
                             .region = param_region,
@@ -20505,7 +20593,7 @@ fn canonicalizeTypeHeader(
                 if (try self.recordTypeHeaderParameter(&seen_type_parameters, name_ident, param_ident, param_region)) continue;
 
                 // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .declared = declared,
                         .region = param_region,
@@ -20519,21 +20607,17 @@ fn canonicalizeTypeHeader(
                 try self.env.store.addScratchTypeAnno(param_anno);
             },
             .underscore => |underscore_param| {
-                // Handle underscore type parameters
                 const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_param.region);
 
-                // Push underscore diagnostic for underscore type parameters
-                // Only reject for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
-                    try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                        .declared = declared,
-                        .region = param_region,
-                    } });
-                }
-
-                // Create underscore type annotation
-                const underscore_anno = try self.env.addTypeAnno(.{ .underscore = {} }, param_region);
-                try self.env.store.addScratchTypeAnno(underscore_anno);
+                // A bare underscore is an inferred annotation, not a binder.
+                // Declaration headers require named rigid variables so every
+                // formal has a stable identity throughout checking and
+                // checked-artifact publication.
+                const malformed_anno = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .underscore_in_type_declaration = .{
+                    .declared = declaredTypeKind(type_kind),
+                    .region = param_region,
+                } });
+                try self.env.store.addScratchTypeAnno(malformed_anno);
             },
             .malformed => |malformed_param| {
                 // Handle malformed underscore type parameters
@@ -20541,7 +20625,7 @@ fn canonicalizeTypeHeader(
 
                 // Push underscore diagnostic for malformed underscore type parameters
                 // Only reject for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .declared = declared,
                         .region = param_region,

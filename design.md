@@ -523,6 +523,14 @@ referenced declaration. This evidence comes from the normal annotation-generatio
 traversal; validity must not be reconstructed later by rescanning source syntax or
 solved type structure.
 
+A declaration header parameter is always a named rigid type variable. Bare `_` is
+an inferred type annotation, not a binder, so canonicalization diagnoses it and
+emits a `.malformed` header annotation for every declaration kind. Nominal and
+opaque declarations may use an underscore-prefixed name such as `_a` for an
+intentionally phantom parameter; aliases and where aliases reject those names.
+This keeps every valid declaration formal's identity explicit through checking and
+`CheckedModule` construction.
+
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
 finalization is linear in the number of declarations plus recorded references,
@@ -6851,6 +6859,11 @@ columns, not hash tables keyed by node id. Union-find redirects may change which
 node is a class root, but they never renumber a node; root-owned columns are
 updated explicitly when a union moves that ownership.
 
+Declaration-backed nominal reuse is indexed by declaration identity plus the
+current argument-root tuple. Root unions rekey affected entries, so lookup cost
+must depend only on the current live index: the history of earlier root
+migrations must not lengthen future probe paths.
+
 A context-free callee body never joins the caller group's graph. Instead
 CheckedModule stores a complete specialization-interface relation table for
 every procedure template. Its records explicitly name checked equalities,
@@ -10499,6 +10512,15 @@ results, and decision slices are discarded together only after the proc body
 and metadata have been committed. `ArcPlan` is the phase boundary: dependency
 solving may query ownership and liveness while filling a slot; its materializer
 accepts neither and only follows the explicit decisions.
+
+Exact ownership and certifier path snapshots use persistent sparse proc-local
+state. A control-flow fork shares the unchanged state root, and a transition
+stores only bounded-depth paths to changed `OwnedEntry` values, liveness words,
+or certifier `State` entries.
+Fresh one-owner states update their paths in place until the first fork; meets
+share equal subtrees and allocate only changed subtrees. Procedure width is
+therefore paid once by the producer-owned domains and summaries, not once per
+branch, join arrival, plan endpoint, or certifier work item.
 
 Immediate `incref`/matching-`decref` cancellation is part of retain
 construction: count one cancels the pair and larger counts are reduced by one.
