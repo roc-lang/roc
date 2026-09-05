@@ -2249,6 +2249,12 @@ const ReturnConstraintKind = enum(u8) {
     }
 };
 
+const TryReturnErrorContribution = union(enum) {
+    none,
+    tagged,
+    tail: Var,
+};
+
 const ReturnConstraintFrame = struct {
     /// The canonical owner of every return in this frame.
     lambda: CIR.Expr.Idx,
@@ -5122,6 +5128,205 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             } });
             try self.types.setVarContent(var_, .err);
         },
+    }
+}
+
+fn settledTagRowThroughAliases(self: *Self, start: Var) ?Var {
+    var current = start;
+    var remaining = self.types.len();
+    while (remaining > 0) : (remaining -= 1) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat_type| return if (flat_type == .tag_union) resolved.var_ else null,
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    }
+    return null;
+}
+
+fn recordSettledTagRowRoot(
+    self: *Self,
+    roots: *std.AutoHashMapUnmanaged(Var, void),
+    var_: Var,
+) std.mem.Allocator.Error!void {
+    const row_root = self.settledTagRowThroughAliases(var_) orelse return;
+    try roots.put(self.gpa, row_root, {});
+}
+
+const SettledTypeReach = struct {
+    var_: Var,
+    starts_tag_row: bool,
+};
+
+fn appendSettledTypeReachVars(
+    self: *Self,
+    stack: *std.ArrayListUnmanaged(SettledTypeReach),
+    vars: []const Var,
+    starts_tag_row: bool,
+) std.mem.Allocator.Error!void {
+    for (vars) |var_| try stack.append(self.gpa, .{ .var_ = var_, .starts_tag_row = starts_tag_row });
+}
+
+/// Validate every tag row reachable from a checked value after inference has
+/// settled. Source annotations are validated when they are materialized, but
+/// instantiating an inferred open row can expose a duplicate only later. This
+/// single linear reachability walk closes that checked-boundary invariant
+/// without adding per-variable metadata or work to ordinary unification.
+fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    self.var_set.clearRetainingCapacity();
+    defer self.var_set.clearRetainingCapacity();
+
+    var semantic_row_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer semantic_row_roots.deinit(self.gpa);
+    var walk_stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
+    defer walk_stack.deinit(self.gpa);
+
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+        try walk_stack.append(self.gpa, .{ .var_ = @enumFromInt(raw_node_idx), .starts_tag_row = true });
+    }
+
+    while (walk_stack.pop()) |entry| {
+        if (entry.starts_tag_row) {
+            try self.recordSettledTagRowRoot(&semantic_row_roots, entry.var_);
+        }
+
+        const resolved = self.types.resolveVar(entry.var_);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try walk_stack.append(self.gpa, .{
+                    .var_ = self.types.getAliasBackingVar(alias),
+                    .starts_tag_row = entry.starts_tag_row,
+                });
+                try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceAliasArgs(alias), true);
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(tuple.elems), true),
+                .nominal_type => |nominal| try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceNominalArgs(nominal), true),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try walk_stack.append(self.gpa, .{ .var_ = func.ret, .starts_tag_row = true });
+                    try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(func.args), true);
+                    try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(func.effect_deps), true);
+                },
+                .record => |record| {
+                    try walk_stack.append(self.gpa, .{ .var_ = record.ext, .starts_tag_row = false });
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_tag_row = true });
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_tag_row = true });
+                        }
+                    }
+                },
+                .record_unbound => |fields_range| {
+                    const fields = self.types.getRecordFieldsSlice(fields_range);
+                    for (fields.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_tag_row = true });
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_tag_row = true });
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_tag_row = false });
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| {
+                        try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(args), true);
+                    }
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .field_presence, .err => {},
+        }
+    }
+
+    var row_roots: std.ArrayListUnmanaged(Var) = .empty;
+    defer row_roots.deinit(self.gpa);
+    var row_root_iter = semantic_row_roots.keyIterator();
+    while (row_root_iter.next()) |row_root| {
+        try row_roots.append(self.gpa, row_root.*);
+    }
+    std.mem.sort(Var, row_roots.items, {}, struct {
+        fn lessThan(_: void, a: Var, b: Var) bool {
+            return @intFromEnum(a) < @intFromEnum(b);
+        }
+    }.lessThan);
+
+    var seen_names: std.AutoHashMapUnmanaged(Ident.Idx, void) = .empty;
+    defer seen_names.deinit(self.gpa);
+    var seen_parts: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer seen_parts.deinit(self.gpa);
+    var invalid_rows: std.ArrayListUnmanaged(Var) = .empty;
+    defer invalid_rows.deinit(self.gpa);
+
+    for (row_roots.items) |row_root| {
+        seen_names.clearRetainingCapacity();
+        seen_parts.clearRetainingCapacity();
+        var current = row_root;
+        var invalid_at: ?Var = null;
+
+        while (true) {
+            const resolved = self.types.resolveVar(current);
+            if (seen_parts.contains(resolved.var_)) break;
+            try seen_parts.put(self.gpa, resolved.var_, {});
+
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        const tags = self.types.getTagsSlice(tag_union.tags);
+                        for (tags.items(.name)) |name| {
+                            const entry = try seen_names.getOrPut(self.gpa, name);
+                            if (entry.found_existing) {
+                                invalid_at = resolved.var_;
+                                break;
+                            }
+                        }
+                        if (invalid_at != null) break;
+                        current = tag_union.ext;
+                    },
+                    .empty_tag_union => break,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    => {
+                        invalid_at = resolved.var_;
+                        break;
+                    },
+                },
+                .flex, .rigid, .err => break,
+                .field_presence => {
+                    invalid_at = resolved.var_;
+                    break;
+                },
+            }
+        }
+
+        if (invalid_at) |bad_var| {
+            try self.reportInvalidRow(.tag_union, bad_var, env, self.getRegionAt(row_root), .none);
+            try invalid_rows.append(self.gpa, row_root);
+        }
+    }
+
+    // Delay recovery until every diagnostic has snapshotted the settled graph;
+    // poisoning a shared suffix earlier would make the result depend on root
+    // traversal order.
+    for (invalid_rows.items) |row_root| {
+        try self.types.setVarContent(row_root, .err);
     }
 }
 
@@ -8209,6 +8414,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     }
 
     try self.finalizeTypes(&env, .{ .module = .{ .skip_numeric_defaults = skip_numeric_defaults } });
+
+    try self.validateSettledValueTagRows(&env);
 
     // After solving all deferred constraints, check every binding root
     // (top-level defs and local bindings) for infinite types
@@ -12601,6 +12808,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.finalizeTypes(&env, .{ .repl_expr = expr_idx });
     try self.reportPolymorphicConstrainedExpr(expr_idx);
 
+    try self.validateSettledValueTagRows(&env);
+
     // Check for infinite types, at the expression root and at every binding
     // root the expression contains
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
@@ -12689,6 +12898,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // After solving all deferred constraints, check every binding root
     // (top-level defs and local bindings) for infinite types
+    try self.validateSettledValueTagRows(&env);
     try self.checkBindingRootsForInfiniteTypes();
 
     // Check the result expression itself, matching checkExprRepl: its type may
@@ -12707,6 +12917,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // finalize sequence): last, after every judgment above, for the same
     // reasons documented there.
     try self.defaultLiteralFieldKinds(&env);
+    try self.validateSettledValueTagRows(&env);
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.recheckNominalConstructorBackings(&env);
 
@@ -15998,6 +16209,17 @@ fn reportInvalidAliasRow(
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
+    return self.reportInvalidRow(row_kind, actual_var, env, region, .type_annotation);
+}
+
+fn reportInvalidRow(
+    self: *Self,
+    comptime row_kind: AliasRowKind,
+    actual_var: Var,
+    env: *Env,
+    region: Region,
+    context: problem.Context,
+) Allocator.Error!void {
     const expected_content: Content = switch (row_kind) {
         .record => .{ .structure = .empty_record },
         .tag_union => .{ .structure = .empty_tag_union },
@@ -16013,7 +16235,7 @@ fn reportInvalidAliasRow(
             .actual_var = actual_var,
             .actual_snapshot = actual_snapshot,
         },
-        .context = .type_annotation,
+        .context = context,
     } });
 }
 
@@ -19619,7 +19841,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             };
 
             if (expected_return) |annotated_return| {
-                try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(null), env);
+                if (return_kind == .try_suffix) {
+                    try self.appendReturnConstraint(ret.lambda, ret.expr, return_kind);
+                } else {
+                    try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(null), env);
+                }
             } else {
                 // Validate the lambda body type against the return value after the
                 // body is fully checked, but before the lambda generalizes.
@@ -28590,6 +28816,132 @@ fn checkReturnRelation(
     }
 }
 
+/// Classify one inferred `?` error contribution for return-row composition.
+/// A tag-bearing row participates in the ordinary row merge. A tagless row is
+/// the residual tail contributed by a bare `?`; it is related to the merged
+/// row's extension only after all visible tags have been collected.
+fn tryReturnErrorContribution(self: *Self, error_var: Var) TryReturnErrorContribution {
+    var current = error_var;
+    var guard = types_mod.debug.IterationGuard.init("tryReturnErrorContribution");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    if (tag_union.tags.len() > 0) return .tagged;
+                    current = tag_union.ext;
+                },
+                .empty_tag_union => return .none,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => return .{ .tail = resolved.var_ },
+            },
+            .err => return .none,
+            .flex, .rigid, .field_presence => return .{ .tail = resolved.var_ },
+        }
+    }
+}
+
+/// The residual extension of a composed inferred `?` return row. This walk is
+/// over explicit row topology produced by checking; it does not inspect source
+/// syntax or choose a representation.
+fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
+    var current = error_var;
+    var guard = types_mod.debug.IterationGuard.init("tryReturnErrorTail");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| current = tag_union.ext,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .empty_tag_union,
+                => return resolved.var_,
+            },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
+        }
+    }
+}
+
+/// Whether `needle` is already a structural part of `root`. Static-dispatch
+/// constraints on flex/rigid variables are deliberately not structure: the
+/// occurs check permits them to be self-referential, and ordinary unification
+/// does not turn them into children of the variable's type.
+fn typeStructurallyContainsVar(self: *Self, root: Var, needle: Var) std.mem.Allocator.Error!bool {
+    const needle_root = self.types.resolveVar(needle).var_;
+    self.var_set.clearRetainingCapacity();
+    defer self.var_set.clearRetainingCapacity();
+
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    try stack.append(self.gpa, root);
+
+    while (stack.items.len > stack_base) {
+        const current = stack.pop().?;
+        const resolved = self.types.resolveVar(current);
+        if (resolved.var_ == needle_root) return true;
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .record_unbound => |fields_range| {
+                    const fields = self.types.getRecordFieldsSlice(fields_range);
+                    for (fields.items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    }
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+    return false;
+}
+
 /// The first `?` that produces the value of `expr_idx`, following tail
 /// positions through blocks and through `if` and `match` branches. For a
 /// function body, such a `?` unwraps the `Try` the body would otherwise return.
@@ -28678,14 +29030,126 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     const frame = self.return_constraint_frames.items[frame_idx];
     std.debug.assert(frame.lambda == lambda_idx);
 
+    const constraints = self.return_constraints.items[frame.start..];
     const body_tail_try = self.tailTrySuffixExpr(self.cir.store.getExpr(lambda_idx).e_lambda.body);
-    for (self.return_constraints.items[frame.start..]) |constraint| {
+
+    // Ordinary returns remain equality constraints and settle the inferred
+    // body result before `?` composes any propagated error rows into it.
+    for (constraints) |constraint| {
+        if (constraint.kind != .return_expr) continue;
         try self.checkReturnRelation(
             frame.body_result,
             constraint.actual_expr,
             constraint.kind.problemContext(body_tail_try),
             env,
         );
+    }
+
+    var expected_try = self.tryArgsFromVar(frame.body_result);
+    if (expected_try == null) {
+        for (constraints) |constraint| {
+            if (constraint.kind != .try_suffix) continue;
+            const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
+
+            var commit_probe = try self.beginCommitProbe(env);
+            var committed = false;
+            defer if (!committed) commit_probe.rollback();
+            const region = self.cir.store.getExprRegion(constraint.actual_expr);
+            const inferred_err = try self.fresh(env, region);
+            const inferred_try = try self.freshFromContent(
+                try self.mkTryContent(actual.ok, inferred_err),
+                env,
+                region,
+            );
+            const result = try commit_probe.unifyInContext(
+                frame.body_result,
+                inferred_try,
+                constraint.kind.problemContext(body_tail_try),
+            );
+            if (!result.isEstablished()) break;
+            committed = true;
+            commit_probe.commit();
+            expected_try = self.tryArgsFromVar(frame.body_result);
+            break;
+        }
+    }
+    if (expected_try) |expected| {
+        // First merge every contribution with visible tags. Ordinary tag-row
+        // unification collects those tags and leaves one residual extension.
+        for (constraints) |constraint| {
+            if (constraint.kind != .try_suffix) continue;
+            const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse {
+                try self.checkReturnRelation(
+                    frame.body_result,
+                    constraint.actual_expr,
+                    constraint.kind.problemContext(body_tail_try),
+                    env,
+                );
+                continue;
+            };
+            var had_problem = false;
+            if ((try self.unifyInContext(
+                expected.ok,
+                actual.ok,
+                env,
+                constraint.kind.problemContext(body_tail_try),
+            )).isProblem()) {
+                had_problem = true;
+            }
+            if (self.tryReturnErrorContribution(actual.err) == .tagged and
+                (try self.unifyInContext(
+                    expected.err,
+                    actual.err,
+                    env,
+                    constraint.kind.problemContext(body_tail_try),
+                )).isProblem())
+            {
+                had_problem = true;
+            }
+            if (had_problem) try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
+        }
+
+        // Preserve the ordinary full-row equality for a bare `?` unless its
+        // error is already embedded in the composed row. Only that latter
+        // relation would form `e = [Wrapped(e), ..]`; its exact non-recursive
+        // representation relates `e` to the residual extension instead.
+        for (constraints) |constraint| {
+            if (constraint.kind != .try_suffix) continue;
+            const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
+            const contribution = self.tryReturnErrorContribution(actual.err);
+            const tail = switch (contribution) {
+                .none, .tagged => continue,
+                .tail => |tail_var| tail_var,
+            };
+            const expected_root = self.types.resolveVar(expected.err).var_;
+            const tail_root = self.types.resolveVar(tail).var_;
+            const relation_target = if (expected_root != tail_root and
+                try self.typeStructurallyContainsVar(expected.err, tail))
+                self.tryReturnErrorTail(expected.err)
+            else
+                expected.err;
+            const result = try self.unifyInContext(
+                relation_target,
+                tail,
+                env,
+                constraint.kind.problemContext(body_tail_try),
+            );
+            if (result.isProblem()) {
+                try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
+            }
+        }
+    } else {
+        // Preserve the existing diagnostic when the inferred function result is
+        // not a `Try` at all.
+        for (constraints) |constraint| {
+            if (constraint.kind != .try_suffix) continue;
+            try self.checkReturnRelation(
+                frame.body_result,
+                constraint.actual_expr,
+                constraint.kind.problemContext(body_tail_try),
+                env,
+            );
+        }
     }
 
     self.return_constraints.shrinkRetainingCapacity(frame.start);
