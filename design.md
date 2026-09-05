@@ -3240,6 +3240,19 @@ evidence still distinguish genuinely different targets. The grounding call
 index remains only activation and debug metadata. These audits and their
 consumption bits are absent from release compiler builds.
 
+Backed named applications keep independent main union-find classes so each
+request retains its own representation witness. An explicit checked/request or
+deferred-template relation therefore also records the matching applications in
+a sparse nominal-identity union-find. Independently allocated wrappers for the
+same application join that identity through their exact permanent backing
+witness; the nominal-backing cache keys that witness by the complete
+declaration and all type arguments, including phantom arguments. Generated
+codec call selection consumes this producer-written identity directly. It does
+not recursively compare type arguments, open a backing to reconstruct nominal
+identity, or merge the representation-owning main classes. Nominal subject
+comparison is therefore constant-time amortized while preserving both exact
+source identity and backing ownership.
+
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
 or encode failures. Runtime failures are reserved for input/output conditions

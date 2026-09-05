@@ -1110,10 +1110,7 @@ fn relateMatchingRequestContainers(
         },
         .named => |left_named| switch (right_content) {
             .named => |right_named| {
-                if (!sameTypeDef(left_named.def, right_named.def) or
-                    left_named.kind != right_named.kind or
-                    left_named.args.len != right_named.args.len)
-                {
+                if (!sameNamedValueDefinition(left_named, right_named)) {
                     return false;
                 }
                 for (left_named.args, right_named.args) |left_arg, right_arg| {
@@ -1125,6 +1122,7 @@ fn relateMatchingRequestContainers(
                 } else if (right_named.backing != null) {
                     return false;
                 }
+                try graph.relateNamedInstances(left_node, right_node);
                 return true;
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
@@ -1215,9 +1213,7 @@ fn constrainDeferredTemplateTypeArgumentsAt(
         },
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
-                if (!sameTypeDef(checked_named.def, request_named.def) or
-                    checked_named.args.len != request_named.args.len)
-                {
+                if (!sameNamedValueDefinition(checked_named, request_named)) {
                     if (transparentAliasBacking(graph, checked_content)) |backing| {
                         return constrainDeferredTemplateTypeArgumentsAt(graph, backing, request_root, seen);
                     }
@@ -1229,6 +1225,7 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 for (checked_named.args, request_named.args) |checked_arg, request_arg| {
                     try constrainDeferredTemplateArgument(graph, checked_arg, request_arg, seen);
                 }
+                try graph.relateNamedInstances(checked_root, request_root);
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return,
         },
@@ -1584,6 +1581,7 @@ fn relateCheckedMonoRequestNodeAt(
                         row_width,
                         seen,
                     );
+                    try graph.relateNamedInstances(checked_root, request_root);
                     return;
                 }
             },
@@ -44444,7 +44442,6 @@ const BodyContext = struct {
     }
 
     fn sameCodecSubject(self: *BodyContext, checked_subject: NodeId, requested_subject: NodeId) bool {
-        if (self.graph.sameClass(checked_subject, requested_subject)) return true;
         // A declaration-backed nominal opens its backing in a declaration
         // scope, independently from the checked codec contract's snapshot.
         // Closed primitives and named applications still have exact constant-
@@ -44457,21 +44454,9 @@ const BodyContext = struct {
                 .primitive => |requested_primitive| checked_primitive == requested_primitive,
                 .redirect, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
             },
-            .redirect, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .named => return self.graph.sameRelatedNamedInstance(checked_subject, requested_subject),
+            .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return self.graph.sameClass(checked_subject, requested_subject),
         }
-        const checked_named = switch (checked_content) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
-        };
-        const requested_named = switch (requested_content) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
-        };
-        if (!sameNamedValueDefinition(checked_named, requested_named)) return false;
-        for (checked_named.args, requested_named.args) |checked_arg, requested_arg| {
-            if (!self.graph.sameClass(checked_arg, requested_arg)) return false;
-        }
-        return true;
     }
 
     fn debugVerifyGeneratedCodecContractConsumed(
@@ -44508,28 +44493,16 @@ const BodyContext = struct {
             .encoder => "encoder_for",
         };
         const active = self.active_codec_contract orelse return null;
-        const request_named = switch (self.graph.content(shape_node)) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-        };
+        if (self.graph.content(shape_node) != .named) return null;
         var selected: ?InstantiatedGeneratedCodecCall = null;
         for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |*candidate| {
             if (!std.mem.eql(u8, candidate.view.names.methodNameText(candidate.checked.method), method_name)) continue;
             const candidate_subject = candidate.subject_node orelse
                 Common.invariant("checked generated codec boundary call had no nominal subject");
-            const candidate_named = switch (self.graph.content(candidate_subject)) {
-                .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("checked generated codec boundary subject was not nominal"),
-            };
-            if (!sameNamedValueDefinition(candidate_named, request_named)) continue;
-            var args_match = true;
-            for (candidate_named.args, request_named.args) |candidate_arg, request_arg| {
-                if (!self.graph.sameClass(candidate_arg, request_arg)) {
-                    args_match = false;
-                    break;
-                }
+            if (self.graph.content(candidate_subject) != .named) {
+                Common.invariant("checked generated codec boundary subject was not nominal");
             }
-            if (!args_match) continue;
+            if (!self.sameCodecSubject(candidate_subject, shape_node)) continue;
             if (selected) |previous| {
                 if (!self.graph.sameFunctionInterface(previous.callable_node, candidate.callable_node) or
                     !std.meta.eql(previous.checked.resolution, candidate.checked.resolution))

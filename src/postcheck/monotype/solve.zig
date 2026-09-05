@@ -177,6 +177,13 @@ const InstNamed = struct {
     declared_order: []const InstDeclaredField = &.{},
 };
 
+/// Union-find node for nominal applications that an explicit relation proved
+/// equivalent without joining their representation-owning type classes.
+const RelatedNamedInstance = struct {
+    parent: NodeId,
+    rank: u8 = 0,
+};
+
 /// Graph-owned data for a private iterator representation before sealing.
 pub const InstGeneratedIterator = struct {
     callable_evidence: ?names.TypeDigest,
@@ -520,6 +527,16 @@ pub const InstGraph = struct {
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
+    /// Explicit equivalence classes for matching nominal applications whose
+    /// backing nodes must remain independently owned. This is deliberately
+    /// separate from the main type union-find: consumers can use the proven
+    /// nominal identity without collapsing declaration and request storage.
+    related_named_instances: collections.DenseMap(NodeId, RelatedNamedInstance),
+    /// One related wrapper for each exact declaration-backing witness. The
+    /// nominal backing cache includes every type argument in its key, so a
+    /// shared permanent backing id proves two independently allocated wrappers
+    /// denote the same application without inspecting their shape.
+    related_named_backings: collections.DenseMap(NodeId, NodeId),
     /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
     /// retain their original provenance while `find` resolves that node to its
     /// current class root; unions therefore never move or reindex snapshots.
@@ -635,6 +652,8 @@ pub const InstGraph = struct {
             .class_member_head = .empty,
             .class_member_tail = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
+            .related_named_instances = collections.DenseMap(NodeId, RelatedNamedInstance).init(allocator),
+            .related_named_backings = collections.DenseMap(NodeId, NodeId).init(allocator),
             .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .current_snapshots_dirty = false,
@@ -728,6 +747,8 @@ pub const InstGraph = struct {
         self.active_snapshot_nodes.deinit();
         self.imported_type_nodes.deinit();
         self.provisional_view_shareable.deinit();
+        self.related_named_backings.deinit();
+        self.related_named_instances.deinit();
         self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
@@ -2028,6 +2049,133 @@ pub const InstGraph = struct {
     /// Whether two live cells already belong to the same union-find class.
     pub fn sameClass(self: *InstGraph, left: NodeId, right: NodeId) bool {
         return self.find(left) == self.find(right);
+    }
+
+    fn relatedNamedInstanceRoot(self: *InstGraph, node: NodeId) NodeId {
+        var root = node;
+        while (self.related_named_instances.get(root)) |entry| {
+            if (entry.parent == root) break;
+            root = entry.parent;
+        }
+
+        var current = node;
+        while (current != root) {
+            const entry = self.related_named_instances.getPtr(current) orelse break;
+            const next = entry.parent;
+            entry.parent = root;
+            current = next;
+        }
+        return root;
+    }
+
+    fn ensureRelatedNamedInstanceNode(self: *InstGraph, node: NodeId) Allocator.Error!void {
+        const entry = try self.related_named_instances.getOrPut(node);
+        if (!entry.found_existing) entry.value_ptr.* = .{ .parent = node };
+    }
+
+    fn unionRelatedNamedInstanceNodes(self: *InstGraph, left_node: NodeId, right_node: NodeId) void {
+        var left_root = self.relatedNamedInstanceRoot(left_node);
+        var right_root = self.relatedNamedInstanceRoot(right_node);
+        if (left_root == right_root) return;
+        if (self.related_named_instances.get(left_root).?.rank <
+            self.related_named_instances.get(right_root).?.rank)
+        {
+            const temp = left_root;
+            left_root = right_root;
+            right_root = temp;
+        }
+        self.related_named_instances.getPtr(right_root).?.parent = left_root;
+        const left_rank = self.related_named_instances.get(left_root).?.rank;
+        if (left_rank == self.related_named_instances.get(right_root).?.rank) {
+            self.related_named_instances.getPtr(left_root).?.rank = left_rank + 1;
+        }
+    }
+
+    fn bindRelatedNamedBacking(
+        self: *InstGraph,
+        named_node: NodeId,
+        named: InstNamed,
+    ) Allocator.Error!void {
+        const backing = named.backing orelse return;
+        const entry = try self.related_named_backings.getOrPut(backing.node);
+        if (entry.found_existing) {
+            self.unionRelatedNamedInstanceNodes(named_node, entry.value_ptr.*);
+        } else {
+            entry.value_ptr.* = named_node;
+        }
+    }
+
+    /// Record an exact nominal identity proved by a graph relation. Backed
+    /// named applications intentionally keep distinct main type classes so
+    /// each request retains its own representation witness; this parallel
+    /// union-find exposes the proven source-level identity to later consumers.
+    pub fn relateNamedInstances(
+        self: *InstGraph,
+        raw_left: NodeId,
+        raw_right: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const left_node = self.find(raw_left);
+        const right_node = self.find(raw_right);
+        const left = switch (self.content(left_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named left node"),
+        };
+        const right = switch (self.content(right_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named right node"),
+        };
+        if (left.kind != right.kind or
+            !sameTypeDef(left.def, right.def) or
+            left.builtin_owner != right.builtin_owner or
+            left.args.len != right.args.len)
+        {
+            Common.invariant("named-instance relation received different declarations");
+        }
+
+        try self.ensureRelatedNamedInstanceNode(left_node);
+        try self.ensureRelatedNamedInstanceNode(right_node);
+        try self.bindRelatedNamedBacking(left_node, left);
+        try self.bindRelatedNamedBacking(right_node, right);
+        self.unionRelatedNamedInstanceNodes(left_node, right_node);
+    }
+
+    /// Whether the main type relation or a backed-nominal relation proved
+    /// that two named application cells have the same source-level identity.
+    pub fn sameRelatedNamedInstance(self: *InstGraph, left: NodeId, right: NodeId) bool {
+        const left_named = switch (self.content(left)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        const right_named = switch (self.content(right)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        if (left_named.kind != right_named.kind or
+            !sameTypeDef(left_named.def, right_named.def) or
+            left_named.builtin_owner != right_named.builtin_owner or
+            left_named.args.len != right_named.args.len) return false;
+        if (self.sameClass(left, right)) return true;
+
+        const left_related = if (self.related_named_instances.contains(left))
+            self.relatedNamedInstanceRoot(left)
+        else if (left_named.backing) |backing|
+            if (self.related_named_backings.get(backing.node)) |representative|
+                self.relatedNamedInstanceRoot(representative)
+            else
+                return false
+        else
+            return false;
+        const right_related = if (self.related_named_instances.contains(right))
+            self.relatedNamedInstanceRoot(right)
+        else if (right_named.backing) |backing|
+            if (self.related_named_backings.get(backing.node)) |representative|
+                self.relatedNamedInstanceRoot(representative)
+            else
+                return false
+        else
+            return false;
+        return left_related == right_related;
     }
 
     pub const ClassMemberIterator = struct {
@@ -8981,6 +9129,80 @@ test "nominal backing index rekeys root tuples and merges collisions" {
     }
     try std.testing.expectEqual(@as(usize, 3), active_instances);
     try std.testing.expectEqual(@as(u32, 3), graph.nominal_backing_index.count());
+}
+
+test "related named instances reuse exact backing witnesses" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const type_name = try name_store.internTypeName("Wrap");
+    const other_type_name = try name_store.internTypeName("Other");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const other_def: Type.TypeDef = .{ .module = module_identity, .type_name = other_type_name };
+
+    const request_arg = try graph.newNode(.{ .primitive = .bool });
+    const checked_arg = try graph.newNode(.{ .primitive = .bool });
+    try graph.unify(request_arg, checked_arg);
+    const request_backing = try graph.newNode(.empty_tag_union);
+    const checked_backing = try graph.newNode(.empty_tag_union);
+    const unrelated_backing = try graph.newNode(.empty_tag_union);
+
+    const request = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+    const same_request = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+    const checked_node = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{checked_arg}),
+        .backing = .{ .node = checked_backing, .use = .inspectable },
+    } });
+    const unrelated = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = unrelated_backing, .use = .inspectable },
+    } });
+    const other_definition = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = other_def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+
+    try graph.relateNamedInstances(request, checked_node);
+
+    try std.testing.expect(!graph.sameClass(request, checked_node));
+    try std.testing.expect(graph.sameRelatedNamedInstance(request, checked_node));
+    try std.testing.expect(graph.sameRelatedNamedInstance(same_request, checked_node));
+    try std.testing.expect(!graph.sameRelatedNamedInstance(unrelated, checked_node));
+    try std.testing.expect(!graph.sameRelatedNamedInstance(other_definition, checked_node));
 }
 
 test "issue 9647: same nominal backing wrapper resolves to structural backing once" {
