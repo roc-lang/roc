@@ -26839,9 +26839,20 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
 /// callable shape. Variables exposed through the enclosing scheme remain fixed
 /// anchors; only requirement-private generalized variables may be renamed.
 /// This keeps repeated helper uses compact without conflating call results that
-/// a caller can still specialize differently. Shape keys are memoized by
-/// finalized callable root for the duration of this pass because attached and
-/// side-table requirements commonly refer to the same callable graph.
+/// a caller can still specialize differently.
+///
+/// Two same-shape requirements are one relation, so their callables are
+/// unified before the duplicate is dropped: the union-find then records which
+/// private variable of the dropped callable each retained variable stands for,
+/// and every scheme-use pair, nested evidence key, and body expression typed
+/// by the dropped callable resolves to the retained one. The shape digest only
+/// selects the candidate; the unifier is the exact equality authority, and a
+/// pair it cannot establish stays distinct. Merging two callables can bring
+/// their private receivers' own same-name requirements together, so those
+/// variables are revisited until no receiver holds two same-shape callables.
+/// Shape keys are memoized by finalized callable root for the duration of this
+/// pass because attached and side-table requirements commonly refer to the
+/// same callable graph.
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
@@ -26864,41 +26875,78 @@ fn deduplicateGeneralizedDispatchRequirements(
     var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
     defer callable_shapes.deinit();
 
+    var pending_receivers: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending_receivers.deinit(self.gpa);
+    try pending_receivers.appendSlice(self.gpa, identity_vars);
+
+    var snapshot: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    defer snapshot.deinit(self.gpa);
     var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer retained_constraints.deinit(self.gpa);
-    var seen_attached = std.AutoHashMap(GeneralizedAttachedConstraintKey, void).init(self.gpa);
-    defer seen_attached.deinit();
+    var retained_by_key = std.AutoHashMap(GeneralizedAttachedConstraintKey, Var).init(self.gpa);
+    defer retained_by_key.deinit();
 
-    for (identity_vars) |identity_var| {
-        const resolved = self.types.resolveVar(identity_var);
-        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
-        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
-        if (constraints.len <= 1) continue;
+    while (pending_receivers.pop()) |receiver_var| {
+        // Unifying two callables appends merged constraint ranges to the
+        // store, so the receiver's list is iterated from a private copy and
+        // re-read afterwards.
+        snapshot.clearRetainingCapacity();
+        {
+            const resolved = self.types.resolveVar(receiver_var);
+            const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
+            const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+            if (constraints.len <= 1) continue;
+            try snapshot.appendSlice(self.gpa, constraints);
+        }
 
-        retained_constraints.clearRetainingCapacity();
-        seen_attached.clearRetainingCapacity();
-        try retained_constraints.ensureTotalCapacity(self.gpa, constraints.len);
-        try seen_attached.ensureTotalCapacity(@intCast(constraints.len));
-        for (constraints) |constraint| {
+        retained_by_key.clearRetainingCapacity();
+        for (snapshot.items) |constraint| {
             // Literal metadata is aggregated by the literal-specific path.
-            if (constraint.origin == .from_literal) {
-                retained_constraints.appendAssumeCapacity(constraint);
-                continue;
-            }
-            const callable_shape = try self.generalizedCallableShape(
-                &anchors,
-                &callable_shapes,
-                constraint.fn_var,
-            );
+            if (constraint.origin == .from_literal) continue;
             const key = GeneralizedAttachedConstraintKey{
                 .fn_name = constraint.fn_name,
                 .origin_tag = std.meta.activeTag(constraint.origin),
                 .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
-                .callable_shape = callable_shape,
+                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var),
             };
-            if (seen_attached.contains(key)) continue;
-            seen_attached.putAssumeCapacity(key, {});
-            retained_constraints.appendAssumeCapacity(constraint);
+            const entry = try retained_by_key.getOrPut(key);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = constraint.fn_var;
+                continue;
+            }
+            if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var)) {
+                try canonical_type_keys.appendIdentityVarsFromVar(
+                    self.gpa,
+                    self.types,
+                    self.cir,
+                    entry.value_ptr.*,
+                    &pending_receivers,
+                );
+            }
+        }
+
+        const resolved = self.types.resolveVar(receiver_var);
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        retained_constraints.clearRetainingCapacity();
+        try retained_constraints.ensureTotalCapacity(self.gpa, constraints.len);
+        for (constraints) |constraint| {
+            if (constraint.origin == .from_literal) {
+                retained_constraints.appendAssumeCapacity(constraint);
+                continue;
+            }
+            const fn_root = self.types.resolveVar(constraint.fn_var).var_;
+            var duplicate = false;
+            for (retained_constraints.items) |retained| {
+                if (retained.origin == .from_literal) continue;
+                if (!retained.fn_name.eql(constraint.fn_name)) continue;
+                if (std.meta.activeTag(retained.origin) != std.meta.activeTag(constraint.origin)) continue;
+                if (dispatchConstraintOriginFlag(retained.origin) != dispatchConstraintOriginFlag(constraint.origin)) continue;
+                if (self.types.resolveVar(retained.fn_var).var_ != fn_root) continue;
+                duplicate = true;
+                break;
+            }
+            if (!duplicate) retained_constraints.appendAssumeCapacity(constraint);
         }
         if (retained_constraints.items.len == constraints.len) continue;
 
@@ -26912,41 +26960,57 @@ fn deduplicateGeneralizedDispatchRequirements(
     }
 
     const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
-    const scheme = &self.type_schemes.items[scheme_idx];
-    if (scheme.dispatch_requirements.items.len <= 1) return;
+    if (self.type_schemes.items[scheme_idx].dispatch_requirements.items.len <= 1) return;
 
-    var seen = std.AutoHashMap(GeneralizedSchemeRequirementKey, void).init(self.gpa);
+    var seen = std.AutoHashMap(GeneralizedSchemeRequirementKey, Var).init(self.gpa);
     defer seen.deinit();
-    try seen.ensureTotalCapacity(@intCast(scheme.dispatch_requirements.items.len));
+    try seen.ensureTotalCapacity(@intCast(self.type_schemes.items[scheme_idx].dispatch_requirements.items.len));
 
     var write: usize = 0;
-    for (scheme.dispatch_requirements.items) |requirement| {
+    var read: usize = 0;
+    while (read < self.type_schemes.items[scheme_idx].dispatch_requirements.items.len) : (read += 1) {
+        const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[read];
         // Literal metadata participates in defaulting and is intentionally
         // aggregated by the literal-specific path, not this method-target pass.
         if (requirement.constraint.origin == .from_literal) {
-            scheme.dispatch_requirements.items[write] = requirement;
+            self.type_schemes.items[scheme_idx].dispatch_requirements.items[write] = requirement;
             write += 1;
             continue;
         }
 
-        const callable_shape = try self.generalizedCallableShape(
-            &anchors,
-            &callable_shapes,
-            requirement.constraint.fn_var,
-        );
         const key = GeneralizedSchemeRequirementKey{
             .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
             .fn_name = requirement.constraint.fn_name,
             .origin_tag = std.meta.activeTag(requirement.constraint.origin),
             .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
-            .callable_shape = callable_shape,
+            .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, requirement.constraint.fn_var),
         };
-        if (seen.contains(key)) continue;
-        seen.putAssumeCapacity(key, {});
-        scheme.dispatch_requirements.items[write] = requirement;
+        const entry = seen.getOrPutAssumeCapacity(key);
+        if (entry.found_existing) {
+            const same_callable = self.types.resolveVar(entry.value_ptr.*).var_ == self.types.resolveVar(requirement.constraint.fn_var).var_ or
+                try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, requirement.constraint.fn_var);
+            if (same_callable) continue;
+        } else {
+            entry.value_ptr.* = requirement.constraint.fn_var;
+        }
+        self.type_schemes.items[scheme_idx].dispatch_requirements.items[write] = requirement;
         write += 1;
     }
-    scheme.dispatch_requirements.shrinkRetainingCapacity(write);
+    self.type_schemes.items[scheme_idx].dispatch_requirements.shrinkRetainingCapacity(write);
+}
+
+/// Establish two same-shape generalized callables as one relation. Returns
+/// false, leaving the store untouched, when the unifier cannot prove them
+/// equal (the shape digest was a collision).
+fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplicate_fn_var: Var) Allocator.Error!bool {
+    if (self.types.resolveVar(retained_fn_var).var_ == self.types.resolveVar(duplicate_fn_var).var_) return false;
+    var probe = try self.beginProbe(null);
+    if (try self.probeUnifyWithoutRecordingProblems(retained_fn_var, duplicate_fn_var)) {
+        probe.commit();
+        return true;
+    }
+    probe.rollback();
+    return false;
 }
 
 /// Retire side-table requirements only after their exact deferred callable was
@@ -30283,13 +30347,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         break :fn_result probed_result;
                     };
-                    if (fn_result.isEstablished()) {
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                    } else {
-                        if (fn_result.isProblem()) {
+                    switch (fn_result) {
+                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        }
-                        try self.markStaticDispatchRejected(constraint);
+                            try self.markStaticDispatchRejected(constraint);
+                        },
                     }
                 }
                 break :dispatch_resolution;
@@ -30607,13 +30670,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
-                    if (fn_result.isEstablished()) {
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                    } else {
-                        if (fn_result.isProblem()) {
+                    switch (fn_result) {
+                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        }
-                        try self.markStaticDispatchRejected(constraint);
+                            try self.markStaticDispatchRejected(constraint);
+                        },
                     }
                 }
                 break :dispatch_resolution;

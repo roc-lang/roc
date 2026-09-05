@@ -1655,11 +1655,14 @@ pub const ReportBuilder = struct {
         try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
         try report.document.addLineBreak();
 
-        if (try self.addTryErrorPayloadType(&report, types)) {
+        const has_error_payload_type = try self.addTryErrorPayloadType(&report, types);
+        if (has_error_payload_type) {
             try D.renderSlice(&.{
-                D.bytes("So this function must return a"),
+                D.bytes("Returning an"),
+                D.bytes("Err").withAnnotation(.inline_code),
+                D.bytes("with that type only works if the function itself returns a"),
                 D.bytes("Try").withAnnotation(.inline_code),
-                D.bytes("with a compatible error type."),
+                D.bytes("with a compatible error type, but this function's return type is:"),
             }, self, &report);
         } else {
             try D.renderSlice(&.{
@@ -1672,9 +1675,11 @@ pub const ReportBuilder = struct {
                 D.bytes(".").withNoPrecedingSpace(),
             }, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
+        if (!has_error_payload_type) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const body_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
@@ -1744,13 +1749,16 @@ pub const ReportBuilder = struct {
         const err_type = self.getFormattedString(err_snapshot);
 
         try D.renderSlice(&.{
-            D.bytes("On error, this"),
+            D.bytes("If this"),
+            D.bytes("Try").withAnnotation(.inline_code),
+            D.bytes("is an"),
+            D.bytes("Err").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("then the"),
             D.bytes("?").withAnnotation(.inline_code),
-            D.bytes("returns"),
-            D.bytes("Err(e)").withAnnotation(.inline_code),
-            D.bytes("where"),
-            D.bytes("e").withAnnotation(.inline_code),
-            D.bytes("has the type:"),
+            D.bytes("after it immediately returns an"),
+            D.bytes("Err").withAnnotation(.inline_code),
+            D.bytes("whose payload has this type:"),
         }, self, report);
         try report.document.addLineBreak();
         try report.document.addLineBreak();

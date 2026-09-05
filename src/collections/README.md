@@ -9,3 +9,6 @@ This module provides:
 - **Memory Efficiency**: Data structures designed to minimize memory overhead during compilation
 - **Performance**: Fast access patterns for common compiler operations
 - **Type Safety**: Safe, generic collections that work with Roc's type system
+
+`RekeyingHashMap` keeps lookup cost independent of deletion history for indexes
+whose keys are repeatedly removed and reinserted as compiler identities evolve.
