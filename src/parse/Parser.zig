@@ -874,6 +874,14 @@ fn recoverMalformedTypeDeclLine(self: *Parser, start: TokenIdx) void {
         self.advance();
     }
 }
+
+noinline fn malformedWhereAliasMissingColon(self: *Parser, start: TokenIdx) std.mem.Allocator.Error!AST.Statement.Idx {
+    const diagnostic_pos = self.pos - 1;
+    try self.pushDiagnostic(.where_alias_expected_colon, .{ .start = diagnostic_pos, .end = self.pos });
+    self.recoverMalformedTypeDeclLine(start);
+    return try self.store.addMalformed(AST.Statement.Idx, .where_alias_expected_colon, .{ .start = start, .end = self.pos });
+}
+
 /// parse a `.roc` module
 ///
 /// the tokens are provided at Parser initialisation
@@ -1010,9 +1018,7 @@ fn parseRecordFieldTokens(self: *Parser) std.mem.Allocator.Error!AST.RecordField
 
 fn parseTypeIdentToken(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     const tag = self.peek();
-    if (tag != .LowerIdent and tag != .NamedUnderscore and tag != .Underscore) {
-        return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
-    }
+    std.debug.assert(tag == .LowerIdent or tag == .NamedUnderscore or tag == .Underscore);
     const tok = self.pos;
     self.advance();
     const region = AST.TokenizedRegion{ .start = tok, .end = self.pos };
@@ -1022,31 +1028,6 @@ fn parseTypeIdentToken(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
         .{ .underscore_type_var = .{ .region = region, .tok = tok } }
     else
         .{ .underscore = .{ .region = region } });
-}
-
-/// Whether the tokens at the current position begin a where alias declaration:
-/// a lowercase receiver, a dotted upper name, optional arguments, then `:`.
-/// Nothing else in the language starts this way, so committing here lets the
-/// missing-`where` case report against the declaration rather than the line.
-fn whereAliasDeclFollows(self: *Parser) bool {
-    std.debug.assert(self.peek() == .LowerIdent);
-    if (self.peekNext() != .NoSpaceDotUpperIdent and self.peekNext() != .DotUpperIdent) return false;
-
-    var pos = self.pos + 2;
-    if (self.peekAt(pos) == .NoSpaceOpenRound or self.peekAt(pos) == .OpenRound) {
-        var depth: u32 = 1;
-        pos += 1;
-        while (depth > 0) : (pos += 1) {
-            const tag = self.peekAt(pos);
-            if (tag == .OpenRound or tag == .NoSpaceOpenRound) {
-                depth += 1;
-            } else if (tag == .CloseRound) {
-                depth -= 1;
-            } else if (tag == .EndOfFile) return false;
-        }
-    }
-
-    return self.peekAt(pos) == .OpColon;
 }
 
 /// Which token tag opens the header's name. Where alias headers are named by a
@@ -1071,6 +1052,14 @@ fn parseTypeHeaderTokens(self: *Parser, name_tag: TypeHeaderNameTag) std.mem.All
     self.advance();
     const scratch_top = self.store.scratchTypeAnnoTop();
     while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+        const arg_tag = self.peek();
+        if (arg_tag != .LowerIdent and arg_tag != .NamedUnderscore and arg_tag != .Underscore) {
+            @branchHint(.unlikely);
+            const invalid_pos = self.pos;
+            try self.pushDiagnostic(.invalid_type_arg, .{ .start = invalid_pos, .end = invalid_pos + 1 });
+            self.store.clearScratchTypeAnnosFrom(scratch_top);
+            return try self.store.addMalformed(AST.TypeHeader.Idx, .invalid_type_arg, .{ .start = start, .end = self.pos });
+        }
         try self.store.addScratchTypeAnno(try self.parseTypeIdentToken());
         if (!self.consumeComma()) {
             break;
@@ -5872,7 +5861,9 @@ fn runExprStatementKernel(
                 if (tok == .LowerIdent or tok == .NamedUnderscore) {
                     const start = self.pos;
                     const next_tok = self.peekNext();
-                    if (tok == .LowerIdent and self.whereAliasDeclFollows()) {
+                    if (tok == .LowerIdent and
+                        (next_tok == .NoSpaceDotUpperIdent or next_tok == .DotUpperIdent))
+                    {
                         const var_tok = self.pos;
                         self.advance();
                         const header = try self.parseTypeHeaderTokens(.dotted_upper_ident);
@@ -5884,6 +5875,12 @@ fn runExprStatementKernel(
                             continue :expr_kernel .statement_complete;
                         }
 
+                        if (self.peek() != .OpColon) {
+                            @branchHint(.unlikely);
+                            last_statement = try self.malformedWhereAliasMissingColon(start);
+                            continue :expr_kernel .statement_complete;
+                        }
+
                         const type_path = blk_path: {
                             const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
                             const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
@@ -5891,8 +5888,6 @@ fn runExprStatementKernel(
                             break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
                         };
 
-                        // `whereAliasDeclFollows` already checked for the colon.
-                        std.debug.assert(self.peek() == .OpColon);
                         self.advance();
                         if (self.peek() != .KwWhere) {
                             last_statement = try self.pushMalformed(AST.Statement.Idx, .where_alias_expected_where, self.pos);
