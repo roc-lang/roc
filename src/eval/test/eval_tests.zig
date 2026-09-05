@@ -2021,6 +2021,32 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
     },
     .{
+        .name = "inspect: typed custom from_numeral codepoint literals convert in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Code(numeral.digits_before_pt()))
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    'a'.Code => "letter a"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force('a'.Code)), describe(force('b'.Code)))
+        ,
+        .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
+    },
+    .{
         .name = "inspect: custom from_numeral fractional literal pattern dispatches through is_eq",
         .source_kind = .module,
         .source =
