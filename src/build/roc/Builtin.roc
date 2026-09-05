@@ -5834,13 +5834,14 @@ Builtin :: [].{
 			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		insert = |dict, key, value| match dict {
 			HashMap(data) => {
-				match dict_find(data, key) {
+				(next_data, found_or_missing) = dict_find_for_insert(data, key)
+				match found_or_missing {
 					Found(found) => {
-						entries = list_set_unsafe(data.entries, found.entry_index, (key, value))
-						HashMap({ entries, buckets: data.buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts })
+						entries = list_set_unsafe(next_data.entries, found.entry_index, (key, value))
+						HashMap({ entries, buckets: next_data.buckets, max_entries_before_grow: next_data.max_entries_before_grow, shifts: next_data.shifts })
 					}
 					Missing(missing) => {
-						HashMap(dict_insert_absent_data(data, missing, key, value))
+						HashMap(dict_insert_absent_data(next_data, missing, key, value))
 					}
 				}
 			}
@@ -21461,6 +21462,53 @@ dict_find = |data, key| {
 	}
 }
 
+dict_find_for_insert : Dict.DictData(k, v), k -> (Dict.DictData(k, v), [Found({ bucket_index : U64, entry_index : U64 }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })])
+	where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+dict_find_for_insert = |data, key| {
+	insert_outcome = if List.is_empty(data.entries) {
+		if List.is_empty(data.buckets) {
+			Missing({ bucket_index: 0, dist_and_fingerprint: 0 })
+		} else {
+			hash = dict_hash_key(key, data.shifts)
+			Missing({
+				bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
+				dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
+			})
+		}
+	} else if List.is_empty(data.buckets) {
+		crash "Dict invariant violated: entries without buckets"
+	} else {
+		hash = dict_hash_key(key, data.shifts)
+		dict_find_for_insert_from(
+			data.buckets,
+			data.entries,
+			dict_bucket_index_from_hash(hash, data.shifts),
+			dict_dist_and_fingerprint_from_hash(hash),
+			key,
+		)
+	}
+	(data, insert_outcome)
+}
+
+dict_find_for_insert_from : List(Dict.DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64 }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	where [k.is_eq : k, k -> Bool]
+dict_find_for_insert_from = |buckets, entries, bucket_index, dist_and_fingerprint, key| {
+	bucket = list_get_unsafe(buckets, bucket_index)
+	if dist_and_fingerprint == bucket.dist_and_fingerprint {
+		entry_index = U32.to_u64(bucket.entry_index)
+		(found_key, _) = list_get_unsafe(entries, entry_index)
+		if found_key == key {
+			Found({ bucket_index, entry_index })
+		} else {
+			dict_find_for_insert_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
+		}
+	} else if dist_and_fingerprint > bucket.dist_and_fingerprint {
+		Missing({ bucket_index, dist_and_fingerprint })
+	} else {
+		dict_find_for_insert_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
+	}
+}
+
 dict_find_from : List(Dict.DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
 	where [k.is_eq : k, k -> Bool]
 dict_find_from = |buckets, entries, bucket_index, dist_and_fingerprint, key| {
@@ -21594,16 +21642,24 @@ dict_next_while_less_from = |buckets, bucket_index, dist_and_fingerprint| {
 
 dict_place_and_shift_up : List(Dict.DictBucket), Dict.DictBucket, U64 -> List(Dict.DictBucket)
 dict_place_and_shift_up = |buckets, bucket, bucket_index| {
-	loaded = list_get_unsafe(buckets, bucket_index)
-	if loaded.dist_and_fingerprint == 0 {
-		list_set_unsafe(buckets, bucket_index, bucket)
-	} else {
-		next_bucket = {
-			dist_and_fingerprint: dict_increment_dist(loaded.dist_and_fingerprint),
-			entry_index: loaded.entry_index,
+	var $buckets = buckets
+	var $bucket = bucket
+	var $bucket_index = bucket_index
+	var $done = False
+	while $done == False {
+		loaded = list_get_unsafe($buckets, $bucket_index)
+		$buckets = list_set_unsafe($buckets, $bucket_index, $bucket)
+		if loaded.dist_and_fingerprint == 0 {
+			$done = True
+		} else {
+			$bucket = {
+				dist_and_fingerprint: dict_increment_dist(loaded.dist_and_fingerprint),
+				entry_index: loaded.entry_index,
+			}
+			$bucket_index = dict_next_bucket_index($bucket_index, List.len($buckets))
 		}
-		dict_place_and_shift_up(list_set_unsafe(buckets, bucket_index, bucket), next_bucket, dict_next_bucket_index(bucket_index, List.len(buckets)))
 	}
+	$buckets
 }
 
 u8_from_str : Str -> Try(U8, [BadNumStr, ..])

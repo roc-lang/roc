@@ -2048,20 +2048,27 @@ const Certifier = struct {
         };
         const existing = state.claimsOf(container);
         if (existing & bit != 0) {
-            // Same-value aliases can own independent retained units. A
-            // complete projection may spend one intact surplus unit without
-            // claiming the already-dismantled unit's fields a second time.
-            // Partial projections still cannot repeat a field claim.
-            if (self.requiredClaimMask(container) != bit or
-                !self.hasIntactSurplusUnit(state, container)) return false;
-            const before = state.balanceOf(container);
-            try state.addBalance(container, -1);
-            if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
-                .value = container,
-                .before = before,
-                .after = before - 1,
-            } });
-            return true;
+            // Only a complete projection can spend another whole unit;
+            // repeating a partial field claim would lose its other fields.
+            if (self.requiredClaimMask(container) != bit) return false;
+            // A second stamped take of the same projection spends that field
+            // from an intact surplus aggregate unit. The first unit remains
+            // represented by the existing claim set.
+            if (self.hasIntactSurplusUnit(state, container)) {
+                const before = state.balanceOf(container);
+                try state.addBalance(container, -1);
+                if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                    .value = container,
+                    .before = before,
+                    .after = before - 1,
+                } });
+                return true;
+            }
+            // A complete projected container can hold another unit in its
+            // parent even when its only explicit balance is the unit already
+            // described by `existing`. Claim that exact parent unit for the
+            // duplicate projection.
+            return try self.tryClaimSeen(state, container, seen, mutations);
         }
         if (!try self.ensureClaimContainerUnit(state, container, seen, mutations)) return false;
         try state.setClaims(container, existing | bit);
@@ -4629,18 +4636,21 @@ const Certifier = struct {
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            assign.take_kind,
                         ),
                         .tag_payload => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            assign.take_kind,
                         ),
                         .tag_payload_struct => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            assign.take_kind,
                         ),
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
@@ -4863,9 +4873,19 @@ const Certifier = struct {
                 },
                 .set_local => |assign| {
                     if (assign.target != assign.value) {
-                        _ = try self.requireLive(&state, assign.value);
+                        const value = try self.requireLive(&state, assign.value);
+                        if (assign.mode == .initialize_join_param and
+                            value != no_value and
+                            state.balanceOf(value) == 0 and
+                            try self.tryClaim(&state, value))
+                        {
+                            // A stamped take crossing into its explicit join
+                            // cell settles here, so later residual releases
+                            // cannot claim the transferred field first.
+                            try state.addBalance(value, 1);
+                        }
                         if (self.isRc(assign.target)) {
-                            try state.bindValue(assign.target, state.valueOf(assign.value));
+                            try state.bindValue(assign.target, value);
                         }
                     }
                     if (assign.mode == .initialize_join_param and self.maybe_uninitialized.get(assign.target) != null) {
@@ -5168,14 +5188,14 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, take_kind: LIR.TakeKind) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and self.isInlineStructRepresentation(source)) {
             _ = try self.requireStructRepresentation(state, source);
             return;
         }
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
-        if (source_value != no_value) try self.requireFieldUntaken(state, source_value, source, target, projection);
+        if (source_value != no_value and take_kind == .none) try self.requireFieldUntaken(state, source_value, source, target, projection);
         const value = if (source_value == no_value)
             try self.bindBorrowedFromImplicitLive(state, target)
         else

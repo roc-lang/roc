@@ -541,6 +541,10 @@ value_lookup_tracking: std.ArrayListUnmanaged(ValueLookupEntry),
 /// Tracks expressions whose checked type contains an error, even if annotation
 /// preservation later gives their raw expr var a non-error type.
 erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+/// Reassignments whose pattern/RHS relation was rejected. The whole statement
+/// must become an explicit runtime error before checked-body construction,
+/// because its pattern interface is erroneous independently of its RHS.
+erroneous_reassignments: std.AutoHashMapUnmanaged(CIR.Statement.Idx, CIR.Expr.Idx),
 /// Tracks unannotated expression identities whose checked value type contains
 /// an error and therefore cannot be used to introduce a parent call relation.
 call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
@@ -2596,6 +2600,7 @@ fn initAssumePrepared(
         .binding_scheme_nodes = binding_scheme_nodes,
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
+        .erroneous_reassignments = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .erroneous_value_patterns = .empty,
         .rejected_default_exprs = .empty,
@@ -2710,6 +2715,7 @@ pub fn deinit(self: *Self) void {
     self.predeclared_local_scheme_vars.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
+    self.erroneous_reassignments.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
@@ -20939,7 +20945,20 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 //
                 // TODO: if there's a mismatch here, the region of the error is
                 // the original assignment pattern, not the reassignment region
-                const reassign_pattern_result = try self.unify(reassign_pattern_var, reassign_expr_var, env);
+                const reassign_pattern_result = try self.unifyOwnedRelation(
+                    reassign_pattern_var,
+                    reassign_expr_var,
+                    env,
+                    .none,
+                    .construction,
+                );
+
+                if (reassign_pattern_result.isProblem() or
+                    self.types.resolveVar(reassign_expr_var).desc.content == .err)
+                {
+                    try self.erroneous_value_exprs.put(self.gpa, reassign.expr, {});
+                    try self.erroneous_reassignments.put(self.gpa, stmt_idx, reassign.expr);
+                }
 
                 _ = try self.unify(stmt_var, reassign_expr_var, env);
 
@@ -24408,6 +24427,18 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
             .region = self.cir.store.getExprRegion(expr_idx.*),
         } });
         try self.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
+    }
+
+    var reassignments = self.erroneous_reassignments.iterator();
+    while (reassignments.next()) |entry| {
+        const poisoned_expr = self.cir.store.getExpr(entry.value_ptr.*);
+        if (poisoned_expr != .e_runtime_error) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("check invariant violated: rejected reassignment RHS was not poisoned", .{});
+            }
+            unreachable;
+        }
+        self.cir.store.replaceStatementWithRuntimeError(entry.key_ptr.*, poisoned_expr.e_runtime_error.diagnostic);
     }
 }
 

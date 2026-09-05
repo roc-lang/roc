@@ -4,6 +4,40 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+test "check - mismatched reassignment becomes a runtime error statement" {
+    const src =
+        \\main! = |_| {
+        \\    var $list = [1, 2, 3]
+        \\    $list = List.set($list, 0, 5)
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    var repeated_diagnostic_count: usize = 0;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node = test_env.module_env.store.nodes.get(node_idx);
+        if (node.tag != .malformed) continue;
+        const diagnostic = node.getPayload().diag_single_value.value;
+        var same_diagnostic_count: usize = 0;
+        var other_raw_node_idx: u32 = 0;
+        while (other_raw_node_idx < test_env.module_env.store.nodes.len()) : (other_raw_node_idx += 1) {
+            const other_node = test_env.module_env.store.nodes.get(@enumFromInt(other_raw_node_idx));
+            if (other_node.tag == .malformed and other_node.getPayload().diag_single_value.value == diagnostic) {
+                same_diagnostic_count += 1;
+            }
+        }
+        repeated_diagnostic_count = @max(repeated_diagnostic_count, same_diagnostic_count);
+    }
+    try std.testing.expectEqual(@as(usize, 2), repeated_diagnostic_count);
+}
+
 test "check - repro - issue 10365 - erroneous captured lambda poisons closure owner" {
     const src =
         \\wrap : U64, a -> Box(({} => a))

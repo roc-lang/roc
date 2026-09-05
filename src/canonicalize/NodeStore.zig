@@ -2174,6 +2174,21 @@ pub fn replaceExprWithRuntimeError(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing statement with an in-place runtime error node after
+/// checking has rejected the statement and recorded its diagnostic.
+pub fn replaceStatementWithRuntimeError(
+    store: *NodeStore,
+    stmt_idx: CIR.Statement.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .diag_single_value = .{
+        .value = @intFromEnum(diagnostic_idx),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Updates the body of an e_lambda expression.
 /// Used when the lambda was created with a placeholder body and needs to be updated
 /// after the actual body is canonicalized.
