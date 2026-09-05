@@ -67,6 +67,9 @@ pub const BuildSession = struct {
             override = .{ .path = absolute_path, .content = text, .base = env.filesystem };
             env.filesystem = override.io();
         }
+        errdefer if (override_text != null) {
+            env.filesystem = saved_io;
+        };
 
         const preferred_main = try preferredMainFromWorkspace(allocator, env.filesystem, workspace_root);
         defer if (preferred_main) |main_path| allocator.free(main_path);
