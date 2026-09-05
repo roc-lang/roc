@@ -1878,19 +1878,17 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .underscore_in_type_declaration => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{data.declared.label()});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "Underscore In Type Alias", headline, .runtime_error);
+            var report = try Report.init(allocator, data.declared.underscoreReportTitle(), data.declared.underscoreHeadline(), .runtime_error);
 
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
             try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
 
             try report.document.addLineBreak();
-            const explanation = try std.fmt.allocPrint(allocator, "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.", .{});
-            defer allocator.free(explanation);
-            const owned_explanation = try report.addOwnedString(explanation);
-            try report.document.addReflowingText(owned_explanation);
+            switch (data.declared) {
+                .alias, .where_alias => try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead."),
+                .nominal, .@"opaque" => try report.document.addReflowingText("A bare underscore in a type annotation means \"I don't care about this type\", so it does not declare a type parameter. If this parameter is intentionally phantom, give it an underscore-prefixed name like `_a` instead."),
+            }
 
             break :blk report;
         },
