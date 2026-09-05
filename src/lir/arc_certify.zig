@@ -5548,7 +5548,7 @@ const Certifier = struct {
         }
 
         var arg_values_buffer: [arc_sig.tracked_param_count]ValueId = undefined;
-        var receipts_buffer = [_]RestitutionReceipt{.{}} ** arc_sig.tracked_param_count;
+        var receipts_buffer: [arc_sig.tracked_param_count]RestitutionReceipt = @splat(.{});
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
             const arg = GuardedList.at(arg_locals, index);
             const value = try self.requireLive(state, arg);

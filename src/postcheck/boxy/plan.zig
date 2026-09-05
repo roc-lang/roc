@@ -14105,7 +14105,7 @@ test "boxy planner records imported box payload capability source modules" {
 
     const root_key = moduleKey(1);
     const source_key = moduleKey(2);
-    const nominal_identity = [_]u8{0x44} ** 32;
+    const nominal_identity: [32]u8 = @splat(0x44);
     const nominal_module = try root_names.internModuleIdentity(&nominal_identity);
     const source_nominal_module = try source_names.internModuleIdentity(&nominal_identity);
     try std.testing.expectEqual(nominal_module, source_nominal_module);

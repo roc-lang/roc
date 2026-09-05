@@ -129,7 +129,7 @@ export fn roc_fallible_str_ok() callconv(.c) FallibleStrResult {
 
 const json_input = "{\"favoritesCount\":14}";
 var json_input_storage: [@sizeOf(usize) + json_input.len]u8 align(@alignOf(usize)) =
-    ([_]u8{0} ** @sizeOf(usize)) ++ json_input.*;
+    (@as([@sizeOf(usize)]u8, @splat(0))) ++ json_input.*;
 
 export fn roc_json_input() callconv(.c) RocStr {
     const HostRocStr = extern struct {

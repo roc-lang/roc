@@ -3281,7 +3281,7 @@ test "fluxsort reverses whole quadrants without shifting elements by a byte" {
         try expectStableItems(&items);
 
         // Every input element has to come back exactly once, unchanged.
-        var seen = [_]bool{false} ** len;
+        var seen: [len]bool = @splat(false);
         for (items) |item| {
             try testing.expect(item.input_index < len);
             try testing.expect(!seen[item.input_index]);
@@ -3469,7 +3469,7 @@ test "sorting with a self-contradicting comparison still returns a permutation" 
                 env.getOps(),
             );
 
-            var seen = [_]bool{false} ** 400;
+            var seen: [400]bool = @splat(false);
             for (items[0..len]) |item| {
                 if (item.input_index >= len or seen[item.input_index]) {
                     std.debug.print("seed={d} len={d} duplicated input_index={d}\n", .{ seed, len, item.input_index });
@@ -3505,7 +3505,7 @@ test "sorting with a self-contradicting comparison still returns a permutation" 
                 env.getOps(),
             );
 
-            var wide_seen = [_]bool{false} ** 300;
+            var wide_seen: [300]bool = @splat(false);
             for (wide[0..wide_len]) |item| {
                 if (item.item.input_index >= wide_len or wide_seen[item.item.input_index]) {
                     std.debug.print("seed={d} wide_len={d} duplicated input_index={d}\n", .{ seed, wide_len, item.item.input_index });

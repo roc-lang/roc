@@ -997,7 +997,7 @@ fn gluePluginStamp(
 
 test "glue dylib output hash includes specialization strategy" {
     const artifact_key: CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = [_]u8{0x5a} ** 32,
+        .bytes = @as([32]u8, @splat(0x5a)),
     };
     const lss_hash = glueDylibOutputHash(artifact_key, gluePluginStamp(artifact_key, .lss));
     const boxy_hash = glueDylibOutputHash(artifact_key, gluePluginStamp(artifact_key, .boxy));

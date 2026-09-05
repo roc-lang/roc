@@ -118,7 +118,7 @@ pub const ArgObservation = struct {
 pub const Observation = struct {
     op: LowLevel,
     arg_count: usize,
-    args: [max_observed_args]ArgObservation = [_]ArgObservation{.{}} ** max_observed_args,
+    args: [max_observed_args]ArgObservation = @splat(.{}),
     /// The result's outermost allocation, after the op ran.
     result_outer: ?Allocation = null,
     /// Everything refcounted the result can reach, after the op ran.

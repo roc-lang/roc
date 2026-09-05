@@ -1788,7 +1788,7 @@ fn hostStrEscapeAndQuote(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, para
 
     const result_len = slice.len + extra + 2;
     if (result_len < wasm_roc_str_size) {
-        var small: [wasm_roc_str_size]u8 = .{0} ** wasm_roc_str_size;
+        var small: [wasm_roc_str_size]u8 = @splat(0);
         small[0] = '"';
         var pos: usize = 1;
         for (slice) |ch| {

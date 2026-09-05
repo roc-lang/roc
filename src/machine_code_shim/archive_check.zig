@@ -62,7 +62,7 @@ pub fn main(init: std.process.Init) ArchiveCheckError!void {
         return error.NotAnArchive;
     }
 
-    var uses = [_]Use{.{}} ** compiler_private.len;
+    var uses: [compiler_private.len]Use = @splat(.{});
     const members_scanned = scanArchive(bytes, &uses);
     if (members_scanned == 0) {
         std.debug.print("FAILED: {s} holds no ELF object members\n", .{path});

@@ -470,8 +470,8 @@ test "DenseMap swap-removes and clears compact values" {
     var map = DenseMap(TestId, LargeValue).init(std.testing.allocator);
     defer map.deinit();
 
-    try map.put(@enumFromInt(300), [_]u8{1} ** 1024);
-    try map.put(@enumFromInt(700), [_]u8{2} ** 1024);
+    try map.put(@enumFromInt(300), @as([1024]u8, @splat(1)));
+    try map.put(@enumFromInt(700), @as([1024]u8, @splat(2)));
     try std.testing.expectEqual(@as(usize, 2), map.values.items.len);
     try std.testing.expect(map.remove(@enumFromInt(300)));
     try std.testing.expectEqual(@as(usize, 1), map.values.items.len);
@@ -481,7 +481,7 @@ test "DenseMap swap-removes and clears compact values" {
     try std.testing.expectEqual(@as(usize, 0), map.count());
     try std.testing.expectEqual(@as(?LargeValue, null), map.get(@enumFromInt(700)));
 
-    try map.put(@enumFromInt(300), [_]u8{3} ** 1024);
+    try map.put(@enumFromInt(300), @as([1024]u8, @splat(3)));
     try std.testing.expectEqual(@as(u8, 3), map.get(@enumFromInt(300)).?[0]);
     try std.testing.expectEqual(@as(usize, 1), map.values.items.len);
 

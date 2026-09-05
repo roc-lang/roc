@@ -7236,7 +7236,7 @@ const no_bin_op_bp = BinOpBp{ .left = 0, .right = 0 };
 const bin_op_bp_table = blk: {
     const start = @intFromEnum(Token.Tag.OpPlus);
     const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
-    var table = [_]BinOpBp{no_bin_op_bp} ** len;
+    var table: [len]BinOpBp = @splat(no_bin_op_bp);
     // `*`, `/`, `//`, and `%` form a single multiplicative precedence group,
     // left-associative among each other (`right > left` makes a following
     // same-group operator fail `left >= min_bp`, so `1 % 10 // 100` parses as

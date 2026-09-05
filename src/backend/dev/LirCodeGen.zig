@@ -23676,7 +23676,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_offset = self.codegen.allocStackSlot(roc_str_size);
 
             if (backing_bytes.len < roc_str_size and str_bytes.len < roc_str_size) {
-                var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
+                var bytes: [roc_str_size]u8 = @splat(0);
                 @memcpy(bytes[0..str_bytes.len], str_bytes);
                 bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80);
 
@@ -23893,7 +23893,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
                     try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
                 } else {
-                    var padded: [8]u8 = .{0} ** 8;
+                    var padded: [8]u8 = @splat(0);
                     @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
                     const chunk: u64 = @bitCast(padded);
                     try self.codegen.emitLoadImm(tmp, @bitCast(chunk));

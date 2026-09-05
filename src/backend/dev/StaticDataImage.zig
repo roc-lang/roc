@@ -186,7 +186,7 @@ fn alignForwardChecked(value: usize, alignment: usize) ?usize {
 test "static data image resolves data relocations and compact LIR addresses" {
     const allocator = std.testing.allocator;
     var target_bytes = [_]u8{ 10, 20, 30, 40 };
-    var root_bytes = [_]u8{0} ** @sizeOf(usize);
+    var root_bytes: [@sizeOf(usize)]u8 = @splat(0);
     const root_relocations = [_]StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "payload",
@@ -218,7 +218,7 @@ test "static data image resolves data relocations and compact LIR addresses" {
 
 test "static data image resolves function relocations explicitly" {
     const allocator = std.testing.allocator;
-    var root_bytes = [_]u8{0} ** @sizeOf(usize);
+    var root_bytes: [@sizeOf(usize)]u8 = @splat(0);
     const root_relocations = [_]StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "roc__proc_1",
@@ -250,7 +250,7 @@ test "static data image resolves function relocations explicitly" {
 }
 
 test "static data image rejects and releases an unresolved data graph" {
-    var root_bytes = [_]u8{0} ** @sizeOf(usize);
+    var root_bytes: [@sizeOf(usize)]u8 = @splat(0);
     const relocations = [_]StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "missing",

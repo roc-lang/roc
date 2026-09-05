@@ -11112,7 +11112,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const repro_name = try solved.lifted.names.internTypeName("Repro");
     const alias_name = try solved.lifted.names.internTypeName("Alias");
     const wrap_name = try solved.lifted.names.internTagLabel("Wrap");
@@ -11168,7 +11168,7 @@ test "layout lowering sorts a padding-free nominal record structurally" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0x5A} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0x5A))));
     const state_name = try solved.lifted.names.internTypeName("State");
     const first_name = try solved.lifted.names.internRecordFieldLabel("first");
     const second_name = try solved.lifted.names.internRecordFieldLabel("second");
@@ -11224,7 +11224,7 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0x5B} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0x5B))));
     const state_name = try solved.lifted.names.internTypeName("State");
     const first_name = try solved.lifted.names.internRecordFieldLabel("first");
     const second_name = try solved.lifted.names.internRecordFieldLabel("second");
@@ -11268,7 +11268,7 @@ test "sparse local layout nodes commit in type id order" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD5} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0xD5))));
     const first_name = try solved.lifted.names.internTypeName("FirstLocal");
     const second_name = try solved.lifted.names.internTypeName("SecondLocal");
     const probe_name = try solved.lifted.names.internTypeName("ProbeLocal");
@@ -11340,7 +11340,7 @@ test "named layout index reuses only representation-equivalent instantiations" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0xC3))));
     const first_name = try solved.lifted.names.internTypeName("First");
     const equivalent_name = try solved.lifted.names.internTypeName("Equivalent");
     const different_name = try solved.lifted.names.internTypeName("Different");
@@ -11406,7 +11406,7 @@ test "named layout index reuses structurally equivalent recursive types" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD3} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0xD3))));
     const first_name = try solved.lifted.names.internTypeName("FirstRecursive");
     const equivalent_name = try solved.lifted.names.internTypeName("EquivalentRecursive");
     const next_name = try solved.lifted.names.internRecordFieldLabel("next");
@@ -11461,7 +11461,7 @@ test "named layout index applies backing metadata by named type policy" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD4} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0xD4))));
     const type_name = try solved.lifted.names.internTypeName("MetadataPolicy");
 
     var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});

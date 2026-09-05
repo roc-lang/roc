@@ -8,7 +8,7 @@ extern fn write(fd: c_int, buf: [*]const u8, count: usize) callconv(.c) isize;
 extern fn _write(fd: c_int, buf: [*]const u8, count: c_uint) callconv(.c) c_int;
 
 var failure_count: usize = 0;
-var report: [512]u8 = [_]u8{0} ** 512;
+var report: [512]u8 = @splat(0);
 var report_len: usize = 0;
 var alloc_count: usize = 0;
 var dealloc_count: usize = 0;

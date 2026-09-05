@@ -3551,7 +3551,7 @@ test "BuildEnv collectWatchInputStates includes package root state" {
     defer env.deinit();
     env.setWatchInputTracking(true);
 
-    const root_hash = [_]u8{7} ** 32;
+    const root_hash: [32]u8 = @splat(7);
     const key = try allocator.dupe(u8, "pkg");
     errdefer allocator.free(key);
 
@@ -3612,7 +3612,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         .name = try allocator.dupe(u8, "pkg"),
         .kind = .package,
         .root_file = try allocator.dupe(u8, generated_app_path),
-        .root_file_state = .{ .hash = [_]u8{1} ** 32 },
+        .root_file_state = .{ .hash = @as([32]u8, @splat(1)) },
         .root_dir = try allocator.dupe(u8, generated_dir),
     });
 
@@ -3631,11 +3631,11 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     env.coordinator = coord;
 
     const coord_pkg = try coord.ensurePackage("pkg", generated_dir);
-    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = [_]u8{1} ** 32 });
+    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = @as([32]u8, @splat(1)) });
     const coord_module_id = try coord_pkg.ensureModule(allocator, "App", generated_app_path);
     const coord_mod = &coord_pkg.modules.items[coord_module_id];
     coord_mod.source_dir_override = try allocator.dupe(u8, real_src_dir);
-    coord_mod.source_file_state = .{ .hash = [_]u8{2} ** 32 };
+    coord_mod.source_file_state = .{ .hash = @as([32]u8, @splat(2)) };
     try testing.expectEqualStrings(real_src_dir, coord_mod.canonicalSourceDir());
 
     const source = try allocator.dupe(u8, "main = 1\n");
@@ -3643,7 +3643,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.initCIRFields("App");
     const dep_idx = try module_env.recordFileDependency("data.txt", 0, 0);
-    const dep_hash = [_]u8{3} ** 32;
+    const dep_hash: [32]u8 = @splat(3);
     module_env.setFileDependencyContentHash(dep_idx, dep_hash);
     coord_mod.semantic = .{ .module_env = module_env, .checked_artifact = null };
 

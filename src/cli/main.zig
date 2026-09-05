@@ -21,6 +21,13 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+fn repeatBytes(comptime bytes: []const u8, comptime count: usize) [bytes.len * count]u8 {
+    var result: [bytes.len * count]u8 = undefined;
+    for (0..count) |i| @memcpy(result[i * bytes.len ..][0..bytes.len], bytes);
+    return result;
+}
+
 /// Configure std library logging to suppress debug messages in production.
 /// This prevents debug logs from polluting stderr which should only contain
 /// actual program output (like Stderr.line! calls).
@@ -2502,7 +2509,7 @@ fn shimHostExeCacheName(
 }
 
 fn testDigest(byte: u8) [32]u8 {
-    return [_]u8{byte} ** 32;
+    return @as([32]u8, @splat(byte));
 }
 
 fn testCacheDigest(checked_host_identity: [32]u8, link_inputs_identity: [32]u8) [32]u8 {
@@ -5892,7 +5899,7 @@ test "diagnostic summary header has exact colors and bounded width" {
     plain_config.max_line_width = 80;
     try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
     try std.testing.expectEqualStrings(
-        "── 1 error and 1 warning " ++ ("─" ** 43) ++ " example.roc\n\n",
+        "── 1 error and 1 warning " ++ repeatBytes("─", 43) ++ " example.roc\n\n",
         output.written(),
     );
 
@@ -5904,7 +5911,7 @@ test "diagnostic summary header has exact colors and bounded width" {
         ansi_term.bright_black ++ "── " ++
             ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++
             ansi_term.yellow ++ "1 warning" ++ ansi_term.bright_black ++ " " ++
-            ("─" ** 43) ++ " " ++ ansi_term.cyan ++ "example.roc" ++ ansi_term.reset ++ "\n\n",
+            repeatBytes("─", 43) ++ " " ++ ansi_term.cyan ++ "example.roc" ++ ansi_term.reset ++ "\n\n",
         output.written(),
     );
 
@@ -10953,7 +10960,7 @@ fn cliTestCacheKey(
 
 test "CLI test cache key includes specialization strategy" {
     const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = [_]u8{0x5a} ** 32,
+        .bytes = @as([32]u8, @splat(0x5a)),
     };
     const lss_key = cliTestCacheKey(artifact_key, .lss);
     const boxy_key = cliTestCacheKey(artifact_key, .boxy);

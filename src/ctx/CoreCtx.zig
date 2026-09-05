@@ -907,7 +907,7 @@ fn osCanonicalize(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: A
         return osCanonicalizeLibc(path, allocator);
     }
 
-    var buffer: [std.Io.Dir.max_path_bytes]u8 = [_]u8{0} ** std.Io.Dir.max_path_bytes;
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
     const len = std.Io.Dir.cwd().realPathFile(std_io, path, &buffer) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
@@ -920,11 +920,11 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
     if (std.mem.findScalar(u8, path, 0) != null) return error.IoError;
     if (path.len >= std.posix.PATH_MAX) return error.IoError;
 
-    var path_buffer: [std.posix.PATH_MAX]u8 = [_]u8{0} ** std.posix.PATH_MAX;
+    var path_buffer: [std.posix.PATH_MAX]u8 = @splat(0);
     @memcpy(path_buffer[0..path.len], path);
     const path_z = path_buffer[0..path.len :0];
 
-    var resolved_buffer: [std.posix.PATH_MAX]u8 = [_]u8{0} ** std.posix.PATH_MAX;
+    var resolved_buffer: [std.posix.PATH_MAX]u8 = @splat(0);
     while (true) {
         if (std.c.realpath(path_z, resolved_buffer[0..].ptr)) |resolved| {
             std.debug.assert(resolved == resolved_buffer[0..].ptr);

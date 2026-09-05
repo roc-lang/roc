@@ -1648,7 +1648,7 @@ test "NodeStore round trip - Pattern" {
     });
 
     // Test the round-trip for all patterns with their original regions
-    var regions = [_]base.Region{undefined} ** NodeStore.MODULEENV_PATTERN_NODE_COUNT;
+    var regions: [NodeStore.MODULEENV_PATTERN_NODE_COUNT]base.Region = @splat(undefined);
     for (&regions) |*region| {
         region.* = rand_region();
     }

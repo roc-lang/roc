@@ -7701,9 +7701,7 @@ pub const Constant = enum(u32) {
                             const expected_limbs = @divExact(512, @bitSizeOf(std.math.big.Limb));
                             string: [
                                 (std.math.big.int.Const{
-                                    .limbs = &([1]std.math.big.Limb{
-                                        maxInt(std.math.big.Limb),
-                                    } ** expected_limbs),
+                                    .limbs = &@as([expected_limbs]std.math.big.Limb, @splat(maxInt(std.math.big.Limb))),
                                     .positive = false,
                                 }).sizeInBaseUpperBound(10)
                             ]u8,
@@ -9473,7 +9471,7 @@ pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
         .double => try self.doubleConst(std.math.nan(f64)),
         .fp128 => try self.fp128Const(std.math.nan(f128)),
         .x86_fp80 => try self.x86_fp80Const(std.math.nan(f80)),
-        .ppc_fp128 => try self.ppc_fp128Const(.{std.math.nan(f64)} ** 2),
+        .ppc_fp128 => try self.ppc_fp128Const(@splat(std.math.nan(f64))),
         else => unreachable,
     };
 }
@@ -10778,9 +10776,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         const expected_limbs = @divExact(512, @bitSizeOf(std.math.big.Limb));
                         string: [
                             (std.math.big.int.Const{
-                                .limbs = &([1]std.math.big.Limb{
-                                    maxInt(std.math.big.Limb),
-                                } ** expected_limbs),
+                                .limbs = &@as([expected_limbs]std.math.big.Limb, @splat(maxInt(std.math.big.Limb))),
                                 .positive = false,
                             }).sizeInBaseUpperBound(10)
                         ]u8,

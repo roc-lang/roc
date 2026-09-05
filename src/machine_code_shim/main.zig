@@ -1029,7 +1029,7 @@ test "shim resolves every Boxy runtime wrapper" {
 }
 
 test "data relocations patch data pointers" {
-    var data = [_]u8{0} ** (@sizeOf(usize) + 4);
+    var data: [@sizeOf(usize) + 4]u8 = @splat(0);
     const source_name = "roc__source";
     const target_name = "roc__target";
     const symbol_names = source_name ++ target_name;
@@ -1086,7 +1086,7 @@ test "data relocations patch data pointers" {
 
 test "function-pointer data relocations patch generated Roc code pointers" {
     var code = [_]u8{ 0, 0, 0, 0 };
-    var data = [_]u8{0} ** @sizeOf(usize);
+    var data: [@sizeOf(usize)]u8 = @splat(0);
     const proc_name = "roc__proc_2a";
     const code_symbols = [_]RunImage.CodeSymbol{
         .{

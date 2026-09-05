@@ -14,7 +14,7 @@ const Allocation = struct {
 };
 
 const ContractEnv = struct {
-    allocations: [max_allocations]Allocation = [_]Allocation{.{}} ** max_allocations,
+    allocations: [max_allocations]Allocation = @splat(.{}),
     heap_cursor: usize = 0,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
@@ -23,7 +23,7 @@ const ContractEnv = struct {
     failure_count: usize = 0,
     log_count: usize = 0,
     checksum_count: usize = 0,
-    report: [1024]u8 = [_]u8{0} ** 1024,
+    report: [1024]u8 = @splat(0),
     report_len: usize = 0,
 
     fn reset(self: *ContractEnv) void {

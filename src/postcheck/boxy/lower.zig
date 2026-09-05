@@ -44063,7 +44063,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&([_]u8{0x31} ** 32));
+    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x31))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
         .type_name = @enumFromInt(2),
@@ -44214,7 +44214,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
 
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(1);
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(2);
-    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&([_]u8{0x32} ** 32));
+    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x32))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
         .type_name = @enumFromInt(4),
@@ -44455,7 +44455,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
 
     const field_a = try checked_module.canonical_names.internRecordFieldLabel("a");
     const field_b = try checked_module.canonical_names.internRecordFieldLabel("b");
-    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&([_]u8{0x33} ** 32));
+    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x33))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
         .type_name = try checked_module.canonical_names.internTypeName("WithPadding"),
@@ -44650,7 +44650,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
 
     const field_a = try checked_module.canonical_names.internRecordFieldLabel("a");
     const field_b = try checked_module.canonical_names.internRecordFieldLabel("b");
-    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&([_]u8{0x34} ** 32));
+    const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x34))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
         .type_name = try checked_module.canonical_names.internTypeName("WithPadding"),

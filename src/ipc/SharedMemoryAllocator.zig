@@ -52,7 +52,7 @@ pub const Header = extern struct {
     used_size: u64 = 0,
     total_size: u64 = 0,
     data_offset: u64 = @sizeOf(Header),
-    reserved: [472]u8 = [_]u8{0} ** 472, // Pad to 512 bytes total
+    reserved: [472]u8 = @splat(0), // Pad to 512 bytes total
 };
 
 /// Platform-specific handle for the shared memory

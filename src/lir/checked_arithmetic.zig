@@ -57,7 +57,7 @@ const low_level_table_len = blk: {
 };
 
 const classify_table: [low_level_table_len]?FamilyEntry = blk: {
-    var table = [_]?FamilyEntry{null} ** low_level_table_len;
+    var table: [low_level_table_len]?FamilyEntry = @splat(null);
     for (family) |entry| {
         const index = @intFromEnum(entry.op);
         if (table[index] != null) @compileError("duplicate checked-arithmetic family operation");

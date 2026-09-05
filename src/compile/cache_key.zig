@@ -51,7 +51,7 @@ pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
 }
 
 fn hashWithByte(byte: u8) [32]u8 {
-    return [_]u8{byte} ** 32;
+    return @as([32]u8, @splat(byte));
 }
 
 fn moduleIdentity(byte: u8) CheckedArtifact.ModuleIdentity {

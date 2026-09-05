@@ -36,7 +36,7 @@ const Reduction = struct {
 };
 
 fn multiplyTwoOverPi(significand: u32) Fixed {
-    var product = [_]u64{0} ** 5;
+    var product: [5]u64 = @splat(0);
     var carry: u128 = 0;
 
     for (two_over_pi, 0..) |limb, index| {
@@ -56,7 +56,7 @@ fn fixedBit(value: Fixed, bit_index: u16) bool {
 }
 
 fn lowerBits(value: Fixed, bit_count: u16) Fixed {
-    var result = [_]u64{0} ** 5;
+    var result: [5]u64 = @splat(0);
     const whole_limbs: usize = @intCast(bit_count / 64);
     const partial_bits: u6 = @intCast(bit_count % 64);
 
@@ -73,7 +73,7 @@ fn lowerBits(value: Fixed, bit_count: u16) Fixed {
 fn powerOfTwoMinus(value: Fixed, exponent: u16) Fixed {
     std.debug.assert(exponent < 320);
 
-    var result = [_]u64{0} ** 5;
+    var result: [5]u64 = @splat(0);
     const limb: usize = @intCast(exponent / 64);
     const bit: u6 = @intCast(exponent % 64);
     result[limb] = @as(u64, 1) << bit;

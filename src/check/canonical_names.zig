@@ -58,7 +58,7 @@ pub const EntryWrapperId = enum(u32) { _ };
 
 /// Public `ArtifactRef` declaration.
 pub const ArtifactRef = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @splat(0),
 };
 
 /// 32-byte deep module content identity carried raw at post-check boundaries
@@ -199,7 +199,7 @@ pub const ProcedureCallableRef = struct {
 
 /// Public `CanonicalExecValueTypeKey` declaration.
 pub const CanonicalExecValueTypeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @splat(0),
 };
 
 /// Public `procedureCallableRefEql` function.
@@ -226,17 +226,17 @@ pub fn liftedProcedureTemplateRefEql(a: LiftedProcedureTemplateRef, b: LiftedPro
 
 /// Public `CanonicalTypeKey` declaration.
 pub const CanonicalTypeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @splat(0),
 };
 
 /// Public `CanonicalTypeTemplateKey` declaration.
 pub const CanonicalTypeTemplateKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @splat(0),
 };
 
 /// Public `CanonicalTypeSchemeKey` declaration.
 pub const CanonicalTypeSchemeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @splat(0),
 };
 
 /// Public `ProcBaseKind` declaration.
@@ -1020,7 +1020,7 @@ test "canonical name relocation qualifies every text domain by owning stores" {
     defer destination.deinit();
 
     _ = try destination.internModuleName("Unrelated");
-    _ = try destination.internModuleIdentity(&([_]u8{0xFF} ** 32));
+    _ = try destination.internModuleIdentity(&(@as([32]u8, @splat(0xFF))));
     _ = try destination.internTypeName("Unrelated");
     _ = try destination.internMethodName("unrelated");
     _ = try destination.internRecordFieldLabel("unrelated");
@@ -1029,7 +1029,7 @@ test "canonical name relocation qualifies every text domain by owning stores" {
     _ = try destination.internExternalSymbolName("unrelated_external");
 
     const module_name = try source.internModuleName("Main");
-    const module_identity = try source.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try source.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try source.internTypeName("Model");
     const method_name = try source.internMethodName("render");
     const field_name = try source.internRecordFieldLabel("value");
@@ -1090,7 +1090,7 @@ test "canonical name epoch deltas own consecutive id ranges" {
     try std.testing.expectEqual(@as(usize, 0), empty.proc_bases.len);
 
     const module_name = try source.internModuleName("Main");
-    const module_identity = try source.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try source.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try source.internTypeName("Model");
     const method_name = try source.internMethodName("render");
     const field_name = try source.internRecordFieldLabel("value");
@@ -1138,7 +1138,7 @@ test "canonical name epoch deltas own consecutive id ranges" {
     try first.appendTo(&destination);
     try second.appendTo(&destination);
     try std.testing.expectEqualStrings("Main", destination.moduleNameText(module_name));
-    try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), destination.moduleIdentityBytes(module_identity));
+    try std.testing.expectEqualSlices(u8, &(@as([32]u8, @splat(0xAB))), destination.moduleIdentityBytes(module_identity));
     try std.testing.expectEqualStrings("Model", destination.typeNameText(type_name));
     try std.testing.expectEqualStrings("render", destination.methodNameText(method_name));
     try std.testing.expectEqualStrings("value", destination.recordFieldLabelText(field_name));
@@ -1165,7 +1165,7 @@ test "proc base identity includes nested owner mono specialization" {
     });
     const first_template_index: u32 = 0;
     const owner_template = ProcedureTemplateRef{
-        .artifact = .{ .bytes = [_]u8{1} ** 32 },
+        .artifact = .{ .bytes = @as([32]u8, @splat(1)) },
         .proc_base = owner_base,
         .template = @enumFromInt(first_template_index),
     };

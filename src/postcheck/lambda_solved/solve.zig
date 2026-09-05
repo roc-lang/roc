@@ -3301,7 +3301,7 @@ test "solved type digest treats a transparent alias as its backing" {
     var solver = solvedTypeDigestTestSolver(allocator, &program, &name_store);
     defer solver.solved_position_pool.deinit();
     const backing = try program.types.add(.{ .primitive = .u64 });
-    const module = try name_store.internModuleIdentity(&([_]u8{0xA5} ** 32));
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xA5))));
     const type_name = try name_store.internTypeName("Count");
     const alias = try program.types.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = undefined },
@@ -3360,7 +3360,7 @@ test "lambda solved erased callable digest includes record field default identit
     var name_store = names.NameStore.init(gpa);
     defer name_store.deinit();
     const field_name = try name_store.internRecordFieldLabel("retries");
-    const module = try name_store.internModuleIdentity(&([_]u8{0xD5} ** 32));
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD5))));
 
     var program: Ast.Program = undefined;
     program.types = Type.Store.init(gpa);

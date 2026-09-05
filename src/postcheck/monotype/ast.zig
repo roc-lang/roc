@@ -138,7 +138,7 @@ pub const NestedFn = struct {
 /// specialization. Equal callable/type requests with different evidence must
 /// remain distinct specializations.
 pub const EvidenceDigest = extern struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @splat(0),
 };
 
 /// The structural codec derivation whose checked call contract identifies a

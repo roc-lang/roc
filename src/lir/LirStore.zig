@@ -1412,10 +1412,10 @@ test "body shard append preserves destination on every reserve-stage allocation 
             var destination = Self.init(std.testing.allocator);
             defer destination.deinit();
 
-            const locals = [_]Local{.{ .layout_idx = .zst }} ** 9;
-            const u64s = [_]u64{7} ** 9;
-            const u32s = [_]u32{11} ** 9;
-            const steps = [_]StrMatchStep{.{ .capture = .discard, .delimiter = .{ .backing = .none, .offset = 0, .len = 0 } }} ** 9;
+            const locals: [9]Local = @splat(.{ .layout_idx = .zst });
+            const u64s: [9]u64 = @splat(7);
+            const u32s: [9]u32 = @splat(11);
+            const steps: [9]StrMatchStep = @splat(.{ .capture = .discard, .delimiter = .{ .backing = .none, .offset = 0, .len = 0 } });
 
             var local_ids: [locals.len]LocalId = undefined;
             for (locals, 0..) |local, index| local_ids[index] = try source.addLocal(local);
@@ -1433,19 +1433,19 @@ test "body shard append preserves destination on every reserve-stage allocation 
                 const stmt = try source.addCFStmt(.{ .ret = .{ .value = local_ids[0] } });
                 if (index == 0) source_stmt = stmt;
             }
-            _ = try source.addCFSwitchBranches(&([_]CFSwitchBranch{.{ .value = 1, .body = source_stmt }} ** 9));
+            _ = try source.addCFSwitchBranches(&@as([9]CFSwitchBranch, @splat(.{ .value = 1, .body = source_stmt })));
             _ = try source.addStrMatchSteps(&steps);
-            _ = try source.addStrMatchArms(&([_]StrMatchArm{.{
+            _ = try source.addStrMatchArms(&@as([9]StrMatchArm, @splat(.{
                 .prefix = .{ .backing = .none, .offset = 0, .len = 0 },
                 .steps = .{ .start = 0, .len = 1 },
                 .end = .exact,
                 .on_match = source_stmt,
-            }} ** 9));
-            _ = try source.addJoinPointSpan(&([_]JoinPoint{.{
+            })));
+            _ = try source.addJoinPointSpan(&@as([9]JoinPoint, @splat(.{
                 .id = @enumFromInt(1),
                 .params = .empty(),
                 .body = source_stmt,
-            }} ** 9));
+            })));
 
             const destination_local = try destination.addLocal(.{ .layout_idx = .zst });
             _ = try destination.addLocalSpan(&.{destination_local});

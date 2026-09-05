@@ -6907,7 +6907,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn strMatchSetDistinctFirstByteCount(self: *MonoLlvmCodeGen, arms: anytype, start: usize, end: usize) usize {
-        var seen = [_]bool{false} ** 256;
+        var seen: [256]bool = @splat(false);
         var count: usize = 0;
         for (start..end) |i| {
             const arm = GuardedList.at(arms, i);
@@ -6961,7 +6961,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const usize_ty = self.ptrSizedIntType();
 
-        var bucket_blocks = [_]?LlvmBuilder.Function.Block.Index{null} ** 256;
+        var bucket_blocks: [256]?LlvmBuilder.Function.Block.Index = @splat(null);
         var bucket_bytes = std.ArrayList(u8).empty;
         defer bucket_bytes.deinit(self.allocator);
 

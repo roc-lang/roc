@@ -179,7 +179,7 @@ const TestEnv = struct {
     // helpers - alias //
 
     fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        const module_identity = try self.module_env.internModuleIdentity(&([_]u8{0x22} ** 32), Ident.Idx.NONE);
+        const module_identity = try self.module_env.internModuleIdentity(&(@as([32]u8, @splat(0x22))), Ident.Idx.NONE);
         return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_identity);
     }
 
@@ -1063,7 +1063,7 @@ test "unify - distinct concrete builtin numeric nominals never unify" {
     // `mkNumberTypeContent` in src/check/Check.zig). Mirror that shape for
     // U8 and I64 with distinct source decls.
     const origin_module = try env.module_env.internModuleIdentity(
-        &([_]u8{0x33} ** 32),
+        &(@as([32]u8, @splat(0x33))),
         Ident.Idx.NONE,
     );
 
@@ -2683,7 +2683,7 @@ test "cross-module copy substitutes every application of an explicit alias decla
             source_decl,
         ),
     );
-    const other_origin = try source.module_env.internModuleIdentity(&([_]u8{0xA5} ** 32), Ident.Idx.NONE);
+    const other_origin = try source.module_env.internModuleIdentity(&(@as([32]u8, @splat(0xA5))), Ident.Idx.NONE);
     const unrelated_application = try source.module_env.types.freshFromContent(
         try source.module_env.types.mkAliasWithSourceDecl(
             .{ .ident_idx = alias_ident },

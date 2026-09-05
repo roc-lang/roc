@@ -161,8 +161,8 @@ test {
 test "deeply nested parentheses parse stack-safely" {
     const gpa = std.testing.allocator;
 
-    const open_parens = "(" ** 512;
-    const close_parens = ")" ** 512;
+    const open_parens: [512]u8 = @splat('(');
+    const close_parens: [512]u8 = @splat(')');
     const source = open_parens ++ "1" ++ close_parens;
 
     var env = try CommonEnv.init(gpa, source);

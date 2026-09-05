@@ -1381,7 +1381,7 @@ test "canonical error detection traverses alias arguments" {
 
     var env = try ModuleEnv.init(allocator, "");
     defer env.deinit();
-    try env.setContentIdentity([_]u8{0xA5} ** 32);
+    try env.setContentIdentity(@as([32]u8, @splat(0xA5)));
     const alias_ident = try env.insertIdent(Ident.for_text("Alias"));
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);

@@ -9,6 +9,12 @@ const testing = std.testing;
 const CompactWriter = collections.CompactWriter;
 const InternedBytes = @import("InternedBytes.zig");
 
+fn repeatBytes(comptime bytes: []const u8, comptime count: usize) [bytes.len * count]u8 {
+    var result: [bytes.len * count]u8 = undefined;
+    for (0..count) |i| @memcpy(result[i * bytes.len ..][0..bytes.len], bytes);
+    return result;
+}
+
 /// The index of this string in a `Store`.
 pub const Idx = enum(u32) {
     none = 0,
@@ -636,7 +642,7 @@ test "Store comprehensive CompactWriter roundtrip" {
         "line1\nline2\r\nline3", // line breaks
         "tab\tseparated\tvalues", // tabs
         "quotes: 'single' and \"double\"", // quotes
-        "very long string " ** 50, // long string
+        repeatBytes("very long string ", 50), // long string
     };
 
     var indices = std.ArrayList(Idx).empty;
@@ -808,7 +814,7 @@ test "Store edge case indices CompactWriter roundtrip" {
     const idx3 = try builder.insert(&original, gpa, "");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "".len), @intFromEnum(idx3));
 
-    const long_str = "x" ** 1000;
+    const long_str: [1000]u8 = @splat('x');
     const idx4 = try builder.insert(&original, gpa, long_str);
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, long_str.len), @intFromEnum(idx4));
 

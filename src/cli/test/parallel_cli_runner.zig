@@ -95,7 +95,7 @@ const suite_count = @typeInfo(Suite).@"enum".fields.len;
 const all_suites = [_]Suite{ .platforms, .subcommands, .echo, .glue };
 
 const SuiteSelection = struct {
-    enabled: [suite_count]bool = [_]bool{false} ** suite_count,
+    enabled: [suite_count]bool = @splat(false),
 
     fn all() SuiteSelection {
         var result = SuiteSelection{};
@@ -10004,12 +10004,12 @@ fn printResults(
     const status_count = 7;
     const opt_count = 4;
     const all_opts = [_]OptMode{ .interpreter, .dev, .size, .speed };
-    var status_counts = [_]usize{0} ** status_count;
-    var opt_counts = [_]usize{0} ** opt_count;
-    var opt_failures = [_]usize{0} ** opt_count;
-    var suite_counts = [_]usize{0} ** suite_count;
-    var suite_failures = [_]usize{0} ** suite_count;
-    var suite_skips = [_]usize{0} ** suite_count;
+    var status_counts: [status_count]usize = @splat(0);
+    var opt_counts: [opt_count]usize = @splat(0);
+    var opt_failures: [opt_count]usize = @splat(0);
+    var suite_counts: [suite_count]usize = @splat(0);
+    var suite_failures: [suite_count]usize = @splat(0);
+    var suite_skips: [suite_count]usize = @splat(0);
 
     for (tests, 0..) |tc, i| {
         const r = results[i];

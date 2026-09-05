@@ -1038,8 +1038,8 @@ pub const DebugRefcountTracker = struct {
         site: Site,
     };
 
-    var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
-    var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
+    var rc_addrs: [max_tracked]usize = @splat(0);
+    var shadow_rcs: [max_tracked]isize = @splat(0);
     var count: usize = 0;
     var active: bool = false;
 

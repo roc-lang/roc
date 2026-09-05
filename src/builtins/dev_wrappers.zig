@@ -567,7 +567,7 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
     const small_string_size = @sizeOf(RocStr);
 
     if (result_len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        var buf: [small_string_size]u8 = @splat(0);
         buf[0] = '"';
         var pos: usize = 1;
         for (slice) |ch| {
@@ -1666,7 +1666,7 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
     const small_string_size = @sizeOf(RocStr);
 
     if (slice.len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        var buf: [small_string_size]u8 = @splat(0);
         @memcpy(buf[0..slice.len], slice);
         buf[small_string_size - 1] = @intCast(slice.len | 0x80);
         out.* = @bitCast(buf);

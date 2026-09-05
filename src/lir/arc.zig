@@ -1074,7 +1074,7 @@ const RestitutionSwitch = struct {
     default_resources: std.ArrayList(RestoredResource) = .empty,
     /// The converged resource carrier for each call argument position. One
     /// position can denote a whole unit or one residual field, never both.
-    position_resources: [arc_sig.tracked_param_count]?RestoredResource = .{null} ** arc_sig.tracked_param_count,
+    position_resources: [arc_sig.tracked_param_count]?RestoredResource = @splat(null),
     restored_positions: arc_sig.ParamMask = 0,
 };
 
@@ -5449,7 +5449,7 @@ const Inserter = struct {
         // outcomes. Such a root receipt makes the outcome convention mandatory
         // for its position: the argument carries the root's only unit and the
         // root is read again on the restoring paths.
-        var root_receipts = [_]?LIR.LocalId{null} ** arc_sig.tracked_param_count;
+        var root_receipts: [arc_sig.tracked_param_count]?LIR.LocalId = @splat(null);
         var any_root_receipt = false;
         if (outcome_refinement) |refinement| {
             for (0..@min(GuardedList.borrowLen(locals), arc_sig.tracked_param_count)) |position| {

@@ -4012,7 +4012,7 @@ test "monotype type epoch deltas own consecutive suffixes" {
 
     const field_name = try name_store.internRecordFieldLabel("value");
     const tag_name = try name_store.internTagLabel("Value");
-    const module_bytes = [_]u8{21} ** 32;
+    const module_bytes: [32]u8 = @splat(21);
     const module = try name_store.internModuleIdentity(&module_bytes);
     const type_name = try name_store.internTypeName("Model");
 
@@ -4067,7 +4067,7 @@ test "monotype type epoch deltas own consecutive suffixes" {
     // segments must continue to own both their main nodes and side pools.
     var iteration: u32 = 0;
     while (iteration < 512) : (iteration += 1) {
-        var digest_bytes = [_]u8{0} ** 32;
+        var digest_bytes: [32]u8 = @splat(0);
         digest_bytes[0] = @truncate(iteration);
         digest_bytes[1] = @truncate(iteration >> 8);
         _ = try source.internErased(&name_store, .{ .bytes = digest_bytes });
@@ -4133,9 +4133,9 @@ test "monotype cross-store import relocates names, side pools, sharing, and recu
     _ = try destination_names.internRecordFieldLabel("unrelated");
     _ = try destination_names.internTagLabel("Unrelated");
     _ = try destination_names.internTypeName("Unrelated");
-    _ = try destination_names.internModuleIdentity(&([_]u8{99} ** 32));
+    _ = try destination_names.internModuleIdentity(&(@as([32]u8, @splat(99))));
 
-    const module_bytes = [_]u8{7} ** 32;
+    const module_bytes: [32]u8 = @splat(7);
     const source_module = try source_names.internModuleIdentity(&module_bytes);
     const field_name = try source_names.internRecordFieldLabel("value");
     const tag_name = try source_names.internTagLabel("Node");
@@ -4224,7 +4224,7 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
     defer source_names.deinit();
     var destination_names = names.NameStore.init(std.testing.allocator);
     defer destination_names.deinit();
-    const module_bytes = [_]u8{11} ** 32;
+    const module_bytes: [32]u8 = @splat(11);
     const module = try source_names.internModuleIdentity(&module_bytes);
     const type_name = try source_names.internTypeName("Iterator");
     const len_field = try source_names.internRecordFieldLabel("len");
@@ -4240,7 +4240,7 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
     _ = try destination_names.internRecordFieldLabel("unrelated");
     _ = try destination_names.internTagLabel("Unrelated");
     _ = try destination_names.internTypeName("Unrelated");
-    _ = try destination_names.internModuleIdentity(&([_]u8{98} ** 32));
+    _ = try destination_names.internModuleIdentity(&(@as([32]u8, @splat(98))));
 
     var source = Store.init(std.testing.allocator);
     defer source.deinit();
@@ -4326,7 +4326,7 @@ test "monotype cross-store import preserves every acyclic content form" {
     defer destination.deinit();
 
     const primitive = try source.internPrimitive(&source_names, .u64);
-    const erased_digest = names.TypeDigest{ .bytes = [_]u8{42} ** 32 };
+    const erased_digest = names.TypeDigest{ .bytes = @as([32]u8, @splat(42)) };
     const erased = try source.internErased(&source_names, erased_digest);
     const unit = try source.internZst(&source_names);
     const list = try source.internList(&source_names, primitive);
@@ -4462,7 +4462,7 @@ test "monotype cross-store import is atomic under allocation failure" {
     defer source_names.deinit();
     var source = Store.init(std.testing.allocator);
     defer source.deinit();
-    const module = try source_names.internModuleIdentity(&([_]u8{17} ** 32));
+    const module = try source_names.internModuleIdentity(&(@as([32]u8, @splat(17))));
     const field_name = try source_names.internRecordFieldLabel("field");
     const declared_name = try source_names.internRecordFieldLabel("declared");
     const tag_name = try source_names.internTagLabel("Node");
@@ -4830,7 +4830,7 @@ test "monotype type store recursive transaction preserves captured side-pool row
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x5A} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x5A))));
     const type_name = try name_store.internTypeName("Tree");
     const next_field = try name_store.internRecordFieldLabel("next");
     const more_tag = try name_store.internTagLabel("More");
@@ -5038,7 +5038,7 @@ test "monotype type store acyclic interning keeps distinct backing-less aliases"
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCD))));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
@@ -5076,7 +5076,7 @@ test "monotype named type digest includes generic arguments" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Box");
 
     var store = Store.init(std.testing.allocator);
@@ -5112,7 +5112,7 @@ test "monotype cached digest visits nested parameterized nominals once" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("W");
 
     var store = Store.init(std.testing.allocator);
@@ -5157,7 +5157,7 @@ test "monotype recursive nominal digest ignores how deep the knot is tied" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCD))));
     const type_name = try name_store.internTypeName("V");
     const tag_name = try name_store.internTagLabel("Node");
 
@@ -5225,7 +5225,7 @@ test "monotype recursive nominal digest still separates different arguments" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCE} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCE))));
     const type_name = try name_store.internTypeName("V");
     const tag_name = try name_store.internTagLabel("Node");
 
@@ -5463,7 +5463,7 @@ test "monotype iterator containment cache is invalidated by rollback" {
     try std.testing.expect(!try store.containsIteratorInterface(survivor));
 
     store.restore(mark_);
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Iter");
     const replacement = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
@@ -5542,7 +5542,7 @@ test "monotype digest keeps aliases opaque" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
@@ -5595,7 +5595,7 @@ test "monotype type equality treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
@@ -5633,7 +5633,7 @@ test "monotype type equality compares exact types across stores" {
     defer loaded.deinit();
 
     const field_name = try name_store.internRecordFieldLabel("value");
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Alias");
 
     const current_unit = try current.add(.zst);
@@ -5689,7 +5689,7 @@ test "monotype type equality and digests separate aliases without backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
@@ -5721,7 +5721,7 @@ test "monotype named type digest includes backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Wrap");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -5758,7 +5758,7 @@ test "monotype specialization identity includes generated backing without builti
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("GeneratedEvidence");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -5800,7 +5800,7 @@ test "monotype named backing authority participates in durable identity" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAC))));
     const type_name = try name_store.internTypeName("UnownedEvidence");
     const backing = try store.add(.{ .record = Span.empty() });
     const base = NamedContent{
@@ -5836,7 +5836,7 @@ test "monotype named type digest includes nested named backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const outer_type_name = try name_store.internTypeName("Outer");
     const inner_type_name = try name_store.internTypeName("Inner");
     const outer_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
@@ -5885,7 +5885,7 @@ test "monotype named type digest includes declared field order" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Pair");
     const field_a = try name_store.internRecordFieldLabel("a");
     const field_b = try name_store.internRecordFieldLabel("b");
@@ -6142,7 +6142,7 @@ test "monotype digest separates named types by checked type id" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Reentrant");
 
     const first = try store.add(.{ .named = .{
@@ -6223,7 +6223,7 @@ test "monotype named type digest includes padding backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Padded");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });

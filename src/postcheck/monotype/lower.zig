@@ -12295,7 +12295,7 @@ const DraftNestedLookupAddress = struct {
 };
 
 fn draftOpenRequestKey(node: NodeId) [32]u8 {
-    var bytes = [_]u8{0} ** 32;
+    var bytes: [32]u8 = @splat(0);
     std.mem.writeInt(u32, bytes[0..@sizeOf(u32)], @intFromEnum(node), .little);
     return bytes;
 }
@@ -18651,7 +18651,7 @@ const BodyContext = struct {
                 .kind = 0,
                 .binder = @intFromEnum(entry.binder),
                 .local = @intFromEnum(entry.local),
-                .type_digest = .{ .bytes = [_]u8{0} ** 32 },
+                .type_digest = .{ .bytes = @as([32]u8, @splat(0)) },
             };
             index += 1;
         }
@@ -53991,8 +53991,8 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = recursive_ret,
     } });
     const shared_frame = RuntimeDemandGuardFrameAddress{
-        .module = [_]u8{1} ** 32,
-        .owner_module = [_]u8{2} ** 32,
+        .module = @as([32]u8, @splat(1)),
+        .owner_module = @as([32]u8, @splat(2)),
         .owner_proc_base = 3,
         .owner_template = 4,
         .pattern = 5,
@@ -54176,7 +54176,7 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     const graph = try InstGraph.create(std.testing.allocator, &program.types, &program.names);
     defer graph.destroy();
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("Alias");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
@@ -54302,7 +54302,7 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
         .method_name = "parse_record_field",
         .method_role = 0,
         .subject_bearing = true,
-        .contract_view = [_]u8{0} ** 32,
+        .contract_view = @as([32]u8, @splat(0)),
         .contract_derivation = @enumFromInt(6),
         .shape_ty = first_shape,
         .lookup = lookup,
@@ -54336,7 +54336,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAC))));
     const alias_name = try name_store.internTypeName("Alias");
     const nominal_name = try name_store.internTypeName("Nominal");
     const outer_alias_name = try name_store.internTypeName("OuterAlias");
@@ -55696,7 +55696,7 @@ test "hosted Try adapter narrows requested private representations by declared l
     builder.program = &program;
     builder.active_body_draft = null;
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xA7} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xA7))));
     const opaque_def = Type.TypeDef{
         .module = module_identity,
         .type_name = try program.names.internTypeName("HostedPrivate"),
@@ -55833,7 +55833,7 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
     builder.program = &program;
     builder.active_body_draft = null;
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xB2} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xB2))));
     const try_def = Type.TypeDef{
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
@@ -55944,7 +55944,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
     builder.program = &program;
     builder.active_body_draft = null;
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xC3))));
     const try_def = Type.TypeDef{
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
@@ -56068,7 +56068,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
     try std.testing.expect(std.mem.find(u8, message, "host ABI") != null);
 
     // An over-long symbol still reports; the message stays inside its buffer.
-    const long_symbol = "roc_" ++ ("x" ** 400);
+    const long_symbol = "roc_" ++ (@as([400]u8, @splat('x')));
     const long_message = hostedExternAbiViolationMessage(
         &message_buf,
         long_symbol,
@@ -56091,7 +56091,7 @@ test "request component relation follows root authority before nested private ev
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xE1} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE1))));
     const type_name = try name_store.internTypeName("OuterEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(8) };
@@ -56150,7 +56150,7 @@ test "request component relation descends through matching private-bearing conta
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xE2} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE2))));
     const type_name = try name_store.internTypeName("ElementEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(10) };
@@ -56216,7 +56216,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCE} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCE))));
     const type_name = try name_store.internTypeName("CompositeEvidence");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(1) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
@@ -56268,7 +56268,7 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCF} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCF))));
     const type_name = try name_store.internTypeName("PayloadEvidence");
     const tag_name = try name_store.internTagLabel("One");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(2) };
@@ -56325,7 +56325,7 @@ test "direct call request preserves generated-private return provenance" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD3} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD3))));
     const type_name = try name_store.internTypeName("DirectReturnEvidence");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(4) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
@@ -56372,7 +56372,7 @@ test "dispatch call target relation preserves generated-private return provenanc
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD4} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD4))));
     const type_name = try name_store.internTypeName("DispatchReturnEvidence");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(5) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
@@ -56422,7 +56422,7 @@ test "iterator request nodes preserve generated-private operand and result prove
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD1} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD1))));
     const type_name = try name_store.internTypeName("IteratorEvidence");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(2) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
@@ -56476,7 +56476,7 @@ test "partial synthetic request nodes preserve generated-private argument and re
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD2} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD2))));
     const type_name = try name_store.internTypeName("PartialEvidence");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(3) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
@@ -57021,7 +57021,7 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
         // capture, then destroy the workspace before coordinator absorption.
         var index: u32 = 0;
         while (index < 256) : (index += 1) {
-            var digest = [_]u8{0} ** 32;
+            var digest: [32]u8 = @splat(0);
             std.mem.writeInt(u32, digest[0..4], index, .little);
             _ = try workspace.types.internErased(
                 &workspace.name_store,
@@ -57213,7 +57213,7 @@ test "body draft commit relocates core type and name fields out of private store
     _ = try program.names.internRecordFieldLabel("unrelated");
     _ = try program.names.internTagLabel("Unrelated");
     _ = try program.names.internTypeName("Unrelated");
-    _ = try program.names.internModuleIdentity(&([_]u8{0xFF} ** 32));
+    _ = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xFF))));
 
     var sealed_list: Type.TypeId = undefined;
     {
@@ -57256,7 +57256,7 @@ test "body draft commit relocates core type and name fields out of private store
         _ = try draft.addPat(.{ .ty = list_cell, .data = .{ .record = destructs } });
         _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
         _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = unit_cell } });
-        const module_bytes = [_]u8{0xAB} ** 32;
+        const module_bytes: [32]u8 = @splat(0xAB);
         const module = try private_names.internModuleIdentity(&module_bytes);
         const type_name = try private_names.internTypeName("Model");
         try draft.runtime_schema_requests.append(allocator, .{
@@ -57320,7 +57320,7 @@ test "body draft commit relocates core type and name fields out of private store
         program.names.recordFieldLabelText(GuardedList.at(program.recordDestructSpan(program.getPatAt(2).data.record), 0).name),
     );
     const schema = program.runtimeSchemaRequestsView()[0];
-    try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), program.names.moduleIdentityBytes(schema.def.module));
+    try std.testing.expectEqualSlices(u8, &(@as([32]u8, @splat(0xAB))), program.names.moduleIdentityBytes(schema.def.module));
     try std.testing.expectEqualStrings("Model", program.names.typeNameText(schema.def.type_name));
     const sealed_stmt = program.getStmtAt(0);
     if (sealed_stmt != .return_) return error.TestExpectedEqual;
@@ -57464,7 +57464,7 @@ test "body draft sealed output maps back from specialization cache without body 
         digest.* = program.types.typeDigest(&program.names, @enumFromInt(@as(u32, @intCast(index))));
     }
 
-    const zero_hash = [_]u8{0} ** 32;
+    const zero_hash: [32]u8 = @splat(0);
     const image = try serialize.buildImage(gpa, zero_hash, zero_hash, &.{
         .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(fresh.types.types) },
         .{ .id = .type_args, .bytes = std.mem.sliceAsBytes(fresh.types.spans) },
@@ -57545,8 +57545,8 @@ test "checked string literal cache is shared only within one draft owner" {
     defer draft.deinit();
 
     const literal: checked.CheckedStringLiteralId = @enumFromInt(3);
-    const first_module = [_]u8{1} ** 32;
-    const other_module = [_]u8{2} ** 32;
+    const first_module: [32]u8 = @splat(1);
+    const other_module: [32]u8 = @splat(2);
 
     const first = try draft.addCheckedStringLiteral(first_module, literal, "same");
     const reused = try draft.addCheckedStringLiteral(first_module, literal, "same");
@@ -57571,7 +57571,7 @@ test "checked type instantiation scopes have exact isolated identities" {
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
 
-    const module_bytes = [_]u8{7} ** 32;
+    const module_bytes: [32]u8 = @splat(7);
     var first = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
     defer first.deinit();
     var second = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
@@ -57627,8 +57627,8 @@ test "specialization shard diagnostics remain private until coordinator commit" 
 }
 
 test "function context identity excludes draft local allocation ids" {
-    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 32 };
-    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 32 };
+    const base_key = names.TypeDigest{ .bytes = @as([32]u8, @splat(1)) };
+    const type_digest = names.TypeDigest{ .bytes = @as([32]u8, @splat(2)) };
     const original = [_]LexicalBinderEntry{.{
         .kind = 1,
         .binder = 17,

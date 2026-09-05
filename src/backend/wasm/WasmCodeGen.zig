@@ -8674,7 +8674,7 @@ fn emitZeroValue(self: *Self, val_type: ValType) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
             try self.currentCode().appendSlice(self.allocator, &.{ 0, 0, 0, 0, 0, 0, 0, 0 });
         },
-        .v128 => try self.emitV128Const([_]u8{0} ** 16),
+        .v128 => try self.emitV128Const(@as([16]u8, @splat(0))),
     }
 }
 
@@ -19748,7 +19748,7 @@ fn emitSimdRoundedShift(self: *Self, args: anytype, kind: layout.Vector) Allocat
     self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.v128)) catch return error.OutOfMemory;
-    try self.emitV128Const([_]u8{0} ** 16);
+    try self.emitV128Const(@as([16]u8, @splat(0)));
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     // Add the rounding bias in double-width lanes. A same-width add would
     // wrap for positive lanes near the signed maximum before the shift.

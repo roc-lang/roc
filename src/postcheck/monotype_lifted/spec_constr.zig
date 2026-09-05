@@ -14374,7 +14374,7 @@ test "SpecConstr accepts a transparent alias record update base" {
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
         .{ .name = field, .ty = u8_ty, .default = null },
     }) });
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("RecordAlias");
     const alias_ty = try program.types.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
@@ -15342,7 +15342,7 @@ test "substitution resolves equivalent named types with distinct checked provena
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("Nominal");
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const first_ty = try program.types.add(.{ .named = .{

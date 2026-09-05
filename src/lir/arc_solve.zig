@@ -1800,8 +1800,8 @@ fn buildTailCallTable(
 
         var fact = TailCallLifetime{
             .stmt = call.stmt,
-            .anchor_params = [_]u8{no_param_anchor} ** arc_sig.tracked_param_count,
-            .carriers = [_]u32{no_local} ** arc_sig.tracked_param_count,
+            .anchor_params = @as([arc_sig.tracked_param_count]u8, @splat(no_param_anchor)),
+            .carriers = @as([arc_sig.tracked_param_count]u32, @splat(no_local)),
         };
         const args = solver.store.getLocalSpan(call.args);
         for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {

@@ -461,7 +461,7 @@ const TestsSummaryStep = struct {
         // in a compact form to avoid visual repetition.
         if (self.has_filters and effective_passed > 0) {
             const max_indent = 256;
-            const spaces = [_]u8{' '} ** max_indent;
+            const spaces: [max_indent]u8 = @splat(' ');
             var prev_module: []const u8 = "";
             var prev_name: []const u8 = "";
 
@@ -669,9 +669,9 @@ const CheckTypeCheckerPatternsStep = struct {
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("{s:=<80}\n", .{""});
             std.debug.print("FORBIDDEN PATTERN DETECTED\n", .{});
-            std.debug.print("=" ** 80 ++ "\n\n", .{});
+            std.debug.print("{s:=<80}\n\n", .{""});
 
             std.debug.print(
                 \\Code in src/canonicalize/, src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
@@ -711,7 +711,7 @@ const CheckTypeCheckerPatternsStep = struct {
                 });
             }
 
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("\n{s:=<80}\n", .{""});
 
             return step.fail(
                 "Found {d} forbidden patterns (raw string comparison or manipulation) in src/canonicalize/, src/check/, src/layout/, or src/eval/. " ++
@@ -931,9 +931,9 @@ const CheckEnumFromIntZeroStep = struct {
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("{s:=<80}\n", .{""});
             std.debug.print("FORBIDDEN PATTERN: @enumFromInt(0)\n", .{});
-            std.debug.print("=" ** 80 ++ "\n\n", .{});
+            std.debug.print("{s:=<80}\n\n", .{""});
 
             std.debug.print(
                 \\Using @enumFromInt(0) is forbidden in this codebase.
@@ -969,7 +969,7 @@ const CheckEnumFromIntZeroStep = struct {
                 });
             }
 
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("\n{s:=<80}\n", .{""});
 
             return step.fail(
                 "Found {d} uses of @enumFromInt(0). Using placeholder values like this has consistently led to bugs in this code base. " ++
@@ -1082,9 +1082,9 @@ const CheckUnusedSuppressionStep = struct {
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("{s:=<80}\n", .{""});
             std.debug.print("UNUSED VARIABLE SUPPRESSION DETECTED\n", .{});
-            std.debug.print("=" ** 80 ++ "\n\n", .{});
+            std.debug.print("{s:=<80}\n\n", .{""});
 
             std.debug.print(
                 \\In this codebase, we do NOT use `_ = variable;` to suppress unused warnings.
@@ -1106,7 +1106,7 @@ const CheckUnusedSuppressionStep = struct {
                 });
             }
 
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("\n{s:=<80}\n", .{""});
 
             return step.fail(
                 "Found {d} unused variable suppression patterns (`_ = identifier;`). " ++
@@ -1526,9 +1526,9 @@ const CheckPanicStep = struct {
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("{s:=<80}\n", .{""});
             std.debug.print("FORBIDDEN PATTERN: @panic / std.debug.panic in runtime code\n", .{});
-            std.debug.print("=" ** 80 ++ "\n\n", .{});
+            std.debug.print("{s:=<80}\n\n", .{""});
 
             std.debug.print(
                 \\Using @panic or std.debug.panic is forbidden in interpreter and builtins.
@@ -1566,7 +1566,7 @@ const CheckPanicStep = struct {
                 });
             }
 
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("\n{s:=<80}\n", .{""});
 
             return step.fail(
                 "Found {d} uses of @panic or std.debug.panic in runtime code. " ++
@@ -1658,9 +1658,9 @@ const CheckCliGlobalStdioStep = struct {
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("{s:=<80}\n", .{""});
             std.debug.print("GLOBAL STDIO USAGE DETECTED IN CLI\n", .{});
-            std.debug.print("=" ** 80 ++ "\n\n", .{});
+            std.debug.print("{s:=<80}\n\n", .{""});
 
             std.debug.print(
                 \\In the CLI code, we use context-based I/O, not global stdio functions.
@@ -1699,7 +1699,7 @@ const CheckCliGlobalStdioStep = struct {
                 });
             }
 
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("\n{s:=<80}\n", .{""});
 
             return step.fail(
                 "Found {d} global stdio usage(s) in CLI code. " ++
@@ -1772,14 +1772,14 @@ const CoverageSummaryStep = struct {
         const io = b.graph.io;
         const json_content = std.Io.Dir.cwd().readFileAlloc(io, json_path, allocator, .limited(10 * 1024 * 1024)) catch |err| {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("{s:=<60}\n", .{""});
             std.debug.print("COVERAGE ERROR\n", .{});
-            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("{s:=<60}\n\n", .{""});
             std.debug.print("Could not open coverage JSON at {s}: {}\n", .{ json_path, err });
             std.debug.print("\nMake sure kcov is installed:\n", .{});
             std.debug.print("  - Linux: apt install kcov\n", .{});
             std.debug.print("  - macOS: brew install kcov\n\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("{s:=<60}\n", .{""});
             return;
         };
         defer allocator.free(json_content);
@@ -1790,24 +1790,24 @@ const CoverageSummaryStep = struct {
         // Fail if kcov didn't capture any data - this indicates a problem with kcov
         if (result.total_lines == 0) {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("{s:=<60}\n", .{""});
             std.debug.print("COVERAGE ERROR: NO DATA CAPTURED\n", .{});
-            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("{s:=<60}\n\n", .{""});
             std.debug.print("kcov reported 0 total lines - coverage data was not captured.\n", .{});
             std.debug.print("This indicates a problem with kcov or the binary format.\n\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("{s:=<60}\n", .{""});
             return step.fail("kcov failed to capture coverage data (0 total lines)", .{});
         }
 
         // Enforce minimum coverage threshold
         if (result.percent < self.min_coverage) {
             std.debug.print("\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("{s:=<60}\n", .{""});
             std.debug.print("COVERAGE CHECK FAILED\n", .{});
-            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("{s:=<60}\n\n", .{""});
             std.debug.print("{s} coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ self.label, result.percent, self.min_coverage });
             std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("{s:=<60}\n", .{""});
             return step.fail("{s} coverage {d:.2}% is below minimum {d:.2}%", .{ self.label, result.percent, self.min_coverage });
         }
     }
@@ -1892,9 +1892,9 @@ const CoverageSummaryStep = struct {
             0.0;
 
         std.debug.print("\n", .{});
-        std.debug.print("=" ** 60 ++ "\n", .{});
+        std.debug.print("{s:=<60}\n", .{""});
         std.debug.print("{s} CODE COVERAGE SUMMARY\n", .{label});
-        std.debug.print("=" ** 60 ++ "\n\n", .{});
+        std.debug.print("{s:=<60}\n\n", .{""});
 
         std.debug.print("Total lines:     {d}\n", .{total_lines});
         std.debug.print("Covered lines:   {d}\n", .{covered_lines});
@@ -1923,9 +1923,9 @@ const CoverageSummaryStep = struct {
             }
         }
 
-        std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
+        std.debug.print("\n{s:=<60}\n", .{""});
         std.debug.print("Full HTML report: {s}/index.html\n", .{coverage_dir});
-        std.debug.print("=" ** 60 ++ "\n", .{});
+        std.debug.print("{s:=<60}\n", .{""});
 
         return .{ .percent = percent, .total_lines = total_lines };
     }
@@ -6378,12 +6378,12 @@ pub fn build(b: *std.Build) void {
             .makeFn = struct {
                 fn make(_: *Step, _: Step.MakeOptions) !void {
                     std.debug.print("\n", .{});
-                    std.debug.print("=" ** 60 ++ "\n", .{});
+                    std.debug.print("{s:=<60}\n", .{""});
                     std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
-                    std.debug.print("=" ** 60 ++ "\n\n", .{});
+                    std.debug.print("{s:=<60}\n\n", .{""});
                     std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64.\n", .{});
                     std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
-                    std.debug.print("=" ** 60 ++ "\n", .{});
+                    std.debug.print("{s:=<60}\n", .{""});
                 }
             }.make,
         });

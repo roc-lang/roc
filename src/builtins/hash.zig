@@ -6,6 +6,12 @@ const str = @import("str.zig");
 const float_bits = @import("float_bits.zig");
 const mem = std.mem;
 
+fn repeatBytes(comptime bytes: []const u8, comptime count: usize) [bytes.len * count]u8 {
+    var result: [bytes.len * count]u8 = undefined;
+    for (0..count) |i| @memcpy(result[i * bytes.len ..][0..bytes.len], bytes);
+    return result;
+}
+
 /// TODO: Document wyhash.
 pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.c) u64 {
     if (bytes) |nonnull| {
@@ -320,7 +326,8 @@ test "test vectors streaming" {
     const pattern = "1234567890";
     const count = 8;
     const result = 0x829e9c148b75970e;
-    try std.testing.expectEqual(Wyhash.hash(6, pattern ** 8), result);
+    const repeated_pattern = repeatBytes(pattern, 8);
+    try std.testing.expectEqual(Wyhash.hash(6, &repeated_pattern), result);
 
     wh = Wyhash.init(6);
     var i: u32 = 0;

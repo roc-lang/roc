@@ -260,7 +260,7 @@ pub const BuiltinFn = enum {
 
     const payload_by_builtin = blk: {
         @setEvalBranchQuota(10_000);
-        var result = [_]Payload{.full} ** std.meta.fields(BuiltinFn).len;
+        var result: [std.meta.fields(BuiltinFn).len]Payload = @splat(.full);
         for ([_]BuiltinFn{
             .allocate_with_refcount,
             .box_decref_with,

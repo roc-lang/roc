@@ -342,11 +342,11 @@ fn compileModule(
         try can.BuiltinLowLevel.apply(module_env);
 
         const builtin_indices = buildBuiltinIndices(gpa, module_env) catch |err| {
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("\n{s:=<80}\n", .{""});
             std.debug.print("ERROR: Could not build Builtin type index before type checking\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("{s:=<80}\n", .{""});
             std.debug.print("Builtin type declarations are required for type checking.\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("{s:=<80}\n", .{""});
             return err;
         };
 

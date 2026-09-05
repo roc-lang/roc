@@ -45,6 +45,12 @@ const CliProblem = problem_mod.CliProblem;
 const ColorPalette = reporting.ColorPalette;
 const ReportingConfig = reporting.ReportingConfig;
 
+fn repeatBytes(comptime bytes: []const u8, comptime count: usize) [bytes.len * count]u8 {
+    var result: [bytes.len * count]u8 = undefined;
+    for (0..count) |i| @memcpy(result[i * bytes.len ..][0..bytes.len], bytes);
+    return result;
+}
+
 /// I/O interface for CLI operations.
 /// Owns the buffered writer state (per-stream byte buffers and File.Writer
 /// instances) layered on top of `std.Io`, so the CLI can flush and rebind
@@ -469,8 +475,10 @@ pub fn renderProblem(ctx: *CliCtx, problem: CliProblem) Allocator.Error!void {
 // Tests
 
 const merged_stdio_helper_path_env = "ROC_CLI_IO_WRITER_TEST_HELPER";
-const merged_stdout_payload = "stdout \u{2713} issue-10465\n" ** 256;
-const merged_stderr_payload = "stderr \u{2713} issue-10465\n" ** 256;
+const merged_stdout_line = "stdout \u{2713} issue-10465\n";
+const merged_stderr_line = "stderr \u{2713} issue-10465\n";
+const merged_stdout_payload = repeatBytes(merged_stdout_line, 256);
+const merged_stderr_payload = repeatBytes(merged_stderr_line, 256);
 
 test "issue 10465 merged standard streams preserve both buffered outputs" {
     const allocator = std.testing.allocator;

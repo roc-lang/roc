@@ -396,7 +396,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
 
         // Sentinel bytes on both sides of the result slot; the callee owns
         // only ret_buf[8 .. 8 + expected.len].
-        var ret_buf align(16) = [_]u8{0xAA} ** 32;
+        var ret_buf: [32]u8 align(16) = @splat(0xAA);
         var out_desc: ?*const anyopaque = null;
         callable(&roc_ops, ret_buf[8..].ptr, null, null, null, &out_desc);
 

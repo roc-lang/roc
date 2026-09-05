@@ -16,7 +16,7 @@ const CompactWriter = @This();
 /// require aligned memory access.
 pub const SERIALIZATION_ALIGNMENT = std.mem.Alignment.@"16";
 
-const ZEROS: [16]u8 = [_]u8{0} ** 16;
+const ZEROS: [16]u8 = @splat(0);
 
 iovecs: std.ArrayList(Iovec),
 total_bytes: usize,
@@ -244,7 +244,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .auto) {
         // Zero inter-field gaps
         const covered = comptime blk: {
-            var mask = [_]bool{false} ** vsize;
+            var mask: [vsize]bool = @splat(false);
             for (vinfo.@"struct".fields) |field| {
                 const start = @offsetOf(V, field.name);
                 const end = start + @sizeOf(field.type);

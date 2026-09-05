@@ -1230,7 +1230,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             }
 
             if (is_tty) {
-                std.debug.print("\r{s}\r", .{" " ** 72});
+                std.debug.print("\r{s:>72}\r", .{""});
             }
         }
 

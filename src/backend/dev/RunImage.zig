@@ -102,7 +102,7 @@ pub const RelocationRecord = extern struct {
     code_offset: u64,
     symbol: StringRef,
     kind: u8,
-    _padding: [7]u8 = [_]u8{0} ** 7,
+    _padding: [7]u8 = @splat(0),
 
     pub fn relocationKind(self: RelocationRecord) ImageError!RelocationKind {
         return std.enums.fromInt(RelocationKind, self.kind) orelse error.InvalidDevRunImage;
@@ -137,7 +137,7 @@ pub const DataRelocationRecord = extern struct {
     symbol: StringRef,
     addend: i64,
     target_kind: u8,
-    _padding: [7]u8 = [_]u8{0} ** 7,
+    _padding: [7]u8 = @splat(0),
 
     pub fn targetKind(self: DataRelocationRecord) ImageError!StaticDataTargetKind {
         return std.enums.fromInt(StaticDataTargetKind, self.target_kind) orelse error.InvalidDevRunImage;

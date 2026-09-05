@@ -119,8 +119,8 @@ fn hashLenPrefixed(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void
 
 test "computeDeep is order- and duplicate-insensitive over imports" {
     const gpa = std.testing.allocator;
-    const a: Hash = [_]u8{1} ** 32;
-    const b: Hash = [_]u8{2} ** 32;
+    const a: Hash = @as([32]u8, @splat(1));
+    const b: Hash = @as([32]u8, @splat(2));
 
     const h1 = try computeDeep(gpa, "M", "x = 1", &.{ a, b });
     const h2 = try computeDeep(gpa, "M", "x = 1", &.{ b, a });
@@ -131,7 +131,7 @@ test "computeDeep is order- and duplicate-insensitive over imports" {
 
 test "computeDeep distinguishes name, source, and imports" {
     const gpa = std.testing.allocator;
-    const a: Hash = [_]u8{1} ** 32;
+    const a: Hash = @as([32]u8, @splat(1));
     const base_hash = try computeDeep(gpa, "M", "x = 1", &.{a});
 
     try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "N", "x = 1", &.{a}))));
@@ -150,7 +150,7 @@ test "computeDeep handles more imports than the inline buffer" {
     const gpa = std.testing.allocator;
     var many: [inline_import_capacity + 3]Hash = undefined;
     for (&many, 0..) |*h, i| {
-        h.* = [_]u8{@intCast(i)} ** 32;
+        h.* = @as([32]u8, @splat(@intCast(i)));
     }
     const h1 = try computeDeep(gpa, "M", "x = 1", &many);
     std.mem.reverse(Hash, &many);
