@@ -9981,7 +9981,7 @@ fn constraintSourceExpr(
     var pattern_failure_expr: ?CIR.Expr.Idx = null;
 
     for (self.cir.store.literalDispatchPlans()) |plan| {
-        if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
+        if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
             return @enumFromInt(plan.node_idx);
@@ -9991,6 +9991,20 @@ fn constraintSourceExpr(
         }
     }
     return pattern_failure_expr;
+}
+
+fn literalDispatchPlanMatchesConstraint(
+    self: *Self,
+    plan: LiteralDispatchPlan,
+    constraint: StaticDispatchConstraint,
+    dispatcher_root: Var,
+) bool {
+    const literal_kind = constraint.origin.literalKind() orelse return false;
+    // The raw callable is the literal occurrence's stable identity. Distinct
+    // occurrences may share both a receiver root and a callable equivalence
+    // class after unification, so either resolved root would conflate owners.
+    return plan.fn_var == @intFromEnum(constraint.fn_var) and
+        self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root);
 }
 
 fn literalDispatchPlanMatches(
@@ -10029,13 +10043,56 @@ fn literalPatternFailureExprForConstraint(
     if (literal_kind == .interpolation) return null;
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
     for (self.cir.store.literalDispatchPlans()) |plan| {
-        if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
+        if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
         const raw = plan.patternFailureExpr() orelse continue;
         return @enumFromInt(raw);
     }
     return null;
+}
+
+/// Poison every source occurrence represented by a merged literal relation.
+/// The scan is failure-only: successful dispatch never pays for occurrence
+/// recovery. Collect owners before rewriting any of them because invalidating
+/// an expression subtree retires its literal plans from the dense plan list.
+fn poisonLiteralFailureOwners(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    failed_constraint: StaticDispatchConstraint,
+) Allocator.Error!bool {
+    const dispatcher_root = self.types.resolveVar(deferred.var_).var_;
+    var owners: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer owners.deinit(self.gpa);
+
+    for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
+        const literal_kind = literal_constraint.origin.literalKind() orelse continue;
+        if (literal_kind == .interpolation) continue;
+        const literal_fn_root = self.types.resolveVar(literal_constraint.fn_var).var_;
+
+        for (self.cir.store.literalDispatchPlans()) |plan| {
+            if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
+            if (self.types.resolveVar(@enumFromInt(plan.fn_var)).var_ != literal_fn_root) continue;
+            const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+            const owner: CIR.Expr.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
+                @enumFromInt(plan.node_idx)
+            else
+                @enumFromInt(plan.patternFailureExpr() orelse continue);
+            var already_recorded = false;
+            for (owners.items) |recorded| {
+                if (recorded == owner) {
+                    already_recorded = true;
+                    break;
+                }
+            }
+            if (!already_recorded) try owners.append(self.gpa, owner);
+        }
+    }
+
+    for (owners.items) |owner| {
+        try self.poisonConstraintFailureSource(deferred.var_, failed_constraint, owner);
+    }
+    return owners.items.len != 0;
 }
 
 fn poisonConstraintSourceExpr(
@@ -10110,15 +10167,22 @@ fn poisonConstraintFailure(
     const fn_root = self.types.resolveVar(constraint.fn_var).var_;
     var found_owner = false;
     for (env.deferred_static_dispatch_constraints.items.items) |deferred| {
-        const owner_expr = self.deferredConstraintFailureExpr(deferred) orelse continue;
         if (self.types.resolveVar(deferred.var_).var_ != dispatcher_root) continue;
 
+        var owns_relation = false;
         for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |candidate| {
             if (!candidate.fn_name.eql(constraint.fn_name)) continue;
             if (self.types.resolveVar(candidate.fn_var).var_ != fn_root) continue;
+            owns_relation = true;
+            break;
+        }
+        if (!owns_relation) continue;
+
+        if (explicitDeferredConstraintFailureExpr(deferred)) |owner_expr| {
             try self.poisonConstraintFailureSource(dispatcher_var, constraint, owner_expr);
             found_owner = true;
-            break;
+        } else if (try self.poisonLiteralFailureOwners(deferred, constraint)) {
+            found_owner = true;
         }
     }
 
@@ -30185,7 +30249,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     deferred_constraint.var_,
                                     constraint,
                                     env,
-                                    self.deferredConstraintFailureExpr(deferred_constraint),
+                                    failure_expr,
                                 );
                                 continue;
                             }
@@ -30546,7 +30610,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     deferred_constraint.var_,
                                     constraint,
                                     env,
-                                    self.deferredConstraintFailureExpr(deferred_constraint),
+                                    failure_expr,
                                 );
                             }
                             continue;
@@ -30844,7 +30908,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
-                                self.deferredConstraintFailureExpr(deferred_constraint),
+                                failure_expr,
                             );
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
@@ -31029,7 +31093,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
-                                self.deferredConstraintFailureExpr(deferred_constraint),
+                                failure_expr,
                             );
                         } else {
                             try self.reportConstraintError(

@@ -67,6 +67,7 @@ test "issue 10893: rejected equality dispatch on a converted numeral pattern inv
 
 test "issue 10893: a shared rejected literal dispatch invalidates every owning match" {
     try expectLowersToLirWithOptions(
+        \\f : [Z] -> I64
         \\f = |x| {
         \\    first = match x {
         \\        1 => 1
@@ -81,6 +82,58 @@ test "issue 10893: a shared rejected literal dispatch invalidates every owning m
         \\
         \\main! = |_args| {
         \\    echo!(f(Z).to_str())
+        \\    Ok({})
+        \\}
+    , .{ .allow_user_errors = true, .monotype_only = true });
+}
+
+test "issue 10893: merged rejected literal dispatch invalidates every owning match" {
+    try expectLowersToLirWithOptions(
+        \\f = |x| {
+        \\    first = match x {
+        \\        1 => 1
+        \\        _ => 0
+        \\    }
+        \\    second = match x {
+        \\        2 => 1
+        \\        _ => 0
+        \\    }
+        \\    tag = match x {
+        \\        Z => 1
+        \\        _ => 0
+        \\    }
+        \\    first + second + tag
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    echo!(f(Z).to_str())
+        \\    Ok({})
+        \\}
+    , .{ .allow_user_errors = true, .monotype_only = true });
+}
+
+test "issue 10893: merged rejected literal equality invalidates every owning match" {
+    try expectLowersToLirWithOptions(
+        \\N := [Val(I64)].{
+        \\    from_numeral : Numeral -> Try(N, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(N.Val(0))
+        \\}
+        \\
+        \\f : N -> I64
+        \\f = |x| {
+        \\    first = match x {
+        \\        1 => 1
+        \\        _ => 0
+        \\    }
+        \\    second = match x {
+        \\        2 => 1
+        \\        _ => 0
+        \\    }
+        \\    first + second
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    echo!(f(N.Val(0)).to_str())
         \\    Ok({})
         \\}
     , .{ .allow_user_errors = true, .monotype_only = true });

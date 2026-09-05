@@ -2826,12 +2826,15 @@ Literal-pattern deferred static-dispatch constraint groups are owned by the
 enclosing match. The checker passes that owner through recursive pattern
 checking and records it in the literal node's checked dispatch plan at
 creation. When the literal's deferred conversion-and-equality group is
-processed, that plan supplies the group's failure owner. If either constraint
-is rejected, diagnostic recovery replaces the whole match with the checked
-`runtime_error`; a reachable `checked_error` literal pattern may not enter a
-checked body. A later scheme instantiation still owns failure of its copied
-static-dispatch constraint at the use expression. Ownership is explicit
-producer data and must
+processed, the conversion constraint's raw callable identity selects its exact
+plan and therefore the group's failure owner. If unification merged equivalent
+literal relations, the failure path uses the merged callable class to enumerate
+every explicit occurrence plan and invalidates every owner; a receiver root by
+itself is never an occurrence identity. If either constraint is rejected,
+diagnostic recovery replaces the whole match with the checked `runtime_error`;
+a reachable `checked_error` literal pattern may not enter a checked body. A
+later scheme instantiation still owns failure of its copied static-dispatch
+constraint at the use expression. Ownership is explicit producer data and must
 not be reconstructed from pattern structure. The plan packs its kind and
 resolution into one word, so recording the owner does not increase plan size.
 
