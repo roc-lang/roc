@@ -16,7 +16,7 @@ OLD LIST REST PATTERN - list_patterns.md:3:13:3:19
 NAME NOT IN SCOPE - list_patterns.md:1:7:1:14
 NAME NOT IN SCOPE - list_patterns.md:2:11:2:14
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
-UNUSED VARIABLE - list_patterns.md:3:15:3:15
+UNUSED VARIABLE - list_patterns.md:3:15:3:19
 # PROBLEMS
 ── ✗ old list rest pattern ─────────────────────────────── list_patterns.md:3:13
 
@@ -64,7 +64,7 @@ suppress this warning.
 Variable rest is defined here and then never used:
 
 [first, ..rest] => 0 # invalid rest pattern should error
-          ^
+          ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.

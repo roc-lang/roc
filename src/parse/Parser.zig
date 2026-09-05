@@ -144,14 +144,6 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
-/// Check if the token at the given position is a var identifier (starts with '$')
-fn isVarIdent(self: *Parser, token: Token.Idx) bool {
-    if (self.tok_buf.resolveIdentifier(token)) |ident| {
-        return ident.attributes.reassignable;
-    }
-    return false;
-}
-
 /// Check if the current position looks like a type declaration with a valid type following.
 /// This peeks ahead without consuming tokens to determine if we have:
 /// - `Name :` followed by a valid type start token
@@ -995,9 +987,6 @@ fn parseRecordFieldTokens(self: *Parser) std.mem.Allocator.Error!AST.RecordField
     self.expect(.LowerIdent) catch {
         return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
     };
-    if (self.isVarIdent(start)) {
-        try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = start, .end = start + 1 });
-    }
     const name = start;
     var value: AST.RecordField.Value = .punned;
     if (self.peek() == .OpColon) {
@@ -1559,9 +1548,6 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
             return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, start);
         }
         const name_tok = self.pos;
-        if (self.isVarIdent(name_tok)) {
-            try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = name_tok, .end = name_tok + 1 });
-        }
         self.advance();
         if (self.peek() != .OpColon) {
             self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
@@ -4753,9 +4739,6 @@ fn runExprStatementKernel(
                 continue :expr_kernel .record_finish;
             } else if (self.peek() == .LowerIdent) {
                 const field_start = self.pos;
-                if (self.isVarIdent(field_start)) {
-                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
-                }
                 self.advance();
                 const name = field_start;
                 if (self.peek() == .OpColon) {
@@ -5469,9 +5452,6 @@ fn runExprStatementKernel(
             else if (self.peek() == .LowerIdent or self.peek() == .Underscore or self.peek() == .NamedUnderscore) {
                 const field_start = self.pos;
                 const name_tag = self.peek();
-                if (name_tag == .LowerIdent and self.isVarIdent(field_start)) {
-                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
-                }
                 const name = self.pos;
                 self.advance();
                 var optional_mark: ?Token.Idx = null;
@@ -5946,10 +5926,6 @@ fn runExprStatementKernel(
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
                     } else if (next_tok == .OpColon) {
-                        if (tok == .LowerIdent and self.isVarIdent(start)) {
-                            last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
-                            continue :expr_kernel .statement_complete;
-                        }
                         self.advance();
                         self.advance();
                         try open_syntax.pushType(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
@@ -6918,9 +6894,6 @@ fn runExprStatementKernel(
                 continue :expr_kernel .pattern_record_finish;
             } else if (self.peek() == .LowerIdent) {
                 const field_start = self.pos;
-                if (self.isVarIdent(field_start)) {
-                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
-                }
                 const name = self.pos;
                 self.advance();
                 if (self.peek() == .Comma or self.peek() == .CloseCurly) {

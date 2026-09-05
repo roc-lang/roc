@@ -173,7 +173,9 @@ pub const Constants = struct {
     /// 77: Evidence parameters record their constraint callable type.
     /// 78: Procedure templates record their root evidence.
     /// 79: Recursive-reference provenance is separate from shared scheme uses.
-    pub const CACHE_VERSION = 79;
+    /// 80: CIR has an explicit mutable-binder pattern and binding-name warning
+    ///     diagnostic node tags.
+    pub const CACHE_VERSION = 80;
 };
 
 /// Configuration for the Roc cache system.

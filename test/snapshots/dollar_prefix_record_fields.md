@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Reassignable ($-prefixed) identifiers are rejected as record field names in expressions, patterns, and type annotations
+description=Dollar-prefixed record labels are allowed, while a punned pattern field is checked as an immutable binding
 type=snippet
 ~~~
 # SOURCE
@@ -13,42 +13,20 @@ g : { $b : Str } -> Str
 g = |_| "x"
 ~~~
 # EXPECTED
-INVALID RECORD FIELD NAME - record_field_name_cannot_be_var.md:1:15:1:21
-INVALID RECORD FIELD NAME - record_field_name_cannot_be_var.md:3:8:3:10
-INVALID RECORD FIELD NAME - record_field_name_cannot_be_var.md:5:7:5:9
-UNUSED VARIABLE - record_field_name_cannot_be_var.md:3:8:3:10
+DOLLAR PREFIX WITHOUT `VAR` - dollar_prefix_record_fields.md:3:8:3:10
+UNUSED VARIABLE - dollar_prefix_record_fields.md:3:8:3:10
 # PROBLEMS
-── ✗ invalid record field name ───────── record_field_name_cannot_be_var.md:1:15
+── ● dollar prefix without `var` ──────────── dollar_prefix_record_fields.md:3:8
 
-Record field names cannot start with a dollar sign.
-
-my_record = { $field: "value", ok: 1 }
-              ^^^^^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
-── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:3:8
-
-Record field names cannot start with a dollar sign.
+The immutable binding $a starts with $ but is not declared with var.
 
 f = |{ $a }| "y"
        ^^
 
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
+Either rename this binding and all of its uses to a, or declare it with var if
+it should be mutable.
 
-── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:5:7
-
-Record field names cannot start with a dollar sign.
-
-g : { $b : Str } -> Str
-      ^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
-── ● unused variable ──────────────────── record_field_name_cannot_be_var.md:3:8
+── ● unused variable ──────────────────────── dollar_prefix_record_fields.md:3:8
 
 Variable $a is defined here and then never used:
 
