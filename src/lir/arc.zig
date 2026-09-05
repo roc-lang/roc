@@ -2114,6 +2114,7 @@ const Inserter = struct {
             } }),
             .expect => |expect_stmt| try self.store.addCFStmt(.{ .expect = .{
                 .condition = expect_stmt.condition,
+                .site = expect_stmt.site,
                 .next = next,
             } }),
             .decref_if_initialized => |rc| try self.store.addCFStmt(.{ .decref_if_initialized = .{

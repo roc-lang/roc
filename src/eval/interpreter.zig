@@ -309,6 +309,11 @@ pub const Interpreter = struct {
     const max_debug_value_visits: usize = 16;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
+    pub const ExpectObserver = struct {
+        context: *anyopaque,
+        observe: *const fn (*anyopaque, LIR.ExpectSiteId, bool) void,
+    };
+
     const ErasedCallableCaptureDrop = enum(u8) {
         none,
         rc_helper,
@@ -344,6 +349,7 @@ pub const Interpreter = struct {
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
     hosted_call_handler: ?HostedCallHandler,
+    expect_observer: ?ExpectObserver = null,
     static_strings: backend.StaticStringData.Table,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
@@ -841,6 +847,7 @@ pub const Interpreter = struct {
                 .hosted_fns = caller_roc_ops.hosted_fns,
             },
             .hosted_call_handler = hosted_call_handler,
+            .expect_observer = null,
             .static_strings = static_strings,
             .static_data = &.{},
             .static_erased_callables = &.{},
@@ -913,6 +920,11 @@ pub const Interpreter = struct {
     ) void {
         self.static_data = addresses;
         self.static_erased_callables = erased_callables;
+    }
+
+    /// Install the test runner's per-site observation sink.
+    pub fn setExpectObserver(self: *LirInterpreter, observer: ?ExpectObserver) void {
+        self.expect_observer = observer;
     }
 
     /// Function address stored in static erased-callable payloads interpreted
@@ -3272,7 +3284,11 @@ pub const Interpreter = struct {
                         try self.getLocalChecked(frame, cond_local),
                         self.store.getLocal(cond_local).layout_idx,
                     );
-                    if (cond_value == 0) {
+                    if (expect_stmt.site) |site| {
+                        const observer = self.expect_observer orelse
+                            self.invariantFailed("test expect reached the interpreter without an observer", .{});
+                        observer.observe(observer.context, site, cond_value != 0);
+                    } else if (cond_value == 0) {
                         try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current), self.store.stmtLoc(current));
                         self.roc_ops.expectFailed("expect failed");
                     }

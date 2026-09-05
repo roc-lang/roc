@@ -101,6 +101,24 @@ pub const ErasedFns = struct {
 /// Identifier for a constant storage plan emitted with LIR.
 pub const ConstPlanId = enum(u32) { _ };
 
+const ExpectSiteKey = struct {
+    file: u32,
+    line: u32,
+    column: u32,
+    region_start: u32,
+    region_end: u32,
+
+    fn init(loc: base.SourceLoc, region: base.Region) ExpectSiteKey {
+        return .{
+            .file = loc.file,
+            .line = loc.line,
+            .column = loc.column,
+            .region_start = region.start.offset,
+            .region_end = region.end.offset,
+        };
+    }
+};
+
 /// Stable index of a Boxy type descriptor in the program side tables.
 pub const BoxyTypeDescId = LIR.BoxyTypeDescId;
 /// Stable index of a Boxy method dictionary in the program side tables.
@@ -333,6 +351,8 @@ pub const Result = struct {
     const_roots: std.ArrayList(ConstRootPlan),
     static_data_values: std.ArrayList(StaticDataValue),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
+    expect_sites: std.ArrayList(LIR.ExpectSite),
+    expect_site_ids: std.AutoHashMapUnmanaged(ExpectSiteKey, LIR.ExpectSiteId),
 
     pub fn init(allocator: Allocator, target_usize: @import("base").target.TargetUsize) Allocator.Error!Result {
         return .{
@@ -367,6 +387,8 @@ pub const Result = struct {
             .const_roots = .empty,
             .static_data_values = .empty,
             .comptime_sites = .empty,
+            .expect_sites = .empty,
+            .expect_site_ids = .empty,
         };
     }
 
@@ -376,6 +398,8 @@ pub const Result = struct {
             allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(allocator);
+        self.expect_site_ids.deinit(allocator);
+        self.expect_sites.deinit(allocator);
         self.static_data_values.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
@@ -437,6 +461,29 @@ pub const Result = struct {
             .branch_regions = owned_branch_regions,
         });
         return id;
+    }
+
+    /// Intern one source `expect` so generated code can use a dense counter.
+    pub fn addExpectSite(self: *Result, loc: base.SourceLoc, region: base.Region) Allocator.Error!LIR.ExpectSiteId {
+        const key = ExpectSiteKey.init(loc, region);
+        const entry = try self.expect_site_ids.getOrPut(self.store.allocator, key);
+        if (entry.found_existing) return entry.value_ptr.*;
+        errdefer _ = self.expect_site_ids.remove(key);
+        const id: LIR.ExpectSiteId = @enumFromInt(@as(u32, @intCast(self.expect_sites.items.len)));
+        try self.expect_sites.append(self.store.allocator, .{ .loc = loc, .region = region });
+        entry.value_ptr.* = id;
+        return id;
+    }
+
+    pub fn findExpectSite(self: *const Result, loc: base.SourceLoc, region: base.Region) ?LIR.ExpectSiteId {
+        return self.expect_site_ids.get(ExpectSiteKey.init(loc, region));
+    }
+
+    /// Discard the lowering-only source lookup once every statement has its
+    /// dense id. Runtime consumers need only `expect_sites`.
+    pub fn finishExpectSites(self: *Result) void {
+        self.expect_site_ids.deinit(self.store.allocator);
+        self.expect_site_ids = .empty;
     }
 };
 

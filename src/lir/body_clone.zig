@@ -993,6 +993,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 } }),
                 .expect => |s| try self.store.addCFStmt(.{ .expect = .{
                     .condition = try self.mapLocal(s.condition),
+                    .site = s.site,
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .expect_err => |s| try self.store.addCFStmt(.{ .expect_err = .{

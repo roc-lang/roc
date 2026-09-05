@@ -11884,10 +11884,33 @@ public host symbol ABI. The entrypoint receives `RocOps`, a pointer to a
 test-invocation context, the return buffer, and the argument buffer. The
 invocation context stores immutable execution inputs and mutable observation
 output produced by generated test code that cannot live in `RocOps`; currently
-these are the Boxy native-function table and the `expect_err` source region.
+these are the Boxy native-function table, the `expect_err` source region, and
+the passed and failed counter arrays for source `expect` sites.
 The LLVM backend must not use shared mutable globals such as a Boxy dispatch
 pointer or `roc_expect_err_region` for optimized tests, because a command-level
 test library runs multiple roots in parallel.
+
+Checked `expect` nodes that execute inside another expression are observations,
+not additional entrypoint roots. Test-plan LIR assigns each such source site a
+dense `ExpectSiteId`; its side-table row contains the producer-carried source
+file location and checked region. Copies and specialized bodies retain that id,
+and equal source locations within one lowering result share one row. LIR built
+without a test plan carries no id and preserves the ordinary host failure
+notification behavior. Backends therefore never infer test mode from a symbol,
+message, source shape, or nullable runtime facility.
+
+An observed LIR `expect` increments exactly one passed or failed counter every
+time it executes and does not also emit the generic `roc_expect_failed` host
+event. A source site that executes at least once contributes one test to the
+run: it passes only when its failed count is zero, and otherwise fails. A site
+that does not execute contributes no test. Repeated executions produce one
+report whose structured data includes both counts. An `expect` directly inside
+another top-level expect remains inline; collecting it as a second entrypoint
+would execute and count the same source statement twice.
+When roots from separate checked modules reach the same source site, the
+command combines their counts by qualified declaring module and exact region
+after execution. Per-module cache entries retain the uncombined counts so any
+mix of cached and freshly executed roots produces the same command result.
 
 After the single library is loaded, test roots run on a worker pool. Each root
 call owns its `RuntimeHostEnv`, `RocOps`, allocation tracker, crash boundary,
@@ -11898,6 +11921,17 @@ its mutable observation state. Generated test code must be reentrant with
 respect to test-root calls: a root call must not write process-global state
 except through explicitly thread-safe runtime services or the invocation data
 passed to that root.
+
+Expect counters are worker-local dense arrays, initialized once per execution
+batch. Generated LLVM performs a direct indexed increment; generated dev code
+uses a compiler-internal native callback into the same worker-local arrays, and
+the interpreter records through an explicit observer. No increment is atomic.
+After all roots finish, the runner adds the worker arrays by site and reports
+only nonzero rows. Thus synchronization cost is independent of how many times
+an expect executes, and report-time work is proportional to the number of
+lowered sites and workers rather than the number of executions. Worker shards
+start on separate cache lines so hot source sites do not introduce false
+sharing between parallel roots.
 
 Workers never write test output, diagnostics, stdout, stderr, or cache files
 directly. They send structured transcript events and final root status data to a

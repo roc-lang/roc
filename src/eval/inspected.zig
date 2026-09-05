@@ -404,6 +404,7 @@ pub const BoolRootModule = struct {
     layouts: *const LayoutStore,
     tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
+    expect_site_count: usize = 0,
 };
 
 /// Timings for JIT-compiling and running boolean test roots with the dev backend.
@@ -480,6 +481,24 @@ pub const BoolRootEvalOutcome = union(enum) {
 pub const BoolRootEvalResult = struct {
     outcome: BoolRootEvalOutcome,
     events: []BoolRootEvent,
+};
+
+/// Aggregate executions of one dense LIR expect site.
+pub const ExpectCounts = struct {
+    passed: u64 = 0,
+    failed: u64 = 0,
+};
+
+/// Results and lock-free merged expect observations for one execution batch.
+pub const BoolRootEvalBatch = struct {
+    results: []BoolRootEvalResult,
+    expect_counts: []ExpectCounts,
+
+    pub fn deinit(self: *BoolRootEvalBatch, allocator: Allocator) void {
+        deinitBoolRootEvalResults(allocator, self.results);
+        allocator.free(self.expect_counts);
+        self.* = undefined;
+    }
 };
 
 /// Callback invoked when a bool-root worker has produced its final result.
@@ -2470,11 +2489,7 @@ fn renderCheckedModuleProblemsWithConfig(
         try reporting.renderReportWithConfig(&report, &out.writer, config);
     }
     const raw = try out.toOwnedSlice();
-    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
-    if (trimmed.len == raw.len) return raw;
-    const result = try allocator.dupe(u8, trimmed);
-    allocator.free(raw);
-    return result;
+    return reporting.trimOwnedTrailingLineBreaks(allocator, raw);
 }
 
 fn cleanupCheckedModule(allocator: Allocator, module: CheckedModule) void {
@@ -2755,10 +2770,38 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
     timing: ?*DevBoolRootTiming,
     max_workers: ?usize,
 ) Error![]BoolRootEvalResult {
+    const batch = try devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
+        allocator,
+        store,
+        layouts,
+        tables,
+        roots,
+        timing,
+        max_workers,
+        0,
+    );
+    allocator.free(batch.expect_counts);
+    return batch.results;
+}
+
+/// JIT-compile test roots and aggregate observations for every LIR expect site.
+pub fn devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
+    roots: []const BoolRoot,
+    timing: ?*DevBoolRootTiming,
+    max_workers: ?usize,
+    expect_site_count: usize,
+) Error!BoolRootEvalBatch {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
-        if (roots.len == 0) return try allocator.alloc(BoolRootEvalResult, 0);
+        if (roots.len == 0) return .{
+            .results = try allocator.alloc(BoolRootEvalResult, 0),
+            .expect_counts = try allocator.alloc(ExpectCounts, 0),
+        };
 
         const static_strings_started_ns = if (timing) |timings| timings.start() else 0;
         var static_strings = try backend.StaticStringData.build(
@@ -2787,6 +2830,7 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
         // this function returns.
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
+        if (expect_site_count != 0) codegen.setExpectObserverHook(&RuntimeHostEnv.rocExpectObserved);
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
@@ -2830,13 +2874,14 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
                 .tables = tables,
                 .target = .{ .dev = .{ .executable = &executable, .entry_offset = entry_offsets[i] } },
                 .root = root,
+                .expect_site_count = expect_site_count,
             };
         }
 
         const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
-        const results = runBoolRootCalls(allocator, calls, true, max_workers, null, null);
+        const batch = runBoolRootCalls(allocator, calls, true, max_workers, null, null);
         if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
-        return results;
+        return batch;
     }
 }
 
@@ -2899,6 +2944,8 @@ fn callBoolRoot(
     longjmp_on_crash: bool,
     call_index: usize,
     event_callback: ?BoolRootEventCallback,
+    expect_passed: []u64,
+    expect_failed: []u64,
 ) Error!BoolRootEvalResult {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
@@ -2916,7 +2963,12 @@ fn callBoolRoot(
     }
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
-    var test_context: TestInvocationContext = .{ .boxy_fn_table = boxy_fns };
+    runtime_env.setExpectCounters(expect_passed, expect_failed);
+    var test_context: TestInvocationContext = .{
+        .expect_passed = if (expect_passed.len == 0) null else expect_passed.ptr,
+        .expect_failed = if (expect_failed.len == 0) null else expect_failed.ptr,
+        .boxy_fn_table = boxy_fns,
+    };
     const boxy_runtime_instance = if (tables.needsRuntimeForStore(store))
         try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
     else
@@ -3016,6 +3068,8 @@ const BoolRootCall = struct {
     tables: boxy_runtime.BoxyTables,
     target: BoolRootCallTarget,
     root: BoolRoot,
+    expect_site_base: usize = 0,
+    expect_site_count: usize = 0,
 };
 
 const BoolRootWorkerState = struct {
@@ -3028,9 +3082,18 @@ const BoolRootWorkerState = struct {
     errors: []?Error,
     completion_callback: ?BoolRootCompletionCallback,
     event_callback: ?BoolRootEventCallback,
+    worker_expect_stride: usize,
+    worker_expect_passed: []u64,
+    worker_expect_failed: []u64,
 };
 
-fn boolRootWorker(state: *BoolRootWorkerState) void {
+const BoolRootWorkerArgs = struct {
+    state: *BoolRootWorkerState,
+    worker_index: usize,
+};
+
+fn boolRootWorker(args: *BoolRootWorkerArgs) void {
+    const state = args.state;
     // This thread runs compiled Roc code: give it the per-thread alternate
     // signal stack and stack bounds the fault handler needs to classify a
     // stack overflow in a test and longjmp back to the crash boundary.
@@ -3041,6 +3104,9 @@ fn boolRootWorker(state: *BoolRootWorkerState) void {
         if (index >= state.calls.len) break;
 
         const call = state.calls[index];
+        const worker_start = args.worker_index * state.worker_expect_stride;
+        const expect_start = worker_start + call.expect_site_base;
+        const expect_end = expect_start + call.expect_site_count;
         state.results[index] = callBoolRoot(
             state.allocator,
             call.layouts,
@@ -3052,6 +3118,8 @@ fn boolRootWorker(state: *BoolRootWorkerState) void {
             state.longjmp_on_crash,
             index,
             state.event_callback,
+            state.worker_expect_passed[expect_start..expect_end],
+            state.worker_expect_failed[expect_start..expect_end],
         ) catch |err| {
             state.errors[index] = err;
             return;
@@ -3084,7 +3152,7 @@ fn runBoolRootCalls(
     max_workers: ?usize,
     completion_callback: ?BoolRootCompletionCallback,
     event_callback: ?BoolRootEventCallback,
-) Error![]BoolRootEvalResult {
+) Error!BoolRootEvalBatch {
     const slots = try allocator.alloc(?BoolRootEvalResult, calls.len);
     defer allocator.free(slots);
     for (slots) |*slot| slot.* = null;
@@ -3095,6 +3163,29 @@ fn runBoolRootCalls(
     for (errors) |*slot| slot.* = null;
 
     const boxy_fns = boxyNativeFnTable();
+    const worker_count = optimizedTestWorkerCount(calls.len, max_workers);
+    var total_expect_sites: usize = 0;
+    for (calls) |call| {
+        const call_end = std.math.add(usize, call.expect_site_base, call.expect_site_count) catch return error.OutOfMemory;
+        total_expect_sites = @max(total_expect_sites, call_end);
+    }
+    const cache_line_words = std.atomic.cache_line / @sizeOf(u64);
+    const worker_expect_stride = std.mem.alignForward(usize, total_expect_sites, cache_line_words);
+    const worker_counter_len = std.math.mul(usize, worker_count, worker_expect_stride) catch return error.OutOfMemory;
+    const worker_expect_passed = try allocator.alignedAlloc(
+        u64,
+        std.mem.Alignment.fromByteUnits(std.atomic.cache_line),
+        worker_counter_len,
+    );
+    defer allocator.free(worker_expect_passed);
+    @memset(worker_expect_passed, 0);
+    const worker_expect_failed = try allocator.alignedAlloc(
+        u64,
+        std.mem.Alignment.fromByteUnits(std.atomic.cache_line),
+        worker_counter_len,
+    );
+    defer allocator.free(worker_expect_failed);
+    @memset(worker_expect_failed, 0);
 
     var state = BoolRootWorkerState{
         .allocator = allocator,
@@ -3106,11 +3197,16 @@ fn runBoolRootCalls(
         .errors = errors,
         .completion_callback = completion_callback,
         .event_callback = event_callback,
+        .worker_expect_stride = worker_expect_stride,
+        .worker_expect_passed = worker_expect_passed,
+        .worker_expect_failed = worker_expect_failed,
     };
 
-    const worker_count = optimizedTestWorkerCount(calls.len, max_workers);
+    const worker_args = try allocator.alloc(BoolRootWorkerArgs, worker_count);
+    defer allocator.free(worker_args);
+    for (worker_args, 0..) |*args, worker_index| args.* = .{ .state = &state, .worker_index = worker_index };
     if (worker_count == 1) {
-        boolRootWorker(&state);
+        boolRootWorker(&worker_args[0]);
     } else {
         const threads = try allocator.alloc(std.Thread, worker_count);
         defer allocator.free(threads);
@@ -3118,7 +3214,7 @@ fn runBoolRootCalls(
         var spawned: usize = 0;
         var spawn_error: ?std.Thread.SpawnError = null;
         while (spawned < worker_count) : (spawned += 1) {
-            threads[spawned] = std.Thread.spawn(.{ .stack_size = base.stack_budget.roc_stack_size }, boolRootWorker, .{&state}) catch |err| {
+            threads[spawned] = std.Thread.spawn(.{ .stack_size = base.stack_budget.roc_stack_size }, boolRootWorker, .{&worker_args[spawned]}) catch |err| {
                 spawn_error = err;
                 break;
             };
@@ -3141,7 +3237,17 @@ fn runBoolRootCalls(
         result_len += 1;
     }
 
-    return results;
+    const expect_counts = try allocator.alloc(ExpectCounts, total_expect_sites);
+    @memset(expect_counts, .{});
+    for (0..worker_count) |worker_index| {
+        const start = worker_index * worker_expect_stride;
+        for (expect_counts, 0..) |*counts, site| {
+            counts.passed +|= worker_expect_passed[start + site];
+            counts.failed +|= worker_expect_failed[start + site];
+        }
+    }
+
+    return .{ .results = results, .expect_counts = expect_counts };
 }
 
 /// Compile and run bool-returning test roots via the LLVM backend.
@@ -3160,6 +3266,33 @@ pub fn llvmEvalBoolRoots(
         .roots = roots,
     }};
     return llvmEvalBoolRootModules(allocator, modules[0..], opt);
+}
+
+/// Compile and run one LIR module while aggregating its inline expects.
+pub fn llvmEvalBoolRootsWithExpectSites(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
+    roots: []const BoolRoot,
+    expect_site_count: usize,
+    opt: LlvmTestOpt,
+) Error!BoolRootEvalBatch {
+    const modules = [_]BoolRootModule{.{
+        .store = store,
+        .layouts = layouts,
+        .tables = tables,
+        .roots = roots,
+        .expect_site_count = expect_site_count,
+    }};
+    return llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
+        allocator,
+        modules[0..],
+        opt,
+        null,
+        null,
+        null,
+    );
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
@@ -3207,6 +3340,27 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     completion_callback: ?BoolRootCompletionCallback,
     event_callback: ?BoolRootEventCallback,
 ) Error![]BoolRootEvalResult {
+    const batch = try llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
+        allocator,
+        modules,
+        opt,
+        max_workers,
+        completion_callback,
+        event_callback,
+    );
+    allocator.free(batch.expect_counts);
+    return batch.results;
+}
+
+/// Compile and execute test modules while aggregating their inline expects.
+pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
+    allocator: Allocator,
+    modules: []const BoolRootModule,
+    opt: LlvmTestOpt,
+    max_workers: ?usize,
+    completion_callback: ?BoolRootCompletionCallback,
+    event_callback: ?BoolRootEventCallback,
+) Error!BoolRootEvalBatch {
     if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
     if (modules.len == 0) return error.LlvmBackendUnavailable;
 
@@ -3267,11 +3421,11 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
         compile_options.options,
     );
     defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path) catch {};
         allocator.free(dylib_path);
     }
 
-    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
+    var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
 
     var longjmp_on_crash = true;
@@ -3282,6 +3436,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     const calls = try allocator.alloc(BoolRootCall, total_roots);
     defer allocator.free(calls);
     var call_index: usize = 0;
+    var expect_site_base: usize = 0;
     for (modules) |module| {
         for (module.roots) |root| {
             calls[call_index] = .{
@@ -3290,9 +3445,12 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
                 .tables = module.tables,
                 .target = .{ .llvm = lib.lookup(LlvmBoolRootEntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable },
                 .root = root,
+                .expect_site_base = expect_site_base,
+                .expect_site_count = module.expect_site_count,
             };
             call_index += 1;
         }
+        expect_site_base += module.expect_site_count;
     }
 
     return runBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
