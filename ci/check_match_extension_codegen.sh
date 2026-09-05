@@ -57,17 +57,27 @@ cd "$repo_root"
 # interact rather than adding their separate instruction-count changes: the
 # resulting entrypoint totals are 106 on x64musl and 92 on arm64musl. The
 # pinned compare loop itself is unchanged.
-# Both counts rose (x64musl 106 to 109, arm64musl 92 to 100) when the list
+# A vectorization attempt after the main optimization pipeline reaches the
+# fixture's `List.repeat` setup, which fills the buffer 32 bytes at a time
+# through vector registers instead of a scalar store per element. That is why
+# the two targets move in opposite directions: x64musl drops from 106 to 102
+# and arm64musl rises from 92 to 94, where the rise is the splat and the wider
+# store pair replacing a longer scalar sequence. The pinned compare loop is
+# untouched, still load, load, compare, advance with the `from_le_bytes` bounds
+# test doubling as the loop's termination.
+# Both counts then rose (x64musl 102 to 105, arm64musl 94 to 102) when the list
 # allocation builtins gained overflow guards on their size arithmetic: a
 # `capacity * element_width (+ header)` that overflows `usize` now crashes
 # deterministically instead of wrapping to a tiny allocation and letting the
-# next write run off the heap buffer (a primitive reachable from pure Roc
-# code the compiler also evaluates at compile time). The added branch inlines
-# into the one-time `List.repeat` buffer setup this entrypoint performs; the
-# pinned eight-byte compare loop, which allocates nothing, is unchanged.
+# next write run off the heap buffer (a primitive reachable from pure Roc code
+# the compiler also evaluates at compile time). The added branch inlines into
+# the same one-time `List.repeat` buffer setup the vectorization above rewrote,
+# and costs it the same three and eight instructions it cost the scalar setup,
+# so the two changes are independent rather than interacting. The pinned
+# eight-byte compare loop, which allocates nothing, is unchanged.
 expectations=(
-    "x64musl:109"
-    "arm64musl:100"
+    "x64musl:105"
+    "arm64musl:102"
 )
 
 failed=0

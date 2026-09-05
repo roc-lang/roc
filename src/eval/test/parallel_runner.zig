@@ -1715,6 +1715,7 @@ fn runCrashTest(
 fn canDiagnosticIsError(diag: anytype) bool {
     return switch (diag) {
         .shadowing_warning,
+        .binding_name_does_not_match_mutability,
         .unused_variable,
         .used_underscore_variable,
         .type_shadowed_warning,
@@ -1724,6 +1725,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .module_header_deprecated,
         .roc_version_mismatch,
         .deprecated_number_suffix,
+        .trailing_try_suffix,
         => false,
         .not_implemented,
         .exposed_but_not_implemented,

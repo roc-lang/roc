@@ -970,4 +970,243 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "42" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11060
+        .name = "issue 11060: interpolated Str.inspect of a caller-pinned error from a recursive accumulator",
+        .source_kind = .module,
+        .source =
+        \\only_bad = |made|
+        \\    made.fold([], |acc, item| match item {
+        \\        Bad(bad) => acc.append(bad)
+        \\        Good(_) => acc
+        \\    })
+        \\
+        \\make = |start, file|
+        \\    match start(file) {
+        \\        Ok(handle) => Good(handle)
+        \\        Err(e) => Bad("failed: ${Str.inspect(e)}")
+        \\    }
+        \\
+        \\batch = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => batch(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\main = only_bad(batch(|_file| Err(Nope2), ["x"], []))
+        ,
+        .expected = .{ .inspect_str = "[\"failed: Nope2\"]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11063
+        //
+        // `Opt` brings its own `parser_for`, and the record `Opt` wraps has a
+        // field that is itself an `Opt`. Deriving the record's parser re-enters
+        // the same custom codec (custom -> derived -> custom). Both levels must
+        // decode: the outer `Opt(Inner)` from a JSON object and the inner
+        // `Opt(Bool)` from JSON `null`.
+        .name = "issue 11063: custom codec wrapping a record holding that same custom codec decodes",
+        .source_kind = .module,
+        .source =
+        \\Opt(a) := [
+        \\    None,
+        \\    Has(a),
+        \\].{
+        \\    map : Opt(a), (a -> b) -> Opt(b)
+        \\    map = |o, f|
+        \\        match o {
+        \\            Has(a) => Has(f(a))
+        \\            None => None
+        \\        }
+        \\
+        \\    with_default : Opt(a), a -> a
+        \\    with_default = |o, default|
+        \\        match o {
+        \\            Has(a) => a
+        \\            None => default
+        \\        }
+        \\
+        \\    parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\        where [
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\            encoding.parse_null : encoding, state -> Try(state, [InvalidJson(Str)]),
+        \\        ]
+        \\    parser_for = |encoding| {
+        \\        Elem : a
+        \\        parse_elem = Elem.parser_for(encoding)
+        \\
+        \\        |state|
+        \\            match encoding.parse_null(state) {
+        \\                Ok(rest) => Ok({ value: None, rest })
+        \\                Err(InvalidJson(_)) =>
+        \\                    match parse_elem(state) {
+        \\                        Ok(parsed) => Ok({ value: Has(parsed.value), rest: parsed.rest })
+        \\                        Err(InvalidJson(e)) => Err(InvalidJson(e))
+        \\                        Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
+        \\                    }
+        \\            }
+        \\    }
+        \\}
+        \\
+        \\Inner : { label : Str, flag : Opt(Bool) }
+        \\Outer : { thing : Opt(Inner) }
+        \\
+        \\describe : Inner -> Str
+        \\describe = |inner|
+        \\    Str.concat(inner.label, Opt.with_default(Opt.map(inner.flag, |b| if b "T" else "F"), "null"))
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Outer, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"thing\":{\"label\":\"x\",\"flag\":null}}")
+        \\    match decoded {
+        \\        Ok(m) => Opt.with_default(Opt.map(m.thing, describe), "none")
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"xnull\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11094
+        //
+        // The custom codec delegates through `a.parser_for`. Its `Bool`
+        // instantiation must select Bool's scalar parser instead of opening
+        // Bool's tag-union runtime representation under the outer contract.
+        .name = "issue 11094: custom codec delegating to Bool's parser through its type parameter decodes",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\    parser_for : encoding -> (state -> Try({ value : Wrap(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\        where [
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\        ]
+        \\    parser_for = |encoding| {
+        \\        Elem : a
+        \\        parse_elem = Elem.parser_for(encoding)
+        \\        |state|
+        \\            match parse_elem(state) {
+        \\                Ok(parsed) => Ok({ value: W(parsed.value), rest: parsed.rest })
+        \\                Err(InvalidJson(e)) => Err(InvalidJson(e))
+        \\                Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
+        \\            }
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    parsed : Try({ r : Wrap(Bool) }, _)
+        \\    parsed = Json.parse("{\"r\":true}")
+        \\    match parsed {
+        \\        Ok({ r: W(value) }) => if value "yes" else "no"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"yes\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11094
+        //
+        // The encoder path has the same nominal-subject identity requirement
+        // as the parser path above. Delegating through `a.encoder_for` must use
+        // Bool's scalar encoder instead of its tag-union representation.
+        .name = "issue 11094: custom codec delegating to Bool's encoder through its type parameter encodes",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\    encoder_for : encoding -> (Wrap(a), state -> Try(state, err))
+        \\        where [
+        \\            a.encoder_for : encoding -> (a, state -> Try(state, err)),
+        \\        ]
+        \\    encoder_for = |encoding| {
+        \\        Elem : a
+        \\        encode_elem = Elem.encoder_for(encoding)
+        \\        |W(value), state| encode_elem(value, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    wrapped : Wrap(Bool)
+        \\    wrapped = W(Bool.True)
+        \\    Json.to_str({ r: wrapped })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"r\\\":true}\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11064
+        .name = "issue 11064: unannotated imported field reader runs from every match arm calling it",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Bar",
+            .source =
+            \\Bar := [].{
+            \\    header = |request|
+            \\        request.headers.find_first(|h| h.name == "x-foo").map_err(|_| NotFound)
+            \\}
+            ,
+        }},
+        .source =
+        \\import Bar
+        \\
+        \\main = {
+        \\    req = { uri: "/a/b", headers: [{ name: "x-foo", value: "42" }] }
+        \\    baz(req, ["a", "b"])
+        \\}
+        \\
+        \\baz = |req, parts|
+        \\    match parts {
+        \\        ["a", "b"] => foo(req)
+        \\        ["a", "b", "c"] => foo(req)
+        \\        _ => "no route"
+        \\    }
+        \\
+        \\foo = |req|
+        \\    match Bar.header(req) {
+        \\        Ok(h) => "found ${h.value}"
+        \\        Err(_) => "not found"
+        \\    }
+        ,
+        .expected = .{ .inspect_str = "\"found 42\"" },
+    },
+    .{
+        // The interpolation's result type is reachable only through `acc`'s
+        // `append` constraint callable, so `wrap`'s evidence parameter for it
+        // is a hidden dispatcher. The annotated call pins it to a user type
+        // whose own `from_interpolation` must be selected at that edge.
+        .name = "hidden interpolation dispatcher pinned to a custom from_interpolation at the call edge",
+        .source_kind = .module,
+        .source =
+        \\Wrap := [W(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Wrap
+        \\    from_interpolation = |first, rest| W(Str.concat("<", Str.concat(Str.from_interpolation(first, rest), ">")))
+        \\
+        \\    text : Wrap -> Str
+        \\    text = |W(s)| s
+        \\}
+        \\
+        \\wrap = |acc, x| acc.append("v: ${x}")
+        \\
+        \\main = {
+        \\    ws : List(Wrap)
+        \\    ws = wrap([], "a")
+        \\    Str.join_with(List.map(ws, Wrap.text), ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"<v: a>\"" },
+    },
+    .{
+        // The same hidden dispatcher left unpinned at the call edge takes its
+        // checked default (`Str`) there.
+        .name = "hidden interpolation dispatcher defaults to Str at an unpinned call edge",
+        .source_kind = .module,
+        .source =
+        \\wrap = |acc, x| acc.append("v: ${x}")
+        \\
+        \\main = Str.join_with(wrap([], "a"), ",")
+        ,
+        .expected = .{ .inspect_str = "\"v: a\"" },
+    },
 };

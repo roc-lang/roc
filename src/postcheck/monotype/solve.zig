@@ -177,6 +177,13 @@ const InstNamed = struct {
     declared_order: []const InstDeclaredField = &.{},
 };
 
+/// Union-find node for nominal applications that an explicit relation proved
+/// equivalent without joining their representation-owning type classes.
+const RelatedNamedInstance = struct {
+    parent: NodeId,
+    rank: u8 = 0,
+};
+
 /// Graph-owned data for a private iterator representation before sealing.
 pub const InstGeneratedIterator = struct {
     callable_evidence: ?names.TypeDigest,
@@ -269,6 +276,10 @@ pub const GraphDiagnostics = struct {
     /// 10978 hit exactly that).
     nominal_backing_lookups: u64 = 0,
     nominal_backing_instances_scanned: u64 = 0,
+    /// Nominal-backing deletions that leave tombstones in the lookup index.
+    /// This must remain zero: rekeying cannot make lookup cost depend on the
+    /// graph's history of root migrations.
+    nominal_backing_tombstone_deletions: u64 = 0,
     /// Union-find resolutions across all graph operations: the broadest
     /// deterministic proxy for total solver work.
     union_find_resolutions: u64 = 0,
@@ -361,6 +372,13 @@ const NominalBackingKeyContext = struct {
     }
 };
 
+const NominalBackingIndex = collections.RekeyingHashMap(
+    NominalBackingKey,
+    NominalBackingInstanceId,
+    NominalBackingKeyContext,
+    80,
+);
+
 const NominalBackingLookup = struct {
     declaration: NominalBackingDeclaration,
     args: []const NodeId,
@@ -431,6 +449,10 @@ const ContainmentDependency = struct {
 const ContainmentQueryCache = struct {
     valid: bool = false,
     result: bool = false,
+    /// `InstGraph.structure_epoch` when the dependencies were last verified;
+    /// while the epoch is unchanged no class has changed, so the answer is
+    /// still valid without rechecking them.
+    verified_epoch: u32 = 0,
     dependencies: std.ArrayList(ContainmentDependency) = .empty,
 };
 
@@ -505,6 +527,16 @@ pub const InstGraph = struct {
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
+    /// Explicit equivalence classes for matching nominal applications whose
+    /// backing nodes must remain independently owned. This is deliberately
+    /// separate from the main type union-find: consumers can use the proven
+    /// nominal identity without collapsing declaration and request storage.
+    related_named_instances: collections.DenseMap(NodeId, RelatedNamedInstance),
+    /// One related wrapper for each exact declaration-backing witness. The
+    /// nominal backing cache includes every type argument in its key, so a
+    /// shared permanent backing id proves two independently allocated wrappers
+    /// denote the same application without inspecting their shape.
+    related_named_backings: collections.DenseMap(NodeId, NodeId),
     /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
     /// retain their original provenance while `find` resolves that node to its
     /// current class root; unions therefore never move or reindex snapshots.
@@ -522,6 +554,9 @@ pub const InstGraph = struct {
     active_snapshot_nodes: collections.DenseMap(Type.TypeId, NodeId),
     /// Finished Monotypes already imported into the current ownership scope.
     imported_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
+    /// Memo of `provisionalViewShareable`: whether everything reachable from
+    /// a Monotype type is settled per-request evidence-free structure.
+    provisional_view_shareable: collections.DenseMap(Type.TypeId, bool),
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
@@ -531,7 +566,7 @@ pub const InstGraph = struct {
     /// Exact declaration-plus-current-argument-roots index for instantiated
     /// nominal backings. Keys point into the stable argument storage owned by
     /// `nominal_backing_instances`.
-    nominal_backing_index: std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80),
+    nominal_backing_index: NominalBackingIndex,
     nominal_backing_instances: std.ArrayList(NominalBackingInstance),
     /// Argument positions by their current root. This is the precise
     /// invalidation index used to rekey affected instances in `union_`.
@@ -572,6 +607,30 @@ pub const InstGraph = struct {
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
     /// domains on every walk; pooled maps keep their chunks.
     node_set_pool: collections.DenseMapPool(NodeId, void),
+    /// Roots whose every reachable node was found resolved, stamped with the
+    /// `resolved_epoch` current at that walk. Resolvedness survives every
+    /// union (a concrete class always wins over a variable), every content
+    /// replacement of a class no snapshot could observe, and every
+    /// observationally equivalent compression, so a stamp goes stale only
+    /// when an observable class's content is replaced or a variable wins a
+    /// union, each of which advances the epoch.
+    resolved_roots: collections.DenseMap(NodeId, u32),
+    resolved_epoch: u32,
+    /// Advances on every union and every content change, so an equal epoch
+    /// proves no class in the graph has changed since.
+    structure_epoch: u32,
+    /// Types known to reach no active snapshot. Store types are immutable
+    /// and every snapshot is a freshly reserved slot, so no existing type can
+    /// come to reference one: a negative answer never changes.
+    snapshot_free_types: collections.DenseMap(Type.TypeId, void),
+    /// At least how many times a node received a generated-private backing.
+    /// While zero, no class can reach one and the containment query answers
+    /// at once.
+    generated_private_nodes: u32,
+    /// Interned type per class root sealed in final mode, kept and dropped
+    /// together with `current_snapshots`: the same relation changes that
+    /// leave an active view current leave a committed type current.
+    current_durable: collections.DenseMap(NodeId, Type.TypeId),
     type_set_pool: collections.DenseMapPool(Type.TypeId, void),
     pub fn create(
         allocator: Allocator,
@@ -593,13 +652,16 @@ pub const InstGraph = struct {
             .class_member_head = .empty,
             .class_member_tail = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
+            .related_named_instances = collections.DenseMap(NodeId, RelatedNamedInstance).init(allocator),
+            .related_named_backings = collections.DenseMap(NodeId, NodeId).init(allocator),
             .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .current_snapshots_dirty = false,
             .active_snapshot_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
+            .provisional_view_shareable = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
-            .nominal_backing_index = std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80).init(allocator),
+            .nominal_backing_index = NominalBackingIndex.init(allocator, .{}),
             .nominal_backing_instances = .empty,
             .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
             .nominal_backing_affected = .empty,
@@ -615,6 +677,12 @@ pub const InstGraph = struct {
             .containment_visit_epoch = 0,
             .containment_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
             .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
+            .resolved_roots = collections.DenseMap(NodeId, u32).init(allocator),
+            .resolved_epoch = 0,
+            .structure_epoch = 0,
+            .snapshot_free_types = collections.DenseMap(Type.TypeId, void).init(allocator),
+            .generated_private_nodes = 0,
+            .current_durable = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(allocator),
         };
         return graph;
@@ -633,6 +701,12 @@ pub const InstGraph = struct {
     fn countDiagnosticBy(self: *InstGraph, comptime field: []const u8, amount: usize) void {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics, field) += @intCast(amount);
+        }
+    }
+
+    fn countNominalBackingIndexRemoval(self: *InstGraph) void {
+        if (NominalBackingIndex.removal_leaves_tombstones) {
+            self.countDiagnostic("nominal_backing_tombstone_deletions");
         }
     }
 
@@ -659,6 +733,9 @@ pub const InstGraph = struct {
         self.recursive_argument_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
         self.containment_visit_epochs.deinit(allocator);
+        self.current_durable.deinit();
+        self.snapshot_free_types.deinit();
+        self.resolved_roots.deinit();
         self.node_set_pool.deinit();
         self.type_set_pool.deinit();
         var containment_entries = self.containment_cache.valueIterator();
@@ -669,6 +746,9 @@ pub const InstGraph = struct {
         self.imported_monos.deinit();
         self.active_snapshot_nodes.deinit();
         self.imported_type_nodes.deinit();
+        self.provisional_view_shareable.deinit();
+        self.related_named_backings.deinit();
+        self.related_named_instances.deinit();
         self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
@@ -779,6 +859,53 @@ pub const InstGraph = struct {
             .optional => .optional,
             .defaulted => |default| .{ .defaulted = default },
             .undetermined => |id| self.field_kinds.items[@intFromEnum(self.findFieldKind(id))].resolved,
+        };
+    }
+
+    /// Return the source-language value node a generated codec reads or
+    /// writes for one record field. This is intentionally distinct from the
+    /// runtime slot: an optional field's `ty` is the compiler-reserved tagged
+    /// presence slot, while its codec operates on the explicit `value_ty`.
+    pub fn codecFieldValueNode(self: *InstGraph, field: InstField) NodeId {
+        const value = switch (field.kind) {
+            .required => blk: {
+                if (field.value_ty != null or field.default != null) {
+                    Common.invariant("required codec field carried optional or defaulted metadata");
+                }
+                break :blk field.ty;
+            },
+            .optional => blk: {
+                if (field.default != null) Common.invariant("optional codec field carried a default identity");
+                break :blk field.value_ty orelse
+                    Common.invariant("optional codec field carried no source value node");
+            },
+            .defaulted => |default| blk: {
+                if (field.value_ty != null or field.default == null or !std.meta.eql(field.default.?, default)) {
+                    Common.invariant("defaulted codec field metadata disagreed with its field kind");
+                }
+                break :blk field.ty;
+            },
+            .undetermined => blk: {
+                if (field.default != null) Common.invariant("undetermined codec field carried a default identity");
+                break :blk field.value_ty orelse
+                    Common.invariant("undetermined codec field carried no source value node");
+            },
+            .sealed => Common.invariant("sealed record field reached graph-native codec planning"),
+        };
+        return self.find(value);
+    }
+
+    /// Return the explicit field kind seen by generated-codec planning. An
+    /// unresolved specialization-local presence cell has the declared
+    /// Monotype default of `required`; relation freeze commits that same
+    /// choice before any completed Monotype is emitted.
+    pub fn codecFieldKind(self: *InstGraph, field: InstField) ResolvedFieldKind {
+        return switch (field.kind) {
+            .required => .required,
+            .optional => .optional,
+            .defaulted => |default| .{ .defaulted = default },
+            .undetermined => self.resolvedFieldKind(field.kind) orelse .required,
+            .sealed => Common.invariant("sealed record field reached graph-native codec planning"),
         };
     }
 
@@ -1677,6 +1804,7 @@ pub const InstGraph = struct {
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         self.requireRelationProduction();
         const id: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
+        if (contentHasGeneratedPrivateBacking(node_content)) self.generated_private_nodes += 1;
         try self.nodes.append(self.allocator, node_content);
         try self.versions.append(self.allocator, 0);
         try self.class_member_next.append(self.allocator, null);
@@ -1819,6 +1947,7 @@ pub const InstGraph = struct {
             };
             const removed = self.nominal_backing_index.fetchRemove(old_key) orelse
                 Common.invariant("active nominal backing instance was absent from its index");
+            self.countNominalBackingIndexRemoval();
             if (removed.value != instance_id) {
                 Common.invariant("nominal backing key referenced the wrong instance");
             }
@@ -1860,6 +1989,7 @@ pub const InstGraph = struct {
                 if (retained_id == instance_id) {
                     const removed = self.nominal_backing_index.fetchRemove(new_key) orelse
                         Common.invariant("colliding nominal backing key disappeared during migration");
+                    self.countNominalBackingIndexRemoval();
                     if (removed.value != existing_id) {
                         Common.invariant("colliding nominal backing key referenced the wrong instance");
                     }
@@ -1919,6 +2049,133 @@ pub const InstGraph = struct {
     /// Whether two live cells already belong to the same union-find class.
     pub fn sameClass(self: *InstGraph, left: NodeId, right: NodeId) bool {
         return self.find(left) == self.find(right);
+    }
+
+    fn relatedNamedInstanceRoot(self: *InstGraph, node: NodeId) NodeId {
+        var root = node;
+        while (self.related_named_instances.get(root)) |entry| {
+            if (entry.parent == root) break;
+            root = entry.parent;
+        }
+
+        var current = node;
+        while (current != root) {
+            const entry = self.related_named_instances.getPtr(current) orelse break;
+            const next = entry.parent;
+            entry.parent = root;
+            current = next;
+        }
+        return root;
+    }
+
+    fn ensureRelatedNamedInstanceNode(self: *InstGraph, node: NodeId) Allocator.Error!void {
+        const entry = try self.related_named_instances.getOrPut(node);
+        if (!entry.found_existing) entry.value_ptr.* = .{ .parent = node };
+    }
+
+    fn unionRelatedNamedInstanceNodes(self: *InstGraph, left_node: NodeId, right_node: NodeId) void {
+        var left_root = self.relatedNamedInstanceRoot(left_node);
+        var right_root = self.relatedNamedInstanceRoot(right_node);
+        if (left_root == right_root) return;
+        if (self.related_named_instances.get(left_root).?.rank <
+            self.related_named_instances.get(right_root).?.rank)
+        {
+            const temp = left_root;
+            left_root = right_root;
+            right_root = temp;
+        }
+        self.related_named_instances.getPtr(right_root).?.parent = left_root;
+        const left_rank = self.related_named_instances.get(left_root).?.rank;
+        if (left_rank == self.related_named_instances.get(right_root).?.rank) {
+            self.related_named_instances.getPtr(left_root).?.rank = left_rank + 1;
+        }
+    }
+
+    fn bindRelatedNamedBacking(
+        self: *InstGraph,
+        named_node: NodeId,
+        named: InstNamed,
+    ) Allocator.Error!void {
+        const backing = named.backing orelse return;
+        const entry = try self.related_named_backings.getOrPut(backing.node);
+        if (entry.found_existing) {
+            self.unionRelatedNamedInstanceNodes(named_node, entry.value_ptr.*);
+        } else {
+            entry.value_ptr.* = named_node;
+        }
+    }
+
+    /// Record an exact nominal identity proved by a graph relation. Backed
+    /// named applications intentionally keep distinct main type classes so
+    /// each request retains its own representation witness; this parallel
+    /// union-find exposes the proven source-level identity to later consumers.
+    pub fn relateNamedInstances(
+        self: *InstGraph,
+        raw_left: NodeId,
+        raw_right: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const left_node = self.find(raw_left);
+        const right_node = self.find(raw_right);
+        const left = switch (self.content(left_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named left node"),
+        };
+        const right = switch (self.content(right_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named right node"),
+        };
+        if (left.kind != right.kind or
+            !sameTypeDef(left.def, right.def) or
+            left.builtin_owner != right.builtin_owner or
+            left.args.len != right.args.len)
+        {
+            Common.invariant("named-instance relation received different declarations");
+        }
+
+        try self.ensureRelatedNamedInstanceNode(left_node);
+        try self.ensureRelatedNamedInstanceNode(right_node);
+        try self.bindRelatedNamedBacking(left_node, left);
+        try self.bindRelatedNamedBacking(right_node, right);
+        self.unionRelatedNamedInstanceNodes(left_node, right_node);
+    }
+
+    /// Whether the main type relation or a backed-nominal relation proved
+    /// that two named application cells have the same source-level identity.
+    pub fn sameRelatedNamedInstance(self: *InstGraph, left: NodeId, right: NodeId) bool {
+        const left_named = switch (self.content(left)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        const right_named = switch (self.content(right)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        if (left_named.kind != right_named.kind or
+            !sameTypeDef(left_named.def, right_named.def) or
+            left_named.builtin_owner != right_named.builtin_owner or
+            left_named.args.len != right_named.args.len) return false;
+        if (self.sameClass(left, right)) return true;
+
+        const left_related = if (self.related_named_instances.contains(left))
+            self.relatedNamedInstanceRoot(left)
+        else if (left_named.backing) |backing|
+            if (self.related_named_backings.get(backing.node)) |representative|
+                self.relatedNamedInstanceRoot(representative)
+            else
+                return false
+        else
+            return false;
+        const right_related = if (self.related_named_instances.contains(right))
+            self.relatedNamedInstanceRoot(right)
+        else if (right_named.backing) |backing|
+            if (self.related_named_backings.get(backing.node)) |representative|
+                self.relatedNamedInstanceRoot(representative)
+            else
+                return false
+        else
+            return false;
+        return left_related == right_related;
     }
 
     pub const ClassMemberIterator = struct {
@@ -2006,6 +2263,7 @@ pub const InstGraph = struct {
         root: NodeId,
         allow_field_kind_defaults: bool,
     ) Allocator.Error!bool {
+        if (self.rootStampedResolved(root)) return true;
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
         var seen = self.node_set_pool.acquire();
@@ -2015,6 +2273,9 @@ pub const InstGraph = struct {
             const node = self.find(raw_node);
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
+            // A stamped class is resolved throughout, so nothing below it can
+            // change the answer.
+            if (self.rootStampedResolved(node)) continue;
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved => return false,
@@ -2057,7 +2318,20 @@ pub const InstGraph = struct {
                 },
             }
         }
+        if (!allow_field_kind_defaults) {
+            // Every class the strict walk visited is resolved throughout.
+            var visited = seen.keyIterator();
+            while (visited.next()) |node| {
+                try self.resolved_roots.put(node.*, self.resolved_epoch);
+            }
+        }
         return true;
+    }
+
+    /// Whether the node's class was stamped resolved at the current epoch.
+    fn rootStampedResolved(self: *InstGraph, node: NodeId) bool {
+        const stamp = self.resolved_roots.get(self.find(node)) orelse return false;
+        return stamp == self.resolved_epoch;
     }
 
     /// Materialize the checked literal default recorded on an otherwise-open
@@ -2189,6 +2463,7 @@ pub const InstGraph = struct {
     /// opaque evidence at any structural depth.
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("generated_private_scans");
+        if (self.generated_private_nodes == 0) return false;
         return try self.containmentResult(
             root,
             .generated_private,
@@ -2208,10 +2483,14 @@ pub const InstGraph = struct {
         const cache = try self.containment_cache.getOrPut(query_root);
         if (!cache.found_existing) cache.value_ptr.* = .{};
         const entry = cache.value_ptr.forQuery(query);
-        if (entry.valid and !self.containmentQueryCacheValid(entry)) {
-            entry.valid = false;
-            entry.result = false;
-            entry.dependencies.clearRetainingCapacity();
+        if (entry.valid and entry.verified_epoch != self.structure_epoch) {
+            if (self.containmentQueryCacheValid(entry)) {
+                entry.verified_epoch = self.structure_epoch;
+            } else {
+                entry.valid = false;
+                entry.result = false;
+                entry.dependencies.clearRetainingCapacity();
+            }
         }
         if (entry.valid) {
             self.countDiagnostic(cache_hits_field);
@@ -2276,6 +2555,7 @@ pub const InstGraph = struct {
                     if (found) {
                         entry.result = true;
                         entry.valid = true;
+                        entry.verified_epoch = self.structure_epoch;
                         return true;
                     }
                     if (named.backing) |backing| {
@@ -2290,6 +2570,7 @@ pub const InstGraph = struct {
             }
         }
         entry.valid = true;
+        entry.verified_epoch = self.structure_epoch;
         return false;
     }
 
@@ -3516,10 +3797,32 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Whether the class is unresolved by inspection of its root alone: a
+    /// variable, or a row whose extension is a variable. No active snapshot
+    /// reaches such a class, so replacing its content cannot stale one.
+    fn classProvablyUnresolved(self: *InstGraph, root: NodeId) bool {
+        return switch (self.nodes.items[@intFromEnum(root)]) {
+            .unresolved => true,
+            .tag_union => |row| self.nodes.items[@intFromEnum(self.find(row.ext))] == .unresolved,
+            .record => |row| self.nodes.items[@intFromEnum(self.find(row.ext))] == .unresolved,
+            .redirect, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        };
+    }
+
     fn refreshActiveSnapshots(self: *InstGraph) void {
         if (!self.current_snapshots_dirty) return;
         self.current_snapshots.clearRetainingCapacity();
+        self.current_durable.clearRetainingCapacity();
         self.current_snapshots_dirty = false;
+    }
+
+    /// Whether the node's class has a current active snapshot. Snapshots are
+    /// taken only from resolved roots, resolvedness survives every join, and
+    /// the cache is cleared by every observable content change, so a current
+    /// snapshot proves the class is still resolved without walking it.
+    fn hasCurrentSnapshot(self: *InstGraph, node: NodeId) bool {
+        self.refreshActiveSnapshots();
+        return self.current_snapshots.contains(self.find(node));
     }
 
     /// Redirect `loser` into `winner` and invalidate the current snapshot
@@ -3529,6 +3832,11 @@ pub const InstGraph = struct {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
+        if (self.nodes.items[@intFromEnum(winner)] == .unresolved and self.nodes.items[@intFromEnum(loser)] != .unresolved) {
+            // A variable absorbing concrete content can make classes that
+            // reached the loser unresolved.
+            self.resolved_epoch +%= 1;
+        }
         // Rekey before changing union state. Its allocation preflight can still
         // fail without staling a resident key.
         try self.migrateNominalBackingRoot(loser, winner);
@@ -3536,28 +3844,60 @@ pub const InstGraph = struct {
         const loser_head = self.class_member_head.items[@intFromEnum(loser)];
         self.class_member_next.items[@intFromEnum(winner_tail)] = loser_head;
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
+        const winner_content = self.nodes.items[@intFromEnum(winner)];
+        const loser_content = self.nodes.items[@intFromEnum(loser)];
+        const joins_nominal_with_structural = winner_content != .unresolved and loser_content != .unresolved and
+            (winner_content == .named) != (loser_content == .named);
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
+        self.structure_epoch +%= 1;
         self.countDiagnostic("class_unions");
-        self.invalidateActiveSnapshots(winner);
+        // An active snapshot exists only for a resolved class and reaches
+        // only resolved classes. A variable never wins a join, and two
+        // resolved classes that unified are equal throughout, so a join of
+        // one kind leaves every snapshot observing the same type. Only a
+        // nominal wrapper absorbing its structural backing (or the reverse)
+        // changes what a snapshot through the loser observes.
+        if (joins_nominal_with_structural) {
+            self.invalidateActiveSnapshots(winner);
+        } else {
+            // The joined class keeps its current view under its new root.
+            self.refreshActiveSnapshots();
+            if (self.current_snapshots.get(loser)) |view| {
+                if (!self.current_snapshots.contains(winner)) try self.current_snapshots.put(winner, view);
+            }
+            if (self.current_durable.get(loser)) |durable| {
+                if (!self.current_durable.contains(winner)) try self.current_durable.put(winner, durable);
+            }
+        }
         try self.drainNominalBackingCollisions();
     }
 
     /// Replace a root's content with an observationally equivalent compressed
-    /// form without invalidating immutable Type-shaped snapshots. Returns
-    /// whether the stored graph content changed.
+    /// form without invalidating snapshots or resolvedness stamps: the class
+    /// still denotes the same type and reaches the same resolved state.
+    /// Returns whether the stored graph content changed.
     fn replaceContentWithoutSnapshotInvalidation(self: *InstGraph, raw_root: NodeId, new_content: InstNode) bool {
         const root = self.find(raw_root);
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
+        if (contentHasGeneratedPrivateBacking(new_content)) self.generated_private_nodes += 1;
         self.nodes.items[@intFromEnum(root)] = new_content;
         self.versions.items[@intFromEnum(root)] +%= 1;
+        self.structure_epoch +%= 1;
         return true;
     }
 
-    /// Replace a root's type content and invalidate every cached snapshot.
+    /// Replace a root's type content and invalidate every cached snapshot
+    /// that could observe the class.
     fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) void {
+        const observable = !self.classProvablyUnresolved(self.find(root));
         if (!self.replaceContentWithoutSnapshotInvalidation(root, new_content)) return;
-        self.invalidateActiveSnapshots(root);
+        if (observable) {
+            self.invalidateActiveSnapshots(root);
+            // The new content can reach unresolved nodes that classes
+            // stamped resolved through this one never saw.
+            self.resolved_epoch +%= 1;
+        }
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
@@ -4139,7 +4479,7 @@ pub const InstGraph = struct {
         if (declared_backing.node != backing_node) {
             var compressed = named;
             compressed.backing = .{ .node = backing_node, .use = declared_backing.use, .authority = declared_backing.authority };
-            self.setContent(named_node, .{ .named = compressed });
+            _ = self.replaceContentWithoutSnapshotInvalidation(named_node, .{ .named = compressed });
         }
         // The named node already owns this exact structural backing. This
         // relation arises when a checked function interface names the wrapper
@@ -4201,7 +4541,7 @@ pub const InstGraph = struct {
             if (backing.node != result) {
                 var compressed = named;
                 compressed.backing = .{ .node = result, .use = backing.use, .authority = backing.authority };
-                self.setContent(current, .{ .named = compressed });
+                _ = self.replaceContentWithoutSnapshotInvalidation(current, .{ .named = compressed });
             }
             current = next;
         }
@@ -4502,11 +4842,26 @@ pub const InstGraph = struct {
         var only_right = std.ArrayList(InstTag).empty;
         defer only_right.deinit(self.allocator);
 
+        // Both rows indexed by label text so each side pairs with the other
+        // in one pass; the first row position wins for a repeated label.
+        var right_by_text: std.StringHashMapUnmanaged(usize) = .empty;
+        defer right_by_text.deinit(self.allocator);
+        try right_by_text.ensureTotalCapacity(self.allocator, @intCast(flat_right.tags.len));
+        for (flat_right.tags, 0..) |right_tag, index| {
+            const gop = right_by_text.getOrPutAssumeCapacity(self.tagLabelText(right_tag.name));
+            if (!gop.found_existing) gop.value_ptr.* = index;
+        }
+        var left_texts: std.StringHashMapUnmanaged(void) = .empty;
+        defer left_texts.deinit(self.allocator);
+        try left_texts.ensureTotalCapacity(self.allocator, @intCast(flat_left.tags.len));
         for (flat_left.tags) |left_tag| {
-            const wanted = self.tagLabelText(left_tag.name);
+            left_texts.putAssumeCapacity(self.tagLabelText(left_tag.name), {});
+        }
+
+        for (flat_left.tags) |left_tag| {
             var shared = false;
-            for (flat_right.tags) |right_tag| {
-                if (!Ident.textEql(wanted, self.tagLabelText(right_tag.name))) continue;
+            if (right_by_text.get(self.tagLabelText(left_tag.name))) |right_index| {
+                const right_tag = flat_right.tags[right_index];
                 if (left_tag.payloads.len != right_tag.payloads.len) {
                     Common.invariant("instantiation unified one tag at two different payload arities");
                 }
@@ -4514,24 +4869,14 @@ pub const InstGraph = struct {
                     try pending.append(self.allocator, .{ .left = left_payload, .right = right_payload, .row_width = row_width });
                 }
                 shared = true;
-                break;
             }
             try merged.append(self.allocator, left_tag);
             if (!shared) try only_left.append(self.allocator, left_tag);
         }
         for (flat_right.tags) |right_tag| {
-            const wanted = self.tagLabelText(right_tag.name);
-            var shared = false;
-            for (flat_left.tags) |left_tag| {
-                if (Ident.textEql(wanted, self.tagLabelText(left_tag.name))) {
-                    shared = true;
-                    break;
-                }
-            }
-            if (!shared) {
-                try merged.append(self.allocator, right_tag);
-                try only_right.append(self.allocator, right_tag);
-            }
+            if (left_texts.contains(self.tagLabelText(right_tag.name))) continue;
+            try merged.append(self.allocator, right_tag);
+            try only_right.append(self.allocator, right_tag);
         }
 
         if (self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .tag_union) or
@@ -4622,11 +4967,26 @@ pub const InstGraph = struct {
         var only_right = std.ArrayList(InstField).empty;
         defer only_right.deinit(self.allocator);
 
+        // Both rows indexed by label text so each side pairs with the other
+        // in one pass; the first row position wins for a repeated label.
+        var right_by_text: std.StringHashMapUnmanaged(usize) = .empty;
+        defer right_by_text.deinit(self.allocator);
+        try right_by_text.ensureTotalCapacity(self.allocator, @intCast(flat_right.fields.len));
+        for (flat_right.fields, 0..) |right_field, index| {
+            const gop = right_by_text.getOrPutAssumeCapacity(self.fieldLabelText(right_field.name));
+            if (!gop.found_existing) gop.value_ptr.* = index;
+        }
+        var left_texts: std.StringHashMapUnmanaged(void) = .empty;
+        defer left_texts.deinit(self.allocator);
+        try left_texts.ensureTotalCapacity(self.allocator, @intCast(flat_left.fields.len));
         for (flat_left.fields) |left_field| {
-            const wanted = self.fieldLabelText(left_field.name);
+            left_texts.putAssumeCapacity(self.fieldLabelText(left_field.name), {});
+        }
+
+        for (flat_left.fields) |left_field| {
             var shared = false;
-            for (flat_right.fields) |right_field| {
-                if (!Ident.textEql(wanted, self.fieldLabelText(right_field.name))) continue;
+            if (right_by_text.get(self.fieldLabelText(left_field.name))) |right_index| {
+                const right_field = flat_right.fields[right_index];
                 const merged_kind = self.unifyFieldKinds(
                     left_field.kind,
                     left_field.default,
@@ -4651,7 +5011,6 @@ pub const InstGraph = struct {
                     .default = resolved_default,
                 });
                 shared = true;
-                break;
             }
             if (!shared) {
                 try merged.append(self.allocator, left_field);
@@ -4659,18 +5018,9 @@ pub const InstGraph = struct {
             }
         }
         for (flat_right.fields) |right_field| {
-            const wanted = self.fieldLabelText(right_field.name);
-            var shared = false;
-            for (flat_left.fields) |left_field| {
-                if (Ident.textEql(wanted, self.fieldLabelText(left_field.name))) {
-                    shared = true;
-                    break;
-                }
-            }
-            if (!shared) {
-                try merged.append(self.allocator, right_field);
-                try only_right.append(self.allocator, right_field);
-            }
+            if (left_texts.contains(self.fieldLabelText(right_field.name))) continue;
+            try merged.append(self.allocator, right_field);
+            try only_right.append(self.allocator, right_field);
         }
 
         const left_absorbs_right = self.closedRecordAbsorbsFields(flat_left.ext, only_right.items, row_width);
@@ -4888,14 +5238,112 @@ pub const InstGraph = struct {
 
     /// Instantiate one immutable provisional interface-replay view as fresh
     /// graph cells. Unlike `importMono`, this deliberately creates an
-    /// independent copy on every call: an undetermined field-kind cell remains
-    /// open evidence for the duplicate request and must not become an immutable
-    /// cross-request witness or share later constraints with another duplicate.
+    /// independent copy of every open part on every call: an undetermined
+    /// field-kind cell remains open evidence for the duplicate request and
+    /// must not become an immutable cross-request witness or share later
+    /// constraints with another duplicate. A component with no open part
+    /// anywhere inside it (see `provisionalViewShareable`) is finished
+    /// structure every duplicate reads identically, so it enters through the
+    /// finished-Monotype import memo and is shared rather than copied.
     pub fn instantiateProvisionalTypeView(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
         var imported = collections.DenseMap(Type.TypeId, NodeId).init(self.allocator);
         defer imported.deinit();
         return try self.instantiateProvisionalTypeViewInner(ty, &imported);
+    }
+
+    /// Whether every type reachable from `ty` is settled structure a
+    /// provisional view may share between requests: no undetermined
+    /// record-field kind, no generated-private backing, and no
+    /// compiler-generated or representation-carrying iterator nominal, since
+    /// those are per-request evidence that representation selection may
+    /// still rewrite.
+    fn provisionalViewShareable(self: *InstGraph, root: Type.TypeId) Allocator.Error!bool {
+        if (self.provisional_view_shareable.get(root)) |known| return known;
+
+        var reachable = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer reachable.deinit();
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        const types = self.types;
+        var shareable = true;
+        scan: while (pending.pop()) |ty| {
+            const entry = try reachable.getOrPut(ty);
+            if (entry.found_existing) continue;
+            if (self.provisional_view_shareable.get(ty)) |known| {
+                // A settled subtree needs no walk; an unsettled one settles
+                // the whole query.
+                if (!known) {
+                    shareable = false;
+                    break :scan;
+                }
+                continue;
+            }
+            switch (types.get(ty)) {
+                .primitive, .erased, .zst => {},
+                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .tuple => |items| try self.appendProvisionalSpan(&pending, types.span(items)),
+                .func => |func| {
+                    try self.appendProvisionalSpan(&pending, types.span(func.args));
+                    try pending.append(self.allocator, func.ret);
+                },
+                .tag_union => |tags| {
+                    const span = types.tagSpan(tags);
+                    for (0..span.len) |index| {
+                        try self.appendProvisionalSpan(&pending, types.span(GuardedList.at(span, index).payloads));
+                    }
+                },
+                .record => |fields| {
+                    const span = types.fieldSpan(fields);
+                    for (0..span.len) |index| {
+                        const field = GuardedList.at(span, index);
+                        if (field.kind_state == .undetermined) {
+                            shareable = false;
+                            break :scan;
+                        }
+                        try pending.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                    }
+                },
+                .named => |named| {
+                    if (named.def.generated != null or named.def.iterator_representation != .none or named.def.iterator_kind != .none) {
+                        shareable = false;
+                        break :scan;
+                    }
+                    try self.appendProvisionalSpan(&pending, types.span(named.args));
+                    if (named.backing) |backing| {
+                        if (backing.authority == .generated_private) {
+                            shareable = false;
+                            break :scan;
+                        }
+                        try pending.append(self.allocator, backing.ty);
+                    }
+                    const declared = types.declaredFieldSpan(named.declared_order);
+                    for (0..declared.len) |index| {
+                        switch (GuardedList.at(declared, index)) {
+                            .named => {},
+                            .padding => |padding_ty| try pending.append(self.allocator, padding_ty),
+                        }
+                    }
+                },
+            }
+        }
+
+        if (shareable) {
+            // Everything reachable from a settled root is settled too.
+            var it = reachable.keyIterator();
+            while (it.next()) |ty| try self.provisional_view_shareable.put(ty.*, true);
+        } else {
+            try self.provisional_view_shareable.put(root, false);
+        }
+        return shareable;
+    }
+
+    fn appendProvisionalSpan(self: *InstGraph, pending: *std.ArrayList(Type.TypeId), tys: anytype) Allocator.Error!void {
+        for (0..tys.len) |index| {
+            try pending.append(self.allocator, GuardedList.at(tys, index));
+        }
     }
 
     fn instantiateProvisionalTypeViewInner(
@@ -4904,6 +5352,11 @@ pub const InstGraph = struct {
         imported: *collections.DenseMap(Type.TypeId, NodeId),
     ) Allocator.Error!NodeId {
         if (imported.get(ty)) |existing| return existing;
+        if (try self.provisionalViewShareable(ty)) {
+            const shared = try self.importMono(ty);
+            try imported.put(ty, shared);
+            return shared;
+        }
 
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         try imported.put(ty, node);
@@ -5078,7 +5531,7 @@ pub const InstGraph = struct {
             Common.compilerBug("provisional Monotype snapshot requested inside a type transaction");
         }
         if (self.imported_monos.get(node)) |imported| return imported;
-        if (try self.typeIsResolved(node)) return try self.monoFor(node);
+        if (self.hasCurrentSnapshot(node) or try self.typeIsResolved(node)) return try self.monoFor(node);
         var snapshot = GraphTypeFinals.initProvisionalSnapshot(self);
         defer snapshot.deinit();
         return try snapshot.sealNode(self.find(node));
@@ -5093,7 +5546,7 @@ pub const InstGraph = struct {
         if (self.types.hasSpeculativeConstruction()) {
             Common.compilerBug("specialization Monotype snapshot requested inside a type transaction");
         }
-        if (try self.typeIsResolved(node)) return try self.monoFor(node);
+        if (self.hasCurrentSnapshot(node) or try self.typeIsResolved(node)) return try self.monoFor(node);
         if (!try self.typeIsSpecializationDefaultable(node)) {
             Common.invariant("specialization type view requested for a graph type with non-field-kind unresolved evidence");
         }
@@ -5117,7 +5570,7 @@ pub const InstGraph = struct {
             self.countDiagnostic("active_type_imported_hits");
             return imported;
         }
-        if (!try self.typeIsResolved(node)) {
+        if (!self.hasCurrentSnapshot(node) and !try self.typeIsResolved(node)) {
             Common.invariant("active Monotype TypeId requested for an unresolved instantiation graph node");
         }
         return try self.monoFor(node);
@@ -5125,15 +5578,18 @@ pub const InstGraph = struct {
 
     fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         const root = self.find(node);
-        if (!try self.typeIsResolved(root)) {
-            Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
-        }
+        // A current snapshot was taken from a resolved root, and the cache is
+        // cleared by every union and content change, so a hit is still
+        // resolved without walking the type again.
         self.refreshActiveSnapshots();
         if (self.current_snapshots.get(root)) |current| {
             self.countDiagnostic("active_snapshot_cache_hits");
             return current;
         }
         self.countDiagnostic("active_snapshot_cache_misses");
+        if (!try self.typeIsResolved(root)) {
+            Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
+        }
 
         var snapshot = GraphTypeFinals.initActiveSnapshot(self);
         defer snapshot.deinit();
@@ -5176,9 +5632,16 @@ pub const InstGraph = struct {
     }
 
     pub fn typeHasActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!bool {
+        if (self.snapshot_free_types.contains(ty)) return false;
         var seen = self.type_set_pool.acquire();
         defer self.type_set_pool.release(&seen);
-        return try self.typeContainsActiveSnapshot(ty, &seen);
+        if (try self.typeContainsActiveSnapshot(ty, &seen)) return true;
+        // Every type the walk reached is snapshot-free as well.
+        var visited = seen.keyIterator();
+        while (visited.next()) |visited_ty| {
+            try self.snapshot_free_types.put(visited_ty.*, {});
+        }
+        return false;
     }
 
     fn typeContainsActiveSnapshot(
@@ -5187,6 +5650,7 @@ pub const InstGraph = struct {
         seen: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         if (self.isActiveSnapshotType(ty)) return true;
+        if (self.snapshot_free_types.contains(ty)) return false;
         const seen_entry = try seen.getOrPut(ty);
         if (seen_entry.found_existing) return false;
         return switch (self.types.get(ty)) {
@@ -5354,7 +5818,16 @@ pub const GraphTypeFinals = struct {
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
         const node = self.graph.find(raw_node);
         if (self.sealed.get(node)) |existing| return existing;
-        if (self.mode != .final) return try self.sealNodeSpeculative(node);
+        self.graph.refreshActiveSnapshots();
+        if (self.mode != .final) {
+            // A class with a current active snapshot has not changed since
+            // that view was taken, so a snapshot reaching it reads that view.
+            if (self.graph.current_snapshots.get(node)) |current| return current;
+            return try self.sealNodeSpeculative(node);
+        }
+        // A class sealed to an interned type since its last observable
+        // change still denotes that type.
+        if (self.graph.current_durable.get(node)) |durable| return durable;
         if (self.active_transaction != null) return try self.sealNodeSpeculative(node);
         if (self.graph.types.hasSpeculativeConstruction()) return try self.sealNodeSpeculative(node);
 
@@ -5369,12 +5842,15 @@ pub const GraphTypeFinals = struct {
         const speculative = try self.sealNodeSpeculative(node);
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
         defer result.deinit();
-        self.remapSealedTypes(result);
+        try self.remapSealedTypes(result);
         return result.root;
     }
 
     fn sealNodeSpeculative(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.TypeId {
         if (self.sealed.get(node)) |existing| return existing;
+        if (self.mode == .final) {
+            if (self.graph.current_durable.get(node)) |durable| return durable;
+        }
         const Context = struct {
             sealer: *GraphTypeFinals,
             node: NodeId,
@@ -5395,11 +5871,12 @@ pub const GraphTypeFinals = struct {
         return try self.graph.types.addRecursive(Context{ .sealer = self, .node = node }, Context.fill);
     }
 
-    fn remapSealedTypes(self: *GraphTypeFinals, result: Type.Store.TransactionResult) void {
+    fn remapSealedTypes(self: *GraphTypeFinals, result: Type.Store.TransactionResult) Allocator.Error!void {
         for (self.transaction_sealed_nodes.items) |node| {
             const entry = self.sealed.getPtr(node) orelse
                 Common.compilerBug("transaction-sealed node was missing from the sealed map at commit");
             entry.* = result.remapType(entry.*);
+            try self.graph.current_durable.put(self.graph.find(node), entry.*);
         }
         self.transaction_sealed_nodes.clearRetainingCapacity();
         for (self.transaction_sealed_types.items) |ty| {
@@ -5484,7 +5961,7 @@ pub const GraphTypeFinals = struct {
         const speculative = try self.sealStoreTypeSpeculative(ty);
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
         defer result.deinit();
-        self.remapSealedTypes(result);
+        try self.remapSealedTypes(result);
         return result.root;
     }
 
@@ -6093,6 +6570,12 @@ pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const T
     }
 }
 
+fn contentHasGeneratedPrivateBacking(content: InstNode) bool {
+    if (content != .named) return false;
+    const backing = content.named.backing orelse return false;
+    return backing.authority == .generated_private;
+}
+
 fn instNodeEql(left: InstNode, right: InstNode) bool {
     return switch (left) {
         .redirect => |left_next| right == .redirect and left_next == right.redirect,
@@ -6223,10 +6706,13 @@ test "graph diagnostics count authoritative operations" {
     try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_hits);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_misses);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_nodes_materialized);
-    try std.testing.expect(diagnostics.active_snapshot_invalidations >= 1);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_entries_invalidated);
+    // A variable joining a primitive changes no observable type.
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.active_snapshot_invalidations);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.active_snapshot_entries_invalidated);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_scans);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
+    // No node carries a generated-private backing, so the scan answers
+    // without visiting.
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.generated_private_nodes_visited);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_scans);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_nodes_visited);
 }
@@ -7133,7 +7619,15 @@ test "relation mutation invalidates active snapshots before freezing" {
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     try graph.unify(resolved, unresolved);
 
+    // A variable joining a resolved class leaves the class's type as it
+    // was, so its current view stays.
     try std.testing.expect(graph.acceptsRelationMutation());
+    try std.testing.expect(!graph.current_snapshots_dirty);
+    const after_join = try graph.activeTypeViewForNode(resolved);
+    try std.testing.expectEqual(before_mutation, after_join);
+
+    // Replacing the class's content is observable through every view.
+    graph.setContent(graph.find(resolved), .{ .primitive = .u32 });
     try std.testing.expect(graph.current_snapshots_dirty);
 
     const after_mutation = try graph.activeTypeViewForNode(resolved);
@@ -7167,6 +7661,24 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
     };
     const recursive = try graph.addRecursiveNode(Context{}, Context.fill);
     graph.containment_visit_epoch = std.math.maxInt(u32);
+    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
+
+    // An unrelated generated-private node makes the traversal necessary;
+    // without one the query answers without visiting anything.
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x47} ** 32));
+    const type_name = try name_store.internTypeName("PrivateValue");
+    _ = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(31) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .inspectable,
+            .authority = .generated_private,
+        },
+    } });
     @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
 
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
@@ -8617,6 +9129,80 @@ test "nominal backing index rekeys root tuples and merges collisions" {
     }
     try std.testing.expectEqual(@as(usize, 3), active_instances);
     try std.testing.expectEqual(@as(u32, 3), graph.nominal_backing_index.count());
+}
+
+test "related named instances reuse exact backing witnesses" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const type_name = try name_store.internTypeName("Wrap");
+    const other_type_name = try name_store.internTypeName("Other");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const other_def: Type.TypeDef = .{ .module = module_identity, .type_name = other_type_name };
+
+    const request_arg = try graph.newNode(.{ .primitive = .bool });
+    const checked_arg = try graph.newNode(.{ .primitive = .bool });
+    try graph.unify(request_arg, checked_arg);
+    const request_backing = try graph.newNode(.empty_tag_union);
+    const checked_backing = try graph.newNode(.empty_tag_union);
+    const unrelated_backing = try graph.newNode(.empty_tag_union);
+
+    const request = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+    const same_request = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+    const checked_node = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{checked_arg}),
+        .backing = .{ .node = checked_backing, .use = .inspectable },
+    } });
+    const unrelated = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = unrelated_backing, .use = .inspectable },
+    } });
+    const other_definition = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = other_def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+
+    try graph.relateNamedInstances(request, checked_node);
+
+    try std.testing.expect(!graph.sameClass(request, checked_node));
+    try std.testing.expect(graph.sameRelatedNamedInstance(request, checked_node));
+    try std.testing.expect(graph.sameRelatedNamedInstance(same_request, checked_node));
+    try std.testing.expect(!graph.sameRelatedNamedInstance(unrelated, checked_node));
+    try std.testing.expect(!graph.sameRelatedNamedInstance(other_definition, checked_node));
 }
 
 test "issue 9647: same nominal backing wrapper resolves to structural backing once" {

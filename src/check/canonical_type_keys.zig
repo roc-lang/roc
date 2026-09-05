@@ -92,6 +92,21 @@ pub fn identityVarsFromVar(
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
+/// Append the identity variables reachable from `var_`, method requirements
+/// included, to `out` in the canonical slot order.
+pub fn appendIdentityVarsFromVar(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+    out: *std.ArrayListUnmanaged(types.Var),
+) Allocator.Error!void {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    try builder.writeVar(var_);
+    try out.appendSlice(allocator, builder.identity_variables.items);
+}
+
 /// Return the identity variables exposed by a type's ordinary structure,
 /// without following method requirements attached to those identities.
 pub fn identityVarsFromVarIgnoringConstraints(

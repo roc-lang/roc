@@ -725,7 +725,7 @@ test "deep mixed field access chains stay flat and source-ordered" {
     try std.testing.expectEqual(.ident, std.meta.activeTag(ast.store.getExpr(path.receiver)));
     try std.testing.expectEqual(@as(usize, 3), ast.store.nodeCount());
 }
-test "dollar-prefixed record field names are rejected with a single diagnostic" {
+test "dollar-prefixed record field names parse without mutability diagnostics" {
     const gpa = std.testing.allocator;
 
     const Case = struct {
@@ -754,11 +754,7 @@ test "dollar-prefixed record field names are rejected with a single diagnostic" 
         defer ast.deinit();
 
         try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
-        try std.testing.expectEqual(
-            AST.Diagnostic.Tag.record_field_name_cannot_be_var,
-            ast.parse_diagnostics.items[0].tag,
-        );
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
     }
 }
 
@@ -867,7 +863,7 @@ test "Parser.init cleans up partial allocations on OOM" {
     try std.testing.checkAllAllocationFailures(gpa, vmInitAllocationFailureImpl, .{output.tokens});
 }
 
-test "parse diagnostic report handles invalid mutable identifier spelling" {
+test "parse diagnostic report handles malformed dollar-prefixed identifier" {
     const gpa = std.testing.allocator;
     const source =
         \\{
@@ -897,7 +893,7 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
     }
 }
 
-test "parse diagnostic report handles mutable type annotation without panicking" {
+test "dollar-prefixed type annotation does not imply mutability" {
     const gpa = std.testing.allocator;
     const source =
         \\$count : U64
@@ -909,18 +905,8 @@ test "parse diagnostic report handles mutable type annotation without panicking"
     const ast = try file(gpa, &env);
     defer ast.deinit();
 
-    var found_mutable_annotation_diagnostic = false;
-    for (ast.parse_diagnostics.items) |diagnostic| {
-        var report = try ast.parseDiagnosticToReport(&env, diagnostic, gpa, "test");
-        defer report.deinit();
-
-        if (diagnostic.tag == .var_type_anno_needs_var_keyword) {
-            found_mutable_annotation_diagnostic = true;
-            try std.testing.expectEqualStrings("Expected Var Keyword", report.title);
-        }
-    }
-
-    try std.testing.expect(found_mutable_annotation_diagnostic);
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
 test "regression B212: parameterized type arguments accept bare function types" {
@@ -1118,5 +1104,42 @@ test "parser does not create a type path for malformed associated type headers" 
         if (decl.kind == .type_alias or decl.kind == .nominal or decl.kind == .@"opaque") {
             return error.MalformedHeaderRecordedTypeDecl;
         }
+    }
+}
+
+test "issue 11109: list rest aliases accept ordinary and named-underscore identifiers" {
+    const gpa = std.testing.allocator;
+    const sources = [_][]const u8{
+        \\b = |lst| {
+        \\    match lst {
+        \\        [h, .. as tail] if h < 4 => "a"
+        \\        _ => ""
+        \\    }
+        \\}
+        \\
+        \\expect [3] |> b |> Str.is_eq("a")
+        \\expect [] |> b |> Str.is_eq("")
+        ,
+        \\b = |lst| {
+        \\    match lst {
+        \\        [h, .. as _tail] if h < 4 => "a"
+        \\        _ => ""
+        \\    }
+        \\}
+        \\
+        \\expect [3] |> b |> Str.is_eq("a")
+        \\expect [] |> b |> Str.is_eq("")
+        ,
+    };
+
+    for (sources) |source| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+
+        const ast = try file(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
     }
 }

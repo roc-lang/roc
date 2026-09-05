@@ -1072,7 +1072,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dispatch-call (method "contains") (constraint-fn-var 1272)
+				(e-dispatch-call (method "contains") (constraint-fn-var 1273)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1112,9 +1112,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 1374)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 1394)
 					(receiver
-						(e-call (constraint-fn-var 1373)
+						(e-call (constraint-fn-var 1392)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

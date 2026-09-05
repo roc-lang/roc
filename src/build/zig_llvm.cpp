@@ -33,6 +33,10 @@
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Transforms/Vectorize/LoopVectorize.h>
+#include <llvm/Transforms/Vectorize/SLPVectorizer.h>
+#include <llvm/Transforms/Scalar/SimplifyCFG.h>
+#include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/Object/Archive.h>
 #include <llvm/Object/ArchiveWriter.h>
@@ -478,6 +482,26 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
 
     // Optimization phase
     module_pm.run(llvm_module, module_am);
+
+    // A second vectorization attempt. Roc emits list bounds and uniqueness
+    // checks as ordinary calls, so a loop that will end up as pure lane
+    // arithmetic still holds a call when the pipeline's vectorizer runs, and
+    // only the later passes that prove the check redundant leave it in a
+    // shape a vectorizer would take. Running one after those passes catches
+    // the loops the first attempt could not see.
+    if (opt_level != OptimizationLevel::O0) {
+        FunctionPassManager revectorize_pm;
+        revectorize_pm.addPass(LoopVectorizePass());
+        revectorize_pm.addPass(SLPVectorizerPass());
+        revectorize_pm.addPass(InstCombinePass());
+        revectorize_pm.addPass(SimplifyCFGPass());
+
+        for (Function &function : llvm_module) {
+            if (!function.isDeclaration()) {
+                revectorize_pm.run(function, function_am);
+            }
+        }
+    }
 
     if (options->lower_memory_intrinsics_to_loops) {
         FunctionPassManager lower_mem_pm;

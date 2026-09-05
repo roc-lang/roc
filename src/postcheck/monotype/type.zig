@@ -4,6 +4,7 @@
 //! defaulting have been finalized. It has no lambda sets and no layout data.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const check = @import("check");
 const collections = @import("collections");
 
@@ -1842,6 +1843,9 @@ pub const Store = struct {
         cache_hits: u64 = 0,
         cache_misses: u64 = 0,
         nodes_visited: u64 = 0,
+        /// Node encodings replayed while reducing cyclic groups: labels,
+        /// the group rendering, and the unfolding index.
+        group_encodings: u64 = 0,
     };
 
     pub const VerifyError = enum {
@@ -2163,6 +2167,15 @@ pub const Store = struct {
         errdefer self.restore(mark_);
         const span_ = try self.addSpan(args);
         const ty = try self.add(.{ .func = .{ .args = span_, .ret = ret } });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    /// Intern a function while reusing an argument span already owned by this
+    /// store. Immutable side-pool spans may be shared between type nodes.
+    pub fn internFuncFromSpan(self: *Store, name_store: *const names.NameStore, args: Span, ret: TypeId) std.mem.Allocator.Error!TypeId {
+        if (builtin.mode == .Debug) requireEpochSpan(args, @intCast(self.spans.len()));
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .func = .{ .args = args, .ret = ret } });
         return try self.internCandidate(name_store, mark_, ty);
     }
 
@@ -2491,9 +2504,9 @@ pub const Store = struct {
     /// format change.
     fn digestDomain(mode: NamedDigestMode) []const u8 {
         return switch (mode) {
-            .full => "roc.monotype.type.identity.v1",
-            .identity_only => "roc.monotype.type.interface.v1",
-            .equality => "roc.monotype.type.equality.v1",
+            .full => "roc.monotype.type.identity.v2",
+            .identity_only => "roc.monotype.type.interface.v2",
+            .equality => "roc.monotype.type.equality.v2",
         };
     }
 
@@ -2821,9 +2834,9 @@ pub const Store = struct {
     /// Iterative Tarjan SCC discovery then resolves the condensation in
     /// reverse topological order: an acyclic node hashes its encoding with
     /// finalized child digests, and each cyclic SCC is reduced by
-    /// bisimulation refinement, linearized by the minimum-over-entry-points
-    /// rotation with group-relative back-references, and digested per reduced
-    /// position. Every settled digest is cached unconditionally, and each
+    /// bisimulation refinement over content labels, rendered once with its
+    /// reduced positions in label order and group-relative back-references,
+    /// and digested per reduced position. Every settled digest is cached unconditionally, and each
     /// reduced position's one-step unfolding enters the store's unfolding
     /// index so later rolled-out prefixes of the same group fold to the same
     /// digests.
@@ -2997,8 +3010,8 @@ pub const Store = struct {
             /// Member position within the SCC per engine node, or
             /// `no_scc_position` for nodes outside the SCC.
             member_pos_of_node: []const u32,
-            blocks: []const u32,
-            order_of_block: []const u32,
+            /// Label-ordered reduced position per SCC member.
+            rank_of_member: []const u32,
         };
 
         /// Rendering sink: writes the encoding into a byte buffer, resolving
@@ -3025,7 +3038,7 @@ pub const Store = struct {
                             const member_pos = ctx.member_pos_of_node[node_index];
                             if (member_pos != no_scc_position) {
                                 try renderBytes(self.engine.gpa, self.out, "group-ref");
-                                try renderU32(self.engine.gpa, self.out, ctx.order_of_block[ctx.blocks[member_pos]]);
+                                try renderU32(self.engine.gpa, self.out, ctx.rank_of_member[member_pos]);
                                 return;
                             }
                         }
@@ -3159,9 +3172,9 @@ pub const Store = struct {
             self.store.setCachedDigest(node.ty, node.mode, digest);
         }
 
-        /// Reduce one cyclic SCC by bisimulation refinement, linearize the
-        /// reduced graph with the minimum-over-entry-points rotation, and
-        /// digest every member as its reduced position.
+        /// Reduce one cyclic SCC by bisimulation refinement over content
+        /// labels, order the reduced positions by their final labels, and
+        /// digest every member as its position in that one group rendering.
         fn resolveCyclicScc(self: *DigestEngine, members: []const u32) std.mem.Allocator.Error!void {
             const member_count = members.len;
             const member_pos_of_node = try self.gpa.alloc(u32, self.nodes.items.len);
@@ -3171,44 +3184,45 @@ pub const Store = struct {
                 member_pos_of_node[node_index] = @intCast(pos);
             }
 
-            // Refine to the stable bisimulation partition. The initial
-            // partition renders every member with its finalized out-of-SCC
-            // child digests—computed now, not at discovery, so whether a
-            // child arrived cached or was resolved in this run cannot split
-            // bisimilar members. Refinement then splits by the partition
-            // identities reached by every ordered in-SCC reference.
-            var blocks = try self.gpa.alloc(u32, member_count);
-            defer self.gpa.free(blocks);
-            var next_blocks = try self.gpa.alloc(u32, member_count);
-            defer self.gpa.free(next_blocks);
-            var block_count: u32 = 0;
-            {
-                var by_label = std.AutoHashMap([32]u8, u32).init(self.gpa);
-                defer by_label.deinit();
-                for (members, 0..) |node_index, pos| {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-                    const sink = SccLabelSink{
-                        .engine = self,
-                        .hasher = &hasher,
-                        .member_pos_of_node = member_pos_of_node,
-                    };
-                    const node = self.nodes.items[node_index];
-                    try self.store.encodeTypeNode(self.name_store, sink, node.ty, node.mode);
-                    const gop = try by_label.getOrPut(hasher.finalResult());
-                    if (!gop.found_existing) {
-                        gop.value_ptr.* = block_count;
-                        block_count += 1;
-                    }
-                    blocks[pos] = gop.value_ptr.*;
-                }
+            // Refine to the stable bisimulation partition. Every member
+            // starts from its content label: its full encoding with every
+            // out-of-SCC child rendered as a finalized digest—computed now,
+            // not at discovery, so whether a child arrived cached or was
+            // resolved in this run cannot split bisimilar members—and every
+            // in-SCC child as a bare positional marker. Each round then
+            // relabels a member by its own label followed by the labels
+            // reached by every ordered in-SCC reference, until a round stops
+            // separating members. A label is a pure function of the
+            // member's unfolding to the current depth, so two members carry
+            // equal labels exactly when they are bisimilar, and the labels
+            // themselves are identical for bisimilar positions of any two
+            // knots regardless of how many store nodes either knot uses or
+            // in what order those nodes were allocated.
+            var labels = try self.gpa.alloc([32]u8, member_count);
+            defer self.gpa.free(labels);
+            var next_labels = try self.gpa.alloc([32]u8, member_count);
+            defer self.gpa.free(next_labels);
+            var distinct_labels = std.AutoHashMap([32]u8, u32).init(self.gpa);
+            defer distinct_labels.deinit();
+            for (members, 0..) |node_index, pos| {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                const sink = SccLabelSink{
+                    .engine = self,
+                    .hasher = &hasher,
+                    .member_pos_of_node = member_pos_of_node,
+                };
+                const node = self.nodes.items[node_index];
+                try self.store.encodeTypeNode(self.name_store, sink, node.ty, node.mode);
+                if (self.stats) |s| s.group_encodings += 1;
+                labels[pos] = hasher.finalResult();
+                try distinct_labels.put(labels[pos], no_scc_position);
             }
+            var label_count: u32 = distinct_labels.count();
             while (true) {
-                var by_signature = std.AutoHashMap([32]u8, u32).init(self.gpa);
-                defer by_signature.deinit();
-                var next_count: u32 = 0;
+                distinct_labels.clearRetainingCapacity();
                 for (members, 0..) |node_index, pos| {
                     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-                    hashU32(&hasher, blocks[pos]);
+                    hasher.update(&labels[pos]);
                     for (self.linksOf(node_index)) |ref| {
                         const target = switch (ref) {
                             .external => continue,
@@ -3216,141 +3230,82 @@ pub const Store = struct {
                         };
                         const target_pos = member_pos_of_node[target];
                         if (target_pos == no_scc_position) continue;
-                        hashU32(&hasher, blocks[target_pos]);
+                        hasher.update(&labels[target_pos]);
                     }
-                    const gop = try by_signature.getOrPut(hasher.finalResult());
-                    if (!gop.found_existing) {
-                        gop.value_ptr.* = next_count;
-                        next_count += 1;
-                    }
-                    next_blocks[pos] = gop.value_ptr.*;
+                    next_labels[pos] = hasher.finalResult();
+                    try distinct_labels.put(next_labels[pos], no_scc_position);
                 }
-                const stable = next_count == block_count;
-                std.mem.swap([]u32, &blocks, &next_blocks);
-                block_count = next_count;
+                const next_count: u32 = distinct_labels.count();
+                const stable = next_count == label_count;
+                std.mem.swap([][32]u8, &labels, &next_labels);
+                label_count = next_count;
                 if (stable) break;
             }
 
-            // Quotient graph: one representative and its ordered in-SCC block
-            // edges per block. The partition is stable, so any member
-            // represents its block.
+            // Group order: the reduced positions sorted by label. Labels are
+            // intrinsic to the infinite type, so the order is too, and no two
+            // reduced positions share a label.
+            const block_count = label_count;
+            const sorted_labels = try self.gpa.alloc([32]u8, block_count);
+            defer self.gpa.free(sorted_labels);
+            {
+                var it = distinct_labels.keyIterator();
+                var next: usize = 0;
+                while (it.next()) |label| : (next += 1) {
+                    sorted_labels[next] = label.*;
+                }
+                std.debug.assert(next == block_count);
+            }
+            std.mem.sort([32]u8, sorted_labels, {}, struct {
+                fn lessThan(_: void, lhs: [32]u8, rhs: [32]u8) bool {
+                    return std.mem.order(u8, &lhs, &rhs) == .lt;
+                }
+            }.lessThan);
+            for (sorted_labels, 0..) |label, rank| {
+                const slot = distinct_labels.getPtr(label) orelse unreachable;
+                slot.* = @intCast(rank);
+            }
+            const rank_of_member = try self.gpa.alloc(u32, member_count);
+            defer self.gpa.free(rank_of_member);
             const block_rep = try self.gpa.alloc(u32, block_count);
             defer self.gpa.free(block_rep);
+            @memset(block_rep, no_scc_position);
+            for (members, 0..) |node_index, pos| {
+                const rank = distinct_labels.get(labels[pos]) orelse unreachable;
+                rank_of_member[pos] = rank;
+                // The partition is stable, so any member represents its
+                // position.
+                if (block_rep[rank] == no_scc_position) block_rep[rank] = node_index;
+            }
+
+            // One group rendering: every reduced position in label order with
+            // in-SCC references written as ranks. Every position then
+            // digests as its rank against the rendering's digest.
+            self.render_buf.clearRetainingCapacity();
             {
-                const filled = try self.gpa.alloc(bool, block_count);
-                defer self.gpa.free(filled);
-                @memset(filled, false);
-                for (members, 0..) |node_index, pos| {
-                    const block = blocks[pos];
-                    if (!filled[block]) {
-                        filled[block] = true;
-                        block_rep[block] = node_index;
-                    }
-                }
-            }
-            var block_edges_pool: std.ArrayList(u32) = .empty;
-            defer block_edges_pool.deinit(self.gpa);
-            const block_edge_start = try self.gpa.alloc(u32, block_count);
-            defer self.gpa.free(block_edge_start);
-            const block_edge_len = try self.gpa.alloc(u32, block_count);
-            defer self.gpa.free(block_edge_len);
-            for (0..block_count) |block| {
-                const start: u32 = @intCast(block_edges_pool.items.len);
-                for (self.linksOf(block_rep[block])) |ref| {
-                    const target = switch (ref) {
-                        .external => continue,
-                        .node => |node_target| node_target,
-                    };
-                    const target_pos = member_pos_of_node[target];
-                    if (target_pos == no_scc_position) continue;
-                    try block_edges_pool.append(self.gpa, blocks[target_pos]);
-                }
-                block_edge_start[block] = start;
-                block_edge_len[block] = @intCast(block_edges_pool.items.len - start);
-            }
-
-            // Deterministic order: preorder DFS from every entry block,
-            // keeping the lexicographically smallest rendering. The reduced
-            // graph has no two equivalent positions, so the minimum is
-            // unique.
-            const order_of_block = try self.gpa.alloc(u32, block_count);
-            defer self.gpa.free(order_of_block);
-            const best_order = try self.gpa.alloc(u32, block_count);
-            defer self.gpa.free(best_order);
-            const DfsFrame = struct { block: u32, edge_cursor: u32 };
-            var dfs: std.ArrayList(DfsFrame) = .empty;
-            defer dfs.deinit(self.gpa);
-            var candidate_order: std.ArrayList(u32) = .empty;
-            defer candidate_order.deinit(self.gpa);
-            var candidate_buf: std.ArrayList(u8) = .empty;
-            defer candidate_buf.deinit(self.gpa);
-            var best_buf: std.ArrayList(u8) = .empty;
-            defer best_buf.deinit(self.gpa);
-            var have_best = false;
-
-            for (0..block_count) |entry| {
-                @memset(order_of_block, no_scc_position);
-                candidate_order.clearRetainingCapacity();
-                dfs.clearRetainingCapacity();
-                order_of_block[entry] = 0;
-                try candidate_order.append(self.gpa, @intCast(entry));
-                try dfs.append(self.gpa, .{ .block = @intCast(entry), .edge_cursor = 0 });
-                while (dfs.items.len > 0) {
-                    const frame = &dfs.items[dfs.items.len - 1];
-                    const edges = block_edges_pool.items[block_edge_start[frame.block]..][0..block_edge_len[frame.block]];
-                    if (frame.edge_cursor >= edges.len) {
-                        _ = dfs.pop();
-                        continue;
-                    }
-                    const target = edges[frame.edge_cursor];
-                    frame.edge_cursor += 1;
-                    if (order_of_block[target] != no_scc_position) continue;
-                    order_of_block[target] = @intCast(candidate_order.items.len);
-                    try candidate_order.append(self.gpa, target);
-                    try dfs.append(self.gpa, .{ .block = target, .edge_cursor = 0 });
-                }
-                if (candidate_order.items.len != block_count) {
-                    Common.invariant("Monotype digest SCC quotient was not strongly connected");
-                }
-
-                candidate_buf.clearRetainingCapacity();
                 const ctx = SccRenderContext{
                     .member_pos_of_node = member_pos_of_node,
-                    .blocks = blocks,
-                    .order_of_block = order_of_block,
+                    .rank_of_member = rank_of_member,
                 };
-                const sink = RenderSink{ .engine = self, .out = &candidate_buf, .scc = &ctx };
-                for (candidate_order.items) |block| {
-                    const rep = self.nodes.items[block_rep[block]];
+                const sink = RenderSink{ .engine = self, .out = &self.render_buf, .scc = &ctx };
+                for (block_rep) |rep_index| {
+                    const rep = self.nodes.items[rep_index];
                     try self.store.encodeTypeNode(self.name_store, sink, rep.ty, rep.mode);
-                }
-
-                if (have_best) {
-                    // Two entry points rendering identical bytes would be
-                    // bisimilar, contradicting the reduced partition.
-                    std.debug.assert(!std.mem.eql(u8, candidate_buf.items, best_buf.items));
-                }
-                if (!have_best or std.mem.order(u8, candidate_buf.items, best_buf.items) == .lt) {
-                    std.mem.swap(std.ArrayList(u8), &candidate_buf, &best_buf);
-                    @memcpy(best_order, order_of_block);
-                    have_best = true;
+                    if (self.stats) |s| s.group_encodings += 1;
                 }
             }
-
-            // Every reduced position digests as its index in the minimum
-            // group encoding; every original member adopts its position's
-            // digest.
+            const group_digest = sha256Of(self.render_buf.items);
             const block_digest = try self.gpa.alloc(names.TypeDigest, block_count);
             defer self.gpa.free(block_digest);
-            for (0..block_count) |block| {
+            for (0..block_count) |rank| {
                 var hasher = std.crypto.hash.sha2.Sha256.init(.{});
                 hashBytes(&hasher, "recursive-member");
-                hashU32(&hasher, best_order[block]);
-                hashBytes(&hasher, best_buf.items);
-                block_digest[block] = .{ .bytes = hasher.finalResult() };
+                hashU32(&hasher, @intCast(rank));
+                hasher.update(&group_digest);
+                block_digest[rank] = .{ .bytes = hasher.finalResult() };
             }
             for (members, 0..) |node_index, pos| {
-                self.finalizeNode(node_index, block_digest[blocks[pos]]);
+                self.finalizeNode(node_index, block_digest[rank_of_member[pos]]);
             }
 
             // Record each reduced position's one-step unfolding in the
@@ -3358,19 +3313,20 @@ pub const Store = struct {
             // group fold to the same digests. Members are finalized, so a
             // plain rendering resolves in-SCC children to their new group
             // digests.
-            for (0..block_count) |block| {
+            for (block_rep, 0..) |rep_index, rank| {
                 self.render_buf.clearRetainingCapacity();
                 const sink = RenderSink{ .engine = self, .out = &self.render_buf, .scc = null };
-                const rep = self.nodes.items[block_rep[block]];
+                const rep = self.nodes.items[rep_index];
                 try self.store.encodeTypeNode(self.name_store, sink, rep.ty, rep.mode);
+                if (self.stats) |s| s.group_encodings += 1;
                 const unfolding = sha256Of(self.render_buf.items);
                 const gop = try self.store.recursive_digest_unfoldings.getOrPut(unfolding);
                 if (gop.found_existing) {
                     // Reduced-group digests are intrinsic, so an equivalent
                     // group digested earlier must agree.
-                    std.debug.assert(std.mem.eql(u8, &gop.value_ptr.bytes, &block_digest[block].bytes));
+                    std.debug.assert(std.mem.eql(u8, &gop.value_ptr.bytes, &block_digest[rank].bytes));
                 } else {
-                    gop.value_ptr.* = block_digest[block];
+                    gop.value_ptr.* = block_digest[rank];
                 }
             }
         }
@@ -4645,6 +4601,27 @@ test "monotype type store acyclic interning reuses child-first function nodes" {
     try std.testing.expectEqual(@as(usize, 2), store.view().types.len);
     try std.testing.expect(store.view().type_digests[@intFromEnum(first)] != null);
     try std.testing.expect(store.specializationDigestsView()[@intFromEnum(first)] != null);
+}
+
+test "monotype type store function interning reuses an existing argument span" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.internZst(&name_store);
+    const str = try store.internPrimitive(&name_store, .str);
+    const original = try store.internFunc(&name_store, &.{unit}, unit);
+    const args = store.get(original).func.args;
+    const spans_len = store.spans.len();
+
+    const with_str_return = try store.internFuncFromSpan(&name_store, args, str);
+    const reused_args = store.get(with_str_return).func.args;
+
+    try std.testing.expectEqual(args, reused_args);
+    try std.testing.expectEqual(spans_len, store.spans.len());
+    try std.testing.expectEqual(with_str_return, try store.internFunc(&name_store, &.{unit}, str));
 }
 
 test "monotype type store recursive transaction interns equal SCC positions" {
@@ -6043,6 +6020,55 @@ test "monotype digest ignores child cachedness inside a recursive group" {
     store.fillReservedSlot(solo, .{ .tuple = try store.addSpan(&.{ solo, third_str }) });
     const solo_digest = store.typeDigest(&name_store, solo);
     try std.testing.expectEqualSlices(u8, k1_digest.bytes[0..], solo_digest.bytes[0..]);
+}
+
+test "monotype recursive group digest work is linear in the group's distinct members" {
+    // `[C1({ f1 : List(T) }), ..., CN({ fN : List(T) })]` tied through T: every
+    // record is its own reduced position, so the group has N + 2 members and
+    // no two are bisimilar. Reducing it must replay each member's encoding a
+    // bounded number of times, not once per entry point.
+    const member_count = 64;
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const union_ty = try store.reserveSlot();
+    const list_ty = try store.reserveSlot();
+    store.fillReservedSlot(list_ty, .{ .list = union_ty });
+    var tags: [member_count]Tag = undefined;
+    var label_buf: [16]u8 = undefined;
+    for (&tags, 0..) |*tag, index| {
+        const field_label = try std.fmt.bufPrint(&label_buf, "f{d}", .{index});
+        const field_name = try name_store.internRecordFieldLabel(field_label);
+        const record_ty = try store.reserveSlot();
+        store.fillReservedSlot(record_ty, .{ .record = try store.addRecordFields(&name_store, &.{
+            .{ .name = field_name, .ty = list_ty, .default = null },
+        }) });
+        const tag_label = try std.fmt.bufPrint(&label_buf, "C{d}", .{index});
+        const tag_name = try name_store.internTagLabel(tag_label);
+        tag.* = .{ .name = tag_name, .checked_name = tag_name, .payloads = try store.addSpan(&.{record_ty}) };
+    }
+    store.fillReservedSlot(union_ty, .{ .tag_union = try store.addTagVariants(&name_store, &tags) });
+
+    var stats: Store.DigestStats = .{};
+    const digest = store.typeDigestCached(&name_store, union_ty, &stats);
+    // Label pass, group rendering, and unfolding index: three replays per
+    // reduced position, with headroom for refinement rounds.
+    try std.testing.expect(stats.group_encodings <= 6 * (member_count + 2));
+
+    // Every position digests apart, and the digest is stable on repeat.
+    const again = store.typeDigestCached(&name_store, union_ty, &stats);
+    try std.testing.expectEqualSlices(u8, digest.bytes[0..], again.bytes[0..]);
+    var seen_digests = std.AutoHashMap([32]u8, void).init(std.testing.allocator);
+    defer seen_digests.deinit();
+    for (tags) |tag| {
+        const payload = store.span(tag.payloads);
+        const record_digest = store.typeDigest(&name_store, GuardedList.at(payload, 0));
+        try std.testing.expect(!seen_digests.contains(record_digest.bytes));
+        try seen_digests.put(record_digest.bytes, {});
+    }
 }
 
 test "monotype digest keeps entangled equivalent knots conservatively distinct" {

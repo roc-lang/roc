@@ -111,7 +111,7 @@ main! = |_| {
 		(p-assign (ident "topThunk"))
 		(e-lambda
 			(args)
-			(e-call (constraint-fn-var 258)
+			(e-call (constraint-fn-var 262)
 				(e-lookup-local
 					(p-assign (ident "echo!")))
 				(e-string
@@ -126,17 +126,17 @@ main! = |_| {
 					(p-assign (ident "thunk"))
 					(e-lambda
 						(args)
-						(e-call (constraint-fn-var 267)
+						(e-call (constraint-fn-var 275)
 							(e-lookup-local
 								(p-assign (ident "echo!")))
 							(e-string
 								(e-literal (string ""))))))
 				(s-expr
-					(e-call (constraint-fn-var 268)
+					(e-call (constraint-fn-var 276)
 						(e-lookup-local
 							(p-assign (ident "thunk")))))
 				(s-expr
-					(e-call (constraint-fn-var 270)
+					(e-call (constraint-fn-var 281)
 						(e-lookup-local
 							(p-assign (ident "topThunk")))))
 				(e-tuple
@@ -150,9 +150,9 @@ main! = |_| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "({}) => {}"))
-		(patt (type "_arg => ({}, Error)")))
+		(patt (type "_arg => ({}, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "({}) => {}"))
-		(expr (type "_arg => ({}, Error)"))))
+		(expr (type "_arg => ({}, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

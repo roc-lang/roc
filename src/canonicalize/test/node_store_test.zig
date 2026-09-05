@@ -1286,6 +1286,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .trailing_try_suffix = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .return_outside_fn = .{
             .region = rand_region(),
             .context = .return_statement,
@@ -1339,6 +1345,21 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .range_op_chained = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .mutable,
+            .region = rand_region(),
+        },
+    });
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .immutable,
             .region = rand_region(),
         },
     });
@@ -1541,6 +1562,11 @@ test "NodeStore round trip - Pattern" {
     // Test all Pattern variants to ensure complete coverage
     try patterns.append(gpa, CIR.Pattern{
         .assign = .{
+            .ident = rand_ident_idx(),
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
+        .var_assign = .{
             .ident = rand_ident_idx(),
         },
     });

@@ -19,9 +19,31 @@ result = {
 expect result == 55
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_var_every_iteration.md:3:6:3:11
+VAR NAME MISSING `$` - for_loop_var_every_iteration.md:4:6:4:12
 # PROBLEMS
-NIL
+── ● var name missing `$` ────────────────── for_loop_var_every_iteration.md:3:6
+
+The mutable binding prev_ is declared with var but its name does not start with
+$.
+
+var prev_ = 0
+    ^^^^^
+
+Rename this binding and all of its uses to $prev_. The name is only a
+convention; mutability comes from the var declaration.
+
+── ● var name missing `$` ────────────────── for_loop_var_every_iteration.md:4:6
+
+The mutable binding count_ is declared with var but its name does not start
+with $.
+
+var count_ = 0
+    ^^^^^^
+
+Rename this binding and all of its uses to $count_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -89,10 +111,10 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "prev_"))
+				(p-var-assign (ident "prev_"))
 				(e-num (value "0")))
 			(s-var
-				(p-assign (ident "count_"))
+				(p-var-assign (ident "count_"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -105,25 +127,25 @@ NO CHANGE
 						(e-num (value "50"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "count_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 341)
+						(p-var-assign (ident "count_"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 343)
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "count_"))))
+									(p-var-assign (ident "count_"))))
 							(args
 								(e-num (value "1")))))
 					(s-reassign
-						(p-assign (ident "prev_"))
+						(p-var-assign (ident "prev_"))
 						(e-lookup-local
 							(p-assign (ident "n"))))
 					(e-empty_record)))
-			(e-dispatch-call (method "plus") (constraint-fn-var 346)
+			(e-dispatch-call (method "plus") (constraint-fn-var 348)
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "prev_"))))
+						(p-var-assign (ident "prev_"))))
 				(args
 					(e-lookup-local
-						(p-assign (ident "count_"))))))
+						(p-var-assign (ident "count_"))))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

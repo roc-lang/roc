@@ -141,6 +141,23 @@ pub const EvidenceDigest = extern struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// The structural codec derivation whose checked call contract identifies a
+/// specialization context.
+pub const CodecContractKind = enum(u8) {
+    parser,
+    encoder,
+};
+
+/// Collision-authoritative specialization context for a procedure whose body
+/// is lowered beneath one exact checker-generated codec contract boundary.
+pub const CodecContractIdentity = struct {
+    module: names.CheckedModuleDigest,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    kind: CodecContractKind,
+    constructor_ty_digest: names.TypeDigest,
+    constructor_ty: Type.TypeId,
+};
+
 /// Function template plus source and monomorphic type identities.
 pub const FnTemplate = struct {
     fn_def: FnDef,
@@ -218,6 +235,11 @@ pub const SpecIdentity = struct {
     method_scope: names.CheckedModuleDigest,
     source_fn_ty_digest: names.TypeDigest,
     evidence_digest: EvidenceDigest,
+    /// Exact lowering-only context required by generated codec method bodies.
+    /// Zero for ordinary specializations.
+    codec_contract_digest: names.TypeDigest,
+    /// Exact collision authority for `codec_contract_digest`.
+    codec_contract: ?CodecContractIdentity,
     request_fn_ty_digest: names.TypeDigest,
     request_fn_ty: Type.TypeId,
 };
@@ -297,17 +319,20 @@ pub fn fnEvidenceDigest(
                     .from_callable => {},
                 }
             },
-            .structural => |derivation| writeStructuralDerivation(&hasher, derivation),
-            .constraint_callable => |source| {
-                writeBytes(&hasher, &source.view.bytes);
-                writeBytes(&hasher, &source.callable_key.bytes);
-                writeU32(&hasher, @intFromEnum(source.source.plan));
-                writeU32(&hasher, @intFromEnum(source.source.method));
-                writeU32(&hasher, source.source.path.start);
-                writeU32(&hasher, source.source.path.len);
-                if (source.source.structural) |kind| {
+            .structural => |structural| {
+                writeStructuralDerivation(&hasher, structural.derivation);
+                if (structural.checked) |checked_structural| {
                     writeU8(&hasher, 1);
-                    writeU8(&hasher, @intFromEnum(kind));
+                    writeBytes(&hasher, &checked_structural.view.bytes);
+                    writeBytes(&hasher, &checked_structural.dispatcher_key.bytes);
+                    writeBytes(&hasher, &checked_structural.callable_key.bytes);
+                    writeOptionalU32(
+                        &hasher,
+                        if (checked_structural.generated_codec_derivation) |derivation|
+                            @intFromEnum(derivation)
+                        else
+                            null,
+                    );
                 } else writeU8(&hasher, 0);
             },
             .unreachable_value, .checked_error => {},
@@ -345,20 +370,11 @@ pub fn fnEvidenceEql(
                 .target => |right_target| {
                     if (!fnEvidenceTargetEql(left_target, right_target)) return false;
                 },
-                .constraint_callable, .structural, .unreachable_value, .checked_error => return false,
+                .structural, .unreachable_value, .checked_error => return false,
             },
             .structural => |left_structural| switch (right) {
                 .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
-                .target, .constraint_callable, .unreachable_value, .checked_error => return false,
-            },
-            .constraint_callable => |left_source| switch (right) {
-                .constraint_callable => |right_source| if (!std.meta.eql(left_source.view, right_source.view) or
-                    !std.meta.eql(left_source.callable_key, right_source.callable_key) or
-                    left_source.source.plan != right_source.source.plan or
-                    left_source.source.method != right_source.source.method or
-                    !std.meta.eql(left_source.source.structural, right_source.source.structural) or
-                    !std.meta.eql(left_source.source.path, right_source.source.path)) return false,
-                .target, .structural, .unreachable_value, .checked_error => return false,
+                .target, .unreachable_value, .checked_error => return false,
             },
             .unreachable_value => if (right != .unreachable_value) return false,
             .checked_error => if (right != .checked_error) return false,
@@ -475,34 +491,6 @@ test "function evidence identity uses checked callable type keys" {
 
     right[0].target.method_callable_key = method_key;
     right[0].target.instantiation.?.callable_key.bytes[0] = 9;
-    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
-}
-
-test "constraint callable evidence identity ignores checked type replay payload" {
-    var callable_key: names.CanonicalTypeKey = .{};
-    callable_key.bytes[0] = 1;
-    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
-    };
-    const left = [_]check.ConstStore.ConstFnEvidence{.{ .constraint_callable = .{
-        .view = .{},
-        .callable_key = callable_key,
-        .source = .{
-            .plan = @enumFromInt(2),
-            .callable_ty = @enumFromInt(3),
-            .method = @enumFromInt(4),
-            .structural = null,
-            .path = .{ .start = 5, .len = 1 },
-        },
-    } }};
-    var right = left;
-    right[0].constraint_callable.source.callable_ty = @enumFromInt(6);
-
-    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
-
-    right[0].constraint_callable.callable_key.bytes[0] = 9;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }
@@ -870,6 +858,14 @@ pub const StaticDataCandidate = struct {
     runtime_expr: ExprId,
 };
 
+/// Explicit result relation between independently specialized Monotype graphs.
+/// The child retains its producer-authored type; this expression's `ty` is the
+/// consumer type. Lambda Solved preserves the unification the removed call
+/// supplied, and LIR lowering performs the resulting typed assignment.
+pub const TypedBoundary = struct {
+    value: ExprId,
+};
+
 /// A checked early return plus the explicit target lambda return type.
 pub const Return = struct {
     value: ExprId,
@@ -891,6 +887,7 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
@@ -1291,6 +1288,9 @@ pub const ProgramView = struct {
 
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return .spec_type_out_of_bounds;
+            if (spec.identity.codec_contract) |contract| {
+                if (!self.typeRefInBounds(contract.constructor_ty)) return .spec_type_out_of_bounds;
+            }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return .spec_type_out_of_bounds;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return .spec_type_out_of_bounds;
         }
@@ -2276,6 +2276,8 @@ test "monotype program view exposes read-only side arrays" {
             .method_scope = .{},
             .source_fn_ty_digest = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
+            .codec_contract_digest = .{},
+            .codec_contract = null,
             .request_fn_ty_digest = .{},
             .request_fn_ty = unit_ty,
         },

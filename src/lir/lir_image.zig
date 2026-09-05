@@ -248,6 +248,8 @@ pub const LirStoreImage = extern struct {
             .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
             .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
+            .body_coordinator = null,
+            .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
             .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
@@ -347,7 +349,7 @@ pub const LayoutStoreImage = extern struct {
             .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
             .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
             .scratch_intern_key = .empty,
-            .interned_recursive_graphs = std.StringHashMap(layout_mod.Idx).init(allocator),
+            .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
             .target_usize = target_usize,
         };
     }
@@ -760,7 +762,7 @@ fn serializeSidecarInto(
         .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
         .interned_layouts = std.StringHashMap(layout_mod.Idx).init(gpa),
         .scratch_intern_key = .empty,
-        .interned_recursive_graphs = std.StringHashMap(layout_mod.Idx).init(gpa),
+        .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
         .target_usize = lowered.layouts.target_usize,
     };
     const strings = try lowered.store.strings.clone(gpa);
@@ -838,14 +840,14 @@ pub fn buildSidecarBlob(
 }
 
 comptime {
-    // The LIR image mirrors these three stores field-for-field. When a
-    // serialized field is added to or removed from a store, update the matching
-    // `*Image` extern struct, its `fromStore` and `view` methods, and the
-    // "LIR image round-trips every populated store field" test at the bottom of
-    // this file, then update the expected field count below. A same-build
-    // omission (a new store field left out of the image plumbing) is otherwise
-    // silent, since `FORMAT_VERSION` only guards cross-version mismatches.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 32);
+    // The LIR image mirrors each serializable field in these three stores. When
+    // a serialized field is added to or removed from a store, update the
+    // matching `*Image` extern struct, its `fromStore` and `view` methods, and
+    // the "LIR image round-trips every populated store field" test at the
+    // bottom of this file, then update the expected field count below. A
+    // same-build omission is otherwise silent, since `FORMAT_VERSION` only
+    // guards cross-version mismatches.
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 34);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -1444,6 +1446,8 @@ test "LIR image copies and round-trips every populated store field" {
     try std.testing.expectEqual(base.SourceLoc.none, view.store.current_loc);
     try std.testing.expectEqual(base.Region.zero(), view.store.current_region);
     try std.testing.expectEqual(LIR.InlineScopeId.none, view.store.current_inline_scope);
+    try std.testing.expectEqual(@as(?*const LirStore, null), view.store.body_coordinator);
+    try std.testing.expectEqual(std.mem.zeroes(LirStore.BodyPrefix), view.store.body_prefix);
     // A viewed image is read-only, so string insertion is disabled.
     try std.testing.expectEqual(false, view.store.strings_insertable);
 

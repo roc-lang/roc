@@ -216,9 +216,9 @@ EMPTY TUPLE NOT ALLOWED - fuzz_crash_028.md:52:1:52:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:65:4:65:5
 NAME NOT IN SCOPE - fuzz_crash_028.md:65:6:65:7
 NAME NOT IN SCOPE - fuzz_crash_028.md:71:7:71:11
-UNUSED VARIABLE - fuzz_crash_028.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_028.md:70:38:70:42
 NOT IMPLEMENTED - fuzz_crash_028.md:72:7:72:12
-UNUSED VARIABLE - fuzz_crash_028.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_028.md:72:23:72:27
 NOT IMPLEMENTED - fuzz_crash_028.md:77:7:77:12
 NAME NOT IN SCOPE - fuzz_crash_028.md:78:37:78:40
 UNUSED VARIABLE - fuzz_crash_028.md:78:21:78:27
@@ -227,6 +227,7 @@ UNUSED VARIABLE - fuzz_crash_028.md:62:2:62:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:93:2:93:6
 UNDECLARED TYPE - fuzz_crash_028.md:95:10:95:16
 UNDECLARED TYPE - fuzz_crash_028.md:95:21:95:27
+VAR NAME MISSING `$` - fuzz_crash_028.md:98:6:98:12
 NAME NOT IN SCOPE - fuzz_crash_028.md:99:9:99:13
 UNRECOGNIZED SYNTAX - fuzz_crash_028.md:103:2:103:5
 NAME NOT IN SCOPE - fuzz_crash_028.md:107:1:107:3
@@ -1090,12 +1091,12 @@ Nothing is named ment in this scope.
 
 Is it misspelled, or is there an import missing?
 
-── ● unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:70:38
 
 Variable rest is defined here and then never used:
 
-# Thnt!
-^
+"foo" | "bar" => 20[1, 2, 3, .. as rest] # t
+                                   ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -1111,12 +1112,12 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ● unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:72:23
 
 Variable rest is defined here and then never used:
 
-# Thnt!
-^
+[1, 2 | 5, 3, .. as rest] => 123
+                    ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -1194,6 +1195,17 @@ The type Result is not declared in this scope.
 
 main! : (String) -> Result({}, _)
                     ^^^^^^
+
+── ● var name missing `$` ─────────────────────────────── fuzz_crash_028.md:98:6
+
+The mutable binding number is declared with var but its name does not start
+with $.
+
+var number = 123
+    ^^^^^^
+
+Rename this binding and all of its uses to $number. The name is only a
+convention; mutability comes from the var declaration.
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:99:9
 
@@ -1624,16 +1636,14 @@ This ? may return early with a type that doesn't match the function body.
 le =(arg1)?.od()?.ned()?.recd?
     ^^^^^^^
 
-On error, this would return:
+On error, this ? returns an Err, so this function must return a Try.
 
-    Try(ok, err)
-
-But the function body evaluates to:
+But its body evaluates to:
 
     [Blue, ..]
 
 Hint: The error types from all ? operators and the function body must be
-compatible since any of them could be the actual return value.
+compatible, since any of them could be the actual return value.
 
 ── ● declaration has no value ────────────────────────── fuzz_crash_028.md:141:1
 

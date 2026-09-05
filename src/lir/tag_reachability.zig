@@ -30,24 +30,6 @@ const PayloadSlot = struct {
     payload: u16,
 };
 
-const PayloadInfo = struct {
-    slot: PayloadSlot,
-    value: ValueInfo = .{},
-
-    fn deinit(self: *PayloadInfo, allocator: Allocator) void {
-        self.value.deinit(allocator);
-    }
-};
-
-const FieldInfo = struct {
-    field: u16,
-    value: ValueInfo = .{},
-
-    fn deinit(self: *FieldInfo, allocator: Allocator) void {
-        self.value.deinit(allocator);
-    }
-};
-
 const TagSet = struct {
     all: bool = false,
     values: std.ArrayList(u16) = .empty,
@@ -100,40 +82,25 @@ const TagSet = struct {
     }
 };
 
-/// Producer facts for one whole LIR value. Fields and payloads retain another
-/// complete `ValueInfo` rather than only its top-level tags: projections may
-/// cross several struct/tag boundaries before reaching a switch, and loop joins
-/// must merge every reachable tag at that nested path before pruning an edge.
+/// Producer facts for one whole LIR value. `constructions` names the finite LIR
+/// statements that can construct the value; projections follow those graph
+/// edges on demand. Keeping references instead of recursively copying child
+/// facts is essential for recursive values and shared constructor DAGs: their
+/// abstract state must be bounded by the finite LIR graph, not by the number of
+/// paths through an infinitely unfolding value tree.
 const ValueInfo = struct {
     tags: TagSet = .{},
-    payloads: std.ArrayList(PayloadInfo) = .empty,
-    fields: std.ArrayList(FieldInfo) = .empty,
-
-    fn hasFacts(self: *const ValueInfo) bool {
-        return self.tags.all or
-            self.tags.values.items.len != 0 or
-            self.payloads.items.len != 0 or
-            self.fields.items.len != 0;
-    }
+    constructions: std.ArrayList(LIR.CFStmtId) = .empty,
 
     fn deinit(self: *ValueInfo, allocator: Allocator) void {
-        for (self.payloads.items) |*payload| payload.deinit(allocator);
-        self.payloads.deinit(allocator);
-        for (self.fields.items) |*field| field.deinit(allocator);
-        self.fields.deinit(allocator);
+        self.constructions.deinit(allocator);
         self.tags.deinit(allocator);
     }
 
     fn markAll(self: *ValueInfo, allocator: Allocator) bool {
         var changed = self.tags.markAll(allocator);
-        if (self.payloads.items.len != 0) {
-            for (self.payloads.items) |*payload| payload.deinit(allocator);
-            self.payloads.clearAndFree(allocator);
-            changed = true;
-        }
-        if (self.fields.items.len != 0) {
-            for (self.fields.items) |*field| field.deinit(allocator);
-            self.fields.clearAndFree(allocator);
+        if (self.constructions.items.len != 0) {
+            self.constructions.clearAndFree(allocator);
             changed = true;
         }
         return changed;
@@ -143,53 +110,19 @@ const ValueInfo = struct {
         if (self.tags.all) return false;
         if (other.tags.all) return self.markAll(allocator);
         var changed = try self.tags.mergeFrom(allocator, &other.tags);
-        for (other.payloads.items) |*payload| {
-            if (try self.mergePayloadValue(allocator, payload.slot, &payload.value)) changed = true;
-        }
-        for (other.fields.items) |*field| {
-            if (try self.mergeFieldValue(allocator, field.field, &field.value)) changed = true;
+        for (other.constructions.items) |construction| {
+            if (try self.addConstruction(allocator, construction)) changed = true;
         }
         return changed;
     }
 
-    fn mergePayloadValue(self: *ValueInfo, allocator: Allocator, slot: PayloadSlot, value: *const ValueInfo) Allocator.Error!bool {
+    fn addConstruction(self: *ValueInfo, allocator: Allocator, construction: LIR.CFStmtId) Allocator.Error!bool {
         if (self.tags.all) return false;
-        if (!value.hasFacts()) return false;
-        for (self.payloads.items) |*payload| {
-            if (payload.slot.variant == slot.variant and payload.slot.payload == slot.payload) {
-                return payload.value.mergeFrom(allocator, value);
-            }
+        for (self.constructions.items) |existing| {
+            if (existing == construction) return false;
         }
-        try self.payloads.append(allocator, .{ .slot = slot });
-        return self.payloads.items[self.payloads.items.len - 1].value.mergeFrom(allocator, value);
-    }
-
-    fn mergeFieldValue(self: *ValueInfo, allocator: Allocator, field_index: u16, value: *const ValueInfo) Allocator.Error!bool {
-        if (self.tags.all) return false;
-        if (!value.hasFacts()) return false;
-        for (self.fields.items) |*field| {
-            if (field.field == field_index) {
-                return field.value.mergeFrom(allocator, value);
-            }
-        }
-        try self.fields.append(allocator, .{ .field = field_index });
-        return self.fields.items[self.fields.items.len - 1].value.mergeFrom(allocator, value);
-    }
-
-    fn payloadValue(self: *const ValueInfo, slot: PayloadSlot) ?*const ValueInfo {
-        for (self.payloads.items) |*payload| {
-            if (payload.slot.variant == slot.variant and payload.slot.payload == slot.payload) {
-                return &payload.value;
-            }
-        }
-        return null;
-    }
-
-    fn fieldValue(self: *const ValueInfo, field_index: u16) ?*const ValueInfo {
-        for (self.fields.items) |*field| {
-            if (field.field == field_index) return &field.value;
-        }
-        return null;
+        try self.constructions.append(allocator, construction);
+        return true;
     }
 };
 
@@ -288,13 +221,13 @@ const Pass = struct {
         while (self.stack.pop()) |current| {
             if (self.visited.contains(current)) continue;
             try self.visited.put(current, {});
-            if (try self.analyzeStmt(proc_id, self.store.getCFStmt(current))) changed = true;
+            if (try self.analyzeStmt(proc_id, current, self.store.getCFStmt(current))) changed = true;
         }
 
         return changed;
     }
 
-    fn analyzeStmt(self: *Pass, proc_id: LIR.LirProcSpecId, stmt: LIR.CFStmt) Allocator.Error!bool {
+    fn analyzeStmt(self: *Pass, proc_id: LIR.LirProcSpecId, stmt_id: LIR.CFStmtId, stmt: LIR.CFStmt) Allocator.Error!bool {
         var changed = false;
         switch (stmt) {
             .init_uninitialized => |s| {
@@ -339,31 +272,13 @@ const Pass = struct {
                 try self.pushStmt(s.next);
             },
             .assign_struct => |s| {
-                const target = self.localInfoMut(s.target);
-                const fields = self.store.getLocalSpan(s.fields);
-                for (0..fields.len) |index| {
-                    const field = GuardedList.at(fields, index);
-                    const source = self.localInfo(field);
-                    if (try target.mergeFieldValue(self.allocator, @intCast(index), source)) changed = true;
-                }
+                if (try self.localInfoMut(s.target).addConstruction(self.allocator, stmt_id)) changed = true;
                 try self.pushStmt(s.next);
             },
             .assign_tag => |s| {
                 const target = self.localInfoMut(s.target);
                 if (try target.tags.add(self.allocator, s.discriminant)) changed = true;
-                if (s.payload) |payload| {
-                    const source = self.localInfo(payload);
-                    if (try target.mergePayloadValue(self.allocator, .{
-                        .variant = s.discriminant,
-                        .payload = payload_struct_slot,
-                    }, source)) changed = true;
-                    for (source.fields.items) |*field| {
-                        if (try target.mergePayloadValue(self.allocator, .{
-                            .variant = s.discriminant,
-                            .payload = field.field,
-                        }, &field.value)) changed = true;
-                    }
-                }
+                if (try target.addConstruction(self.allocator, stmt_id)) changed = true;
                 try self.pushStmt(s.next);
             },
             .store_struct => |s| try self.pushStmt(s.next),
@@ -438,16 +353,39 @@ const Pass = struct {
     fn mergeFieldRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, field_index: u16) Allocator.Error!bool {
         const source_info = self.localInfo(source);
         if (source_info.tags.all) return self.localInfoMut(target).markAll(self.allocator);
-        const value = source_info.fieldValue(field_index) orelse return false;
-        return self.localInfoMut(target).mergeFrom(self.allocator, value);
+        return self.mergeFieldFromInfo(target, source_info, field_index);
+    }
+
+    fn mergeFieldFromInfo(self: *Pass, target: LIR.LocalId, source: *const ValueInfo, field_index: u16) Allocator.Error!bool {
+        if (source.tags.all) return self.localInfoMut(target).markAll(self.allocator);
+        var changed = false;
+        for (source.constructions.items) |construction| {
+            const stmt = self.store.getCFStmt(construction);
+            if (stmt != .assign_struct) continue;
+            const fields = self.store.getLocalSpan(stmt.assign_struct.fields);
+            if (field_index >= fields.len) tagReachabilityInvariant("field projection exceeded its constructor arity");
+            const field = GuardedList.at(fields, field_index);
+            if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(field))) changed = true;
+        }
+        return changed;
     }
 
     fn mergePayloadRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, slot: PayloadSlot) Allocator.Error!bool {
         const source_info = self.localInfo(source);
         if (source_info.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         if (!source_info.tags.contains(slot.variant)) return false;
-        const value = source_info.payloadValue(slot) orelse return false;
-        return self.localInfoMut(target).mergeFrom(self.allocator, value);
+        var changed = false;
+        for (source_info.constructions.items) |construction| {
+            const stmt = self.store.getCFStmt(construction);
+            if (stmt != .assign_tag or stmt.assign_tag.discriminant != slot.variant) continue;
+            const payload = stmt.assign_tag.payload orelse continue;
+            if (slot.payload == payload_struct_slot) {
+                if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(payload))) changed = true;
+            } else if (try self.mergeFieldFromInfo(target, self.localInfo(payload), slot.payload)) {
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     fn collectUseCounts(self: *Pass) Allocator.Error!void {

@@ -167,6 +167,7 @@ const SpecLookupAddress = struct {
     default_root_module: [32]u8,
     source_digest: [32]u8,
     evidence_digest: [32]u8,
+    codec_contract_digest: [32]u8,
     type_digest: [32]u8,
 
     fn from(
@@ -174,6 +175,7 @@ const SpecLookupAddress = struct {
         method_scope: names.CheckedModuleDigest,
         source_digest: names.TypeDigest,
         evidence_digest: Ast.EvidenceDigest,
+        codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
     ) SpecLookupAddress {
         var key: SpecLookupAddress = .{
@@ -188,6 +190,7 @@ const SpecLookupAddress = struct {
             .default_root_module = @splat(0),
             .source_digest = source_digest.bytes,
             .evidence_digest = evidence_digest.bytes,
+            .codec_contract_digest = codec_contract_digest.bytes,
             .type_digest = type_digest.bytes,
         };
         switch (callable) {
@@ -316,7 +319,7 @@ pub const SpecBuilder = struct {
         });
         errdefer _ = self.loaded_records.pop();
 
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.solved_fn_ty_digest);
+        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(self.allocator, .{ .loaded = loaded_id });
@@ -334,7 +337,7 @@ pub const SpecBuilder = struct {
         fn_id: Ast.FnId,
     ) std.mem.Allocator.Error!ReserveResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
 
@@ -403,7 +406,7 @@ pub const SpecBuilder = struct {
         scope: FindScope,
     ) std.mem.Allocator.Error!?LookupResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization lookup evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
         const entries = self.lookup.get(address) orelse return null;
         self.countCandidatesBy(identity.callable, entries.items.len);
         return try self.matchInBucket(entries.items, identity, evidence, scope);
@@ -430,6 +433,7 @@ pub const SpecBuilder = struct {
             };
             const record = self.recordPtr(local_spec);
             if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
+            if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.request_fn_ty, record.request_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.request_fn_ty);
         }
@@ -441,6 +445,7 @@ pub const SpecBuilder = struct {
             const record = self.recordPtr(local_spec);
             if (record.status != .ready) continue;
             if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
+            if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.solved_fn_ty, record.solved_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.solved_fn_ty);
         }
@@ -452,6 +457,7 @@ pub const SpecBuilder = struct {
             };
             const loaded = &self.loaded_records.items[@intFromEnum(loaded_id)];
             if (!evidenceEql(loaded.evidence.view(), evidence)) continue;
+            if (!try self.loadedCodecContractMatches(loaded, identity)) continue;
             if (!digestEql(loaded.record.solved_fn_ty_digest, identity.request_fn_ty_digest)) continue;
             self.countExactTypeCheck();
             if (!try Type.typeEqlAcrossStores(
@@ -465,6 +471,46 @@ pub const SpecBuilder = struct {
             return .{ .loaded = loaded.imported };
         }
         return null;
+    }
+
+    fn localCodecContractMatches(
+        self: *SpecBuilder,
+        left: Ast.SpecIdentity,
+        right: Ast.SpecIdentity,
+    ) std.mem.Allocator.Error!bool {
+        if (!codecContractHeaderEql(left.codec_contract, right.codec_contract)) return false;
+        if (left.codec_contract == null) return true;
+        const left_contract = left.codec_contract.?;
+        const right_contract = right.codec_contract.?;
+        if (!digestEql(left_contract.constructor_ty_digest, right_contract.constructor_ty_digest)) return false;
+        if (left_contract.constructor_ty == right_contract.constructor_ty) return true;
+        self.countExactTypeCheck();
+        return try self.types.typeEql(
+            self.names,
+            left_contract.constructor_ty,
+            right_contract.constructor_ty,
+        );
+    }
+
+    fn loadedCodecContractMatches(
+        self: *SpecBuilder,
+        loaded: *const LoadedSpec,
+        current: Ast.SpecIdentity,
+    ) std.mem.Allocator.Error!bool {
+        if (!codecContractHeaderEql(loaded.record.identity.codec_contract, current.codec_contract)) return false;
+        if (current.codec_contract == null) return true;
+        const loaded_contract = loaded.record.identity.codec_contract.?;
+        const current_contract = current.codec_contract.?;
+        if (!digestEql(loaded_contract.constructor_ty_digest, current_contract.constructor_ty_digest)) return false;
+        self.countExactTypeCheck();
+        return try Type.typeEqlAcrossStores(
+            self.allocator,
+            self.names,
+            self.types.view(),
+            current_contract.constructor_ty,
+            loaded.types,
+            loaded_contract.constructor_ty,
+        );
     }
 
     fn localViewMatches(
@@ -512,7 +558,7 @@ pub const SpecBuilder = struct {
             if (identity_shadow_enabled) {
                 try self.refined_digest_shadow.append(self.allocator, .{ .spec = spec, .digest = request_fn_ty_digest });
             }
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, request_fn_ty_digest, spec);
+            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, request_fn_ty_digest, spec);
         }
     }
 
@@ -550,7 +596,7 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
         if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, solved_fn_ty_digest, spec);
+            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
         }
     }
 
@@ -563,10 +609,11 @@ pub const SpecBuilder = struct {
         method_scope: names.CheckedModuleDigest,
         source_digest: names.TypeDigest,
         evidence_digest: Ast.EvidenceDigest,
+        codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
         spec: Ast.SpecId,
     ) std.mem.Allocator.Error!void {
-        const address = SpecLookupAddress.from(callable, method_scope, source_digest, evidence_digest, type_digest);
+        const address = SpecLookupAddress.from(callable, method_scope, source_digest, evidence_digest, codec_contract_digest, type_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         for (gop.value_ptr.items) |existing| {
@@ -695,7 +742,7 @@ pub const SpecBuilder = struct {
     }
 
     fn recordReachableAt(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, digest: names.TypeDigest) bool {
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, digest);
+        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
         const entries = self.lookup.get(address) orelse return false;
         for (entries.items) |entry_id| {
             switch (entry_id) {
@@ -710,12 +757,12 @@ pub const SpecBuilder = struct {
         const callable = record.identity.callable;
         const method_scope = record.identity.method_scope;
         const source_digest = record.identity.source_fn_ty_digest;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.request_fn_ty_digest))) return true;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.request_fn_ty_digest))) return true;
-        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.solved_fn_ty_digest))) return true;
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.request_fn_ty_digest))) return true;
+        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
         for (self.refined_digest_shadow.items) |refined| {
             if (refined.spec != spec) continue;
-            if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, refined.digest))) return true;
+            if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, refined.digest))) return true;
         }
         return false;
     }
@@ -733,10 +780,24 @@ fn localResult(spec: Ast.SpecId, record: *const Ast.SpecRecord, match_ty: Type.T
 
 fn identityEql(left: Ast.SpecIdentity, right: Ast.SpecIdentity) bool {
     return std.meta.eql(left.callable, right.callable) and
+        std.meta.eql(left.method_scope, right.method_scope) and
         digestEql(left.source_fn_ty_digest, right.source_fn_ty_digest) and
         std.meta.eql(left.evidence_digest, right.evidence_digest) and
+        digestEql(left.codec_contract_digest, right.codec_contract_digest) and
+        std.meta.eql(left.codec_contract, right.codec_contract) and
         digestEql(left.request_fn_ty_digest, right.request_fn_ty_digest) and
         left.request_fn_ty == right.request_fn_ty;
+}
+
+fn codecContractHeaderEql(
+    left: ?Ast.CodecContractIdentity,
+    right: ?Ast.CodecContractIdentity,
+) bool {
+    if ((left == null) != (right == null)) return false;
+    if (left == null) return true;
+    return std.meta.eql(left.?.module, right.?.module) and
+        left.?.derivation == right.?.derivation and
+        left.?.kind == right.?.kind;
 }
 
 fn digestEql(left: names.TypeDigest, right: names.TypeDigest) bool {
@@ -994,6 +1055,50 @@ test "monotype spec builder uses exact type equality after digest match" {
     try std.testing.expect(first.created);
     try std.testing.expect(second.created);
     try std.testing.expect(first.spec != second.spec);
+    try std.testing.expectEqual(@as(usize, 2), builder.records.len());
+    builder.validateLookupIntegrity();
+}
+
+test "monotype spec builder uses exact codec contract equality after digest match" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var type_store = Type.Store.init(std.testing.allocator);
+    defer type_store.deinit();
+
+    const request_ty = try type_store.add(.zst);
+    const first_grounding_ty = try type_store.add(.{ .primitive = .str });
+    const second_grounding_ty = try type_store.add(.{ .primitive = .u64 });
+    const forced_contract_digest = digestWithFirstByte(9);
+    const forced_grounding_digest = digestWithFirstByte(10);
+
+    var first_identity = testSpecIdentity(request_ty, digestWithFirstByte(1), digestWithFirstByte(2));
+    first_identity.codec_contract_digest = forced_contract_digest;
+    first_identity.codec_contract = .{
+        .module = moduleDigestWithFirstByte(3),
+        .derivation = @enumFromInt(4),
+        .kind = .encoder,
+        .constructor_ty_digest = forced_grounding_digest,
+        .constructor_ty = first_grounding_ty,
+    };
+    var second_identity = first_identity;
+    second_identity.codec_contract.?.constructor_ty = second_grounding_ty;
+
+    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer records.deinit(std.testing.allocator);
+
+    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
+    defer builder.deinit();
+
+    const first = try builder.reserve(first_identity, testEvidenceView(), @enumFromInt(1));
+    const second = try builder.reserve(second_identity, testEvidenceView(), @enumFromInt(2));
+    const repeated_first = try builder.reserve(first_identity, testEvidenceView(), @enumFromInt(3));
+
+    try std.testing.expect(first.created);
+    try std.testing.expect(second.created);
+    try std.testing.expect(!repeated_first.created);
+    try std.testing.expect(first.spec != second.spec);
+    try std.testing.expectEqual(first.spec, repeated_first.spec);
     try std.testing.expectEqual(@as(usize, 2), builder.records.len());
     builder.validateLookupIntegrity();
 }
@@ -1262,6 +1367,8 @@ fn testSpecIdentityWithModule(
         .method_scope = .{},
         .source_fn_ty_digest = source_digest,
         .evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head),
+        .codec_contract_digest = .{},
+        .codec_contract = null,
         .request_fn_ty_digest = request_digest,
         .request_fn_ty = request_fn_ty,
     };
