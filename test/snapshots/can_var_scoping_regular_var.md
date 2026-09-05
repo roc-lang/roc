@@ -190,12 +190,8 @@ NO CHANGE
 							(args
 								(p-underscore))
 							(e-block
-								(s-reassign
-									(p-var-assign (ident "count_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(s-reassign
-									(p-var-assign (ident "total_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
+								(s-runtime-error (tag "var_across_function_boundary"))
+								(s-runtime-error (tag "var_across_function_boundary"))
 								(e-lookup-local
 									(p-var-assign (ident "count_")))))))
 				(s-let
