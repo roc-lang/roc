@@ -453,7 +453,7 @@ const SemanticCollector = struct {
     fn visitPatternAsParameter(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
         const pattern = self.module_env.store.getPattern(pattern_idx);
         switch (pattern) {
-            .assign => {
+            .assign, .var_assign => {
                 // Simple identifier pattern
                 const region = self.module_env.store.getPatternRegion(pattern_idx);
                 try self.addToken(region, .parameter);
