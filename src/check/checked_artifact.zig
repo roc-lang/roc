@@ -24871,12 +24871,8 @@ pub const CompileTimeRootTable = struct {
         payload: CompileTimeRootPayload,
     };
 
-    /// Collect a single `expect` statement as a standalone compile-time root, then
-    /// recurse into its body when that body is a block: nested `expect` statements
-    /// that appear directly in an enclosing `expect`'s block body are themselves
-    /// standalone test roots (issue #9733). Crucially, we never descend into lambda
-    /// bodies or into ordinary value blocks that are not an `expect`'s body, so inline
-    /// assertions that close over enclosing local bindings are not over-collected.
+    /// Collect one top-level `expect` as a test root. Expects evaluated inside
+    /// its body remain inline and are reported by the test observation table.
     fn collectExpectRoot(
         roots: *std.ArrayList(CompileTimeRoot),
         allocator: Allocator,
@@ -24895,23 +24891,6 @@ pub const CompileTimeRootTable = struct {
             .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(body_expr)),
             .payload = .expect,
         });
-
-        const module_env = module.moduleEnvConst();
-        const body = module_env.store.getExpr(body_expr);
-        if (body != .e_block) return;
-        for (module_env.store.sliceStatements(body.e_block.stmts)) |nested_idx| {
-            const nested_stmt = module_env.store.getStatement(nested_idx);
-            if (nested_stmt != .s_expect) continue;
-            try collectExpectRoot(
-                roots,
-                allocator,
-                module,
-                checked_types,
-                checked_bodies,
-                nested_idx,
-                nested_stmt.s_expect.body,
-            );
-        }
     }
 
     fn appendCompileTimeRoot(

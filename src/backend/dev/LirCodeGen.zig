@@ -273,6 +273,9 @@ pub const ComptimeHooks = struct {
     call_exit: *const fn (*RocOps) callconv(.c) void,
 };
 
+/// Compiler-internal callback emitted only for native test execution.
+pub const ExpectObserverHook = *const fn (*RocOps, u32, u8) callconv(.c) void;
+
 /// Builtin function identifiers, shared across every backend via the
 /// builtin registry. Object-file generation emits `symbolName()` relocations;
 /// native execution calls the wrapper addresses directly.
@@ -1018,6 +1021,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
         comptime_hooks: ?ComptimeHooks = null,
+        expect_observer_hook: ?ExpectObserverHook = null,
 
         /// Scratch buffer for argument locations during lambda body inlining
         scratch_arg_locs: base.Scratch(ValueLocation),
@@ -1365,6 +1369,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         pub fn setComptimeHooks(self: *Self, hooks: ?ComptimeHooks) void {
             self.comptime_hooks = hooks;
+        }
+
+        pub fn setExpectObserverHook(self: *Self, hook: ?ExpectObserverHook) void {
+            self.expect_observer_hook = hook;
         }
 
         pub fn setNativeStaticData(self: *Self, addresses: []const usize) void {
@@ -22762,11 +22770,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .expect => |expect_stmt| {
                             const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
-                            try self.emitCmpImm(cond_reg, 0);
-                            const skip_patch = try self.emitJumpIfNotEqual();
-                            self.codegen.freeGeneral(cond_reg);
-                            try self.emitRocExpectFailed();
-                            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                            if (expect_stmt.site) |site| {
+                                const hook = self.expect_observer_hook orelse {
+                                    std.debug.panic("test expect reached dev codegen without an observer hook", .{});
+                                };
+                                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                                try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+                                try builder.addImmArg(@intFromEnum(site));
+                                try builder.addRegArg(cond_reg);
+                                try builder.call(@intFromPtr(hook));
+                                self.codegen.freeGeneral(cond_reg);
+                            } else {
+                                try self.emitCmpImm(cond_reg, 0);
+                                const skip_patch = try self.emitJumpIfNotEqual();
+                                self.codegen.freeGeneral(cond_reg);
+                                try self.emitRocExpectFailed();
+                                self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                            }
                             try work.append(wa, .{ .node = expect_stmt.next });
                         },
 

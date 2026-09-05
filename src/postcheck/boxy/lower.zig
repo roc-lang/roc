@@ -56,6 +56,7 @@ pub const Options = struct {
     target_usize: base.target.TargetUsize = .native,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
+    observe_expects: bool = false,
 };
 
 /// Lower an explicit Boxy plan and its checked modules into ownership-neutral LIR.
@@ -68,6 +69,16 @@ pub fn run(
 ) Common.LowerError!Output {
     var result = try LirProgram.Result.init(allocator, options.target_usize);
     errdefer result.deinit();
+    if (options.observe_expects) {
+        var source_files = std.ArrayList(base.SourceFileEntry).empty;
+        defer source_files.deinit(allocator);
+        var seen_source_files = std.StringHashMapUnmanaged(void){};
+        defer seen_source_files.deinit(allocator);
+        try appendSourceFile(&source_files, &seen_source_files, allocator, rootProcedureModule(modules));
+        for (modules.imports) |imported| try appendSourceFile(&source_files, &seen_source_files, allocator, procedureModuleFromImport(imported));
+        for (modules.root.relation_modules) |relation| try appendSourceFile(&source_files, &seen_source_files, allocator, procedureModuleFromImport(relation));
+        try result.store.setSourceFiles(source_files.items);
+    }
 
     var layout_plan = try Layouts.build(allocator, plan, &result.layouts, .{});
     defer layout_plan.deinit();
@@ -83,6 +94,7 @@ pub fn run(
     try appendRequestedLayouts(allocator, modules, roots, plan, &layout_plan, &procedure_builder, &result);
     procedure_builder.verifyDirectCallAbis();
     try procedure_builder.finalizeDescriptorMaterializationCaptures();
+    result.finishExpectSites();
 
     return .{
         .lir_result = result,
@@ -112,6 +124,22 @@ const ProcedureModuleView = struct {
     const_store: *const check.ConstStore.ConstStore,
     module_env: *const can.ModuleEnv,
 };
+
+fn appendSourceFile(
+    files: *std.ArrayList(base.SourceFileEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    allocator: Allocator,
+    module: ProcedureModuleView,
+) Allocator.Error!void {
+    const qualified_name = module.module_env.qualifiedModuleName();
+    const entry = try seen.getOrPut(allocator, qualified_name);
+    if (entry.found_existing) return;
+    errdefer _ = seen.remove(qualified_name);
+    try files.append(allocator, .{
+        .name = module.module_env.module_name,
+        .qualified_name = qualified_name,
+    });
+}
 
 const ResolvedWorker = struct {
     worker: Plan.WorkerPlanId,
@@ -1140,8 +1168,33 @@ const ProcedureBuilder = struct {
     callable_adapter_cache: std.ArrayList(CallableAdapterCacheEntry),
     pending_direct_call_descriptor_abis: std.ArrayList(PendingDirectCallDescriptorAbi),
     descriptor_read_steps: std.ArrayList(DescriptorReadStep),
+    source_file_ids: std.StringHashMapUnmanaged(u32),
     hosted_catalog: []HostedCatalogEntry = &.{},
     symbols: Common.SymbolGen = .{},
+
+    fn sourceLoc(self: *ProcedureBuilder, module: ProcedureModuleView, region: base.Region) Allocator.Error!base.SourceLoc {
+        if (self.source_file_ids.count() == 0) {
+            for (0..self.result.store.sourceFileCount()) |file| {
+                const file_id: u32 = @intCast(file);
+                try self.source_file_ids.put(self.allocator, self.result.store.sourceFileQualifiedName(file_id), file_id);
+            }
+        }
+        const qualified_name = module.module_env.qualifiedModuleName();
+        if (self.source_file_ids.get(qualified_name)) |file_id| {
+            const info = module.module_env.calcRegionInfo(region);
+            return .{
+                .file = file_id,
+                .line = info.start_line_idx + 1,
+                .column = info.start_col_idx + 1,
+            };
+        }
+        boxyLowerInvariant("boxy expect source module was absent from the LIR source table");
+    }
+
+    fn expectSite(self: *ProcedureBuilder, module: ProcedureModuleView, region: base.Region) Allocator.Error!?LIR.ExpectSiteId {
+        if (!self.options.observe_expects) return null;
+        return try self.result.addExpectSite(try self.sourceLoc(module, region), region);
+    }
 
     /// The module data the shared label-comparing plan queries need.
     pub fn moduleNames(self: *ProcedureBuilder, module_id: checked.ModuleId) Plan.ModuleNames {
@@ -1186,10 +1239,12 @@ const ProcedureBuilder = struct {
             .callable_adapter_cache = .empty,
             .pending_direct_call_descriptor_abis = .empty,
             .descriptor_read_steps = .empty,
+            .source_file_ids = .empty,
         };
     }
 
     fn deinit(self: *ProcedureBuilder) void {
+        self.source_file_ids.deinit(self.allocator);
         self.descriptor_read_steps.deinit(self.allocator);
         self.pending_direct_call_descriptor_abis.deinit(self.allocator);
         self.callable_adapter_cache.deinit(self.allocator);
@@ -27862,6 +27917,7 @@ const ProcBodyBuilder = struct {
         const cond = try self.addFrameLocalForType(child_expr.ty);
         const expect_stmt = try self.parent.result.store.addCFStmt(.{ .expect = .{
             .condition = cond,
+            .site = try self.parent.expectSite(self.module, self.parent.result.store.current_region),
             .next = next,
         } });
         return try self.lowerExprInto(cond, child, expect_stmt);

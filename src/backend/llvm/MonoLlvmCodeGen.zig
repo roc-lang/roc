@@ -3036,7 +3036,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = debug_stmt.next });
             },
             .expect => |expect_stmt| {
-                try self.emitExpect(expect_stmt.condition);
+                try self.emitExpect(expect_stmt.condition, expect_stmt.site);
                 try work.append(wa, .{ .node = expect_stmt.next });
             },
             .runtime_error => {
@@ -7802,7 +7802,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
 
-    fn emitExpect(self: *MonoLlvmCodeGen, condition: LocalId) Error!void {
+    fn emitExpect(self: *MonoLlvmCodeGen, condition: LocalId, site: ?lir.LIR.ExpectSiteId) Error!void {
         try self.materializeLocalIfDeferred(condition);
         const wip = self.wip orelse return error.CompilationFailed;
         const ok_block = wip.block(0, "expect_ok") catch return error.OutOfMemory;
@@ -7810,9 +7810,41 @@ pub const MonoLlvmCodeGen = struct {
         const cond = try self.loadBool(self.slot(condition).ptr);
         _ = wip.brCond(cond, ok_block, fail_block, .then_likely) catch return error.OutOfMemory;
         wip.cursor = .{ .block = fail_block };
+        if (site) |observed_site| {
+            const done_block = wip.block(0, "expect_done") catch return error.OutOfMemory;
+            try self.incrementExpectCounter(observed_site, false);
+            _ = wip.br(done_block) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = ok_block };
+            try self.incrementExpectCounter(observed_site, true);
+            _ = wip.br(done_block) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = done_block };
+            return;
+        }
         try self.emitStaticRocOpsMessageCall(.expect_failed, "expect failed");
         _ = wip.br(ok_block) catch return error.OutOfMemory;
         wip.cursor = .{ .block = ok_block };
+    }
+
+    fn incrementExpectCounter(self: *MonoLlvmCodeGen, site: lir.LIR.ExpectSiteId, passed: bool) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const pointer_offset = if (passed)
+            in_process_abi.expectPassedOffset(self.targetWordSize())
+        else
+            in_process_abi.expectFailedOffset(self.targetWordSize());
+        const counters = try self.loadPointer(try self.offsetPtr(self.inProcessContext(), pointer_offset));
+        const counter = try self.offsetPtr(counters, @intFromEnum(site) * @sizeOf(u64));
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(@alignOf(u64));
+        const old = wip.load(.normal, .i64, counter, alignment, "") catch return error.OutOfMemory;
+        const next = wip.callIntrinsic(
+            .normal,
+            .none,
+            .@"uadd.sat",
+            &.{.i64},
+            &.{ old, builder.intValue(.i64, 1) catch return error.OutOfMemory },
+            "",
+        ) catch return error.OutOfMemory;
+        _ = wip.store(.normal, next, counter, alignment) catch return error.OutOfMemory;
     }
 
     fn emitCrashIf(self: *MonoLlvmCodeGen, condition: LlvmBuilder.Value, msg: []const u8) Error!void {

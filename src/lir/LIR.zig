@@ -146,6 +146,17 @@ pub const ComptimeSiteId = enum(u32) {
     _,
 };
 
+/// Dense identifier of one source `expect` observed by `roc test`.
+pub const ExpectSiteId = enum(u32) {
+    _,
+};
+
+/// Source metadata for one `expect` observation counter.
+pub const ExpectSite = struct {
+    loc: base.SourceLoc,
+    region: base.Region,
+};
+
 pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
 
 /// Source control-flow construct observed during compile-time finalization.
@@ -954,6 +965,9 @@ pub const CFStmt = union(enum) {
     },
     expect: struct {
         condition: LocalId,
+        /// Present only in test-plan LIR. Other lowering modes retain the
+        /// ordinary host notification behavior for a failed inline expect.
+        site: ?ExpectSiteId = null,
         next: CFStmtId,
     },
     /// The Err arm of a `?` operator used directly inside a top-level expect.
