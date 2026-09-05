@@ -325,6 +325,62 @@ test "uppercase qualified value lookup ignores trivia before dot" {
     );
 }
 
+test "pipe target may be a method call on a literal receiver" {
+    const gpa = std.testing.allocator;
+
+    const cases = [_]struct {
+        source: []const u8,
+        method_name: []const u8,
+        receiver_tag: std.meta.Tag(AST.Expr),
+    }{
+        .{ .source = "[1, 2, 3] |> [1].concat()", .method_name = "concat", .receiver_tag = .list },
+        .{ .source = "1 |> 1.plus()", .method_name = "plus", .receiver_tag = .int },
+        .{ .source = "\"roc \" |> \"and roll\".with_prefix()", .method_name = "with_prefix", .receiver_tag = .string },
+    };
+
+    for (cases) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+        const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+        try std.testing.expectEqual(.arrow_call, std.meta.activeTag(root));
+        try std.testing.expectEqual(AST.PipeTargetKind.method_call, root.arrow_call.target_kind);
+
+        const method = ast.store.getExpr(root.arrow_call.right);
+        try std.testing.expectEqual(.method_call, std.meta.activeTag(method));
+        try std.testing.expectEqualStrings(
+            case.method_name,
+            env.getIdent(ast.tokens.resolveIdentifier(method.method_call.method_token).?),
+        );
+        try std.testing.expectEqual(case.receiver_tag, std.meta.activeTag(ast.store.getExpr(method.method_call.receiver)));
+    }
+}
+
+test "grouping a complete pipe target method call preserves result-call semantics" {
+    const gpa = std.testing.allocator;
+    const source = "(a |> make().method(), a |> (make().method()))";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const tuple = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).tuple;
+    const items = ast.store.exprSlice(tuple.items);
+    try std.testing.expectEqual(AST.PipeTargetKind.method_call, ast.store.getExpr(items[0]).arrow_call.target_kind);
+    try std.testing.expectEqual(AST.PipeTargetKind.ordinary, ast.store.getExpr(items[1]).arrow_call.target_kind);
+}
+
 test "grouped pipe target ending in a field access starts a new suffix path" {
     const gpa = std.testing.allocator;
 

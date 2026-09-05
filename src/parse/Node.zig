@@ -457,6 +457,9 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     arrow_call,
+    /// A pipe whose final target-owned postfix is a method call.
+    /// Uses the same payload layout as arrow_call.
+    arrow_method_call,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - node index of left expression

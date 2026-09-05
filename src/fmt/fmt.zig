@@ -1775,11 +1775,14 @@ const Formatter = struct {
                     .for_expr,
                     .malformed,
                     => {
-                        // A pipe target can start with a name or grouping
-                        // parenthesis. Postfix chains rooted in a name are
-                        // therefore safe without grouping; all other ASTs need
-                        // parentheses so migrating `->` preserves valid syntax.
-                        const needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(ld.right);
+                        // Method-insertion syntax is intentionally ungrouped.
+                        // Ordinary complete method calls stay grouped so they
+                        // continue to mean "call the method result." Other ASTs
+                        // follow the general pipe-target grammar.
+                        const needs_parens = switch (ld.target_kind) {
+                            .method_call => false,
+                            .ordinary => right_expr == .method_call or !fmt.exprCanStartPipeTargetUnparenthesized(ld.right),
+                        };
                         if (needs_parens) {
                             try fmt.formatPipeTargetParens(ld.right, right_expr == .multiline_string or right_expr == .typed_multiline_string);
                         } else {
@@ -4911,6 +4914,26 @@ test "pipe owns the postfix chain on its right" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=foo|>bar(baz).blah()", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = foo |> bar(baz).blah()\n", result);
+}
+
+test "literal method pipe targets and grouped result calls format stably" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=[1,2,3]|>[1].concat()
+        \\b=1|>1.plus()
+        \\c="roc "|>"and roll".with_prefix()
+        \\d=x|>(receiver.method())
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = [1, 2, 3] |> [1].concat()\n" ++
+            "\n" ++
+            "b = 1 |> (1).plus()\n" ++
+            "\n" ++
+            "c = \"roc \" |> \"and roll\".with_prefix()\n" ++
+            "\n" ++
+            "d = x |> (receiver.method())\n",
+        result,
+    );
 }
 
 test "formatter preserves an old arrow's postfix grouping during migration" {
