@@ -29,6 +29,70 @@ const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || li
     MissingSpecializedWorker,
 };
 
+const PeakAllocator = struct {
+    child: Allocator,
+    mutex: std.atomic.Mutex = .unlocked,
+    current_bytes: usize = 0,
+    peak_bytes: usize = 0,
+
+    fn allocator(self: *PeakAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn lock(self: *PeakAllocator) void {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    fn noteResize(self: *PeakAllocator, old_len: usize, new_len: usize) void {
+        self.current_bytes -= old_len;
+        self.current_bytes += new_len;
+        self.peak_bytes = @max(self.peak_bytes, self.current_bytes);
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        const result = self.child.rawAlloc(len, alignment, ret_addr);
+        if (result != null) self.noteResize(0, len);
+        return result;
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        if (!self.child.rawResize(memory, alignment, new_len, ret_addr)) return false;
+        self.noteResize(memory.len, new_len);
+        return true;
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        const result = self.child.rawRemap(memory, alignment, new_len, ret_addr);
+        if (result != null) self.noteResize(memory.len, new_len);
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        self.child.rawFree(memory, alignment, ret_addr);
+        self.noteResize(memory.len, 0);
+    }
+};
+
 var shared_test_builtins: ?eval.BuiltinModules = null;
 var shared_test_builtins_mutex: std.Io.Mutex = .init;
 
@@ -470,6 +534,18 @@ fn structuralJsonLirStats(
         .decrefs = decrefs,
         .conditional_decrefs = conditional_decrefs,
     };
+}
+
+fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
+    const source = try structuralJsonSource(std.testing.allocator, field_count, "Str", .parse);
+    defer std.testing.allocator.free(source);
+
+    var peak_allocator = PeakAllocator{ .child = std.testing.allocator };
+    const allocator = peak_allocator.allocator();
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), peak_allocator.current_bytes);
+    return peak_allocator.peak_bytes;
 }
 
 fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
@@ -1922,6 +1998,31 @@ test "issue 10979 flat JSON record parser growth is linear in field count" {
         );
     }
     try std.testing.expect(wide_per_field <= narrow_per_field * 2);
+}
+
+test "issue 11100 flat JSON record parser peak allocation is linear in field count" {
+    // Repro for https://github.com/roc-lang/roc/issues/11100.
+    // Peak live requested bytes are deterministic allocator accounting, not
+    // wall time. A whole-pipeline peak is the maximum of several phases, so
+    // compare adjacent totals: subtracting them becomes invalid when the
+    // dominating phase changes between input sizes. A doubling may use at
+    // most three times the memory, allowing 50% per-field variance while
+    // still rejecting the issue's greater-than-fourfold 16-to-32 growth.
+    const sizes = [_]usize{ 8, 16, 32 };
+    var peaks: [sizes.len]usize = undefined;
+    for (sizes, &peaks) |field_count, *peak| {
+        peak.* = try structuralJsonLirPeakBytes(field_count);
+    }
+
+    if (peaks[1] > peaks[0] * 3 or peaks[2] > peaks[1] * 3) {
+        std.debug.print(
+            "flat JSON parser peak allocation grew nonlinearly: " ++
+                "{d}/{d}/{d} fields used {d}/{d}/{d} peak bytes\n",
+            .{ sizes[0], sizes[1], sizes[2], peaks[0], peaks[1], peaks[2] },
+        );
+    }
+    try std.testing.expect(peaks[1] <= peaks[0] * 3);
+    try std.testing.expect(peaks[2] <= peaks[1] * 3);
 }
 
 test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
