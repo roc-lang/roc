@@ -599,13 +599,13 @@ fn fieldObservedAfter(
     joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
     receipts: []const FieldRestitution,
 ) Error!bool {
-    var seen = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
-    defer seen.deinit(gpa);
+    var seen = collections.DenseMap(LIR.CFStmtId, void).init(gpa);
+    defer seen.deinit();
     var work = std.ArrayList(LIR.CFStmtId).empty;
     defer work.deinit(gpa);
     try work.append(gpa, start);
     while (work.pop()) |cursor| {
-        if ((try seen.getOrPut(gpa, cursor)).found_existing) continue;
+        if ((try seen.getOrPut(cursor)).found_existing) continue;
         if (reads.get(cursor)) |read| {
             if (read.bit & bit != 0) return true;
         }
