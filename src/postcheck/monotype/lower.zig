@@ -39130,7 +39130,19 @@ const BodyContext = struct {
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, refs.len);
         for (refs, 0..) |ref, i| {
-            out[i] = try self.materializeEvidenceRef(ref, purpose);
+            out[i] = switch (ref.resolution) {
+                // A checked evidence vector is ordered exactly like the
+                // referenced procedure's evidence parameters, so its position
+                // is the durable parameter identity recorded by this recipe.
+                // Keep it symbolic until the callee request has supplied a
+                // concrete callable component (or body lowering consumes the
+                // unresolved component as an unreachable dispatch).
+                .from_callable => .{ .from_callable = .{
+                    .index = @intCast(i),
+                    .independent_callable = false,
+                } },
+                .direct, .constraint, .structural, .checked_error, .unreachable_value => try self.materializeEvidenceRef(ref, purpose),
+            };
         }
         return out;
     }
