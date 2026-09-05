@@ -23,12 +23,18 @@ const CompileResult = struct {
     cache_hits: u32,
 };
 
+const CompileError = eval.BuiltinModules.InitError || std.Thread.SpawnError || Coordinator.AppDiscoveryError || error{
+    UnsupportedBuiltinAnnotationOnly,
+    BuiltinLowLevelAnnotationMustBeFunction,
+    LowLevelOperationsNotFound,
+};
+
 fn compileWithCache(
     gpa: std.mem.Allocator,
     cache_dir: []const u8,
     app_path: []const u8,
     label: []const u8,
-) !CompileResult {
+) CompileError!CompileResult {
     const roc_ctx = CoreCtx.os(gpa, gpa, std.testing.io);
 
     var cache_manager = CacheManager.init(gpa, .{
