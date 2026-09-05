@@ -2047,7 +2047,22 @@ const Certifier = struct {
             => return false,
         };
         const existing = state.claimsOf(container);
-        if (existing & bit != 0) return false;
+        if (existing & bit != 0) {
+            // Same-value aliases can own independent retained units. A
+            // complete projection may spend one intact surplus unit without
+            // claiming the already-dismantled unit's fields a second time.
+            // Partial projections still cannot repeat a field claim.
+            if (self.requiredClaimMask(container) != bit or
+                !self.hasIntactSurplusUnit(state, container)) return false;
+            const before = state.balanceOf(container);
+            try state.addBalance(container, -1);
+            if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                .value = container,
+                .before = before,
+                .after = before - 1,
+            } });
+            return true;
+        }
         if (!try self.ensureClaimContainerUnit(state, container, seen, mutations)) return false;
         try state.setClaims(container, existing | bit);
         if (mutations) |list| try list.append(self.allocator, .{ .claims = .{
@@ -7839,6 +7854,54 @@ test "certify rejects a dismantled record moved whole without a retained surplus
 
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "partially dismantled") != null);
+}
+
+test "certify complete projections spend exactly the retained units" {
+    for ([_]bool{ false, true }) |tagged| {
+        for (0..3) |retains| {
+            var f = try CertifyTest.init(testing.allocator);
+            defer f.deinit();
+            const singleton = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+            const container_layout = if (tagged)
+                try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), .str })
+            else
+                singleton;
+            const container = try f.local(container_layout);
+            const first = try f.local(.str);
+            const second = try f.local(.str);
+            const pair = try f.local(f.pair_str);
+            const ret = try f.ret(pair);
+            const join_id = f.freshJoinPointId();
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+            var body = try f.store.addCFStmt(.{ .assign_struct = .{
+                .target = pair,
+                .fields = try f.store.addLocalSpan(&.{ first, second }),
+                .next = jump,
+            } });
+            for ([_]LIR.LocalId{ second, first }) |target| {
+                const op: LIR.RefOp = if (tagged)
+                    .{ .tag_payload = .{ .source = container, .payload_idx = 0, .variant_index = 1, .tag_discriminant = 1 } }
+                else
+                    .{ .field = .{ .source = container, .field_idx = 0 } };
+                body = try f.store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = op, .next = body } });
+            }
+            for (0..retains) |_| body = try f.increfStmt(container, container_layout, body);
+            const join = try f.store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = LIR.LocalSpan.empty(),
+                .body = ret,
+                .remainder = body,
+            } });
+            _ = try f.addProc(&.{container}, join, f.pair_str);
+            // Two complete projections need two units. One unit is a double
+            // consume; three units leave a leak. Neither may be accepted.
+            if (retains == 1) {
+                try f.certify();
+            } else {
+                try testing.expectError(error.Certification, f.certify());
+            }
+        }
+    }
 }
 
 test "certify accepts a fully dismantled record via field takes" {
