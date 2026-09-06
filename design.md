@@ -4961,7 +4961,17 @@ requirement and empties the checker-local scheme index, so no import can observe
 a root type after such a requirement was silently discarded. A successfully
 validated generated-codec requirement is different: its current concrete shape
 can still change when a downstream use substitutes a nested generalized
-variable. Checking serializes that exact receiver and callable relation in a
+variable. A generated-codec receiver can also be structurally known while one
+of its components is still a scheme variable. When the receiver shares type
+variables with the owning binding's interface, capture records the same exact
+receiver and callable relation before generalization. Only after the binding is
+classified as a scheme does the definition-side worklist entry retire; every
+instantiation copies the structural receiver and validates the resulting codec
+independently. A value-restricted binding retains its original worklist entry
+and therefore cannot use provisional capture to suppress an error. An imported
+or rehydrated pristine relation is likewise a scheme template rather than a new
+use-site obligation; only its instantiated copies are validated in that
+checker. Checking serializes each surviving receiver and callable relation in a
 node-sorted binding-scheme side table, referencing the constraint already stored
 in the module's TypeStore and carrying the scheme root that groups all source
 aliases. Import copying copies the binding root, codec receiver, and callable
@@ -5004,7 +5014,10 @@ multi-hop and transitively copied chains, repeated transitive helper uses, and
 results carried through the definition's return type; every pair has two uses
 at different result item types and asserts identical inferred types. Recursive
 SCC and source-forward annotated recursive definitions have the same two-use
-principality pins.
+principality pins. Generic structural codec pins cover direct, transitive, and
+cross-module encoder schemes, a parser whose inferred record components
+specialize at its use site, and a value-restricted copy that settles from a
+later use; the issue 10949 snapshot pins the original direct encoder case.
 A retirement regression proves later uses do not replay a discharged missing
 method, and a shared pending requirement produces exactly one diagnostic
 across multiple uses. The generated principality test checks the complete

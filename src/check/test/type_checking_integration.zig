@@ -10464,6 +10464,43 @@ test "check type - derived codec - annotated encoder_for body with annotated mod
     try test_env.assertNoErrors();
 }
 
+test "check type - derived codec - generic structural encoder propagates through schemes" {
+    const source =
+        \\to_json = |a, b| Json.to_str({ a, b })
+        \\forward = |a, b| to_json(a, b)
+        \\result = forward("hi", {})
+        \\tuple_json = |a, b| Json.to_str((a, b))
+        \\tuple_result = tuple_json("hi", {})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - derived codec - generic structural parser specializes at use" {
+    const source =
+        \\parse_or = |a, b, text| match Json.parse(text) {
+        \\  Ok(value) => value
+        \\  Err(_) => { a, b }
+        \\}
+        \\result = parse_or("", {}, "{}")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - derived codec - value-restricted structural receiver settles from later use" {
+    const source =
+        \\make_encoder = |_| |a, b| Json.to_str({ a, b })
+        \\to_json = make_encoder({})
+        \\result = to_json("hi", {})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 // RECURSIVE DISPATCH MUST BE REPORTED AS SUCH. Satisfying the interpolation's
 // `from_interpolation` constraint on the annotation's inner
 // `Try(Url, [InvalidUrl])` would require dispatching `from_interpolation` on
