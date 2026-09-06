@@ -1022,6 +1022,7 @@ pub const RootRequestTable = struct {
         const_templates: *const ConstTemplateTable,
         template_root_evidence: []const artifact_serialize.Span,
         explicit_roots: []const ExplicitRootRequestInput,
+        validation: can.Can.Validation,
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
@@ -1054,20 +1055,21 @@ pub const RootRequestTable = struct {
             });
         }
 
-        try appendPublishedEntrypointRoots(
-            &requests,
-            allocator,
-            module,
-            names,
-            checked_types,
-            procedure_templates,
-            provided_exports,
-            top_level_values,
-            top_level_procedure_bindings,
-            relation_substitutions,
-            platform_app_relation,
-            platform_required_declarations,
-        );
+        if (validation == .checking) {
+            try appendPublishedEntrypointRoots(
+                &requests,
+                allocator,
+                module,
+                names,
+                checked_types,
+                provided_exports,
+                top_level_values,
+                top_level_procedure_bindings,
+                relation_substitutions,
+                platform_app_relation,
+                platform_required_declarations,
+            );
+        }
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             switch (binding.value_use) {
@@ -1838,17 +1840,6 @@ fn checkedTagsAreConcreteCompileTimeRoots(
     return true;
 }
 
-fn checkedTypeContainsError(
-    allocator: Allocator,
-    checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
-) Allocator.Error!bool {
-    var scan = CheckedTypeErrorScan{ .checked_types = checked_types };
-    var traversal = CheckedTypeErrorTraversal.init(allocator, &scan);
-    defer traversal.deinit();
-    return traversal.visit(root);
-}
-
 const CheckedTypeErrorTraversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, CheckedTypeErrorScan);
 
 const CheckedTypeErrorScan = struct {
@@ -2273,7 +2264,6 @@ fn appendPublishedEntrypointRoots(
     module: TypedCIR.Module,
     names: *const canonical.CanonicalNameStore,
     checked_types: *CheckedTypePublication,
-    procedure_templates: *const CheckedProcedureTemplateTable,
     provided_exports: *const ProvidedExportTable,
     top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
@@ -2313,31 +2303,7 @@ fn appendPublishedEntrypointRoots(
     }
 
     switch (module_env.module_kind) {
-        .default_app => {
-            const main_ident = module_env.idents.main_bang;
-            const main_node_idx = module_env.getExposedValueNodeIndexById(main_ident) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: default app main! has no published root definition",
-                        .{},
-                    );
-                }
-                unreachable;
-            };
-            const main_def: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(main_node_idx)));
-            const checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = main_def });
-            if (try checkedTypeContainsError(allocator, &checked_types.store, checked_type)) return;
-            try appendRoot(requests, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .runtime_entrypoint,
-                .source = .{ .def = main_def },
-                .checked_type = checked_type,
-                .abi = .roc,
-                .exposure = .exported,
-                .procedure_template = requiredProcedureTemplateForRootSource(procedure_templates, .{ .def = main_def }),
-            });
-        },
-        .app => try appendExposedAppProcedureRoots(
+        .default_app, .app => try appendExposedAppProcedureRoots(
             requests,
             allocator,
             module,
@@ -2418,18 +2384,6 @@ fn procedureTemplateForTopLevelBinding(
             .lifted => checkedArtifactInvariant("checked root binding referenced lifted procedure before post-check lowering", .{}),
         },
         .callable_eval_template => null,
-    };
-}
-
-fn requiredProcedureTemplateForRootSource(
-    procedure_templates: *const CheckedProcedureTemplateTable,
-    source: RootSource,
-) canonical.ProcedureTemplateRef {
-    return procedureTemplateForRootSource(procedure_templates, source) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: root procedure source has no checked procedure template", .{});
-        }
-        unreachable;
     };
 }
 
@@ -34117,6 +34071,7 @@ pub fn publishFromTypedModule(
         &const_templates,
         template_root_evidence,
         inputs.explicit_roots,
+        inputs.validation,
     );
     errdefer root_requests.deinit(allocator);
 
@@ -34816,6 +34771,7 @@ fn expectProvidedExportKind(
         &const_templates,
         template_root_evidence,
         &.{},
+        .checking,
     );
     defer root_requests.deinit(allocator);
 

@@ -6536,6 +6536,12 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     const scratch_exports_start = self.env.store.scratchDefTop();
 
     const defs_slice = self.env.store.sliceDefs(self.env.top_level_value_defs);
+    const file = self.parse_ir.store.getFile();
+    const header = self.parse_ir.store.getHeader(file.header);
+    const has_implicit_default_app_main = self.env.module_kind == .default_app and switch (header) {
+        .type_module, .default_app => true,
+        .app, .module, .package, .platform, .hosted, .malformed => false,
+    };
 
     // Check each definition to see if it corresponds to an exposed item.
     // We check exposed_idents which only contains items from the exposing clause,
@@ -6550,8 +6556,13 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
-            // Check if this identifier was explicitly exposed in the module header
-            if (self.exposed_idents.contains(pattern.assign.ident)) {
+            // Headerless default apps have an implicit `provides [main!]`.
+            // Record it in the same exact export-definition inventory that
+            // explicit app headers produce, so checked root construction
+            // consumes this inventory instead of the broader exposed-item map.
+            const is_implicit_main = has_implicit_default_app_main and
+                pattern.assign.ident.eql(self.env.idents.main_bang);
+            if (self.exposed_idents.contains(pattern.assign.ident) or is_implicit_main) {
                 try self.env.store.addScratchDef(def_idx);
                 try self.env.setExposedValueNodeIndexById(pattern.assign.ident, @intFromEnum(def_idx));
             }
