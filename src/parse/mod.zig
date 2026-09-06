@@ -259,51 +259,6 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
     );
 }
 
-test "pipe method target is explicit in the AST" {
-    const gpa = std.testing.allocator;
-    const source = "(value |> receiver.method(), value |> receiver.field.method(arg), value |> (receiver).method(), value |> make().method(), value |> Type.(arg).method(), value |> receiver.method()(), value |> receiver.method().next(), value |> receiver .method(), value |> pkg.Mod.fn())";
-
-    var env = try CommonEnv.init(gpa, source);
-    defer env.deinit(gpa);
-
-    const ast = try expr(gpa, &env);
-    defer ast.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-
-    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
-    const items = ast.store.exprSlice(root.tuple.items);
-    try std.testing.expectEqual(@as(usize, 9), items.len);
-    try std.testing.expectEqual(.pipe_method_call, std.meta.activeTag(ast.store.getExpr(items[0])));
-    try std.testing.expectEqual(.pipe_method_call, std.meta.activeTag(ast.store.getExpr(items[1])));
-    try std.testing.expectEqual(.pipe_method_call, std.meta.activeTag(ast.store.getExpr(items[2])));
-
-    const chained = ast.store.getExpr(items[3]);
-    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(chained));
-    try std.testing.expectEqual(.method_call, std.meta.activeTag(ast.store.getExpr(chained.arrow_call.right)));
-
-    const nominal_chained = ast.store.getExpr(items[4]);
-    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(nominal_chained));
-    try std.testing.expectEqual(.method_call, std.meta.activeTag(ast.store.getExpr(nominal_chained.arrow_call.right)));
-
-    const applied_method = ast.store.getExpr(items[5]);
-    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(applied_method));
-    try std.testing.expectEqual(.apply, std.meta.activeTag(ast.store.getExpr(applied_method.arrow_call.right)));
-
-    const chained_method = ast.store.getExpr(items[6]);
-    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(chained_method));
-    try std.testing.expectEqual(.method_call, std.meta.activeTag(ast.store.getExpr(chained_method.arrow_call.right)));
-
-    const spaced = ast.store.getExpr(items[7]);
-    try std.testing.expectEqual(.method_call, std.meta.activeTag(spaced));
-    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(spaced.method_call.receiver)));
-
-    const qualified = ast.store.getExpr(items[8]);
-    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(qualified));
-    try std.testing.expectEqual(.apply, std.meta.activeTag(ast.store.getExpr(qualified.arrow_call.right)));
-}
-
 test "uppercase qualified value lookup ignores trivia before dot" {
     const gpa = std.testing.allocator;
     const source =

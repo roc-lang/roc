@@ -2905,7 +2905,6 @@ pub const Expr = union(enum) {
         args: Expr.Span,
         region: TokenizedRegion,
     },
-    pipe_method_call: PipeMethodCall,
     /// Tuple element access: `tuple.0`, `tuple.1`, etc.
     tuple_access: struct {
         /// The tuple expression being accessed
@@ -3024,7 +3023,6 @@ pub const Expr = union(enum) {
             .tuple => |e| e.region,
             .field_access => |e| e.region,
             .method_call => |e| e.region,
-            .pipe_method_call => |e| e.region,
             .tuple_access => |e| e.region,
             .arrow_call => |e| e.region,
             .lambda => |e| e.region,
@@ -3495,36 +3493,6 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("args");
                 const args_attrs = tree.beginNode();
                 for (ast.store.exprSlice(a.args)) |arg_id| {
-                    try ast.store.getExpr(arg_id).pushToSExprTree(gpa, env, ast, tree);
-                }
-                try tree.endNode(args, args_attrs);
-
-                try tree.endNode(begin, attrs);
-            },
-            .pipe_method_call => |a| {
-                const details = ast.store.getPipeMethodCallDetails(a);
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-pipe-method-call");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
-                try tree.pushStringPair("method", ast.resolve(details.method_token));
-                const attrs = tree.beginNode();
-
-                const left = tree.beginNode();
-                try tree.pushStaticAtom("left");
-                const left_attrs = tree.beginNode();
-                try ast.store.getExpr(a.left).pushToSExprTree(gpa, env, ast, tree);
-                try tree.endNode(left, left_attrs);
-
-                const receiver = tree.beginNode();
-                try tree.pushStaticAtom("receiver");
-                const receiver_attrs = tree.beginNode();
-                try ast.store.getExpr(a.receiver).pushToSExprTree(gpa, env, ast, tree);
-                try tree.endNode(receiver, receiver_attrs);
-
-                const args = tree.beginNode();
-                try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (ast.store.exprSlice(details.args)) |arg_id| {
                     try ast.store.getExpr(arg_id).pushToSExprTree(gpa, env, ast, tree);
                 }
                 try tree.endNode(args, args_attrs);
