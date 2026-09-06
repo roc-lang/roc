@@ -27733,6 +27733,30 @@ fn schemeCandidateUsesGeneratedCodec(
     };
 }
 
+fn schemeCodecReceiverHasOpenOuterRow(self: *Self, root: Var) bool {
+    var current = root;
+    while (true) {
+        const content = self.types.resolveVar(current).desc.content;
+        switch (content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |structure| switch (structure) {
+                .record => |record| return self.types.resolveVar(record.ext).desc.content == .flex,
+                .tag_union => |tag_union| return self.types.resolveVar(tag_union.ext).desc.content == .flex,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .empty_tag_union,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                => return false,
+            },
+            .flex, .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
 fn schemeCandidateIsUnresolvedGeneratedCodec(
     self: *Self,
     candidate: SchemeRequirementCandidate,
@@ -27746,14 +27770,15 @@ fn schemeCandidateIsUnresolvedGeneratedCodec(
     if (!self.schemeCandidateUsesGeneratedCodec(candidate)) return false;
 
     const region = self.getRegionAt(candidate.receiver_var);
-    if (candidate.constraint.fn_name.eql(self.cir.idents.parser_for)) {
-        return (try self.varSupportsDerivedParseShape(candidate.receiver_var, env, region)) == .unresolved;
-    }
-    if (candidate.constraint.fn_name.eql(self.cir.idents.encoder_for)) {
+    const support = if (candidate.constraint.fn_name.eql(self.cir.idents.parser_for)) blk: {
+        break :blk try self.varSupportsDerivedParseShape(candidate.receiver_var, env, region);
+    } else if (candidate.constraint.fn_name.eql(self.cir.idents.encoder_for)) blk: {
         const encoding_var = self.encoderForConstraintEncodingVar(candidate.constraint) orelse return false;
-        return (try self.varSupportsDerivedEncodeShape(candidate.receiver_var, encoding_var, env, region)) == .unresolved;
-    }
-    return false;
+        break :blk try self.varSupportsDerivedEncodeShape(candidate.receiver_var, encoding_var, env, region);
+    } else return false;
+
+    return support == .unresolved and
+        !self.schemeCodecReceiverHasOpenOuterRow(candidate.receiver_var);
 }
 
 /// Move every still-open dispatch relation owned by this generalization

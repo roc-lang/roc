@@ -5070,7 +5070,10 @@ variables with the owning binding's interface, capture records the same exact
 receiver and callable relation before generalization. Only after the binding is
 classified as a scheme does the definition-side worklist entry retire; every
 instantiation copies the structural receiver and validates the resulting codec
-independently. A value-restricted binding retains its original worklist entry
+independently. An unresolved outer record or tag extension is not a component
+scheme variable: its definition-side worklist entry remains active so
+quiescence closes or rejects the open row before generalization. A value-restricted
+binding retains its original worklist entry
 and therefore cannot use provisional capture to suppress an error. An imported
 or rehydrated pristine relation is likewise a scheme template rather than a new
 use-site requirement; only its instantiated copies are validated in that
