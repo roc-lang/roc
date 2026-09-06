@@ -24131,12 +24131,17 @@ const BodyContext = struct {
                     const components = self.generatedIteratorComponentNodes(expected, 2);
                     return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
                 }
+                const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
+                const advance_node = if (state_is_private)
+                    try self.iterCustomAdvanceRequestNode(checked_args[2], request_fn.args[0])
+                else
+                    request_fn.args[2];
                 return try self.graphFunctionNode(
-                    request_fn.args,
+                    &.{ request_fn.args[0], request_fn.args[1], advance_node },
                     try self.generatedIteratorNode(
                         mintedProducerKind(procedure),
                         public_fn.ret,
-                        &.{ request_fn.args[0], request_fn.args[2] },
+                        &.{ request_fn.args[0], advance_node },
                         try self.callableArgumentEvidenceDigest(checked_args[2]),
                     ),
                 );
@@ -24212,6 +24217,66 @@ const BodyContext = struct {
             .numeric_range_delegate, .iter_from_step, .range_done => {},
         }
         return null;
+    }
+
+    /// Build the `Iter.custom` transition request with its checked state role
+    /// bound to the seed's exact representation. The transition's argument and
+    /// successful next-state result share that checked identity, so a fresh
+    /// instantiation propagates the representation through both positions
+    /// without mutating a finished seed Monotype or reconstructing a type path.
+    fn iterCustomAdvanceRequestNode(
+        self: *BodyContext,
+        checked_advance: checked.CheckedExprId,
+        state_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const checked_fn_ty = self.view.bodies.expr(checked_advance).ty;
+        const checked_fn = self.checkedFunctionType(checked_fn_ty);
+        if (checked_fn.args.len != 1) {
+            Common.invariant("Iter.custom advance callable did not have exactly one state argument");
+        }
+        var checked_try_ty = checked_fn.ret;
+        const checked_try = while (true) switch (checkedPayload(self.view, checked_try_ty)) {
+            .alias => |alias| checked_try_ty = alias.backing,
+            .nominal => |nominal| break nominal,
+            .pending, .err, .flex, .rigid, .record_unbound, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance callable did not return Try"),
+        };
+        const checked_try_builtin = switch (checked_try.representation) {
+            .builtin => |builtin| builtin,
+            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => Common.invariant("Iter.custom advance callable returned a non-builtin Try"),
+        };
+        if (checked.builtinRuntimeEncoding(checked_try_builtin) != .try_nominal or checked_try.args.len != 2) {
+            Common.invariant("Iter.custom advance callable did not return the builtin Try type");
+        }
+        var checked_ok = checked_try.args[0];
+        const checked_ok_items = while (true) switch (checkedPayload(self.view, checked_ok)) {
+            .alias => |alias| checked_ok = alias.backing,
+            .tuple => |items| break items,
+            .pending, .err, .flex, .rigid, .record_unbound, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance success value was not an item-state tuple"),
+        };
+        if (checked_ok_items.len != 2) {
+            Common.invariant("Iter.custom advance success tuple did not have item and state elements");
+        }
+        const checked_next_state = checked_ok_items[1];
+
+        const previous = self.instantiation;
+        self.instantiation = TypeInstantiationContext.init(
+            self.allocator,
+            self.builder.allocateInstantiationScope(),
+            self.view.key.bytes,
+        );
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous;
+        }
+
+        try self.putScopedNode(self.scopedCheckedType(checked_fn.args[0]), state_node);
+        try self.putScopedNode(self.scopedCheckedType(checked_next_state), state_node);
+        const advance_node = try self.instNode(checked_fn_ty);
+        const advance_fn = try self.graph.functionNodes(advance_node);
+        if (advance_fn.args.len != 1 or !self.graph.sameClass(advance_fn.args[0], state_node)) {
+            Common.invariant("Iter.custom advance request lost its exact state argument");
+        }
+        return advance_node;
     }
 
     /// The registry-declared minted kind for a producing iterator procedure.
@@ -30371,7 +30436,7 @@ const BodyContext = struct {
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
         for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-            if (try caller.exprCallResultEvidenceNode(checked_arg, null)) |evidence_node| {
+            if (try caller.exprCallArgumentEvidenceNode(checked_arg)) |evidence_node| {
                 if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                     const public_node = try caller.freshInstNode(arg_ty);
                     try self.graph.relateOpaqueInterface(public_node, evidence_node);
@@ -30704,6 +30769,189 @@ const BodyContext = struct {
             return try self.activeNodeFromType(ty);
         }
         return null;
+    }
+
+    /// Return the exact representation carried by a call argument. Besides a
+    /// producer result or lookup, a constructor can carry generated-private
+    /// evidence in one of its children (for example `(index, iterator)`).
+    /// Relate constructor children into a fresh node so that evidence reaches
+    /// the callee request without refining the checked-public cached cell.
+    fn exprCallArgumentEvidenceNode(
+        self: *BodyContext,
+        checked_arg: checked.CheckedExprId,
+    ) Allocator.Error!?NodeId {
+        if (try self.exprCallResultEvidenceNode(checked_arg, null)) |produced| {
+            return if (try self.graph.containsGeneratedPrivate(produced)) produced else null;
+        }
+        const expr = self.view.bodies.expr(checked_arg);
+        switch (expr.data) {
+            .tuple, .record, .tag, .nominal, .list => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+        }
+        const argument_node = try self.freshInstNode(expr.ty);
+        const produced = (try self.exprProducedValueEvidenceNode(checked_arg, argument_node)) orelse return null;
+        return if (try self.graph.containsGeneratedPrivate(produced)) produced else null;
+    }
+
+    /// Return the exact value witness explicitly produced by an expression at
+    /// a particular request. Direct producers and lookups supply their own
+    /// evidence; constructors propagate each child's evidence into its exact
+    /// positional slot and create a distinct container witness when needed.
+    fn exprProducedValueEvidenceNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        request_node: NodeId,
+    ) Allocator.Error!?NodeId {
+        if (try self.exprCallResultEvidenceNode(checked_expr, null)) |produced| {
+            return try self.relateCheckedNodeToProducedValue(request_node, produced);
+        }
+        const expr = self.view.bodies.expr(checked_expr);
+        return switch (expr.data) {
+            .tuple => |items| blk: {
+                const item_nodes = try self.graph.tupleItemNodes(request_node);
+                if (items.len != item_nodes.len) Common.invariant("tuple value evidence arity differed from its graph type");
+                const produced_items = try self.allocator.alloc(NodeId, items.len);
+                defer self.allocator.free(produced_items);
+                var requires_distinct_witness = false;
+                for (items, item_nodes, 0..) |item, item_node, index| {
+                    const produced = (try self.exprProducedValueEvidenceNode(item, item_node)) orelse item_node;
+                    const witness = try self.constructorChildWitness(
+                        item_node,
+                        produced,
+                        "tuple value evidence child differed without explicit representation evidence",
+                    );
+                    produced_items[index] = witness.slot;
+                    if (witness.requires_witness) requires_distinct_witness = true;
+                }
+                if (!requires_distinct_witness) break :blk null;
+                const structural_node = try self.graph.newNode(.{
+                    .tuple = try self.graph.arena().dupe(NodeId, produced_items),
+                });
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
+            },
+            .tag => |tag| blk: {
+                const name = try self.tagName(self.view, tag.name);
+                const produced_payloads = try self.allocator.alloc(NodeId, tag.args.len);
+                defer self.allocator.free(produced_payloads);
+                var requires_distinct_witness = false;
+                for (tag.args, 0..) |payload, index| {
+                    const payload_node = try self.graph.tagConstructionPayloadNode(request_node, name, index);
+                    const produced = (try self.exprProducedValueEvidenceNode(payload, payload_node)) orelse payload_node;
+                    const witness = try self.constructorChildWitness(
+                        payload_node,
+                        produced,
+                        "tag value evidence child differed without explicit representation evidence",
+                    );
+                    produced_payloads[index] = witness.slot;
+                    if (witness.requires_witness) requires_distinct_witness = true;
+                }
+                if (!requires_distinct_witness) break :blk null;
+                const structural_node = try self.graph.tagValueNodeWithPayloads(request_node, name, produced_payloads);
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
+            },
+            .record => |record| blk: {
+                const target_fields = (try self.graph.recordConstructionNodes(request_node)).fields;
+                const produced_fields = try self.allocator.dupe(InstField, target_fields);
+                defer self.allocator.free(produced_fields);
+                const base_node = if (record.ext) |base_expr|
+                    try self.exprProducedValueEvidenceNode(
+                        base_expr,
+                        try self.freshInstNode(self.view.bodies.expr(base_expr).ty),
+                    )
+                else
+                    null;
+                var requires_distinct_witness = false;
+                for (target_fields, 0..) |field, index| {
+                    const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse {
+                        const base_witness = base_node orelse continue;
+                        var is_unset = false;
+                        for (record.unsets) |label| {
+                            if (try self.recordFieldName(self.view, label) == field.name) {
+                                is_unset = true;
+                                break;
+                            }
+                        }
+                        if (is_unset) continue;
+                        const produced_slot = try self.graph.recordConstructionFieldNode(base_witness, field.name);
+                        const witness = try self.constructorChildWitness(
+                            field.ty,
+                            produced_slot,
+                            "record update evidence field differed without explicit representation evidence",
+                        );
+                        produced_fields[index].ty = witness.slot;
+                        if (witness.requires_witness) requires_distinct_witness = true;
+                        continue;
+                    };
+                    const value_node = try self.graph.recordConstructionFieldValueNode(request_node, field.name);
+                    const produced_value = (try self.exprProducedValueEvidenceNode(field_value, value_node)) orelse value_node;
+                    const produced_slot = switch (try self.graph.recordConstructionFieldKind(request_node, field.name)) {
+                        .required, .defaulted => produced_value,
+                        .optional => optional: {
+                            const present = try self.nameStoreMut().internTagLabel(Builder.optional_slot_present_tag);
+                            const present_node = try self.graph.tagValueNodeWithPayloads(field.ty, present, &.{produced_value});
+                            break :optional try self.constructorWitnessWithStructuralNode(field.ty, present_node);
+                        },
+                    };
+                    const witness = try self.constructorChildWitness(
+                        field.ty,
+                        produced_slot,
+                        "record value evidence child differed without explicit representation evidence",
+                    );
+                    produced_fields[index].ty = witness.slot;
+                    if (witness.requires_witness) requires_distinct_witness = true;
+                }
+                if (!requires_distinct_witness) break :blk null;
+                const structural_node = try self.graph.newNode(.{ .record = .{
+                    .fields = try self.graph.arena().dupe(InstField, produced_fields),
+                    .ext = try self.graph.newNode(.empty_record),
+                } });
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
+            },
+            .list => |items| blk: {
+                const element_node = try self.graph.listElementNode(request_node);
+                var produced_element: ?NodeId = null;
+                for (items) |item| {
+                    const produced = (try self.exprProducedValueEvidenceNode(item, element_node)) orelse element_node;
+                    if (produced_element) |selected| {
+                        try selectRequestRepresentation(self.graph, selected, produced);
+                    } else {
+                        const witness = try self.constructorChildWitness(
+                            element_node,
+                            produced,
+                            "list value evidence child differed without explicit representation evidence",
+                        );
+                        if (witness.requires_witness) produced_element = witness.slot;
+                    }
+                }
+                const element_witness = produced_element orelse break :blk null;
+                const structural_node = try self.graph.newNode(.{ .list = element_witness });
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
+            },
+            .nominal => |nominal| blk: {
+                const representation_node = self.constructorRepresentationNode(request_node);
+                const named = switch (self.graph.content(representation_node)) {
+                    .named => |value| value,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal value evidence had no nominal graph representation"),
+                };
+                const backing = named.backing orelse
+                    Common.invariant("nominal value evidence graph node had no backing");
+                const produced = (try self.exprProducedValueEvidenceNode(nominal.backing_expr, backing.node)) orelse
+                    break :blk null;
+                const backing_witness = try self.constructorChildWitness(
+                    backing.node,
+                    produced,
+                    "nominal value evidence child differed without explicit representation evidence",
+                );
+                if (!backing_witness.requires_witness) break :blk null;
+                const witness = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
+                break :blk try self.relateCheckedNodeToProducedValue(representation_node, witness);
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+        };
     }
 
     fn lookupCallArgumentEvidenceNode(
@@ -49726,7 +49974,8 @@ const BodyContext = struct {
                 try self.controlFlowResultEvidenceNode(block.final_expr, expected_node)
             else
                 null,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .tuple, .record, .tag, .nominal, .list => try self.exprProducedValueEvidenceNode(checked_value, expected_node),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .empty_list, .match_, .if_, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
@@ -51487,7 +51736,7 @@ const BodyContext = struct {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
                     try relateRequestComponent(self.graph, formal_node, public_node);
-                    if (try caller.exprCallResultEvidenceNode(checked_arg, null)) |evidence_node| {
+                    if (try caller.exprCallArgumentEvidenceNode(checked_arg)) |evidence_node| {
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
                             public_node,

@@ -4076,6 +4076,16 @@ producer-aware value relation. It never merges the child into the corresponding
 public slot or asks a later consumer to recover the child's runtime
 representation from the public container shape.
 
+Call specialization and control-flow result selection consume that same exact
+constructor witness before code emission. They propagate producer evidence by
+the constructor's explicit field, payload, item, or backing positions; equal
+checked type identities elsewhere do not participate. In particular,
+`Iter.custom` binds the transition callable's input state and successful
+next-state result to the seed's exact witness. An iterator stored in custom
+state therefore keeps one representation through the initial seed, each
+transition result, and the next call, without crossing the public recursive
+`Iter` boundary between steps.
+
 Each generated-private request also retains its exact checked-source function
 node. That source node can itself contain upstream private arguments, so a
 callee relates its fresh checked root to the source through opaque interface
