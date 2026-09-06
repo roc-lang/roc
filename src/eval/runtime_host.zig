@@ -158,6 +158,8 @@ allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
 allocation_call_count: u32 = 0,
 longjmp_on_crash: bool = true,
 event_callback: ?EventCallback = null,
+expect_passed: []u64 = &.{},
+expect_failed: []u64 = &.{},
 
 pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
     // Runtime byte leak checking is handled by allocation_tracker itself, so
@@ -207,6 +209,23 @@ pub fn setLongjmpOnCrash(self: *RuntimeHostEnv, enabled: bool) void {
 /// Install or clear the live host-event observer for this runtime environment.
 pub fn setEventCallback(self: *RuntimeHostEnv, callback: ?EventCallback) void {
     self.event_callback = callback;
+}
+
+/// Bind the worker-local dense arrays used by generated test code.
+pub fn setExpectCounters(self: *RuntimeHostEnv, passed: []u64, failed: []u64) void {
+    std.debug.assert(passed.len == failed.len);
+    self.expect_passed = passed;
+    self.expect_failed = failed;
+}
+
+/// Native dev-code callback for one executed source `expect`.
+pub fn rocExpectObserved(ops: *RocOps, site: u32, passed: u8) callconv(.c) void {
+    const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
+    if (site >= self.expect_passed.len) {
+        std.debug.panic("runtime expect observation site {d} exceeded {d} counters", .{ site, self.expect_passed.len });
+    }
+    const counts = if (passed != 0) self.expect_passed else self.expect_failed;
+    counts[site] +|= 1;
 }
 
 /// Public function `get_ops`.

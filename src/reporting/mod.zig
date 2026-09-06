@@ -21,6 +21,7 @@ pub const source_region = @import("source_region.zig");
 
 pub const renderReport = @import("renderer.zig").renderReport;
 pub const renderReportWithConfig = @import("renderer.zig").renderReportWithConfig;
+pub const trimOwnedTrailingLineBreaks = @import("renderer.zig").trimOwnedTrailingLineBreaks;
 pub const renderReportToTerminal = @import("renderer.zig").renderReportToTerminal;
 pub const renderReportToMarkdown = @import("renderer.zig").renderReportToMarkdown;
 pub const renderReportToPlain = @import("renderer.zig").renderReportToPlain;
