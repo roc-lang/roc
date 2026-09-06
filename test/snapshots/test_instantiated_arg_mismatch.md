@@ -88,7 +88,7 @@ EndOfFile,
 	(e-call (constraint-fn-var 243)
 		(e-lookup-local
 			(p-assign (ident "pair")))
-		(e-num (value "42"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES

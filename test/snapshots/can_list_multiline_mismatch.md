@@ -50,9 +50,9 @@ EndOfFile,
 ~~~clojure
 (e-list
 	(elems
-		(e-num (value "42"))
 		(e-runtime-error (tag "erroneous_value_expr"))
-		(e-num (value "100"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

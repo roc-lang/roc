@@ -265,9 +265,16 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-dispatch-call (method "minus") (constraint-fn-var 357)
+						(receiver
+							(e-runtime-error (tag "erroneous_value_expr")))
+						(args
+							(e-string))))
 				(field (name "e")
-					(e-runtime-error (tag "erroneous_value_expr"))))))
+					(e-dispatch-call (method "not") (constraint-fn-var 367)
+						(receiver
+							(e-runtime-error (tag "erroneous_value_expr")))
+						(args))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block

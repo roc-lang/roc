@@ -257,7 +257,7 @@ NO CHANGE
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-num (value "2")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-apply (name "Pair") (local)
 				(ty-lookup (name "U8") (builtin)))))
@@ -266,7 +266,7 @@ NO CHANGE
 		(e-nominal (nominal "Pair")
 			(e-tag (name "Pair")
 				(args
-					(e-num (value "1"))
+					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-runtime-error (tag "erroneous_value_expr")))))
 		(annotation
 			(ty-apply (name "Pair") (local)

@@ -47,7 +47,7 @@ NO CHANGE
 		(e-empty_list)
 		(e-list
 			(elems
-				(e-num (value "1"))))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(e-list
 			(elems
 				(e-runtime-error (tag "erroneous_value_expr"))))))

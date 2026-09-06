@@ -142,9 +142,9 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(segment (name "run") (mode "required"))))
 					(e-list
 						(elems
-							(e-num (value "1"))
-							(e-num (value "2"))
-							(e-num (value "3")))))
+							(e-runtime-error (tag "erroneous_value_expr"))
+							(e-runtime-error (tag "erroneous_value_expr"))
+							(e-runtime-error (tag "erroneous_value_expr")))))
 				(e-call (constraint-fn-var 324)
 					(e-field-access
 						(receiver
@@ -155,8 +155,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 					(e-list
 						(elems
 							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-string
-								(e-literal (string "b")))))))))
+							(e-runtime-error (tag "erroneous_value_expr"))))))))
 	(s-nominal-decl
 		(ty-header (name "FooBar"))
 		(ty-record)))

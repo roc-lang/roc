@@ -231,7 +231,7 @@ result = multi_arg_fn(
 				(e-literal (string "hello")))
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-dec-small (numerator "15") (denominator-power-of-ten "1") (value "1.5"))
-			(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-list
 				(elems
 					(e-num (value "1"))

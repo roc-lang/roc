@@ -162,7 +162,13 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-runtime-error (tag "erroneous_value_expr"))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 257)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "second")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
