@@ -1209,4 +1209,33 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"v: a\"" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11099
+        // `Tp.send` is unannotated and dispatches a method on its parameter, so
+        // its type carries a where-clause. `Tp.effects` stores that closure in
+        // an unannotated record, and the importing module reads the field back
+        // out and calls it. Calling the closure through the imported record
+        // must run `send`, so this evaluates to "hi!".
+        .name = "issue 11099: where-clause closure read out of a record in an imported module",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Tp",
+            .source =
+            \\Tp := [].{
+            \\    effects = { send: send }
+            \\
+            \\    send = |x| x.concat("!")
+            \\}
+            ,
+        }},
+        .source =
+        \\import Tp
+        \\
+        \\main = {
+        \\    s = Tp.effects.send
+        \\    s("hi")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi!\"" },
+    },
 };

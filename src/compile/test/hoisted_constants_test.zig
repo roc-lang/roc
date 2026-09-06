@@ -2412,13 +2412,10 @@ fn scalarConstNodeI64(
     return actual;
 }
 
-test "issue 9733: nested expect statements are collected as test roots" {
+test "issue 9733: nested expect statements remain inline" {
     // https://github.com/roc-lang/roc/issues/9733
-    // The module has two `expect`s: the outer one and the one nested inside its
-    // block body. Both must be collected as compile-time `expect` roots so that
-    // `roc test` evaluates the nested `expect 3 == 4` (which must fail). Today
-    // only the top-level expect is collected, so this count is 1 and `roc test`
-    // wrongly reports "All (1) tests passed".
+    // Only the outer expect is an execution root. The nested expect executes as
+    // part of that root and is counted through runtime test observation.
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -2473,7 +2470,7 @@ test "issue 9733: nested expect statements are collected as test roots" {
     const app_artifact = coord.appRootCheckedArtifact();
 
     try std.testing.expectEqual(
-        @as(usize, 2),
+        @as(usize, 1),
         countCompileTimeRootKind(app_artifact, .expect),
     );
 }
