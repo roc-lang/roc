@@ -109,6 +109,18 @@ pub fn renderReportWithConfig(report: *const Report, writer: *std.Io.Writer, con
     }
 }
 
+/// Remove trailing line breaks from an owned rendered report.
+///
+/// This consumes `rendered`, including on allocation failure. Keeping this
+/// presentation-specific byte handling in reporting lets compiler stages
+/// consume the rendered result without inspecting or manipulating its bytes.
+pub fn trimOwnedTrailingLineBreaks(allocator: Allocator, rendered: []u8) Allocator.Error![]u8 {
+    errdefer allocator.free(rendered);
+    const trimmed = std.mem.trimEnd(u8, rendered, "\r\n");
+    if (trimmed.len == rendered.len) return rendered;
+    return try allocator.realloc(rendered, trimmed.len);
+}
+
 /// Render a report to terminal with color support.
 pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     try renderReportToTerminalLayout(report, writer, palette, config);

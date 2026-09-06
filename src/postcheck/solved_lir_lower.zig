@@ -184,11 +184,13 @@ pub fn run(
     errdefer lowerer.deinit();
 
     try lowerer.result.store.setSourceFiles(owned.lifted.sourceFiles());
+    try lowerer.prepareExpectSites();
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
     try lowerer.writeRuntimeSchemas();
+    lowerer.result.finishExpectSites();
     if (builtin.mode == .Debug) {
         try lowerer.verifyMaterializedDecisions();
     }
@@ -499,6 +501,7 @@ const Lowerer = struct {
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
     inline_scope_outer: LIR.InlineScopeId = .none,
     inline_expects: InlineExpectMode,
+    observe_expects: bool,
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
     proc_debug_names: bool,
@@ -726,6 +729,7 @@ const Lowerer = struct {
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
+            .observe_expects = options.test_plan_metadata.len != 0,
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .proc_debug_names = options.proc_debug_names,
@@ -2687,6 +2691,30 @@ const Lowerer = struct {
         }, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
+    }
+
+    fn prepareExpectSites(self: *Lowerer) Common.LowerError!void {
+        if (!self.observe_expects) return;
+        for (self.solved.lifted.exprsView(), 0..) |expr, index| {
+            if (std.meta.activeTag(expr.data) != .expect) continue;
+            const id: Lifted.ExprId = @enumFromInt(@as(u32, @intCast(index)));
+            const loc = self.solved.lifted.exprLoc(id);
+            if (!loc.hasLocation()) Common.invariant("test-plan expect expression has no source location");
+            _ = try self.result.addExpectSite(loc, self.solved.lifted.exprRegion(id));
+        }
+        for (self.solved.lifted.stmtsView(), 0..) |stmt, index| {
+            if (std.meta.activeTag(stmt) != .expect) continue;
+            const id: Lifted.StmtId = @enumFromInt(@as(u32, @intCast(index)));
+            const loc = self.solved.lifted.stmtLoc(id);
+            if (!loc.hasLocation()) Common.invariant("test-plan expect statement has no source location");
+            _ = try self.result.addExpectSite(loc, self.solved.lifted.stmtRegion(id));
+        }
+    }
+
+    fn expectSite(self: *const Lowerer) ?LIR.ExpectSiteId {
+        if (!self.observe_expects) return null;
+        if (self.result.findExpectSite(self.result.store.current_loc, self.result.store.current_region)) |site| return site;
+        Common.invariant("test-plan expect has no prepared observation site");
     }
 
     fn writeFrameLocals(self: *Lowerer, locals: *ProcLocalSet) Common.LowerError!LIR.LocalSpan {
@@ -6648,7 +6676,11 @@ const Lowerer = struct {
 
     fn lowerExpectStmt(self: *Lowerer, child: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const cond = try self.addTemp(try self.lowerExprTy(child));
-        const expect_stmt = try self.result.store.addCFStmt(.{ .expect = .{ .condition = cond, .next = next } });
+        const expect_stmt = try self.result.store.addCFStmt(.{ .expect = .{
+            .condition = cond,
+            .site = self.expectSite(),
+            .next = next,
+        } });
         return try self.lowerExprInto(cond, child, expect_stmt);
     }
 

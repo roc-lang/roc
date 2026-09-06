@@ -1946,7 +1946,7 @@ fn renderAstDiagnostics(
     }
 
     const raw = try out.toOwnedSlice();
-    return trimOwnedRight(self.allocator, raw);
+    return reporting.trimOwnedTrailingLineBreaks(self.allocator, raw);
 }
 
 fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
@@ -1961,15 +1961,7 @@ fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_
     errdefer out.deinit();
     try reporting.renderReportWithConfig(&report, &out.writer, report_config);
     const raw = try out.toOwnedSlice();
-    return trimOwnedRight(self.allocator, raw);
-}
-
-fn trimOwnedRight(allocator: Allocator, raw: []u8) Allocator.Error![]u8 {
-    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
-    if (trimmed.len == raw.len) return raw;
-    const result = try allocator.dupe(u8, trimmed);
-    allocator.free(raw);
-    return result;
+    return reporting.trimOwnedTrailingLineBreaks(self.allocator, raw);
 }
 
 /// Whether a REPL line binds a name or is evaluated for its value.

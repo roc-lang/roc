@@ -105,6 +105,7 @@ const ExprNodeTag = enum {
     method_call,
     tuple_access,
     arrow_call,
+    arrow_method_call,
     lambda,
     apply,
     suffix_single_question,
@@ -1196,7 +1197,10 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @intFromEnum(ta.expr);
         },
         .arrow_call => |ld| {
-            node.tag = .arrow_call;
+            node.tag = switch (ld.target_kind) {
+                .ordinary => .arrow_call,
+                .method_call => .arrow_method_call,
+            };
             node.region = ld.region;
             node.main_token = ld.operator;
             node.data.lhs = @intFromEnum(ld.left);
@@ -2482,6 +2486,16 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
                 .region = node.region,
+                .target_kind = .ordinary,
+            } };
+        },
+        .arrow_method_call => {
+            return .{ .arrow_call = .{
+                .left = @enumFromInt(node.data.lhs),
+                .right = @enumFromInt(node.data.rhs),
+                .operator = node.main_token,
+                .region = node.region,
+                .target_kind = .method_call,
             } };
         },
         .lambda => {

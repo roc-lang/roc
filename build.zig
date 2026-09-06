@@ -2509,6 +2509,47 @@ fn buildAndCopyStrongIntrinsicWasmHostObject(
     return &copy_step.step;
 }
 
+/// Build the minimal wasm host shared by the `exports:` fixtures, whose
+/// platform headers differ only in what they declare in that field.
+fn buildAndCopyExportsFixtureWasmHostObject(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+) *Step {
+    const obj = b.addObject(.{
+        .name = "exports_fixture_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/wasm/issue_10951_wasm_exports/wasm_host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    configureBackend(obj, target);
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
+    obj.bundle_compiler_rt = false;
+
+    const copy_step = b.addUpdateSourceFiles();
+    copy_step.addCopyFileToSource(
+        obj.getEmittedBin(),
+        "test/wasm/issue_10951_wasm_exports/missing_exports/platform/targets/wasm32/host.wasm",
+    );
+    copy_step.addCopyFileToSource(
+        obj.getEmittedBin(),
+        "test/wasm/issue_10951_wasm_exports/unknown_export/platform/targets/wasm32/host.wasm",
+    );
+    copy_step.addCopyFileToSource(
+        obj.getEmittedBin(),
+        "test/wasm/issue_10951_wasm_exports/empty_exports/platform/targets/wasm32/host.wasm",
+    );
+    return &copy_step.step;
+}
+
 // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
 const FixArchivePaddingStep = struct {
     step: Step,
@@ -2837,6 +2878,13 @@ fn setupTestPlatforms(
     );
     clear_cache_step.dependOn(wasm_host_step);
     clear_cache_step.dependOn(buildAndCopyStrongIntrinsicWasmHostObject(
+        b,
+        wasm_target,
+        optimize,
+        strip,
+        omit_frame_pointer,
+    ));
+    clear_cache_step.dependOn(buildAndCopyExportsFixtureWasmHostObject(
         b,
         wasm_target,
         optimize,

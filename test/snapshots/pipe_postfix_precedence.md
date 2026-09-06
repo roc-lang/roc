@@ -66,14 +66,13 @@ EndOfFile,
 ~~~clojure
 (e-tuple
 	(elems
-		(e-call
-			(e-method-call (method "blah")
-				(receiver
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope"))))
-				(args))
-			(e-runtime-error (tag "ident_not_in_scope")))
+		(e-method-call (method "blah")
+			(receiver
+				(e-call
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(args
+				(e-runtime-error (tag "ident_not_in_scope"))))
 		(e-method-call (method "blah")
 			(receiver
 				(e-call

@@ -257,6 +257,8 @@ const ExprParentKind = enum(u16) {
     expr_collection_item = 0x8375,
     expr_arrow_inner = 0x2edb,
     expr_pipe_rhs = 0x6c71,
+    expr_pipe_rhs_requires_method = 0xa4c8,
+    expr_pipe_rhs_method_call = 0x31ef,
     expr_pipe_inner = 0x9a24,
     expr_record_ext = 0xf61a,
     expr_record_field = 0x705e,
@@ -2836,6 +2838,24 @@ const OpenSyntaxStack = struct {
         return peekKind(ExprParentKind, &self.expr_kinds);
     }
 
+    inline fn peekExprIsPipeRhs(self: *const OpenSyntaxStack) bool {
+        const kind = self.peekExpr() orelse return false;
+        return kind == .expr_pipe_rhs or
+            kind == .expr_pipe_rhs_requires_method or
+            kind == .expr_pipe_rhs_method_call;
+    }
+
+    inline fn notePipeMethodCall(self: *OpenSyntaxStack) void {
+        if (!self.peekExprIsPipeRhs()) return;
+        self.expr_kinds.items[self.expr_kinds.items.len - 1] = .expr_pipe_rhs_method_call;
+    }
+
+    inline fn notePipeNonMethodPostfix(self: *OpenSyntaxStack) void {
+        if (self.peekExpr() == .expr_pipe_rhs_method_call) {
+            self.expr_kinds.items[self.expr_kinds.items.len - 1] = .expr_pipe_rhs;
+        }
+    }
+
     inline fn peekPattern(self: *const OpenSyntaxStack) ?PatternParentKind {
         return peekKind(PatternParentKind, &self.pattern_kinds);
     }
@@ -3742,7 +3762,7 @@ fn runExprStatementKernel(
 
             // Trivia-separated postfixes apply to the completed pipe; adjacent
             // NoSpaceDot* postfixes remain part of the pipe target.
-            if (open_syntax.peekExpr() == .expr_pipe_rhs and
+            if (open_syntax.peekExprIsPipeRhs() and
                 (tok == .DotInt or tok == .DotLowerIdent or tok == .DotQuestionLowerIdent))
             {
                 last_expr = expr_finish_state.expr;
@@ -3750,6 +3770,7 @@ fn runExprStatementKernel(
             }
 
             if (tok == .Dot and self.peekN(1) == .OpenCurly) {
+                open_syntax.notePipeNonMethodPostfix();
                 const record_start = self.pos + 1;
                 self.advance();
                 self.advance();
@@ -3786,6 +3807,7 @@ fn runExprStatementKernel(
             // unconsumed so it surfaces as a parse error instead of a construction
             // node canonicalization would only reject.
             if (tok == .Dot and self.peekN(1) == .NoSpaceOpenRound and self.store.getExpr(expr_finish_state.expr) == .tag) {
+                open_syntax.notePipeNonMethodPostfix();
                 self.advance();
                 self.advance();
                 try expr_collections.enter(open_allocator, .{
@@ -3805,6 +3827,7 @@ fn runExprStatementKernel(
 
             if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
                 if (tok_int >= @intFromEnum(Token.Tag.DotInt) and tok_int <= @intFromEnum(Token.Tag.NoSpaceDotInt)) {
+                    open_syntax.notePipeNonMethodPostfix();
                     const elem_token = self.pos;
                     self.advance();
                     expr_finish_state.expr = try self.store.addExpr(.{ .tuple_access = .{
@@ -3840,9 +3863,11 @@ fn runExprStatementKernel(
                         .{ .field_token = s, .mode = .required },
                         .{ .start = expr_finish_state.start, .end = self.pos },
                     );
+                    open_syntax.notePipeNonMethodPostfix();
                     continue :expr_kernel .suffix;
                 }
                 if (tok_int >= @intFromEnum(Token.Tag.DotQuestionLowerIdent) and tok_int <= @intFromEnum(Token.Tag.NoSpaceDotQuestionLowerIdent)) {
+                    open_syntax.notePipeNonMethodPostfix();
                     const field_token = self.pos;
                     self.advance();
                     expr_finish_state.expr = try self.store.addOrExtendFieldAccess(
@@ -3885,7 +3910,7 @@ fn runExprStatementKernel(
             } else if (tok == .OpPizza) {
                 // A pipe RHS owns its complete postfix chain. Stop before the
                 // next pipe so pipe chains remain left-associative.
-                if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                if (open_syntax.peekExprIsPipeRhs()) {
                     last_expr = expr_finish_state.expr;
                     continue :expr_kernel .complete;
                 }
@@ -3893,13 +3918,20 @@ fn runExprStatementKernel(
                 const op_pos = self.pos;
                 self.advance();
                 const first_token_tag = self.peek();
-                if (first_token_tag != .LowerIdent and first_token_tag != .UpperIdent and first_token_tag != .OpenRound and first_token_tag != .NoSpaceOpenRound) {
+                const literal_receiver_start = first_token_tag == .Int or
+                    first_token_tag == .Float or
+                    first_token_tag == .StringStart or
+                    first_token_tag == .MultilineStringStart or
+                    first_token_tag == .SingleQuote or
+                    first_token_tag == .OpenSquare or
+                    first_token_tag == .OpenCurly;
+                if (first_token_tag != .LowerIdent and first_token_tag != .UpperIdent and first_token_tag != .OpenRound and first_token_tag != .NoSpaceOpenRound and !literal_receiver_start) {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .expr_pipe_expects_ident, self.pos);
                     expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;
                 }
 
-                try open_syntax.pushExpr(open_allocator, .expr_pipe_rhs, ExprPipeAfterRhsState, .{
+                try open_syntax.pushExpr(open_allocator, if (literal_receiver_start) .expr_pipe_rhs_requires_method else .expr_pipe_rhs, ExprPipeAfterRhsState, .{
                     .start = expr_finish_state.start,
                     .min_bp = expr_finish_state.min_bp,
                     .left = expr_finish_state.expr,
@@ -3928,6 +3960,11 @@ fn runExprStatementKernel(
                         } });
                     expr_finish_state = .{ .start = ident_start, .min_bp = 100, .expr = rhs };
                     continue :expr_kernel .suffix;
+                }
+
+                if (literal_receiver_start) {
+                    expr_state = .{ .start = self.pos, .min_bp = 100 };
+                    continue :expr_kernel .prefix;
                 }
 
                 // Like the legacy arrow, parentheses around a pipe target are
@@ -3969,6 +4006,7 @@ fn runExprStatementKernel(
             } else if (tok_int < @intFromEnum(Token.Tag.NoSpaceOpQuestion)) {
                 // Not an expression suffix.
             } else if (tok == .NoSpaceOpQuestion) {
+                open_syntax.notePipeNonMethodPostfix();
                 self.advance();
                 expr_finish_state.expr = try self.store.addExpr(.{ .suffix_single_question = .{
                     .expr = expr_finish_state.expr,
@@ -3991,7 +4029,7 @@ fn runExprStatementKernel(
             } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
                 // Unlike `->`, `|>` parses postfix access/call syntax as part
                 // of its RHS. An arrow after that RHS starts outside the pipe.
-                if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                if (open_syntax.peekExprIsPipeRhs()) {
                     last_expr = expr_finish_state.expr;
                     continue :expr_kernel .complete;
                 }
@@ -4113,7 +4151,35 @@ fn runExprStatementKernel(
                             .operator = state.operator,
                             .left = state.left,
                             .right = completed,
+                            .target_kind = .ordinary,
                         } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_pipe_rhs_method_call => {
+                        const state = open_syntax.popExprPayload(.expr_pipe_rhs_method_call, ExprPipeAfterRhsState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .arrow_call = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .operator = state.operator,
+                            .left = state.left,
+                            .right = completed,
+                            .target_kind = .method_call,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_pipe_rhs_requires_method => {
+                        const state = open_syntax.popExprPayload(.expr_pipe_rhs_requires_method, ExprPipeAfterRhsState);
+                        last_expr = null;
+                        try self.pushDiagnostic(.expr_pipe_expects_ident, .{
+                            .start = state.operator + 1,
+                            .end = state.operator + 2,
+                        });
+                        const expr = try self.store.addMalformed(AST.Expr.Idx, .expr_pipe_expects_ident, .{
+                            .start = state.start,
+                            .end = self.pos,
+                        });
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
@@ -4556,9 +4622,10 @@ fn runExprStatementKernel(
                                 .region = .{ .start = apply_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            open_syntax.notePipeNonMethodPostfix();
                             // A direct target call makes the following `?` apply
                             // to the completed pipe rather than to its RHS.
-                            if (self.peek() == .NoSpaceOpQuestion and open_syntax.peekExpr() == .expr_pipe_rhs) {
+                            if (self.peek() == .NoSpaceOpQuestion and open_syntax.peekExprIsPipeRhs()) {
                                 last_expr = expr;
                                 continue :expr_kernel .complete;
                             }
@@ -4573,6 +4640,7 @@ fn runExprStatementKernel(
                                 .region = .{ .start = method_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            open_syntax.notePipeMethodCall();
                             expr_finish_state = .{ .start = method_state.start, .min_bp = method_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
@@ -4583,6 +4651,7 @@ fn runExprStatementKernel(
                                 .region = .{ .start = nominal_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            open_syntax.notePipeNonMethodPostfix();
                             expr_finish_state = .{ .start = nominal_state.start, .min_bp = nominal_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },

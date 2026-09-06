@@ -828,6 +828,7 @@ test "NodeStore round trip - Expr" {
             .right = rand_idx(random, AST.Expr.Idx),
             .operator = rand_token_idx(random),
             .region = rand_region(random),
+            .target_kind = if (random.boolean()) .method_call else .ordinary,
         },
     });
     try expressions.append(gpa, AST.Expr{

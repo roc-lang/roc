@@ -1779,11 +1779,14 @@ const Formatter = struct {
                     .for_expr,
                     .malformed,
                     => {
-                        // A pipe target can start with a name or grouping
-                        // parenthesis. Postfix chains rooted in a name are
-                        // therefore safe without grouping; all other ASTs need
-                        // parentheses so migrating `->` preserves valid syntax.
-                        const needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(ld.right);
+                        // Method-insertion syntax is intentionally ungrouped.
+                        // Ordinary complete method calls stay grouped so they
+                        // continue to mean "call the method result." Other ASTs
+                        // follow the general pipe-target grammar.
+                        const needs_parens = switch (ld.target_kind) {
+                            .method_call => false,
+                            .ordinary => right_expr == .method_call or !fmt.exprCanStartPipeTargetUnparenthesized(ld.right),
+                        };
                         if (needs_parens) {
                             try fmt.formatPipeTargetParens(ld.right, right_expr == .multiline_string or right_expr == .typed_multiline_string);
                         } else {
@@ -3607,7 +3610,7 @@ const Formatter = struct {
                         try fmt.newline();
                     }
                 } else if (!fmt.has_newline) {
-                    try fmt.push(' ');
+                    fmt.setInlineCommentSeparator();
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
@@ -3683,7 +3686,7 @@ const Formatter = struct {
                 if (newline_count > 0 or fmt.has_newline) {
                     try fmt.pushIndent();
                 } else {
-                    try fmt.push(' ');
+                    fmt.setInlineCommentSeparator();
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
@@ -3726,6 +3729,11 @@ const Formatter = struct {
 
         // Return true if there was a newline, whether or not there was a comment
         return newline_count > 0;
+    }
+
+    inline fn setInlineCommentSeparator(fmt: *Formatter) void {
+        std.debug.assert(!fmt.has_newline);
+        fmt.pending_spaces = 1;
     }
 
     fn push(fmt: *Formatter, c: u8) error{WriteFailed}!void {
@@ -4921,6 +4929,26 @@ test "pipe owns the postfix chain on its right" {
     try std.testing.expectEqualStrings("a = foo |> bar(baz).blah()\n", result);
 }
 
+test "literal method pipe targets and grouped result calls format stably" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=[1,2,3]|>[1].concat()
+        \\b=1|>1.plus()
+        \\c="roc "|>"and roll".with_prefix()
+        \\d=x|>(receiver.method())
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = [1, 2, 3] |> [1].concat()\n" ++
+            "\n" ++
+            "b = 1 |> (1).plus()\n" ++
+            "\n" ++
+            "c = \"roc \" |> \"and roll\".with_prefix()\n" ++
+            "\n" ++
+            "d = x |> (receiver.method())\n",
+        result,
+    );
+}
+
 test "formatter preserves an old arrow's postfix grouping during migration" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=foo->bar(baz).blah()", false);
     defer std.testing.allocator.free(result);
@@ -4956,6 +4984,15 @@ test "pipe keeps comments from removed empty argument lists" {
             "\tfoo\n",
         result,
     );
+}
+
+test "issue 11043: parenthesized pipe target with a comment-only argument list is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/11043
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\t=0|>(0)(#
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
 }
 
 test "multiline pipes start indented lines" {

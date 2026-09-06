@@ -711,6 +711,11 @@ pub const SchemeUseRecord = extern struct {
         /// The edge shares the definition's vars, so its record has no copy
         /// pairs but still names the exact scheme root used by checking.
         shared_value_use,
+        /// Producer-authored provenance for a reference to a definition in an
+        /// on-stack recursive binding group. This record carries no evidence
+        /// or substitution of its own; an accompanying value/shared use owns
+        /// those facts when the referenced scheme has quantified variables.
+        recursive_reference,
     };
 };
 

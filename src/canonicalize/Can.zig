@@ -11958,6 +11958,40 @@ fn runExprKernel(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const free_vars_start = self.scratch_free_vars.top();
                     const right_expr = self.parse_ir.store.getExpr(e.right);
+                    if (e.target_kind == .method_call) {
+                        if (right_expr != .method_call) unreachable;
+                        const method = right_expr.method_call;
+                        const method_name = self.parse_ir.tokens.resolveIdentifier(method.method_token) orelse {
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                                .region = region,
+                            } });
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        };
+
+                        const raw_method_region = self.parse_ir.tokens.resolve(method.method_token);
+                        const method_name_region = if (raw_method_region.end.offset > raw_method_region.start.offset)
+                            Region{ .start = .{ .offset = raw_method_region.start.offset + 1 }, .end = raw_method_region.end }
+                        else
+                            raw_method_region;
+
+                        const args_slice = self.parse_ir.store.exprSlice(method.args);
+                        try stacks.pushFinishMethodCall(frame_allocator, .{
+                            .region = region,
+                            .free_vars_start = free_vars_start,
+                            .method_name = method_name,
+                            .method_name_region = method_name_region,
+                            .arg_count = args_slice.len + 1,
+                        });
+                        var i = args_slice.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
+                        }
+                        try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
+                        try stacks.pushParse(frame_allocator, .{ .idx = method.receiver, .target = .scratch });
+                        continue :expr_kernel_loop .dispatch;
+                    }
                     if (right_expr == .apply) {
                         const apply = right_expr.apply;
                         const ast_fn = self.parse_ir.store.getExpr(apply.@"fn");
