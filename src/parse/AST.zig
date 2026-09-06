@@ -1700,22 +1700,23 @@ pub const BinOp = struct {
     }
 };
 
-/// A pipe whose target is an attached method call. The piped expression is
-/// supplied as the method's first explicit argument.
-pub const PipeMethodCall = struct {
+/// Records the syntactic interpretation of a pipe target. This distinction is
+/// intentionally made by the parser: canonicalization must not infer pipe
+/// semantics from the shape of the right-hand expression.
+pub const PipeTargetKind = enum {
+    ordinary,
+    method_call,
+};
+
+/// A pipe expression and the parser's final syntactic interpretation of its
+/// target.
+pub const ArrowCall = struct {
     left: Expr.Idx,
-    receiver: Expr.Idx,
-    call_data_idx: u32,
-    region: TokenizedRegion,
-};
-
-/// Tokens and arguments stored out of line for a compact pipe-method node.
-pub const PipeMethodCallDetails = struct {
-    args: Expr.Span,
+    right: Expr.Idx,
     operator: Token.Idx,
-    method_token: Token.Idx,
+    region: TokenizedRegion,
+    target_kind: PipeTargetKind = .ordinary,
 };
-
 /// Whether a record-field access segment requires the field to be present or
 /// queries a runtime-optional field.
 pub const FieldAccessMode = enum(u8) {
@@ -2913,7 +2914,7 @@ pub const Expr = union(enum) {
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },
-    arrow_call: BinOp,
+    arrow_call: ArrowCall,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,

@@ -322,7 +322,7 @@ const DemandAnalyzer = struct {
                     const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @enumFromInt(record.node_idx));
                     if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
                 },
-                .nested_function_use, .dispatch_target => {},
+                .nested_function_use, .dispatch_target, .recursive_reference => {},
             }
         }
 

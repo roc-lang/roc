@@ -168,11 +168,16 @@ pub const Constants = struct {
     ///     value (new diagnostic).
     /// 75: Checked dispatch data drops symbolic constraint-callable evidence
     ///     and records recursive resolved references explicitly.
-    /// 76: CIR has an explicit mutable-binder pattern and binding-name warning
+    /// 76: Scheme uses record their substitution; schemes record their
+    ///     quantified variables and each evidence parameter its slot.
+    /// 77: Evidence parameters record their constraint callable type.
+    /// 78: Procedure templates record their root evidence.
+    /// 79: Recursive-reference provenance is separate from shared scheme uses.
+    /// 80: CIR has an explicit mutable-binder pattern and binding-name warning
     ///     diagnostic node tags.
-    /// 77: Stored functions retain callable-path dispatch evidence across
+    /// 81: Stored functions retain callable-path dispatch evidence across
     ///     reusable compile-time values.
-    pub const CACHE_VERSION = 77;
+    pub const CACHE_VERSION = 81;
 };
 
 /// Configuration for the Roc cache system.
