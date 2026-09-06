@@ -1717,6 +1717,7 @@ pub const ArrowCall = struct {
     region: TokenizedRegion,
     target_kind: PipeTargetKind = .ordinary,
 };
+
 /// Whether a record-field access segment requires the field to be present or
 /// queries a runtime-optional field.
 pub const FieldAccessMode = enum(u8) {

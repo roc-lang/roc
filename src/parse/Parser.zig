@@ -3938,6 +3938,19 @@ fn runExprStatementKernel(
                     .operator = op_pos,
                 });
 
+                if (first_token_tag == .LowerIdent and self.peekN(1) != .NoSpaceDotUpperIdent) {
+                    const ident_start = self.pos;
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    self.advance();
+                    const rhs = try self.store.addExpr(.{ .ident = .{
+                        .region = .{ .start = ident_start, .end = self.pos },
+                        .token = ident_start,
+                        .qualifiers = empty_qualifiers,
+                    } });
+                    expr_finish_state = .{ .start = ident_start, .min_bp = 100, .expr = rhs };
+                    continue :expr_kernel .suffix;
+                }
+
                 if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
                     const ident_start = self.pos;
                     const qual_result = try self.readQualificationChain(.expression_value_boundary);

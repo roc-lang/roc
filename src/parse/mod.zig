@@ -381,6 +381,31 @@ test "grouping a complete pipe target method call preserves result-call semantic
     try std.testing.expectEqual(AST.PipeTargetKind.ordinary, ast.store.getExpr(items[1]).arrow_call.target_kind);
 }
 
+test "lowercase pipe receiver method is not parsed as a qualified value" {
+    const gpa = std.testing.allocator;
+    const source = "(value |> receiver.method(), value |> pkg.Mod.fn())";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const tuple = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).tuple;
+    const items = ast.store.exprSlice(tuple.items);
+
+    const method_pipe = ast.store.getExpr(items[0]).arrow_call;
+    try std.testing.expectEqual(AST.PipeTargetKind.method_call, method_pipe.target_kind);
+    try std.testing.expectEqual(.method_call, std.meta.activeTag(ast.store.getExpr(method_pipe.right)));
+
+    const qualified_pipe = ast.store.getExpr(items[1]).arrow_call;
+    try std.testing.expectEqual(AST.PipeTargetKind.ordinary, qualified_pipe.target_kind);
+    try std.testing.expectEqual(.apply, std.meta.activeTag(ast.store.getExpr(qualified_pipe.right)));
+}
+
 test "grouped pipe target ending in a field access starts a new suffix path" {
     const gpa = std.testing.allocator;
 

@@ -1708,6 +1708,9 @@ const Formatter = struct {
                         const apply_fn_idx = apply.@"fn";
                         const apply_fn = fmt.ast.store.getExpr(apply_fn_idx);
                         const args = fmt.ast.store.exprSlice(apply.args);
+                        const fn_is_call = apply_fn == .apply or
+                            apply_fn == .method_call or
+                            apply_fn == .nominal_apply;
 
                         // A direct empty argument list contributes no arguments
                         // beyond the piped value. Remove it unless a following
@@ -1715,7 +1718,7 @@ const Formatter = struct {
                         // doing so would expose another application as the RHS.
                         // (`value |> make()()` must remain distinct from
                         // `value |> make()`.)
-                        if (args.len == 0 and apply_fn != .apply and !format_context.question_suffix_follows) {
+                        if (args.len == 0 and !fn_is_call and !format_context.question_suffix_follows) {
                             const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
                             const closing_token = right_region.end - 1;
                             if (fmt.hasCommentBefore(closing_token) and try fmt.flushCommentsBefore(closing_token)) {
@@ -4959,6 +4962,26 @@ test "pipe drops direct empty target argument lists" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=(x|>foo(),x|>Ok(),x|>(|v|v)())", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = (x |> foo, x |> Ok, x |> (|v| v))\n", result);
+}
+
+test "issue 11045: pipe keeps empty argument lists on method targets" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\my_const = []
+        \\
+        \\_ = [1, 2, 3] |> my_const.concat()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "my_const = []\n\n" ++
+            "_ = [1, 2, 3] |> my_const.concat()\n",
+        result,
+    );
+}
+
+test "pipe keeps an empty target application after a method call" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=x|>receiver.method()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = x |> receiver.method()()\n", result);
 }
 
 test "pipe keeps comments from removed empty argument lists" {

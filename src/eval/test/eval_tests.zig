@@ -1279,6 +1279,27 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        .name = "pipe supplies the first explicit method argument",
+        .source_kind = .module,
+        .source =
+        \\Holder := { n : I64 }.{
+        \\    add : Holder, I64 -> I64
+        \\    add = |holder, value| holder.n + value
+        \\
+        \\    sum : Holder, I64, I64 -> I64
+        \\    sum = |holder, left, right| holder.n + left + right
+        \\
+        \\    make_adder : Holder -> (I64 -> I64)
+        \\    make_adder = |holder| |value| holder.n + value
+        \\}
+        \\
+        \\holder = Holder.{ n: 3 }
+        \\
+        \\main = (2 |> holder.add(), 2 |> holder.sum(4), 2 |> holder.sum(4) + 1, 2 |> holder.make_adder()())
+        ,
+        .expected = .{ .inspect_str = "(5, 9, 10, 5)" },
+    },
+    .{
         .name = "whitespace-separated postfix applies to completed pipe",
         .source_kind = .module,
         .source =
