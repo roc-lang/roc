@@ -585,6 +585,7 @@ pub const InstGraph = struct {
     /// upstream generated-private arguments; retaining that producer node is
     /// what lets the callee instantiate those relations without reconstruction.
     request_source_interfaces: std.ArrayList(?NodeId),
+    constructor_evidence_requests: std.ArrayList(bool),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
@@ -670,6 +671,7 @@ pub const InstGraph = struct {
             .nominal_backing_collisions = .empty,
             .processing_nominal_backing_collisions = false,
             .request_source_interfaces = .empty,
+            .constructor_evidence_requests = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
             .containment_pending = .empty,
@@ -729,6 +731,7 @@ pub const InstGraph = struct {
         self.nominal_backing_instances.deinit(allocator);
         self.nominal_backing_index.deinit();
         self.request_source_interfaces.deinit(allocator);
+        self.constructor_evidence_requests.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
@@ -1000,6 +1003,17 @@ pub const InstGraph = struct {
     pub fn requestSourceInterface(self: *InstGraph, request_fn: NodeId) ?NodeId {
         const source_fn = self.request_source_interfaces.items[@intFromEnum(request_fn)] orelse return null;
         return self.find(source_fn);
+    }
+
+    pub fn registerConstructorEvidenceRequest(self: *InstGraph, request_fn: NodeId) void {
+        self.requireRelationProduction();
+        self.constructor_evidence_requests.items[@intFromEnum(request_fn)] = true;
+        self.constructor_evidence_requests.items[@intFromEnum(self.find(request_fn))] = true;
+    }
+
+    pub fn requestPropagatesConstructorEvidence(self: *InstGraph, request_fn: NodeId) bool {
+        return self.constructor_evidence_requests.items[@intFromEnum(request_fn)] or
+            self.constructor_evidence_requests.items[@intFromEnum(self.find(request_fn))];
     }
 
     pub fn findGeneratedIterator(
@@ -1812,6 +1826,7 @@ pub const InstGraph = struct {
         try self.class_member_tail.append(self.allocator, id);
         try self.containment_visit_epochs.append(self.allocator, 0);
         try self.request_source_interfaces.append(self.allocator, null);
+        try self.constructor_evidence_requests.append(self.allocator, false);
         self.countDiagnostic("nodes_created");
         return id;
     }
@@ -3846,6 +3861,9 @@ pub const InstGraph = struct {
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         const winner_content = self.nodes.items[@intFromEnum(winner)];
         const loser_content = self.nodes.items[@intFromEnum(loser)];
+        self.constructor_evidence_requests.items[@intFromEnum(winner)] =
+            self.constructor_evidence_requests.items[@intFromEnum(winner)] or
+            self.constructor_evidence_requests.items[@intFromEnum(loser)];
         const joins_nominal_with_structural = winner_content != .unresolved and loser_content != .unresolved and
             (winner_content == .named) != (loser_content == .named);
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };

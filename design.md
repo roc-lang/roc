@@ -4110,10 +4110,23 @@ producer-aware value relation. It never merges the child into the corresponding
 public slot or asks a later consumer to recover the child's runtime
 representation from the public container shape.
 
+`Iter.custom` marks its exact transition-function request with the capability
+to propagate constructor-carried representation evidence. That capability is
+consumed directly while lowering the transition and inherited by its nested
+body contexts; ordinary call and control-flow lowering do not infer it from a
+function's graph shape. The seed call and the marked transition may therefore
+carry a private threaded-state component through tuples, records, tags, lists,
+and nominal backings without making constructor inspection global to unrelated
+calls. If a control-flow prepass cannot see a private result before emission,
+the first exact private branch upgrades the selection and all already-emitted
+inhabited branches are retagged with that validated selection before the
+control-flow expression is finalized.
+
 Call specialization and control-flow result selection consume that same exact
-constructor witness before code emission. They propagate producer evidence by
-the constructor's explicit field, payload, item, or backing positions; equal
-checked type identities elsewhere do not participate. In particular,
+constructor witness where the producer granted the capability. They propagate
+producer evidence by the constructor's explicit field, payload, item, or
+backing positions; equal checked type identities elsewhere do not participate.
+In particular,
 `Iter.custom` binds the transition callable's input state and successful
 next-state result to the seed's exact witness. An iterator stored in custom
 state therefore keeps one representation through the initial seed, each

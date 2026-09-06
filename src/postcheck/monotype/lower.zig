@@ -16083,6 +16083,7 @@ const BodyContext = struct {
     /// If any argument finalizes as uninhabited, the body is unreachable.
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
+    propagate_constructor_value_evidence: bool = false,
     /// Exact return cell owned by the active checked lambda specialization.
     /// Source `return` expressions must consume this cell rather than create a
     /// new instantiation of the lambda's checked return type.
@@ -18558,6 +18559,7 @@ const BodyContext = struct {
         child.active_const_binding = self.active_const_binding;
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
+        child.propagate_constructor_value_evidence = self.propagate_constructor_value_evidence;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
         child.in_default_expr = self.in_default_expr;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
@@ -21480,6 +21482,11 @@ const BodyContext = struct {
         const fn_nodes = try self.graph.functionNodes(fn_node);
         if (fn_nodes.args.len != lambda.args.len) Common.invariant("lambda template arity differs from concrete function type");
 
+        const saved_propagation = self.propagate_constructor_value_evidence;
+        defer self.propagate_constructor_value_evidence = saved_propagation;
+        self.propagate_constructor_value_evidence = saved_propagation or
+            self.graph.requestPropagatesConstructorEvidence(fn_node);
+
         const lowered = try self.lowerLambdaArgsAndBodyAtCell(
             lambda_id,
             lambda.args,
@@ -23539,6 +23546,16 @@ const BodyContext = struct {
         };
     }
 
+    fn iteratorCallNeedsConstructorArgumentEvidence(
+        self: *BodyContext,
+        procedure: ?checked.IteratorProcedureId,
+        args: []const checked.CheckedExprId,
+    ) Allocator.Error!bool {
+        if (procedure != .iter_custom) return false;
+        if (args.len != 3) Common.invariant("Iter.custom call did not have three arguments");
+        return try self.graph.containsIteratorInterface(try self.instNode(self.view.bodies.expr(args[0]).ty));
+    }
+
     fn iteratorProcedureForMethodTarget(
         _: *BodyContext,
         target: static_dispatch.MethodTarget,
@@ -24521,6 +24538,7 @@ const BodyContext = struct {
         if (advance_fn.args.len != 1 or !self.graph.sameClass(advance_fn.args[0], state_node)) {
             Common.invariant("Iter.custom advance request lost its exact state argument");
         }
+        self.graph.registerConstructorEvidenceRequest(advance_node);
         return advance_node;
     }
 
@@ -30286,6 +30304,7 @@ const BodyContext = struct {
             call_ctx.in_deferred_body = self.in_deferred_body;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+            const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
             var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
                 source_fn_ty,
                 self,
@@ -30293,8 +30312,8 @@ const BodyContext = struct {
                 call.args,
                 expected_ret_node,
                 try self.hostedTryCapabilityForResolvedTarget(target),
+                try self.iteratorCallNeedsConstructorArgumentEvidence(iterator_procedure, call.args),
             );
-            const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
             if (iterator_procedure) |procedure| {
                 const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
@@ -30377,6 +30396,7 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             null,
+            false,
         );
         const fn_nodes = try self.graph.functionNodes(fn_node);
         try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
@@ -30665,6 +30685,7 @@ const BodyContext = struct {
         checked_args: []const checked.CheckedExprId,
         expected_ret_node: ?NodeId,
         hosted_try_capability: ?HostedTryAdapterCapability,
+        capture_constructor_argument_evidence: bool,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != checked_args.len) {
@@ -30681,15 +30702,19 @@ const BodyContext = struct {
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
         for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-            if (try caller.exprCallArgumentEvidenceNode(checked_arg)) |evidence_node| {
-                if (try self.graph.containsGeneratedPrivate(evidence_node)) {
+            const evidence_node = if (capture_constructor_argument_evidence or caller.propagate_constructor_value_evidence)
+                try caller.exprCallArgumentEvidenceNode(checked_arg)
+            else
+                try caller.exprCallResultEvidenceNode(checked_arg, null);
+            if (evidence_node) |evidence| {
+                if (try self.graph.containsGeneratedPrivate(evidence)) {
                     const public_node = try caller.freshInstNode(arg_ty);
-                    try self.graph.relateOpaqueInterface(public_node, evidence_node);
+                    try self.graph.relateOpaqueInterface(public_node, evidence);
                     try relateRequestComponent(self.graph, formal_node, public_node);
-                    request_args[index] = evidence_node;
+                    request_args[index] = evidence;
                 } else {
                     const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
-                    try relateRequestComponent(self.graph, formal_node, evidence_node);
+                    try relateRequestComponent(self.graph, formal_node, evidence);
                     request_args[index] = request;
                 }
             } else {
@@ -31554,6 +31579,7 @@ const BodyContext = struct {
                 call.args,
                 if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
                 null,
+                false,
             );
             return switch (self.graph.content(fn_node)) {
                 .func => |function| function.ret,
@@ -31599,6 +31625,10 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             try self.hostedTryCapabilityForResolvedTarget(call.direct_target.?),
+            try self.iteratorCallNeedsConstructorArgumentEvidence(
+                self.iteratorProcedureForResolvedTarget(call.direct_target.?),
+                call.args,
+            ),
         );
         if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
             const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
@@ -35313,6 +35343,13 @@ const BodyContext = struct {
             call.args,
             if (hosted_try_capability != null) expected_ret_node else null,
             hosted_try_capability,
+            if (call.direct_target) |target|
+                try self.iteratorCallNeedsConstructorArgumentEvidence(
+                    self.iteratorProcedureForResolvedTarget(target),
+                    call.args,
+                )
+            else
+                false,
         );
         const fn_nodes = try self.graph.functionNodes(fn_node);
         try relateRequestComponent(self.graph, fn_nodes.ret, expected_ret_node);
@@ -50070,6 +50107,13 @@ const BodyContext = struct {
                 try self.includeControlFlowResult(selection, entry.body);
             }
         }
+        if (value_selection) |selection| {
+            for (pending.items) |entry| {
+                if (self.exprImpossibilityProof(entry.body) == null) {
+                    self.draft.exprs.items[@intFromEnum(entry.body)].ty = selection.selected;
+                }
+            }
+        }
 
         const scrutinee = if (try self.nodeIsProvenUninhabited(scrutinee_node))
             try self.lowerUninhabitedScrutineeAtTypeCell(match.cond, scrutinee_cell)
@@ -50635,7 +50679,10 @@ const BodyContext = struct {
                 try self.controlFlowResultEvidenceNode(block.final_expr, expected_node)
             else
                 null,
-            .tuple, .record, .tag, .nominal, .list => try self.exprProducedValueEvidenceNode(checked_value, expected_node),
+            .tuple, .record, .tag, .nominal, .list => if (self.propagate_constructor_value_evidence)
+                try self.exprProducedValueEvidenceNode(checked_value, expected_node)
+            else
+                null,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .empty_list, .match_, .if_, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
@@ -50654,10 +50701,11 @@ const BodyContext = struct {
         const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
         const value_private = try self.graph.containsGeneratedPrivate(value_node);
         if (selected_private != value_private) {
-            if (!selection.has_value and !selected_private and value_private) {
+            if (!selected_private and value_private) {
                 // A finished private producer remains immutable and therefore
                 // cannot merge into the live public accumulator. Carry its
-                // exact cell forward as the request for every later branch.
+                // exact cell forward, then retag earlier branches after the
+                // final representation has been selected.
                 selection.selected = value_cell;
             } else {
                 Common.invariant("control-flow branch could not use its selected runtime representation");
@@ -50816,6 +50864,14 @@ const BodyContext = struct {
         );
         if (value_selection) |selection| {
             try self.includeControlFlowResult(selection, final_else);
+            for (branches) |branch| {
+                if (self.exprImpossibilityProof(branch.body) == null) {
+                    self.draft.exprs.items[@intFromEnum(branch.body)].ty = selection.selected;
+                }
+            }
+            if (self.exprImpossibilityProof(final_else) == null) {
+                self.draft.exprs.items[@intFromEnum(final_else)].ty = selection.selected;
+            }
         }
         return .{ .if_ = .{
             .branches = try self.addIfBranchSpan(branches),
@@ -52397,11 +52453,15 @@ const BodyContext = struct {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
                     try relateRequestComponent(self.graph, formal_node, public_node);
-                    if (try caller.exprCallArgumentEvidenceNode(checked_arg)) |evidence_node| {
+                    const evidence_node = if (caller.propagate_constructor_value_evidence)
+                        try caller.exprCallArgumentEvidenceNode(checked_arg)
+                    else
+                        try caller.exprCallResultEvidenceNode(checked_arg, null);
+                    if (evidence_node) |evidence| {
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
                             public_node,
-                            evidence_node,
+                            evidence,
                             .exact,
                         );
                     } else {
