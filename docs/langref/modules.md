@@ -482,12 +482,14 @@ targets : {
     inputs_dir: "targets/",
     x64linux: { inputs: ["crt1.o", "host.o", app] },
     arm64mac: { inputs: ["host.o", app] },
-    wasm32: { inputs: ["host.wasm", app], output: Shared },
+    wasm32: { inputs: ["host.wasm", app], output: Shared, exports: ["run"] },
 }
 ```
 
 - `inputs_dir`: The directory containing target-specific files within a package `.tar.zst` bundle.
 - Each target entry lists its link `inputs` and an optional `output` kind.
+- Linked WebAssembly targets must list their final host-visible functions in
+  `exports`. Use `exports: []` to export no functions explicitly.
 
 The `output` field declares the artifact kind the target produces:
 

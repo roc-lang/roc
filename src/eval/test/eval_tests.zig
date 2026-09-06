@@ -1258,7 +1258,12 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(3, 3, 2, 2, 2, 2.0, 2.0, Ok(2.0), Ok(2.0))" },
     },
     .{
-        .name = "pipe RHS includes its postfix method chain",
+        .name = "pipe inserts lhs as first explicit method argument",
+        .source = "([1, 2, 3] |> [1].concat(), 1 |> 1.plus(), \"roc \" |> \"and roll\".with_prefix())",
+        .expected = .{ .inspect_str = "([1.0, 1.0, 2.0, 3.0], 2.0, \"roc and roll\")" },
+    },
+    .{
+        .name = "grouped pipe method target calls the method result",
         .source_kind = .module,
         .source =
         \\Holder := { n : I64 }.{
@@ -1269,7 +1274,7 @@ const core_tests = [_]TestCase{
         \\bar : I64 -> Holder
         \\bar = |n| Holder.{ n: n }
         \\
-        \\main = 2 |> bar(3).blah()
+        \\main = 2 |> (bar(3).blah())
         ,
         .expected = .{ .inspect_str = "5" },
     },
@@ -2017,6 +2022,32 @@ const core_tests = [_]TestCase{
         \\}
         \\
         \\main = (describe(force('a')), describe(force('b')))
+        ,
+        .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
+    },
+    .{
+        .name = "inspect: typed custom from_numeral codepoint literals convert in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Code(numeral.digits_before_pt()))
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    'a'.Code => "letter a"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force('a'.Code)), describe(force('b'.Code)))
         ,
         .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
     },

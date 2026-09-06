@@ -715,8 +715,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // exports below so they remain live roots.
             try args.append("--gc-sections");
 
-            // Allow undefined symbols (imports from host environment)
-            try args.append("--allow-undefined");
+            // Preserve genuine undefined functions as host imports while
+            // retaining LLD's default errors for all other unresolved symbols.
+            // In particular, --allow-undefined also implies
+            // --unresolved-symbols=ignore-all, which would silently discard a
+            // platform header's --export when no definition has that name.
+            try args.append("--import-undefined");
 
             // A non-debug final module exposes only its Import and Export
             // sections. Compiler-owned local names have no runtime purpose and
@@ -1206,6 +1210,30 @@ test "wasm initial memory reaches wasm-ld only when configured" {
     const sized_args = try buildLinkArgs(&ctx, sized_config);
     const idx = findArgWithPrefix(sized_args.items, "--initial-memory=") orelse return error.MissingInitialMemory;
     try std.testing.expectEqualStrings("--initial-memory=1114112", sized_args.items[idx]);
+}
+
+test "wasm links import undefined functions without ignoring missing exports" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .wasm,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = "test_output.wasm",
+        .object_files = &.{"app.o"},
+        .wasm_exports = &.{"run"},
+    };
+    const args = try buildLinkArgs(&ctx, config);
+
+    _ = findArg(args.items, "--import-undefined") orelse return error.MissingImportUndefined;
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "--allow-undefined"));
+    _ = findArg(args.items, "--export=run") orelse return error.MissingExport;
 }
 
 test "force undefined symbols use target linker spelling" {

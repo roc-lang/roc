@@ -10,17 +10,96 @@ const frame = helpers.frame;
 const collectResponses = helpers.collectResponses;
 const uriFromPath = helpers.uriFromPath;
 
+const ExpectSingleErrorResponseError = helpers.HelperError || std.json.ParseError(std.json.Scanner) || error{
+    MissingCode,
+    MissingError,
+    MissingId,
+    MissingMessage,
+    TestExpectedEqual,
+    TestUnexpectedResult,
+    WriteFailed,
+};
+
+const InitialServerState = enum {
+    waiting_for_initialize,
+    running,
+    shutdown,
+};
+
+const FailingWriter = struct {
+    pub fn write(_: *@This(), _: []const u8) error{InjectedFailure}!usize {
+        return error.InjectedFailure;
+    }
+};
+
 fn TestServer(comptime ReaderType: type, comptime WriterType: type) type {
     return server_module.ServerWithSyntaxDriver(ReaderType, WriterType, TestSyntaxDriver);
 }
 
+fn expectSingleErrorResponse(
+    allocator: std.mem.Allocator,
+    request_body: []const u8,
+    expected_id: ?i64,
+    expected_code: protocol.ErrorCode,
+    expected_message: []const u8,
+    initial_state: InitialServerState,
+) ExpectSingleErrorResponseError!void {
+    const input = try frame(allocator, request_body);
+    defer allocator.free(input);
+
+    const reader_stream: std.Io.Reader = .fixed(input);
+    var writer_buffer: [4096]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    defer server.deinit();
+    server.state = switch (initial_state) {
+        .waiting_for_initialize => .waiting_for_initialize,
+        .running => .running,
+        .shutdown => .shutdown,
+    };
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), responses.len);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, responses[0], .{});
+    defer parsed.deinit();
+    const response = parsed.value.object;
+
+    const id = response.get("id") orelse return error.MissingId;
+    if (expected_id) |integer| {
+        try std.testing.expect(id == .integer);
+        try std.testing.expectEqual(integer, id.integer);
+    } else {
+        try std.testing.expect(id == .null);
+    }
+
+    const response_error = response.get("error") orelse return error.MissingError;
+    const code = response_error.object.get("code") orelse return error.MissingCode;
+    try std.testing.expectEqual(@as(i64, @intFromEnum(expected_code)), code.integer);
+    const message = response_error.object.get("message") orelse return error.MissingMessage;
+    try std.testing.expectEqualStrings(expected_message, message.string);
+}
+
 fn lifecycleInput(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
     const messages = [_][]const u8{
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/before.roc","version":1,"text":"before"}}}
+        ,
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{}}}
         ,
         \\{"jsonrpc":"2.0","method":"initialized","params":{}}
         ,
         \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/after.roc","version":1,"text":"after"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
         ,
         \\{"jsonrpc":"2.0","method":"exit"}
         ,
@@ -55,6 +134,9 @@ test "server handles initialize/shutdown/exit handshake" {
     defer server.deinit();
 
     try server.run();
+    try std.testing.expectEqual(@as(usize, 0), server.syntax_checker.check_calls);
+    try std.testing.expect(server.getDocumentForTesting("file:///tmp/before.roc") == null);
+    try std.testing.expect(server.getDocumentForTesting("file:///tmp/after.roc") == null);
 
     const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
@@ -62,7 +144,7 @@ test "server handles initialize/shutdown/exit handshake" {
         allocator.free(responses);
     }
 
-    try std.testing.expectEqual(@as(usize, 2), responses.len);
+    try std.testing.expectEqual(@as(usize, 3), responses.len);
 
     {
         var parsed = try std.json.parseFromSlice(std.json.Value, allocator, responses[0], .{});
@@ -79,15 +161,23 @@ test "server handles initialize/shutdown/exit handshake" {
         const result = parsed.value.object.get("result") orelse return error.MissingResult;
         try std.testing.expect(result == .null);
     }
+
+    {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, responses[2], .{});
+        defer parsed.deinit();
+        const response_error = parsed.value.object.get("error") orelse return error.MissingError;
+        const code = response_error.object.get("code") orelse return error.MissingCode;
+        try std.testing.expectEqual(@as(i64, @intFromEnum(protocol.ErrorCode.invalid_request)), code.integer);
+    }
 }
 
 test "server rejects re-initialization requests" {
     const allocator = std.testing.allocator;
     const init =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const reinit =
-        \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const shutdown =
         \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
@@ -132,6 +222,132 @@ test "server rejects re-initialization requests" {
     try std.testing.expect(error_obj.object.get("code").?.integer == @intFromEnum(protocol.ErrorCode.invalid_request));
 }
 
+test "server reports definition parameter errors exactly once" {
+    const request =
+        \\{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/main.roc"}}}
+    ;
+
+    try expectSingleErrorResponse(
+        std.testing.allocator,
+        request,
+        7,
+        .invalid_params,
+        "missing position",
+        .running,
+    );
+}
+
+test "server reports invalid initialize params as InvalidParams" {
+    const request =
+        \\{"jsonrpc":"2.0","id":8,"method":"initialize","params":{"processId":"not-an-integer"}}
+    ;
+
+    try expectSingleErrorResponse(
+        std.testing.allocator,
+        request,
+        8,
+        .invalid_params,
+        "invalid initialize params",
+        .waiting_for_initialize,
+    );
+}
+
+test "server keeps malformed params envelopes as InvalidRequest" {
+    const request =
+        \\{"jsonrpc":"2.0","id":9,"method":"shutdown","params":7}
+    ;
+
+    try expectSingleErrorResponse(
+        std.testing.allocator,
+        request,
+        9,
+        .invalid_request,
+        "invalid request",
+        .running,
+    );
+}
+
+test "server uses a null response ID for malformed payloads without IDs" {
+    try expectSingleErrorResponse(
+        std.testing.allocator,
+        "[]",
+        null,
+        .invalid_request,
+        "invalid request",
+        .running,
+    );
+}
+
+test "server enforces request lifecycle state before dispatch" {
+    const request =
+        \\{"jsonrpc":"2.0","id":10,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/main.roc"},"position":{"line":0,"character":0}}}
+    ;
+
+    try expectSingleErrorResponse(
+        std.testing.allocator,
+        request,
+        10,
+        .server_not_initialized,
+        "server not initialized",
+        .waiting_for_initialize,
+    );
+    try expectSingleErrorResponse(
+        std.testing.allocator,
+        request,
+        10,
+        .invalid_request,
+        "server is shutting down",
+        .shutdown,
+    );
+}
+
+test "server propagates response write failures without committing initialization" {
+    const allocator = std.testing.allocator;
+    const request =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{}}}
+    ;
+    const input = try frame(allocator, request);
+    defer allocator.free(input);
+
+    const reader: std.Io.Reader = .fixed(input);
+    var server = try TestServer(std.Io.Reader, FailingWriter).init(
+        allocator,
+        std.testing.io,
+        reader,
+        .{},
+        null,
+        .{},
+    );
+    defer server.deinit();
+
+    try std.testing.expectError(error.WriteFailed, server.run());
+    try std.testing.expectEqual(.waiting_for_initialize, server.state);
+    try std.testing.expectEqual(@as(?i64, null), server.client.process_id);
+}
+
+test "server propagates payload allocation failures" {
+    const request = "[]";
+    const input = try frame(std.testing.allocator, request);
+    defer std.testing.allocator.free(input);
+
+    var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    const allocator = failing_allocator.allocator();
+    const reader: std.Io.Reader = .fixed(input);
+    var writer_buffer: [4096]u8 = undefined;
+    const writer: std.Io.Writer = .fixed(&writer_buffer);
+    var server = try TestServer(std.Io.Reader, std.Io.Writer).init(
+        allocator,
+        std.testing.io,
+        reader,
+        writer,
+        null,
+        .{},
+    );
+    defer server.deinit();
+
+    try std.testing.expectError(error.OutOfMemory, server.run());
+}
+
 test "server tracks documents on didOpen/didChange" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -172,6 +388,7 @@ test "server tracks documents on didOpen/didChange" {
     const WriterType = std.Io.Writer;
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
+    server.state = .running;
     try server.run();
     try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
@@ -226,6 +443,7 @@ test "server applies sequential incremental changes in a single didChange" {
     const WriterType = std.Io.Writer;
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
+    server.state = .running;
     try server.run();
     try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
@@ -303,6 +521,7 @@ test "server handles burst of incremental didChange messages" {
     const WriterType = std.Io.Writer;
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
+    server.state = .running;
     try server.run();
     try std.testing.expectEqual(@as(usize, 4), server.syntax_checker.check_calls);
 
@@ -326,7 +545,7 @@ test "server responds to semantic tokens request" {
 
     // Full lifecycle: init -> initialized -> didOpen -> semanticTokens -> shutdown -> exit
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -419,7 +638,7 @@ test "server returns error for semantic tokens on unknown document" {
     const allocator = std.testing.allocator;
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -504,7 +723,7 @@ test "server returns empty tokens for empty document" {
     defer allocator.free(file_uri);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
