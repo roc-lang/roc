@@ -816,6 +816,14 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .pipe_method_call = .{
+            .left = rand_idx(random, AST.Expr.Idx),
+            .receiver = rand_idx(random, AST.Expr.Idx),
+            .call_data_idx = random.int(u32),
+            .region = rand_region(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .tuple_access = .{
             .expr = rand_idx(random, AST.Expr.Idx),
             .elem_token = rand_token_idx(random),
