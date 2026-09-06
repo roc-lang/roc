@@ -5073,7 +5073,7 @@ instantiation copies the structural receiver and validates the resulting codec
 independently. A value-restricted binding retains its original worklist entry
 and therefore cannot use provisional capture to suppress an error. An imported
 or rehydrated pristine relation is likewise a scheme template rather than a new
-use-site obligation; only its instantiated copies are validated in that
+use-site requirement; only its instantiated copies are validated in that
 checker. Checking serializes each surviving receiver and callable relation in a
 node-sorted binding-scheme side table, referencing the constraint already stored
 in the module's TypeStore and carrying the scheme root that groups all source
