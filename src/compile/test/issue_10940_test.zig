@@ -124,3 +124,35 @@ test "issue 10940: a headerless default app still publishes main!" {
     }
     try std.testing.expect(found_runtime_entrypoint);
 }
+
+test "issue 10940: explicit roots do not automatically publish a defined main!" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\main! = |_args| {}
+        \\
+        ,
+    });
+
+    const cwd = try tmp_dir.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd);
+    const main_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
+    defer gpa.free(main_path);
+
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    defer build_env.deinit();
+    build_env.setRootValidation(.explicit_roots);
+
+    try build_env.build(main_path);
+
+    const artifact = build_env.executableRootCheckedArtifact();
+    for (artifact.root_requests.runtime_requests) |root| {
+        try std.testing.expect(root.kind != .runtime_entrypoint);
+    }
+}

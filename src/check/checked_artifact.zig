@@ -1055,21 +1055,20 @@ pub const RootRequestTable = struct {
             });
         }
 
-        if (validation == .checking) {
-            try appendPublishedEntrypointRoots(
-                &requests,
-                allocator,
-                module,
-                names,
-                checked_types,
-                provided_exports,
-                top_level_values,
-                top_level_procedure_bindings,
-                relation_substitutions,
-                platform_app_relation,
-                platform_required_declarations,
-            );
-        }
+        try appendPublishedEntrypointRoots(
+            &requests,
+            allocator,
+            module,
+            names,
+            checked_types,
+            provided_exports,
+            top_level_values,
+            top_level_procedure_bindings,
+            relation_substitutions,
+            platform_app_relation,
+            platform_required_declarations,
+            validation,
+        );
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             switch (binding.value_use) {
@@ -2270,6 +2269,7 @@ fn appendPublishedEntrypointRoots(
     relation_substitutions: *const PlatformRelationTypeSubstitutions,
     platform_app_relation: ?PlatformAppRelationKey,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
+    validation: can.Can.Validation,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
 
@@ -2303,14 +2303,16 @@ fn appendPublishedEntrypointRoots(
     }
 
     switch (module_env.module_kind) {
-        .default_app, .app => try appendExposedAppProcedureRoots(
-            requests,
-            allocator,
-            module,
-            checked_types,
-            top_level_values,
-            top_level_procedure_bindings,
-        ),
+        .default_app, .app => if (validation == .checking) {
+            try appendExposedAppProcedureRoots(
+                requests,
+                allocator,
+                module,
+                checked_types,
+                top_level_values,
+                top_level_procedure_bindings,
+            );
+        },
         .type_module,
         .package,
         .platform,
