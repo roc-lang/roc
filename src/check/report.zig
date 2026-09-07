@@ -1655,11 +1655,14 @@ pub const ReportBuilder = struct {
         try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
         try report.document.addLineBreak();
 
-        if (try self.addTryErrorPayloadType(&report, types)) {
+        const has_error_payload_type = try self.addTryErrorPayloadType(&report, types);
+        if (has_error_payload_type) {
             try D.renderSlice(&.{
-                D.bytes("So this function must return a"),
+                D.bytes("Returning an"),
+                D.bytes("Err").withAnnotation(.inline_code),
+                D.bytes("with that type only works if the function itself returns a"),
                 D.bytes("Try").withAnnotation(.inline_code),
-                D.bytes("with a compatible error type."),
+                D.bytes("with a compatible error type, but this function's return type is:"),
             }, self, &report);
         } else {
             try D.renderSlice(&.{
@@ -1672,9 +1675,11 @@ pub const ReportBuilder = struct {
                 D.bytes(".").withNoPrecedingSpace(),
             }, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
+        if (!has_error_payload_type) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const body_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
@@ -1744,13 +1749,16 @@ pub const ReportBuilder = struct {
         const err_type = self.getFormattedString(err_snapshot);
 
         try D.renderSlice(&.{
-            D.bytes("On error, this"),
+            D.bytes("If this"),
+            D.bytes("Try").withAnnotation(.inline_code),
+            D.bytes("is an"),
+            D.bytes("Err").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("then the"),
             D.bytes("?").withAnnotation(.inline_code),
-            D.bytes("returns"),
-            D.bytes("Err(e)").withAnnotation(.inline_code),
-            D.bytes("where"),
-            D.bytes("e").withAnnotation(.inline_code),
-            D.bytes("has the type:"),
+            D.bytes("after it immediately returns an"),
+            D.bytes("Err").withAnnotation(.inline_code),
+            D.bytes("whose payload has this type:"),
         }, self, report);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -2673,9 +2681,9 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Recursive Dispatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
-            D.bytes("This"),
+            D.bytes("The type requirements for"),
             D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("dispatch would have to call itself to satisfy its own type."),
+            D.bytes("cannot be resolved."),
         }, self, &report, &report.headline);
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
@@ -2693,7 +2701,7 @@ pub const ReportBuilder = struct {
         }
 
         try D.renderSlice(&.{
-            D.bytes("The dispatcher type is:"),
+            D.bytes("The method is being selected for this type:"),
         }, self, &report);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -2718,13 +2726,27 @@ pub const ReportBuilder = struct {
             }, self, &report);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Using"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("for this type requires the same method again, before all of its type requirements have been determined."),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
         }
 
         try D.renderSlice(&.{
+            D.bytes("Recursive function calls are allowed. This error is about a cycle in the type requirements, before the function can run."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Use a more specific result type, or add an associated function whose"),
+            D.bytes("Check the argument, result, and additional method requirements of"),
             D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("implementation does not require the same dispatch on the same type."),
+            D.bytes("to find which requirement leads back to this call."),
         }, self, &report);
 
         return report;

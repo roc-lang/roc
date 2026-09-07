@@ -13,15 +13,26 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
+VAR NAME MISSING `$` - var_polymorphic_annotation_uninitialized_rejected.md:4:9:4:11
+UNUSED VARIABLE - var_polymorphic_annotation_uninitialized_rejected.md:4:9:4:11
 POLYMORPHIC VAR - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
 # PROBLEMS
-── ● unused variable ── var_polymorphic_annotation_uninitialized_rejected.md:4:5
+── ● var name missing `$` ─ var_polymorphic_annotation_uninitialized_rejected.md:4:9
+
+The mutable binding xs is declared with var but its name does not start with $.
+
+var xs : List(a)
+    ^^
+
+Rename this binding and all of its uses to $xs. The name is only a convention;
+mutability comes from the var declaration.
+
+── ● unused variable ── var_polymorphic_annotation_uninitialized_rejected.md:4:9
 
 Variable xs is defined here and then never used:
 
 var xs : List(a)
-^^^^^^^^^^^^^^^^
+    ^^
 
 If you don't need this variable, prefix it with an underscore like _xs to
 suppress this warning.
@@ -93,7 +104,7 @@ main! = |_| {
 				(p-underscore))
 			(e-block
 				(s-var-uninitialized
-					(p-assign (ident "xs")))
+					(p-var-assign (ident "xs")))
 				(e-empty_record)))))
 ~~~
 # TYPES

@@ -46,7 +46,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      alongside display names.
 /// v25: integer arithmetic uses explicit behavior-family operations.
 /// v26: LIR images carry the exact dense Boxy runtime worker proc set.
-pub const FORMAT_VERSION: u32 = 26;
+/// v27: `expect` statements optionally carry a test observation site.
+pub const FORMAT_VERSION: u32 = 27;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{

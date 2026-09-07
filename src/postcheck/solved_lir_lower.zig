@@ -23,6 +23,7 @@ const LambdaMono = @import("lambda_mono/ast.zig");
 const LambdaMonoLower = @import("lambda_mono/lower.zig");
 const MonoType = @import("monotype/type.zig");
 const Type = @import("lambda_mono/type.zig");
+const RecordFields = @import("record_fields.zig");
 const lir_core = @import("lir_core");
 const LIR = lir_core.LIR;
 const LirStore = lir_core.LirStore;
@@ -184,11 +185,13 @@ pub fn run(
     errdefer lowerer.deinit();
 
     try lowerer.result.store.setSourceFiles(owned.lifted.sourceFiles());
+    try lowerer.prepareExpectSites();
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
     try lowerer.writeRuntimeSchemas();
+    lowerer.result.finishExpectSites();
     if (builtin.mode == .Debug) {
         try lowerer.verifyMaterializedDecisions();
     }
@@ -499,6 +502,7 @@ const Lowerer = struct {
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
     inline_scope_outer: LIR.InlineScopeId = .none,
     inline_expects: InlineExpectMode,
+    observe_expects: bool,
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
     proc_debug_names: bool,
@@ -584,6 +588,8 @@ const Lowerer = struct {
     /// Persistent scratch is indexed by executor lane, whose callbacks are
     /// exclusive. Escaping body shards never borrow storage from these entries.
     worker_workspaces: []?FnBodyWorkspace,
+
+    aggregate_bindings: ?*AggregateBindings = null,
 
     const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
 
@@ -726,6 +732,7 @@ const Lowerer = struct {
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
+            .observe_expects = options.test_plan_metadata.len != 0,
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .proc_debug_names = options.proc_debug_names,
@@ -1720,6 +1727,11 @@ const Lowerer = struct {
             self.result.store.current_region = saved_region;
         }
 
+        var aggregates = AggregateBindings.init(self.allocator);
+        defer aggregates.deinit();
+        const saved_aggregates = self.aggregate_bindings;
+        self.aggregate_bindings = &aggregates;
+        defer self.aggregate_bindings = saved_aggregates;
         self.current_ret_ty = initializer.ty;
         self.current_proc_locals = &proc_locals;
         self.current_fn = null;
@@ -1749,6 +1761,11 @@ const Lowerer = struct {
     }
 
     fn lowerFnSpec(self: *Lowerer, fn_id: Type.FnId, spec: FnSpec) Common.LowerError!?LoweredFnBody {
+        var aggregates = AggregateBindings.init(self.allocator);
+        defer aggregates.deinit();
+        const saved_aggregates = self.aggregate_bindings;
+        self.aggregate_bindings = &aggregates;
+        defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
         const entry = self.fn_entries.items[@intFromEnum(fn_id)];
         const source_fn = self.solved.lifted.getFn(spec.source);
@@ -2217,6 +2234,10 @@ const Lowerer = struct {
     }
 
     fn lowerLocalInto(self: *Lowerer, target: LIR.LocalId, local: Lifted.LocalId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        if (try self.materializeRecordBinding(local)) |source| {
+            try self.noteReturnForwardingLocal(target, source.local);
+            return try self.assignTypedBoundary(target, ty, source.local, source.ty, next);
+        }
         if (self.typed_local_map.get(.{ .local = local, .ty = ty })) |source| {
             try self.noteLocal(source);
             try self.noteReturnForwardingLocal(target, source);
@@ -2253,6 +2274,11 @@ const Lowerer = struct {
         // Equal committed layouts make assignTypedBoundary emit one explicit
         // local alias. Layout similarity alone is not allocation provenance.
         if (target_layout != source_layout) return;
+        try self.noteReturnForwardingSource(source);
+    }
+
+    fn noteReturnForwardingSource(self: *Lowerer, source: LIR.LocalId) Common.LowerError!void {
+        if (self.return_forwarding_repeatable_depth != 0) return;
         const existing_candidates = self.return_forwarding_locals.count();
         const candidate = try self.return_forwarding_locals.getOrPut(source);
         if (!candidate.found_existing) {
@@ -2687,6 +2713,30 @@ const Lowerer = struct {
         }, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
+    }
+
+    fn prepareExpectSites(self: *Lowerer) Common.LowerError!void {
+        if (!self.observe_expects) return;
+        for (self.solved.lifted.exprsView(), 0..) |expr, index| {
+            if (std.meta.activeTag(expr.data) != .expect) continue;
+            const id: Lifted.ExprId = @enumFromInt(@as(u32, @intCast(index)));
+            const loc = self.solved.lifted.exprLoc(id);
+            if (!loc.hasLocation()) Common.invariant("test-plan expect expression has no source location");
+            _ = try self.result.addExpectSite(loc, self.solved.lifted.exprRegion(id));
+        }
+        for (self.solved.lifted.stmtsView(), 0..) |stmt, index| {
+            if (std.meta.activeTag(stmt) != .expect) continue;
+            const id: Lifted.StmtId = @enumFromInt(@as(u32, @intCast(index)));
+            const loc = self.solved.lifted.stmtLoc(id);
+            if (!loc.hasLocation()) Common.invariant("test-plan expect statement has no source location");
+            _ = try self.result.addExpectSite(loc, self.solved.lifted.stmtRegion(id));
+        }
+    }
+
+    fn expectSite(self: *const Lowerer) ?LIR.ExpectSiteId {
+        if (!self.observe_expects) return null;
+        if (self.result.findExpectSite(self.result.store.current_loc, self.result.store.current_region)) |site| return site;
+        Common.invariant("test-plan expect has no prepared observation site");
     }
 
     fn writeFrameLocals(self: *Lowerer, locals: *ProcLocalSet) Common.LowerError!LIR.LocalSpan {
@@ -4065,6 +4115,291 @@ const Lowerer = struct {
         return current;
     }
 
+    /// Builder-owned record versions. Components are fresh locals evaluated at
+    /// the binding's original position, never expressions evaluated on demand.
+    const AggregateBindings = struct {
+        allocator: std.mem.Allocator,
+        fields: RecordFields.Store,
+        bindings: collections.DenseMap(Lifted.LocalId, usize),
+        shapes: collections.DenseMap(Type.TypeId, RecordShape),
+        plans: std.ArrayList(RecordPlan) = .empty,
+
+        fn init(allocator: std.mem.Allocator) AggregateBindings {
+            return .{
+                .allocator = allocator,
+                .fields = .{ .allocator = allocator },
+                .bindings = collections.DenseMap(Lifted.LocalId, usize).init(allocator),
+                .shapes = collections.DenseMap(Type.TypeId, RecordShape).init(allocator),
+            };
+        }
+
+        fn deinit(self: *AggregateBindings) void {
+            for (self.plans.items) |plan| {
+                self.allocator.free(plan.values);
+                self.allocator.free(plan.seeds);
+            }
+            self.plans.deinit(self.allocator);
+            var shapes = self.shapes.valueIterator();
+            while (shapes.next()) |shape| {
+                shape.indices.deinit();
+                self.allocator.free(shape.fields);
+                self.allocator.free(shape.field_layouts);
+            }
+            self.shapes.deinit();
+            self.bindings.deinit();
+            self.fields.deinit();
+        }
+    };
+
+    const RecordShape = struct {
+        fields: []const Type.Field,
+        field_layouts: []const layout.Idx,
+        return_child: ?usize,
+        indices: collections.DenseMap(Type.names.RecordFieldNameId, u16),
+        layout_idx: layout.Idx,
+    };
+
+    const RecordValue = struct {
+        index: u16,
+        local: LIR.LocalId,
+        expr: Lifted.ExprId,
+
+        fn lessThan(_: void, lhs: RecordValue, rhs: RecordValue) bool {
+            return lhs.index < rhs.index;
+        }
+    };
+
+    const RecordSeed = struct {
+        target: LIR.LocalId,
+        target_ty: Type.TypeId,
+        source_ty: Type.TypeId,
+        source_index: u16,
+    };
+
+    const RecordPlan = struct {
+        producer: enum { constructor, update, alias },
+        ty: Type.TypeId,
+        root: RecordFields.Id,
+        values: []const RecordValue,
+        seeds: []const RecordSeed,
+        base: ?struct { expr: Lifted.ExprId, local: LIR.LocalId, ty: Type.TypeId },
+        materialized: ?LIR.LocalId = null,
+    };
+
+    const RecordBindingRestore = struct {
+        local: Lifted.LocalId,
+        previous: ?usize,
+    };
+
+    fn recordShape(self: *Lowerer, ty: Type.TypeId) Common.LowerError!RecordShape {
+        const aggregates = self.aggregate_bindings.?;
+        if (aggregates.shapes.get(ty)) |shape| return shape;
+        const fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFields(ty));
+        errdefer self.allocator.free(fields);
+        var indices = collections.DenseMap(Type.names.RecordFieldNameId, u16).init(self.allocator);
+        errdefer indices.deinit();
+        for (fields, 0..) |field, index| try indices.putNoClobber(field.name, @intCast(index));
+        const layout_idx = try self.layoutOfType(ty);
+        const field_layouts = try self.allocator.alloc(layout.Idx, fields.len);
+        errdefer self.allocator.free(field_layouts);
+        var record_layout = self.result.layouts.getLayout(layout_idx);
+        if (record_layout.tag == .box) record_layout = self.result.layouts.getLayout(record_layout.getIdx());
+        if (self.result.layouts.isZeroSized(record_layout)) {
+            @memset(field_layouts, .zst);
+        } else {
+            if (record_layout.tag != .struct_) Common.invariant("record shape expected a committed struct layout");
+            const committed = self.result.layouts.getStructInfo(record_layout).fields;
+            var named_fields: usize = 0;
+            for (0..committed.len) |index| {
+                const field = committed.get(@intCast(index));
+                if (field.is_padding) continue;
+                std.debug.assert(field.index < fields.len);
+                field_layouts[field.index] = field.layout;
+                named_fields += 1;
+            }
+            if (named_fields != fields.len) Common.invariant("record layout named field count differed from its type");
+        }
+        const field_tys = try self.allocator.alloc(Type.TypeId, fields.len);
+        defer self.allocator.free(field_tys);
+        for (fields, 0..) |field, index| field_tys[index] = field.ty;
+        const shape = RecordShape{
+            .fields = fields,
+            .field_layouts = field_layouts,
+            .return_child = self.singleErasedResultChildIndex(field_tys),
+            .indices = indices,
+            .layout_idx = layout_idx,
+        };
+        try aggregates.shapes.put(ty, shape);
+        return shape;
+    }
+
+    /// Whole-value consumers, including retained join locals, must request the
+    /// same definition-site aggregate construction before using an LIR local.
+    fn materializeRecordBinding(self: *Lowerer, local: Lifted.LocalId) Common.LowerError!?struct { local: LIR.LocalId, ty: Type.TypeId } {
+        const aggregates = self.aggregate_bindings orelse return null;
+        const id = aggregates.bindings.get(local) orelse return null;
+        const plan = aggregates.plans.items[id];
+        const source = plan.materialized orelse blk: {
+            const slot = try self.bindLocalForTyped(local, plan.ty);
+            aggregates.plans.items[id].materialized = slot;
+            break :blk slot;
+        };
+        try self.noteLocal(source);
+        return .{ .local = source, .ty = plan.ty };
+    }
+
+    fn restoreRecordBinding(self: *Lowerer, binding: RecordBindingRestore) void {
+        const bindings = &self.aggregate_bindings.?.bindings;
+        if (binding.previous) |previous| {
+            bindings.getPtr(binding.local).?.* = previous;
+        } else {
+            _ = bindings.remove(binding.local);
+        }
+    }
+
+    fn planRecordBinding(self: *Lowerer, pat_id: Lifted.PatId, value: Lifted.ExprId) Common.LowerError!?RecordBindingRestore {
+        const aggregates = self.aggregate_bindings orelse return null;
+        const pattern = self.pat(pat_id);
+        if (pattern.data != .bind) return null;
+        const local = pattern.data.bind;
+        const expr = self.solved.lifted.getExpr(value).data;
+        if (expr != .record and expr != .record_update and expr != .local) return null;
+        const ty = try self.lowerPatTy(pat_id);
+        // Descriptor-governed and recursive boxed representations are ordinary
+        // materialized values. These bindings describe by-value records only.
+        if (self.result.layouts.getLayout(try self.layoutOfType(ty)).tag != .struct_) return null;
+        const runtime_ty = self.runtimeBackingType(ty);
+        if (self.types.get(runtime_ty) != .record) return null;
+        const shape = try self.recordShape(ty);
+        if (shape.fields.len == 0) return null;
+
+        var source_plan: ?RecordPlan = null;
+        const base_expr: ?Lifted.ExprId = if (expr == .record_update) expr.record_update.base else null;
+        const base_local = if (expr == .local) expr.local else if (base_expr) |record_base| blk: {
+            const data = self.solved.lifted.getExpr(record_base).data;
+            break :blk if (data == .local) data.local else null;
+        } else null;
+        if (base_local) |source| {
+            if (aggregates.bindings.get(source)) |id| {
+                const plan = aggregates.plans.items[id];
+                if (plan.ty == ty) source_plan = plan;
+            }
+        }
+        if (expr == .local and source_plan == null) return null;
+
+        var values: std.ArrayList(RecordValue) = .empty;
+        defer values.deinit(self.allocator);
+        if (expr != .local) {
+            const span = if (expr == .record) expr.record else expr.record_update.fields;
+            const fields = try GuardedList.dupe(self.allocator, Lifted.FieldExpr, self.solved.lifted.fieldExprSpan(span));
+            defer self.allocator.free(fields);
+            for (fields) |field| {
+                const index = shape.indices.get(field.name) orelse Common.invariant("record field missing from committed type");
+                const component = try self.addLocalForLayout(shape.field_layouts[index]);
+                try self.local_types.put(component, shape.fields[index].ty);
+                try values.append(self.allocator, .{ .index = index, .local = component, .expr = field.value });
+            }
+            std.mem.sort(RecordValue, values.items, {}, RecordValue.lessThan);
+            for (values.items, 0..) |field, index| {
+                if (index != 0 and values.items[index - 1].index == field.index) Common.invariant("record field defined twice");
+            }
+        }
+
+        var seeds: std.ArrayList(RecordSeed) = .empty;
+        defer seeds.deinit(self.allocator);
+        var record_base: @FieldType(RecordPlan, "base") = null;
+        var root: RecordFields.Id = undefined;
+        if (source_plan) |source| {
+            root = source.root;
+            for (values.items) |field| root = try aggregates.fields.update(root, shape.fields.len, field.index, field.local);
+        } else {
+            const components = try self.allocator.alloc(LIR.LocalId, shape.fields.len);
+            defer self.allocator.free(components);
+            var source_shape: ?RecordShape = null;
+            if (base_expr) |base_value| {
+                const base_ty = try self.lowerExprContextTy(base_value);
+                record_base = .{ .expr = base_value, .local = try self.addTemp(base_ty), .ty = base_ty };
+                source_shape = try self.recordShape(base_ty);
+            }
+            var changed_index: usize = 0;
+            for (shape.fields, 0..) |field, index| {
+                if (changed_index < values.items.len and values.items[changed_index].index == index) {
+                    components[index] = values.items[changed_index].local;
+                    changed_index += 1;
+                } else {
+                    const source = source_shape orelse Common.invariant("record constructor omitted a field");
+                    const source_index = source.indices.get(field.name) orelse Common.invariant("record update source omitted a field");
+                    components[index] = try self.addLocalForLayout(shape.field_layouts[index]);
+                    try self.local_types.put(components[index], field.ty);
+                    try seeds.append(self.allocator, .{
+                        .target = components[index],
+                        .target_ty = field.ty,
+                        .source_ty = source.fields[source_index].ty,
+                        .source_index = source_index,
+                    });
+                }
+            }
+            root = try aggregates.fields.build(components);
+        }
+        const owned_values = try values.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_values);
+        const owned_seeds = try seeds.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_seeds);
+        const id = aggregates.plans.items.len;
+        try aggregates.plans.append(self.allocator, .{ .producer = if (expr == .record) .constructor else if (expr == .record_update) .update else .alias, .ty = ty, .root = root, .values = owned_values, .seeds = owned_seeds, .base = record_base });
+        errdefer _ = aggregates.plans.pop();
+        const previous = aggregates.bindings.get(local);
+        try aggregates.bindings.put(local, id);
+        return .{ .local = local, .previous = previous };
+    }
+
+    fn emitRecordBinding(self: *Lowerer, id: usize, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const aggregates = self.aggregate_bindings.?;
+        const plan = aggregates.plans.items[id];
+        const shape = aggregates.shapes.get(plan.ty).?;
+        var current = next;
+        const saved_return_target = self.current_return_target;
+        defer self.current_return_target = saved_return_target;
+        if (plan.materialized != null and plan.materialized == saved_return_target and plan.producer != .update) {
+            // Forward the explicit unique result-component demand through shared
+            // record versions to the original evaluated component's producer.
+            if (shape.return_child) |child| {
+                try self.noteReturnForwardingSource(aggregates.fields.get(plan.root, shape.fields.len, child));
+            }
+            self.current_return_target = null;
+        }
+        if (plan.materialized) |target| {
+            const components = try self.allocator.alloc(LIR.LocalId, shape.fields.len);
+            defer self.allocator.free(components);
+            aggregates.fields.write(plan.root, components);
+            current = try self.result.store.addCFStmt(.{ .assign_struct = .{
+                .target = target,
+                .fields = try self.result.store.addLocalSpan(components),
+                .next = current,
+            } });
+        }
+        var index = plan.values.len;
+        while (index != 0) {
+            index -= 1;
+            const field = plan.values[index];
+            const forwarding = self.enterReturnForwarding(field.local);
+            defer self.leaveReturnForwarding(forwarding);
+            current = try self.lowerExprIntoAtType(field.local, field.expr, shape.fields[field.index].ty, current);
+        }
+        if (plan.base) |record_base| {
+            index = plan.seeds.len;
+            while (index != 0) {
+                index -= 1;
+                const seed = plan.seeds[index];
+                const forwarding = self.enterReturnForwarding(seed.target);
+                defer self.leaveReturnForwarding(forwarding);
+                current = try self.assignTypedRefRead(seed.target, seed.target_ty, seed.source_ty, self.localFieldLayout(record_base.local, seed.source_index), .{ .field = .{ .source = record_base.local, .field_idx = seed.source_index } }, current);
+            }
+            current = try self.lowerExprIntoAtType(record_base.local, record_base.expr, record_base.ty, current);
+        }
+        return current;
+    }
+
     fn lowerRecordInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -4072,20 +4407,20 @@ const Lowerer = struct {
         span: Lifted.Span(Lifted.FieldExpr),
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        const type_fields = self.recordFields(ty);
+        const shape = try self.recordShape(ty);
+        const type_fields = shape.fields;
         const expr_fields = self.solved.lifted.fieldExprSpan(span);
+        if (expr_fields.len != type_fields.len) Common.invariant("record expression missing field output by Lambda Mono type");
         const ordered = try self.allocator.alloc(Lifted.ExprId, type_fields.len);
         defer self.allocator.free(ordered);
         const field_tys = try self.allocator.alloc(Type.TypeId, type_fields.len);
         defer self.allocator.free(field_tys);
 
-        for (0..type_fields.len) |i| {
-            const field = GuardedList.at(type_fields, i);
-            ordered[i] = for (0..expr_fields.len) |expr_index| {
-                const expr_field = GuardedList.at(expr_fields, expr_index);
-                if (expr_field.name == field.name) break expr_field.value;
-            } else Common.invariant("record expression missing field output by Lambda Mono type");
-            field_tys[i] = field.ty;
+        for (type_fields, 0..) |field, index| field_tys[index] = field.ty;
+        for (0..expr_fields.len) |index| {
+            const field = GuardedList.at(expr_fields, index);
+            const position = shape.indices.get(field.name) orelse Common.invariant("record field missing from committed type");
+            ordered[position] = field.value;
         }
 
         return try self.lowerStructExprsIntoAtTypes(target, ordered, field_tys, next);
@@ -4104,15 +4439,15 @@ const Lowerer = struct {
             return try self.lowerRecordUpdateInto(backing_local, ty, update, boundary);
         }
 
-        const type_fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFields(ty));
-        defer self.allocator.free(type_fields);
+        const shape = try self.recordShape(ty);
+        const type_fields = shape.fields;
         const update_fields = try GuardedList.dupe(self.allocator, Lifted.FieldExpr, self.solved.lifted.fieldExprSpan(update.fields));
         defer self.allocator.free(update_fields);
         const updates_by_field = try self.allocator.alloc(?Lifted.ExprId, type_fields.len);
         defer self.allocator.free(updates_by_field);
         @memset(updates_by_field, null);
         for (update_fields) |field| {
-            const field_index = Lowerer.recordFieldIndexInFields(type_fields, field.name);
+            const field_index = shape.indices.get(field.name) orelse Common.invariant("record update field missing from committed type");
             if (updates_by_field[field_index] != null) Common.invariant("record update contained the same field more than once");
             updates_by_field[field_index] = field.value;
         }
@@ -4149,6 +4484,7 @@ const Lowerer = struct {
         }
 
         const source_ty = self.storageTypeOfLocalOr(base_local, base_ty);
+        const source_shape = try self.recordShape(source_ty);
         index = type_fields.len;
         while (index > 0) {
             index -= 1;
@@ -4157,8 +4493,8 @@ const Lowerer = struct {
                 current = try self.assignZst(field_locals[index], current);
                 continue;
             }
-            const source_index = self.recordFieldIndex(source_ty, type_fields[index].name);
-            const source_field_ty = self.recordFieldType(source_ty, type_fields[index].name);
+            const source_index = source_shape.indices.get(type_fields[index].name) orelse Common.invariant("record update source omitted a field");
+            const source_field_ty = source_shape.fields[source_index].ty;
             current = try self.assignTypedRefRead(
                 field_locals[index],
                 type_fields[index].ty,
@@ -4784,6 +5120,8 @@ const Lowerer = struct {
         let_: anytype,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        const planned = try self.planRecordBinding(let_.bind, let_.value);
+        defer if (planned) |binding| self.restoreRecordBinding(binding);
         const rest = try self.lowerExprIntoAtType(target, let_.rest, result_ty, next);
         const binding_pat = self.pat(let_.bind);
         if (binding_pat.data == .bind) {
@@ -4794,15 +5132,12 @@ const Lowerer = struct {
         return try self.lowerExprInto(value_local, let_.value, bind);
     }
 
-    fn lowerDirectBindValue(
-        self: *Lowerer,
-        pat_id: Lifted.PatId,
-        local: Lifted.LocalId,
-        value: Lifted.ExprId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const bind_ty = try self.lowerPatTy(pat_id);
-        const value_local = self.existingLocalForTyped(local, bind_ty) orelse try self.addTemp(bind_ty);
+    const ReturnForwardingScope = struct {
+        saved_target: ?LIR.LocalId,
+        finishes_ambiguous_group: bool,
+    };
+
+    fn enterReturnForwarding(self: *Lowerer, value_local: LIR.LocalId) ReturnForwardingScope {
         const is_return_candidate = self.return_forwarding_locals.remove(value_local);
         const forwards_return = is_return_candidate and
             !self.return_forwarding_ambiguous and
@@ -4812,10 +5147,30 @@ const Lowerer = struct {
             self.return_forwarding_locals.count() == 0;
         const saved_return_target = self.current_return_target;
         if (forwards_return) self.current_return_target = value_local;
-        defer {
-            self.current_return_target = saved_return_target;
-            if (finishes_ambiguous_group) self.return_forwarding_ambiguous = false;
+        return .{ .saved_target = saved_return_target, .finishes_ambiguous_group = finishes_ambiguous_group };
+    }
+
+    fn leaveReturnForwarding(self: *Lowerer, scope: ReturnForwardingScope) void {
+        self.current_return_target = scope.saved_target;
+        if (scope.finishes_ambiguous_group) self.return_forwarding_ambiguous = false;
+    }
+
+    fn lowerDirectBindValue(
+        self: *Lowerer,
+        pat_id: Lifted.PatId,
+        local: Lifted.LocalId,
+        value: Lifted.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const planned_id = if (self.aggregate_bindings) |aggregates| aggregates.bindings.get(local) else null;
+        if (planned_id) |id| {
+            if (self.aggregate_bindings.?.plans.items[id].materialized == null) return self.emitRecordBinding(id, next);
         }
+        const bind_ty = try self.lowerPatTy(pat_id);
+        const value_local = self.existingLocalForTyped(local, bind_ty) orelse try self.addTemp(bind_ty);
+        const forwarding = self.enterReturnForwarding(value_local);
+        defer self.leaveReturnForwarding(forwarding);
+        if (planned_id) |id| return self.emitRecordBinding(id, next);
         return try self.lowerExprIntoAtType(value_local, value, self.typeOfLocalOr(value_local, bind_ty), next);
     }
 
@@ -5752,7 +6107,29 @@ const Lowerer = struct {
         if (segments.len == 0) Common.invariant("field access path had no segments");
 
         const receiver_ty = try self.lowerExprContextTy(receiver);
-        const receiver_local = try self.addTemp(receiver_ty);
+        var source_ty = receiver_ty;
+        var first_segment: usize = 0;
+        var component: ?LIR.LocalId = null;
+        const receiver_data = self.solved.lifted.getExpr(receiver).data;
+        if (receiver_data == .local) {
+            if (self.aggregate_bindings) |aggregates| {
+                if (aggregates.bindings.get(receiver_data.local)) |id| {
+                    const plan = aggregates.plans.items[id];
+                    if (plan.ty == receiver_ty) {
+                        const shape = aggregates.shapes.get(plan.ty).?;
+                        const field = shape.indices.get(GuardedList.at(segments, 0).field).?;
+                        component = aggregates.fields.get(plan.root, shape.fields.len, field);
+                        source_ty = shape.fields[field].ty;
+                        first_segment = 1;
+                    }
+                }
+            }
+        }
+        const receiver_local = component orelse try self.addTemp(receiver_ty);
+        if (first_segment == segments.len) {
+            try self.noteReturnForwardingLocal(target, receiver_local);
+            return self.assignTypedBoundary(target, self.typeOfLocalOr(target, source_ty), receiver_local, source_ty, next);
+        }
 
         const FieldRead = struct {
             target: LIR.LocalId,
@@ -5762,12 +6139,12 @@ const Lowerer = struct {
             source_field_index: u16,
             storage_layout: ?layout.Idx,
         };
-        const reads = try self.allocator.alloc(FieldRead, segments.len);
+        const reads = try self.allocator.alloc(FieldRead, segments.len - first_segment);
         defer self.allocator.free(reads);
 
-        var logical_source_ty = receiver_ty;
+        var logical_source_ty = source_ty;
         var source_local = receiver_local;
-        for (0..segments.len) |index| {
+        for (first_segment..segments.len) |index| {
             const segment = GuardedList.at(segments, index);
             const target_field_index = self.recordFieldIndex(logical_source_ty, segment.field);
             const target_fields = self.recordFields(logical_source_ty);
@@ -5781,7 +6158,7 @@ const Lowerer = struct {
             const source_field_index = self.recordFieldIndex(storage_source_ty, segment.field);
             const source_fields = self.recordFields(storage_source_ty);
             const source_field_ty = GuardedList.at(source_fields, @intCast(source_field_index)).ty;
-            reads[index] = .{
+            reads[index - first_segment] = .{
                 .target = destination,
                 .target_ty = target_field_ty,
                 .source = source_local,
@@ -5814,7 +6191,7 @@ const Lowerer = struct {
             else
                 try self.assignZst(read.target, current);
         }
-        return try self.lowerExprIntoAtType(receiver_local, receiver, receiver_ty, current);
+        return if (component != null) current else try self.lowerExprIntoAtType(receiver_local, receiver, receiver_ty, current);
     }
 
     fn lowerTupleAccessInto(self: *Lowerer, target: LIR.LocalId, tuple: Lifted.ExprId, elem_index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -6226,6 +6603,22 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const stmts = self.solved.lifted.stmtSpan(stmts_span);
+        var planned: std.ArrayList(RecordBindingRestore) = .empty;
+        defer {
+            var index = planned.items.len;
+            while (index != 0) {
+                index -= 1;
+                self.restoreRecordBinding(planned.items[index]);
+            }
+            planned.deinit(self.allocator);
+        }
+        for (0..stmts.len) |index| {
+            const stmt = self.solved.lifted.getStmt(GuardedList.at(stmts, index));
+            if (stmt != .let_ or stmt.let_.recursive) continue;
+            if (try self.planRecordBinding(stmt.let_.pat, stmt.let_.value)) |binding| {
+                try planned.append(self.allocator, binding);
+            }
+        }
         var current = if (self.solved.lifted.getExpr(final_expr).data == .@"unreachable") blk: {
             if (stmts.len == 0) {
                 Common.invariant("unreachable block-final marker had no preceding terminating statement");
@@ -6648,7 +7041,11 @@ const Lowerer = struct {
 
     fn lowerExpectStmt(self: *Lowerer, child: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const cond = try self.addTemp(try self.lowerExprTy(child));
-        const expect_stmt = try self.result.store.addCFStmt(.{ .expect = .{ .condition = cond, .next = next } });
+        const expect_stmt = try self.result.store.addCFStmt(.{ .expect = .{
+            .condition = cond,
+            .site = self.expectSite(),
+            .next = next,
+        } });
         return try self.lowerExprInto(cond, child, expect_stmt);
     }
 
@@ -8631,6 +9028,7 @@ const Lowerer = struct {
     }
 
     fn localForTyped(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Common.LowerError!LIR.LocalId {
+        if (try self.materializeRecordBinding(local)) |source| return source.local;
         if (self.typed_local_map.get(.{ .local = local, .ty = ty })) |existing| {
             try self.noteLocal(existing);
             return existing;

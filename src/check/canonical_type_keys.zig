@@ -187,6 +187,43 @@ pub fn schemeFromVar(
     return .{ .bytes = builder.hasher.finalResult() };
 }
 
+/// Reusable scratch for complete source-scheme digests within one module.
+/// Every request starts a new digest and new identity/cycle numbering; only
+/// allocation capacity survives. No type information is memoized here.
+pub const SchemeWriter = struct {
+    builder: Builder,
+    /// Count complete digest requests in tests; no storage in compiler builds.
+    test_digests: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
+
+    /// Bind scratch to the source store and its module-local names.
+    pub fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) SchemeWriter {
+        return .{ .builder = Builder.init(allocator, store, env) };
+    }
+
+    /// Release all retained traversal storage.
+    pub fn deinit(self: *SchemeWriter) void {
+        self.builder.deinit();
+    }
+
+    /// Digest a whole source scheme, including after a failed earlier request.
+    pub fn fromVar(self: *SchemeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeSchemeKey {
+        if (builtin.is_test) self.test_digests += 1;
+        const builder = &self.builder;
+        builder.hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        builder.active.clearRetainingCapacity();
+        builder.identity_variables.clearRetainingCapacity();
+        builder.frames.clearRetainingCapacity();
+        builder.pending_fields.clearRetainingCapacity();
+        builder.pending_tags.clearRetainingCapacity();
+        builder.ext_seen.clearRetainingCapacity();
+        builder.contains_identity_variables = false;
+        builder.contains_error = false;
+        builder.writeTag("canonical_type_scheme");
+        try builder.writeVar(var_);
+        return .{ .bytes = builder.hasher.finalResult() };
+    }
+};
+
 /// Whether the canonical-key traversal for `var_` reaches erroneous checked
 /// type content. This uses the key builder itself in detection mode, so guards
 /// for later key construction cannot accidentally inspect a narrower graph.
@@ -1427,4 +1464,60 @@ test "canonical type key digests a spine deeper than any native-stack budget" {
     const first = try fromVar(allocator, &store, &env, current);
     const second = try fromVar(allocator, &store, &env, current);
     try std.testing.expectEqualSlices(u8, first.bytes[0..], second.bytes[0..]);
+}
+
+test "issue 11128 scheme writer reuses scratch with fresh identity and cycle numbering" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(gpa, 32, 32);
+    defer store.deinit();
+    const a = try store.fresh();
+    const b = try store.fresh();
+    const shared = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ a, a }) } } });
+    const separate = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ a, b }) } } });
+    const cycle = try store.fresh();
+    try store.setVarContent(cycle, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ b, cycle, a }) } } });
+    const roots = [_]Var{ cycle, shared, a, separate, b, cycle, separate, shared };
+    var expected: [roots.len]canonical.CanonicalTypeSchemeKey = undefined;
+    for (roots, &expected) |root, *key| key.* = try schemeFromVar(gpa, &store, &env, root);
+    try std.testing.expect(!std.meta.eql(expected[1], expected[3]));
+
+    var counter = std.testing.FailingAllocator.init(gpa, .{});
+    var writer = SchemeWriter.init(counter.allocator(), &store, &env);
+    defer writer.deinit();
+    for (roots) |root| _ = try writer.fromVar(root);
+    const allocated = counter.allocated_bytes;
+    for (0..128) |_| {
+        for (roots, expected) |root, key| try std.testing.expectEqualDeep(key, try writer.fromVar(root));
+    }
+    try std.testing.expectEqual(allocated, counter.allocated_bytes);
+}
+
+test "issue 11128 scheme writer recovers from every allocation failure" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(gpa, 256, 256);
+    defer store.deinit();
+    var args: [128]Var = undefined;
+    for (&args) |*arg| arg.* = try store.fresh();
+    const root = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&args) } } });
+    const expected = try schemeFromVar(gpa, &store, &env, root);
+    const small_expected = try schemeFromVar(gpa, &store, &env, args[0]);
+    var successful = std.testing.FailingAllocator.init(gpa, .{});
+    {
+        var writer = SchemeWriter.init(successful.allocator(), &store, &env);
+        defer writer.deinit();
+        _ = try writer.fromVar(root);
+    }
+    for (0..successful.allocations) |fail_at| {
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at });
+        var writer = SchemeWriter.init(failing.allocator(), &store, &env);
+        defer writer.deinit();
+        try std.testing.expectError(error.OutOfMemory, writer.fromVar(root));
+        failing.fail_index = std.math.maxInt(usize);
+        try std.testing.expectEqualDeep(expected, try writer.fromVar(root));
+        try std.testing.expectEqualDeep(small_expected, try writer.fromVar(args[0]));
+    }
 }

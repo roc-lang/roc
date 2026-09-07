@@ -1004,6 +1004,7 @@ test "loaded dev program borrows direct shared image metadata" {
         &.{},
         &.{},
         &.{},
+        &.{},
         std.mem.zeroes(RunImage.BoxySidecar),
     );
     const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));

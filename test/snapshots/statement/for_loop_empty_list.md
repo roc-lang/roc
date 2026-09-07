@@ -17,9 +17,19 @@ unchanged = {
 expect unchanged == 42
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_empty_list.md:3:6:3:12
 # PROBLEMS
-NIL
+── ● var name missing `$` ─────────────────────────── for_loop_empty_list.md:3:6
+
+The mutable binding value_ is declared with var but its name does not start
+with $.
+
+var value_ = 42
+    ^^^^^^
+
+Rename this binding and all of its uses to $value_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -71,19 +81,19 @@ NO CHANGE
 		(p-assign (ident "unchanged"))
 		(e-block
 			(s-var
-				(p-assign (ident "value_"))
+				(p-var-assign (ident "value_"))
 				(e-num (value "42")))
 			(s-for
 				(p-assign (ident "n"))
 				(e-empty_list)
 				(e-block
 					(s-reassign
-						(p-assign (ident "value_"))
+						(p-var-assign (ident "value_"))
 						(e-lookup-local
 							(p-assign (ident "n"))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "value_"))))
+				(p-var-assign (ident "value_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

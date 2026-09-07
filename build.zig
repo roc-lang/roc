@@ -2509,6 +2509,47 @@ fn buildAndCopyStrongIntrinsicWasmHostObject(
     return &copy_step.step;
 }
 
+/// Build the minimal wasm host shared by the `exports:` fixtures, whose
+/// platform headers differ only in what they declare in that field.
+fn buildAndCopyExportsFixtureWasmHostObject(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+) *Step {
+    const obj = b.addObject(.{
+        .name = "exports_fixture_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/wasm/issue_10951_wasm_exports/wasm_host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    configureBackend(obj, target);
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
+    obj.bundle_compiler_rt = false;
+
+    const copy_step = b.addUpdateSourceFiles();
+    copy_step.addCopyFileToSource(
+        obj.getEmittedBin(),
+        "test/wasm/issue_10951_wasm_exports/missing_exports/platform/targets/wasm32/host.wasm",
+    );
+    copy_step.addCopyFileToSource(
+        obj.getEmittedBin(),
+        "test/wasm/issue_10951_wasm_exports/unknown_export/platform/targets/wasm32/host.wasm",
+    );
+    copy_step.addCopyFileToSource(
+        obj.getEmittedBin(),
+        "test/wasm/issue_10951_wasm_exports/empty_exports/platform/targets/wasm32/host.wasm",
+    );
+    return &copy_step.step;
+}
+
 // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
 const FixArchivePaddingStep = struct {
     step: Step,
@@ -2837,6 +2878,13 @@ fn setupTestPlatforms(
     );
     clear_cache_step.dependOn(wasm_host_step);
     clear_cache_step.dependOn(buildAndCopyStrongIntrinsicWasmHostObject(
+        b,
+        wasm_target,
+        optimize,
+        strip,
+        omit_frame_pointer,
+    ));
+    clear_cache_step.dependOn(buildAndCopyExportsFixtureWasmHostObject(
         b,
         wasm_target,
         optimize,
@@ -3703,6 +3751,9 @@ pub fn build(b: *std.Build) void {
     // Store CLI runner step reference so we can add glue host dependency later.
     var run_cli_test_step: ?*std.Build.Step = null;
 
+    const cli_test_options = b.addOptions();
+    cli_test_options.addOption(bool, "binaryen", !use_system_llvm and user_llvm_path == null);
+
     // CLI integration tests: one harness-backed runner covers platforms,
     // subcommands, echo, and glue. Focus locally with:
     //   zig build run-test-cli -- --suite echo --filter "case name"
@@ -3728,6 +3779,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         parallel_cli_runner_exe.root_module.link_libc = true;
+        parallel_cli_runner_exe.root_module.addOptions("cli_test_options", cli_test_options);
         build_test_cli_runners_step.dependOn(&parallel_cli_runner_exe.step);
 
         const run_cli = b.addRunArtifact(parallel_cli_runner_exe);
@@ -4965,6 +5017,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
 
+        const build_wasm_box_zst_app = b.addRunArtifact(roc_exe);
+        build_wasm_box_zst_app.addArgs(&.{
+            "build",
+            "test/wasm/box_zst_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/box_zst_static_lib_app.wasm",
+        });
+        build_wasm_box_zst_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_box_zst_app.step);
+
         const build_wasm_boxed_model_update_app = b.addRunArtifact(roc_exe);
         build_wasm_boxed_model_update_app.addArgs(&.{
             "build",
@@ -5227,6 +5290,17 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
+
+            const run_wasm_box_zst_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_box_zst_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/box_zst_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+            });
+            run_wasm_box_zst_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_box_zst_test.step);
 
             const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_boxed_model_update_test.addArgs(&.{
@@ -5731,6 +5805,7 @@ pub fn build(b: *std.Build) void {
         }),
         .filters = test_filters,
     });
+    cli_runner_unit_test.root_module.addOptions("cli_test_options", cli_test_options);
     test_suites.register(.{
         .step_suffix = "cli-runner-unit",
         .description = "Run CLI runner Zig unit tests",
@@ -5765,6 +5840,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
             .imports = &.{
+                .{ .name = "base", .module = roc_modules.base },
+                .{ .name = "backend", .module = roc_modules.backend },
                 .{ .name = "layout", .module = roc_modules.layout },
                 .{ .name = "lir", .module = roc_modules.lir },
                 .{ .name = "ctx", .module = roc_modules.ctx },

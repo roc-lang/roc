@@ -65,14 +65,14 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "$var"))
+				(p-var-assign (ident "$var"))
 				(e-tag (name "True")))
 			(s-runtime-error (tag "break_outside_loop"))
 			(s-reassign
-				(p-assign (ident "$var"))
+				(p-var-assign (ident "$var"))
 				(e-tag (name "False")))
 			(e-lookup-local
-				(p-assign (ident "$var"))))
+				(p-var-assign (ident "$var"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin)))))
 ~~~

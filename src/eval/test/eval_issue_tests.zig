@@ -1068,6 +1068,74 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"xnull\"" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/11094
+        //
+        // The custom codec delegates through `a.parser_for`. Its `Bool`
+        // instantiation must select Bool's scalar parser instead of opening
+        // Bool's tag-union runtime representation under the outer contract.
+        .name = "issue 11094: custom codec delegating to Bool's parser through its type parameter decodes",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\    parser_for : encoding -> (state -> Try({ value : Wrap(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\        where [
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\        ]
+        \\    parser_for = |encoding| {
+        \\        Elem : a
+        \\        parse_elem = Elem.parser_for(encoding)
+        \\        |state|
+        \\            match parse_elem(state) {
+        \\                Ok(parsed) => Ok({ value: W(parsed.value), rest: parsed.rest })
+        \\                Err(InvalidJson(e)) => Err(InvalidJson(e))
+        \\                Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
+        \\            }
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    parsed : Try({ r : Wrap(Bool) }, _)
+        \\    parsed = Json.parse("{\"r\":true}")
+        \\    match parsed {
+        \\        Ok({ r: W(value) }) => if value "yes" else "no"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"yes\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11094
+        //
+        // The encoder path has the same nominal-subject identity requirement
+        // as the parser path above. Delegating through `a.encoder_for` must use
+        // Bool's scalar encoder instead of its tag-union representation.
+        .name = "issue 11094: custom codec delegating to Bool's encoder through its type parameter encodes",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\    encoder_for : encoding -> (Wrap(a), state -> Try(state, err))
+        \\        where [
+        \\            a.encoder_for : encoding -> (a, state -> Try(state, err)),
+        \\        ]
+        \\    encoder_for = |encoding| {
+        \\        Elem : a
+        \\        encode_elem = Elem.encoder_for(encoding)
+        \\        |W(value), state| encode_elem(value, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    wrapped : Wrap(Bool)
+        \\    wrapped = W(Bool.True)
+        \\    Json.to_str({ r: wrapped })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"r\\\":true}\"" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11064
         .name = "issue 11064: unannotated imported field reader runs from every match arm calling it",
         .source_kind = .module,
@@ -1140,5 +1208,34 @@ pub const tests = [_]TestCase{
         \\main = Str.join_with(wrap([], "a"), ",")
         ,
         .expected = .{ .inspect_str = "\"v: a\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11099
+        // `Tp.send` is unannotated and dispatches a method on its parameter, so
+        // its type carries a where-clause. `Tp.effects` stores that closure in
+        // an unannotated record, and the importing module reads the field back
+        // out and calls it. Calling the closure through the imported record
+        // must run `send`, so this evaluates to "hi!".
+        .name = "issue 11099: where-clause closure read out of a record in an imported module",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Tp",
+            .source =
+            \\Tp := [].{
+            \\    effects = { send: send }
+            \\
+            \\    send = |x| x.concat("!")
+            \\}
+            ,
+        }},
+        .source =
+        \\import Tp
+        \\
+        \\main = {
+        \\    s = Tp.effects.send
+        \\    s("hi")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi!\"" },
     },
 };

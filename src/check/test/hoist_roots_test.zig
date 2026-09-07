@@ -1140,7 +1140,6 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_nominal_external,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_interpolation,
             .e_structural_eq,
@@ -1214,8 +1213,8 @@ test "hoist roots are not selected for branch-local binding dependencies" {
 test "hoist roots are not selected for mutable local dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
-        \\    var x = 41.I64
-        \\    y = x + 1.I64
+        \\    var $x = 41.I64
+        \\    y = $x + 1.I64
         \\    y
         \\}
     );

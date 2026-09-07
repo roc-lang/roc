@@ -44,7 +44,7 @@ const Ident = base.Ident;
 pub fn instantiateNominalBacking(
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *std.AutoHashMap(Var, Var),
+    var_map: *@import("collections").DenseMap(Var, Var),
     decl: types_mod.NominalDecl,
     args: []const Var,
     current_rank: Rank,
@@ -243,7 +243,7 @@ pub const Instantiator = struct {
     // not owned
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *std.AutoHashMap(Var, Var),
+    var_map: *@import("collections").DenseMap(Var, Var),
 
     current_rank: Rank,
     rigid_behavior: RigidBehavior,

@@ -1,10 +1,9 @@
-//! Security regression tests for the package/platform effect boundary.
+//! Security regression tests for package host authority.
 //!
-//! Roc's central safety property for dependencies is that a *package* is pure:
-//! only a *platform* can reach the host, so adding a third-party package cannot
-//! give that dependency the ability to read files, open sockets, or otherwise
-//! perform effects. That property is what makes a Roc dependency tree safe to
-//! grow without auditing every package for supply-chain behavior.
+//! A package may explicitly depend on the graph's selected platform and call
+//! its exposed hosted effects. It must not manufacture host authority of its
+//! own: only the selected platform's hosted section binds Roc declarations to
+//! host symbols, and the app remains responsible for satisfying `requires`.
 //!
 //! Nothing enforces that property in one place; it falls out of several
 //! independent checks spread across parsing, package resolution, module
@@ -17,18 +16,19 @@
 //! test above would also "pass" against a compiler that simply rejected
 //! everything. One shows a package may still *receive* an effectful function
 //! from the app and call it, since capability passing is the sanctioned way
-//! for a package to perform effects. The other two show a genuine headerless
-//! app still gets `echo!` -- pointed at directly, and pointed at while an
-//! owning `main.roc` supplies its packages -- since the boundary is drawn by
-//! withholding that from everything which is not the entry module.
+//! for a package to perform effects without naming the platform itself. The
+//! other two show a genuine headerless app still gets `echo!` -- pointed at
+//! directly, and pointed at while an owning `main.roc` supplies its packages
+//! -- since the boundary is drawn by withholding that from everything which is
+//! not the entry module.
 //!
 //! Six more cases live in `test/package-effect-boundary/` instead of here: a
-//! package naming a platform as a dependency, a package header using the
-//! app-only `platform` keyword, a package shipping a module called `Builtin`,
-//! a benign package whose stray `main!` must not panic the consumer's
-//! compiler, a package shipping a platformless `app` header, and that same
-//! file pointed at directly as a positive control. The first three are refused
-//! by package resolution and module discovery, which
+//! package naming a platform target without the `platform` keyword, a package
+//! header naming one with that keyword and being accepted, a package shipping
+//! a module called `Builtin`, a benign package whose stray `main!` must not
+//! panic the consumer's compiler, a package shipping a platformless `app`
+//! header, and that same file pointed at directly as a positive control. The
+//! first three are decided by package resolution and module discovery, which
 //! `Coordinator.discoverAppFromPath` does not run, so only driving the real
 //! `roc check` exercises them. The next two guard against a panic, which
 //! aborts the process and so cannot be asserted from inside this runner at

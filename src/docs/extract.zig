@@ -1075,7 +1075,7 @@ fn reparentDottedChildInto(
 fn defEntryName(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?[]const u8 {
     const def = module_env.store.getDef(def_idx);
     return switch (module_env.store.getPattern(def.pattern)) {
-        .assign => |assign| module_env.getIdentText(assign.ident),
+        inline .assign, .var_assign => |assign| module_env.getIdentText(assign.ident),
         .nominal => |nominal| switch (module_env.store.getStatement(nominal.nominal_type_decl)) {
             .s_nominal_decl => |decl| module_env.getIdentText(module_env.store.getTypeHeader(decl.header).relative_name),
             .s_decl,
@@ -1133,7 +1133,7 @@ fn extractDefEntry(
     const pattern = module_env.store.getPattern(def.pattern);
 
     switch (pattern) {
-        .assign => |a| {
+        inline .assign, .var_assign => |a| {
             const ident_name = module_env.getIdentText(a.ident);
             const duped_name = try gpa.dupe(u8, ident_name);
             errdefer gpa.free(duped_name);

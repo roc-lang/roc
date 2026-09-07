@@ -52,7 +52,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 227)
+			(receiver
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(args
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure

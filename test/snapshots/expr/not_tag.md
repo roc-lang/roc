@@ -8,18 +8,22 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-MISSING METHOD - not_tag.md:1:1:1:8
+TYPE MISMATCH - not_tag.md:1:3:1:7
 # PROBLEMS
-── ✗ missing method ───────────────────────────────────────────── not_tag.md:1:1
+── ✗ type mismatch ────────────────────────────────────────────── not_tag.md:1:3
 
-This not method is being called on a value whose type doesn't have that method.
+The first argument being passed to this function has the wrong type.
 
 !(C(2))
-^^^^^^^
+  ^^^^
 
-The value's type, which does not have a method named not, is:
+This argument has the type:
 
     [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+
+But the function needs the first argument to be:
+
+    Bool
 
 # TOKENS
 ~~~zig
@@ -40,9 +44,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "erroneous_value_expr"))
+(e-call
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+	(e-tag (name "C")
+		(args
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[C(Dec), ..]"))
+(expr (type "Error"))
 ~~~

@@ -607,12 +607,10 @@ const StrictBinding = struct {
 
 const PositionedBinding = union(enum) {
     strict: StrictBinding,
-    /// The exact cloned recursive statement that owns a symbolic value's
-    /// runtime back-edge. Keeping this anchor in the same source-ordered chain
-    /// as the initializer's strict leaves lets transparent value flow retain
-    /// the known outer structure without turning the finite symbolic graph
-    /// into an unbound local reference.
-    recursive_anchor: Ast.StmtId,
+    /// An ordered binding with a structured pattern or a recursive anchor.
+    /// Keeping a record snapshot in one statement avoids turning its width
+    /// into a chain of separate expression bindings.
+    statement: Ast.StmtId,
 };
 
 const BindingNode = struct {
@@ -670,9 +668,9 @@ const BindingChain = struct {
         self.last = node;
     }
 
-    fn appendRecursiveAnchor(self: *BindingChain, arena: Allocator, stmt: Ast.StmtId) Allocator.Error!void {
+    fn appendStatement(self: *BindingChain, arena: Allocator, stmt: Ast.StmtId) Allocator.Error!void {
         const node = try arena.create(BindingNode);
-        node.* = .{ .binding = .{ .recursive_anchor = stmt }, .previous = self.last };
+        node.* = .{ .binding = .{ .statement = stmt }, .previous = self.last };
         if (self.last) |last| {
             last.next = node;
         } else {
@@ -703,9 +701,9 @@ const BindingChain = struct {
                     std.debug.assert(program.getLocal(binding.local).ty == binding.ty);
                     std.debug.assert(program.getExpr(binding.value).ty == binding.ty);
                 },
-                .recursive_anchor => |stmt_id| {
+                .statement => |stmt_id| {
                     const stmt = program.getStmt(stmt_id);
-                    std.debug.assert(stmt == .let_ and stmt.let_.recursive);
+                    std.debug.assert(stmt == .let_);
                 },
             }
             previous = node;
@@ -714,18 +712,6 @@ const BindingChain = struct {
         std.debug.assert((self.first == null) == (self.last == null));
     }
 
-    fn hasRecursiveAnchor(self: BindingChain) bool {
-        var current = self.first;
-        while (current) |node| : (current = node.next) {
-            if (node.binding == .recursive_anchor) return true;
-        }
-        return false;
-    }
-
-    /// Whether materializing a symbolic value outside this chain would expose
-    /// one of the chain's private locals. Recursive initializer chains use
-    /// this exact scope proof before letting their symbolic structure flow
-    /// past the recursive statement.
     fn referencedByExpr(
         self: BindingChain,
         program: *const Ast.Program,
@@ -735,11 +721,9 @@ const BindingChain = struct {
         while (current) |node| : (current = node.next) {
             switch (node.binding) {
                 .strict => |binding| if (exprReferencesLocal(program, expr, binding.local)) return true,
-                .recursive_anchor => |stmt_id| {
+                .statement => |stmt_id| {
                     const stmt = program.getStmt(stmt_id);
-                    if (stmt != .let_ or !stmt.let_.recursive) {
-                        Common.invariant("recursive binding-chain anchor was not a recursive statement");
-                    }
+                    if (stmt != .let_) Common.invariant("binding-chain statement was not a binding");
                     var found = false;
                     try Ast.forEachBoundLocal(program, stmt.let_.pat, PatternLocalUseProbe{
                         .program = program,
@@ -2225,231 +2209,95 @@ const Pass = struct {
         }
     }
 
-    /// Whether cloning only a loop would lose the enclosing tail's exact
-    /// demand for its compiler-generated state result. Such a function is
-    /// cloned as a whole so `loopWithSelectedExitValues` can omit unused
-    /// exit fields while leaving the complete back-edge state intact.
-    fn bodyHasProjectableLoopResult(self: *Pass, expr_id: Ast.ExprId) bool {
-        const expr = self.program.getExpr(expr_id);
-        return switch (expr.data) {
-            .let_ => |let_| blk: {
-                break :blk (self.program.getExpr(let_.value).data == .loop_ and
-                    self.tuplePatternIsPartiallyUsedInExpr(let_.bind, let_.rest)) or
-                    self.bodyHasProjectableLoopResult(let_.value) or
-                    self.bodyHasProjectableLoopResult(let_.rest);
+    /// Find a partially used tuple or aggregate loop result in one traversal.
+    /// Sequential spans use a cursor rather than one pending item per statement.
+    fn bodyHasProjectableLoopResult(self: *Pass, expr_id: Ast.ExprId) Common.LowerError!bool {
+        const Work = union(enum) {
+            expr: Ast.ExprId,
+            statements: struct {
+                span: Ast.Span(Ast.StmtId),
+                cursor: u32 = 0,
+                final_expr: ?Ast.ExprId,
             },
-            .block => |block| blk: {
-                const statements = self.program.stmtSpan(block.statements);
-                for (0..statements.len) |index| {
-                    const stmt_id = GuardedList.at(statements, index);
-                    switch (self.program.getStmt(stmt_id)) {
+        };
+        var work = std.ArrayList(Work).empty;
+        defer work.deinit(self.allocator);
+        try work.append(self.allocator, .{ .expr = expr_id });
+        while (work.pop()) |item| {
+            const current = switch (item) {
+                .expr => |expr| expr,
+                .statements => |sequence| {
+                    const statements = self.program.stmtSpan(sequence.span);
+                    if (sequence.cursor == statements.len) {
+                        if (sequence.final_expr) |final| try work.append(self.allocator, .{ .expr = final });
+                        continue;
+                    }
+                    const stmt = self.program.getStmt(GuardedList.at(statements, sequence.cursor));
+                    try work.append(self.allocator, .{ .statements = .{
+                        .span = sequence.span,
+                        .cursor = sequence.cursor + 1,
+                        .final_expr = sequence.final_expr,
+                    } });
+                    switch (stmt) {
                         .let_ => |let_| {
-                            if (self.program.getExpr(let_.value).data == .loop_ and
-                                self.tuplePatternIsPartiallyUsedInBlockTail(
-                                    let_.pat,
-                                    statements,
-                                    index + 1,
-                                    block.final_expr,
-                                )) break :blk true;
-                            if (self.bodyHasProjectableLoopResult(let_.value)) break :blk true;
+                            if (sequence.final_expr) |final| {
+                                if (self.program.getExpr(let_.value).data == .loop_ and
+                                    (self.tuplePatternIsPartiallyUsedInBlockTail(let_.pat, statements, sequence.cursor + 1, final) or
+                                        try self.aggregateLoopBindingIsPartiallyUsedInBlockTail(let_.pat, let_.value, statements, sequence.cursor + 1, final))) return true;
+                            }
+                            try work.append(self.allocator, .{ .expr = let_.value });
                         },
-                        .expr, .expect, .dbg => |value| if (self.bodyHasProjectableLoopResult(value)) break :blk true,
-                        .return_ => |ret| if (self.bodyHasProjectableLoopResult(ret.value)) break :blk true,
+                        .expr, .expect, .dbg => |expr| try work.append(self.allocator, .{ .expr = expr }),
+                        .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
                         .uninitialized, .crash => {},
                     }
-                }
-                break :blk self.bodyHasProjectableLoopResult(block.final_expr);
-            },
-            .if_ => |if_| blk: {
-                const branches = self.program.ifBranchSpan(if_.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    if (self.bodyHasProjectableLoopResult(branch.cond) or
-                        self.bodyHasProjectableLoopResult(branch.body)) break :blk true;
-                }
-                break :blk self.bodyHasProjectableLoopResult(if_.final_else);
-            },
-            .match_ => |match| blk: {
-                if (self.bodyHasProjectableLoopResult(match.scrutinee)) break :blk true;
-                const branches = self.program.branchSpan(match.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    const bindings = self.program.stmtSpan(branch.bindings);
-                    for (0..bindings.len) |binding_index| {
-                        if (self.stmtHasProjectableLoopResult(GuardedList.at(bindings, binding_index))) break :blk true;
+                    continue;
+                },
+            };
+            switch (self.program.getExpr(current).data) {
+                .let_ => |let_| {
+                    if (self.program.getExpr(let_.value).data == .loop_ and
+                        (self.tuplePatternIsPartiallyUsedInExpr(let_.bind, let_.rest) or
+                            try self.aggregateLoopBindingIsPartiallyUsedInExpr(let_.bind, let_.value, let_.rest))) return true;
+                    try work.append(self.allocator, .{ .expr = let_.rest });
+                    try work.append(self.allocator, .{ .expr = let_.value });
+                },
+                .block => |block| try work.append(self.allocator, .{ .statements = .{ .span = block.statements, .final_expr = block.final_expr } }),
+                .if_ => |if_| {
+                    try work.append(self.allocator, .{ .expr = if_.final_else });
+                    const branches = self.program.ifBranchSpan(if_.branches);
+                    var index = branches.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const branch = GuardedList.at(branches, index);
+                        try work.append(self.allocator, .{ .expr = branch.body });
+                        try work.append(self.allocator, .{ .expr = branch.cond });
                     }
-                    if (branch.guard) |guard| if (self.bodyHasProjectableLoopResult(guard)) break :blk true;
-                    if (self.bodyHasProjectableLoopResult(branch.body)) break :blk true;
-                }
-                break :blk false;
-            },
-            .loop_ => |loop| self.bodyHasProjectableLoopResult(loop.body),
-            .typed_boundary => |boundary| self.bodyHasProjectableLoopResult(boundary.value),
-            .nominal, .dbg, .expect => |child| self.bodyHasProjectableLoopResult(child),
-            .comptime_branch_taken => |taken| self.bodyHasProjectableLoopResult(taken.body),
-            .join_point => |join_point| self.bodyHasProjectableLoopResult(join_point.body) or
-                self.bodyHasProjectableLoopResult(join_point.remainder),
-            .local,
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .static_data_candidate,
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .tag,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .fn_ref,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .field_access,
-            .tuple_access,
-            .structural_eq,
-            .structural_hash,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .break_,
-            .continue_,
-            .jump,
-            .return_,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            .expect_err,
-            => false,
-        };
-    }
-
-    fn stmtHasProjectableLoopResult(self: *Pass, stmt_id: Ast.StmtId) bool {
-        return switch (self.program.getStmt(stmt_id)) {
-            .let_ => |let_| self.bodyHasProjectableLoopResult(let_.value),
-            .expr, .expect, .dbg => |expr| self.bodyHasProjectableLoopResult(expr),
-            .return_ => |ret| self.bodyHasProjectableLoopResult(ret.value),
-            .uninitialized, .crash => false,
-        };
-    }
-
-    fn bodyHasAggregateProjectableLoopResult(self: *Pass, expr_id: Ast.ExprId) Common.LowerError!bool {
-        const expr = self.program.getExpr(expr_id);
-        return switch (expr.data) {
-            .let_ => |let_| (self.program.getExpr(let_.value).data == .loop_ and
-                try self.aggregateLoopBindingIsPartiallyUsedInExpr(let_.bind, let_.value, let_.rest)) or
-                try self.bodyHasAggregateProjectableLoopResult(let_.value) or
-                try self.bodyHasAggregateProjectableLoopResult(let_.rest),
-            .block => |block| blk: {
-                const statements = self.program.stmtSpan(block.statements);
-                for (0..statements.len) |index| {
-                    const stmt_id = GuardedList.at(statements, index);
-                    switch (self.program.getStmt(stmt_id)) {
-                        .let_ => |let_| {
-                            if (self.program.getExpr(let_.value).data == .loop_ and
-                                try self.aggregateLoopBindingIsPartiallyUsedInBlockTail(
-                                    let_.pat,
-                                    let_.value,
-                                    statements,
-                                    index + 1,
-                                    block.final_expr,
-                                )) break :blk true;
-                            if (try self.bodyHasAggregateProjectableLoopResult(let_.value)) break :blk true;
-                        },
-                        .expr, .expect, .dbg => |value| if (try self.bodyHasAggregateProjectableLoopResult(value)) break :blk true,
-                        .return_ => |ret| if (try self.bodyHasAggregateProjectableLoopResult(ret.value)) break :blk true,
-                        .uninitialized, .crash => {},
+                },
+                .match_ => |match| {
+                    const branches = self.program.branchSpan(match.branches);
+                    var index = branches.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const branch = GuardedList.at(branches, index);
+                        try work.append(self.allocator, .{ .expr = branch.body });
+                        if (branch.guard) |guard| try work.append(self.allocator, .{ .expr = guard });
+                        try work.append(self.allocator, .{ .statements = .{ .span = branch.bindings, .final_expr = null } });
                     }
-                }
-                break :blk try self.bodyHasAggregateProjectableLoopResult(block.final_expr);
-            },
-            .if_ => |if_| blk: {
-                const branches = self.program.ifBranchSpan(if_.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    if (try self.bodyHasAggregateProjectableLoopResult(branch.cond) or
-                        try self.bodyHasAggregateProjectableLoopResult(branch.body)) break :blk true;
-                }
-                break :blk try self.bodyHasAggregateProjectableLoopResult(if_.final_else);
-            },
-            .match_ => |match| blk: {
-                if (try self.bodyHasAggregateProjectableLoopResult(match.scrutinee)) break :blk true;
-                const branches = self.program.branchSpan(match.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    const bindings = self.program.stmtSpan(branch.bindings);
-                    for (0..bindings.len) |binding_index| {
-                        if (try self.stmtHasAggregateProjectableLoopResult(GuardedList.at(bindings, binding_index))) break :blk true;
-                    }
-                    if (branch.guard) |guard| {
-                        if (try self.bodyHasAggregateProjectableLoopResult(guard)) break :blk true;
-                    }
-                    if (try self.bodyHasAggregateProjectableLoopResult(branch.body)) break :blk true;
-                }
-                break :blk false;
-            },
-            .loop_ => |loop| try self.bodyHasAggregateProjectableLoopResult(loop.body),
-            .typed_boundary => |boundary| try self.bodyHasAggregateProjectableLoopResult(boundary.value),
-            .nominal, .dbg, .expect => |child| try self.bodyHasAggregateProjectableLoopResult(child),
-            .comptime_branch_taken => |taken| try self.bodyHasAggregateProjectableLoopResult(taken.body),
-            .join_point => |join_point| try self.bodyHasAggregateProjectableLoopResult(join_point.body) or
-                try self.bodyHasAggregateProjectableLoopResult(join_point.remainder),
-            .local,
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .static_data_candidate,
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .tag,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .fn_ref,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .field_access,
-            .tuple_access,
-            .structural_eq,
-            .structural_hash,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .break_,
-            .continue_,
-            .jump,
-            .return_,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            .expect_err,
-            => false,
-        };
-    }
-
-    fn stmtHasAggregateProjectableLoopResult(self: *Pass, stmt_id: Ast.StmtId) Common.LowerError!bool {
-        return switch (self.program.getStmt(stmt_id)) {
-            .let_ => |let_| try self.bodyHasAggregateProjectableLoopResult(let_.value),
-            .expr, .expect, .dbg => |expr| try self.bodyHasAggregateProjectableLoopResult(expr),
-            .return_ => |ret| try self.bodyHasAggregateProjectableLoopResult(ret.value),
-            .uninitialized, .crash => false,
-        };
+                    try work.append(self.allocator, .{ .expr = match.scrutinee });
+                },
+                .loop_ => |loop| try work.append(self.allocator, .{ .expr = loop.body }),
+                .typed_boundary => |boundary| try work.append(self.allocator, .{ .expr = boundary.value }),
+                .nominal, .dbg, .expect => |child| try work.append(self.allocator, .{ .expr = child }),
+                .comptime_branch_taken => |taken| try work.append(self.allocator, .{ .expr = taken.body }),
+                .join_point => |join| {
+                    try work.append(self.allocator, .{ .expr = join.remainder });
+                    try work.append(self.allocator, .{ .expr = join.body });
+                },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .list, .tuple, .record, .record_update, .tag, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .break_, .continue_, .jump, .return_, .crash, .comptime_exhaustiveness_failed, .expect_err => {},
+            }
+        }
+        return false;
     }
 
     fn aggregateLoopBindingIsPartiallyUsedInExpr(
@@ -4007,9 +3855,7 @@ const Pass = struct {
                 .roc => |body| body,
                 .hosted => continue,
             };
-            const tuple_projectable = self.bodyHasProjectableLoopResult(body);
-            const aggregate_projectable = try self.bodyHasAggregateProjectableLoopResult(body);
-            if (!tuple_projectable and !aggregate_projectable) continue;
+            if (!try self.bodyHasProjectableLoopResult(body)) continue;
 
             var cloner = Cloner.initForLoopExitSelection(self);
             defer cloner.deinit();
@@ -5616,15 +5462,18 @@ const Cloner = struct {
                 const base_ref = try self.addExpr(.{ .ty = base_ty, .data = .{ .local = base_local } });
 
                 const fields = try self.arena.allocator().alloc(FieldValue, result_type_fields.len);
+                var snapshot_fields = std.ArrayList(Ast.RecordDestruct).empty;
+                defer snapshot_fields.deinit(self.pass.allocator);
                 for (result_type_fields, 0..) |result_type_field, index| {
                     const updated = for (source_fields) |field| {
                         if (self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, field.name)) break field.value;
                     } else null;
                     if (updated != null) continue;
 
-                    const base_type_field = for (base_type_fields) |field| {
-                        if (self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, field.name)) break field;
-                    } else Common.invariant("record update result contained a field absent from its base in SpecConstr");
+                    const base_type_field = base_type_fields[index];
+                    if (!self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, base_type_field.name)) {
+                        Common.invariant("record update base and result had different ordered fields in SpecConstr");
+                    }
                     if (!try self.pass.program.types.typeEql(
                         &self.pass.program.names,
                         base_type_field.ty,
@@ -5633,20 +5482,24 @@ const Cloner = struct {
                         Common.invariant("record update changed the type of an unmodified field in SpecConstr");
                     }
 
-                    const read = try self.addExpr(.{ .ty = base_type_field.ty, .data = .{ .field_access = .{
-                        .receiver = base_ref,
-                        .segments = try self.pass.program.addFieldAccessSegmentSpan(&.{.{ .field = base_type_field.name }}),
-                    } } });
                     const read_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), base_type_field.ty);
-                    try bindings.appendBinding(self.arena.allocator(), .{
-                        .local = read_local,
-                        .ty = base_type_field.ty,
-                        .value = read,
-                    });
+                    const read_pat = try self.pass.program.addPat(.{ .ty = base_type_field.ty, .data = .{ .bind = read_local } });
+                    try snapshot_fields.append(self.pass.allocator, .{ .name = base_type_field.name, .pattern = read_pat });
                     fields[index] = .{
                         .name = result_type_field.name,
                         .value = .{ .expr = try self.addExpr(.{ .ty = base_type_field.ty, .data = .{ .local = read_local } }) },
                     };
+                }
+
+                // Snapshot every unchanged field before cloning replacement
+                // work. A later whole-base read would keep its collections
+                // shared across mutations and prevent in-place reuse.
+                if (snapshot_fields.items.len != 0) {
+                    const snapshot_pat = try self.pass.program.addPat(.{ .ty = base_ty, .data = .{
+                        .record = try self.pass.program.addRecordDestructSpan(snapshot_fields.items),
+                    } });
+                    const snapshot = try self.addStmt(.{ .let_ = .{ .pat = snapshot_pat, .value = base_ref } });
+                    try bindings.appendStatement(self.arena.allocator(), snapshot);
                 }
 
                 for (result_type_fields, 0..) |type_field, index| {
@@ -8356,7 +8209,7 @@ const Cloner = struct {
                 block_bindings.appendChain(cloned.bindings);
                 const anchor = cloned.stmt orelse
                     Common.invariant("recursive statement dissolved while cloning a transparent block");
-                try block_bindings.appendRecursiveAnchor(self.arena.allocator(), anchor);
+                try block_bindings.appendStatement(self.arena.allocator(), anchor);
                 continue;
             }
             const value = try self.cloneExprValueInto(let_.value, &block_bindings);
@@ -9501,35 +9354,16 @@ const Cloner = struct {
         };
     }
 
-    /// Place a strict chain around `expr`, oldest binding outermost.
+    /// Place a strict chain in one flat block, in source evaluation order.
     fn wrapBindings(self: *Cloner, bindings: BindingChain, expr: Ast.ExprId) Common.LowerError!Ast.ExprId {
-        bindings.verify(self.pass.program);
         if (bindings.isEmpty()) return expr;
-        if (bindings.hasRecursiveAnchor()) {
-            var statements = std.ArrayList(Ast.StmtId).empty;
-            defer statements.deinit(self.pass.allocator);
-            try self.appendBindingStmts(bindings, &statements);
-            return try self.addExpr(.{ .ty = self.pass.program.getExpr(expr).ty, .data = .{ .block = .{
-                .statements = try self.pass.program.addStmtSpan(statements.items),
-                .final_expr = expr,
-            } } });
-        }
-        const ty = self.pass.program.getExpr(expr).ty;
-        var result = expr;
-        var current = bindings.last;
-        while (current) |node| : (current = node.previous) {
-            const binding = node.binding.strict;
-            const pat = try self.pass.program.addPat(.{
-                .ty = binding.ty,
-                .data = .{ .bind = binding.local },
-            });
-            result = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
-                .bind = pat,
-                .value = binding.value,
-                .rest = result,
-            } } });
-        }
-        return result;
+        var statements = std.ArrayList(Ast.StmtId).empty;
+        defer statements.deinit(self.pass.allocator);
+        try self.appendBindingStmts(bindings, &statements);
+        return try self.addExpr(.{ .ty = self.pass.program.getExpr(expr).ty, .data = .{ .block = .{
+            .statements = try self.pass.program.addStmtSpan(statements.items),
+            .final_expr = expr,
+        } } });
     }
 
     /// Place a strict chain into a statement list, oldest first.
@@ -9548,7 +9382,7 @@ const Cloner = struct {
                         .value = binding.value,
                     } }));
                 },
-                .recursive_anchor => |stmt| try out.append(self.pass.allocator, stmt),
+                .statement => |stmt| try out.append(self.pass.allocator, stmt),
             }
         }
     }
@@ -14172,20 +14006,16 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     try std.testing.expectEqual(@as(usize, 2), record.fields.len);
 
     const base_binding = cloned.bindings.first orelse return error.TestUnexpectedResult;
-    const read_binding = base_binding.next orelse return error.TestUnexpectedResult;
-    try std.testing.expect(read_binding.next == null);
-    const read = blk_read: {
-        const scrutinee = program.getExpr(read_binding.binding.strict.value).data;
-        if (scrutinee != .field_access) return error.TestUnexpectedResult;
-        break :blk_read scrutinee.field_access;
-    };
-    const read_segments = program.fieldAccessSegmentSpan(read.segments);
-    try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(read_segments));
-    try std.testing.expectEqual(a, GuardedList.at(read_segments, 0).field);
-    try std.testing.expectEqual(base_binding.binding.strict.local, program.getExpr(read.receiver).data.local);
+    const snapshot_node = base_binding.next orelse return error.TestUnexpectedResult;
+    try std.testing.expect(snapshot_node.next == null);
+    const snapshot = program.getStmt(snapshot_node.binding.statement).let_;
+    const snapshot_fields = program.recordDestructSpan(program.getPat(snapshot.pat).data.record);
+    try std.testing.expectEqual(@as(usize, 1), snapshot_fields.len);
+    const snapshot_field = GuardedList.at(snapshot_fields, 0);
+    try std.testing.expectEqual(a, snapshot_field.name);
+    try std.testing.expectEqual(base_binding.binding.strict.local, program.getExpr(snapshot.value).data.local);
+    try std.testing.expectEqual(program.getPat(snapshot_field.pattern).data.bind, program.getExpr(record.fields[0].value.expr).data.local);
 
-    try std.testing.expectEqual(a, record.fields[0].name);
-    try std.testing.expectEqual(read_binding.binding.strict.local, program.getExpr(record.fields[0].value.expr).data.local);
     try std.testing.expectEqual(b, record.fields[1].name);
     try std.testing.expectEqual(update_local, program.getExpr(record.fields[1].value.expr).data.local);
 }
@@ -14226,12 +14056,12 @@ test "SpecConstr record update permits an updated field representation to change
     try std.testing.expectEqual(result_record_ty, record.ty);
 
     const base_binding = cloned.bindings.first orelse return error.TestUnexpectedResult;
-    const read_binding = base_binding.next orelse return error.TestUnexpectedResult;
-    try std.testing.expect(read_binding.next == null);
-    const read_expr = read_binding.binding.strict.value;
-    try std.testing.expectEqual(u8_ty, program.getExpr(read_expr).ty);
-    const read_segments = program.fieldAccessSegmentSpan(program.getExpr(read_expr).data.field_access.segments);
-    try std.testing.expectEqual(a, GuardedList.at(read_segments, 0).field);
+    const snapshot_node = base_binding.next orelse return error.TestUnexpectedResult;
+    try std.testing.expect(snapshot_node.next == null);
+    const snapshot = program.getStmt(snapshot_node.binding.statement).let_;
+    const snapshot_fields = program.recordDestructSpan(program.getPat(snapshot.pat).data.record);
+    try std.testing.expectEqual(@as(usize, 1), snapshot_fields.len);
+    try std.testing.expectEqual(a, GuardedList.at(snapshot_fields, 0).name);
 
     try std.testing.expectEqual(a, record.fields[0].name);
     try std.testing.expectEqual(u8_ty, valueType(&program, record.fields[0].value));
@@ -14275,7 +14105,7 @@ test "SpecConstr keeps a transparent recursive anchor and its initializer bindin
     const anchor_node = cloned.bindings.first orelse return error.TestUnexpectedResult;
     try std.testing.expect(anchor_node.next == null);
     const anchor_id = switch (anchor_node.binding) {
-        .recursive_anchor => |stmt| stmt,
+        .statement => |stmt| stmt,
         .strict => return error.TestUnexpectedResult,
     };
     const anchor = program.getStmt(anchor_id).let_;
@@ -14334,7 +14164,8 @@ test "SpecConstr keeps a transparent recursive anchor and its initializer bindin
     // The record-update base is strict work created from the recursive
     // reference. It must remain in the initializer, where the anchor local is
     // already in scope, rather than preceding the recursive statement.
-    const initializer_let = program.getExpr(anchor.value).data.let_;
+    const initializer_block = program.getExpr(anchor.value).data.block;
+    const initializer_let = program.getStmt(GuardedList.at(program.stmtSpan(initializer_block.statements), 0)).let_;
     try std.testing.expectEqual(anchor_local, program.getExpr(initializer_let.value).data.local);
 
     const wrapped = try cloner.wrapBindings(cloned.bindings, try cloner.materialize(cloned.value));
@@ -15470,4 +15301,21 @@ test "known match fold preserves absurd elimination of a structural product" {
 
 test "call-pattern specialization declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "SpecConstr loop projection scan is stack safe on deep sequential expressions" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const unit_ty = try program.types.add(.zst);
+    const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    var body = unit;
+    for (0..50_000) |_| {
+        const local = try program.addLocal(@enumFromInt(@as(u32, @intCast(program.localsView().len))), unit_ty);
+        const pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = local } });
+        body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{ .bind = pat, .value = unit, .rest = body } } });
+    }
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    try std.testing.expect(!try pass.bodyHasProjectableLoopResult(body));
 }

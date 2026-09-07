@@ -4,6 +4,40 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+test "check - mismatched reassignment becomes a runtime error statement" {
+    const src =
+        \\main! = |_| {
+        \\    var $list = [1, 2, 3]
+        \\    $list = List.set($list, 0, 5)
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    var repeated_diagnostic_count: usize = 0;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node = test_env.module_env.store.nodes.get(node_idx);
+        if (node.tag != .malformed) continue;
+        const diagnostic = node.getPayload().diag_single_value.value;
+        var same_diagnostic_count: usize = 0;
+        var other_raw_node_idx: u32 = 0;
+        while (other_raw_node_idx < test_env.module_env.store.nodes.len()) : (other_raw_node_idx += 1) {
+            const other_node = test_env.module_env.store.nodes.get(@enumFromInt(other_raw_node_idx));
+            if (other_node.tag == .malformed and other_node.getPayload().diag_single_value.value == diagnostic) {
+                same_diagnostic_count += 1;
+            }
+        }
+        repeated_diagnostic_count = @max(repeated_diagnostic_count, same_diagnostic_count);
+    }
+    try std.testing.expectEqual(@as(usize, 2), repeated_diagnostic_count);
+}
+
 test "check - repro - issue 10365 - erroneous captured lambda poisons closure owner" {
     const src =
         \\wrap : U64, a -> Box(({} => a))
@@ -880,6 +914,160 @@ test "check - associated underscore annotation with a body is inferred normally"
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 11024 - empty record literal satisfies an all-defaulted nominal annotation" {
+    // Repro for https://github.com/roc-lang/roc/issues/11024: every field of
+    // `Foo` has a default, so the annotation-driven `{}` literal supplies a
+    // complete record and should check as `Foo`.
+    const src =
+        \\main! = |_args| {}
+        \\
+        \\Foo := { bar : U64 ?? 0, baz : U64 ?? 0 }
+        \\
+        \\y : Foo
+        \\y = {}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("y", "Foo");
+}
+
+test "check - issue 11024 - nested empty literals own their omitted defaults" {
+    const src =
+        \\Foo := { bar : U64 ?? 3, baz : U64 ?? 7 }
+        \\xs : List(Foo)
+        \\xs = [{}, {}]
+    ;
+    var env = try TestEnv.init("Test", src);
+    defer env.deinit();
+    try env.assertDefType("xs", "List(Foo)");
+
+    const omissions = env.module_env.record_omitted_defaults.items.items;
+    try std.testing.expectEqual(4, omissions.len);
+    for (omissions) |omission| {
+        try std.testing.expect(env.module_env.store.getExpr(omission.expr) == .e_empty_record);
+        var owned_count: usize = 0;
+        for (omissions) |other| {
+            if (other.expr == omission.expr) owned_count += 1;
+        }
+        try std.testing.expectEqual(2, owned_count);
+    }
+}
+
+test "check - issue 11024 - implicit defaulted nominal constructions instantiate type parameters independently" {
+    const src =
+        \\Cfg(a) := { values : List(a) ?? [] }
+        \\numbers : Cfg(U8)
+        \\numbers = {}
+        \\strings : Cfg(Str)
+        \\strings = {}
+    ;
+    var env = try TestEnv.init("Test", src);
+    defer env.deinit();
+    try env.assertDefType("numbers", "Cfg(U8)");
+    try env.assertDefType("strings", "Cfg(Str)");
+}
+
+test "check - issue 11024 - empty nominal construction rejects required fields" {
+    const src =
+        \\Foo := { bar : U64 ?? 0, baz : U64 }
+        \\y : Foo
+        \\y = {}
+    ;
+    var env = try TestEnv.init("Test", src);
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11024 - committed empty argument cannot acquire defaults" {
+    const src =
+        \\Foo := { bar : U64 ?? 0 }
+        \\read : Foo -> U64
+        \\read = |foo| foo.bar
+        \\use : {} -> U64
+        \\use = |empty| read(empty)
+    ;
+    var env = try TestEnv.init("Test", src);
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11024 - existing empty value is not a defaulted nominal backing" {
+    const src =
+        \\Foo := { bar : U64 ?? 0 }
+        \\make : {} -> Foo
+        \\make = |empty| Foo.(empty)
+    ;
+    var env = try TestEnv.init("Test", src);
+    defer env.deinit();
+    try env.assertOneTypeError("Invalid Nominal Type");
+}
+
+test "check - issue 11024 - inferred empty construction rejects a recursive default" {
+    const src =
+        \\Foo := { bar : U64 ?? make({}).bar }
+        \\make : {} -> Foo
+        \\make = |_| {}
+    ;
+    var env = try TestEnv.init("Test", src);
+    defer env.deinit();
+    try env.assertOneTypeError("Recursive Default Value");
+}
+
+test "check - issue 11024 - supplied implicit field breaks the default dependency cycle" {
+    const src =
+        \\Foo := { bar : U64 ?? make({}).bar }
+        \\make : {} -> Foo
+        \\make = |_| { bar: 5 }
+        \\y : Foo
+        \\y = {}
+    ;
+    var env = try TestEnv.init("Test", src);
+    defer env.deinit();
+    try env.assertDefType("y", "Foo");
+}
+
+test "check - issue 11024 - imported transparent defaults lift" {
+    var cfg = try TestEnv.init("Cfg",
+        \\Cfg := { bar : U64 ?? 7 }
+    );
+    defer cfg.deinit();
+    try cfg.assertNoErrors();
+
+    var good = try TestEnv.initWithImport("Good",
+        \\import Cfg
+        \\y : Cfg.Cfg
+        \\y = {}
+    , "Cfg", &cfg);
+    defer good.deinit();
+    try good.assertDefType("y", "Cfg");
+}
+
+test "check - issue 11024 - imported opaque empty records reject lifting in both orders" {
+    var secret = try TestEnv.init("Secret", "Secret :: {}\n");
+    defer secret.deinit();
+    try secret.assertNoErrors();
+
+    var bad = try TestEnv.initWithImport("Bad",
+        \\import Secret
+        \\y : Secret.Secret
+        \\y = {}
+    , "Secret", &secret);
+    defer bad.deinit();
+    try bad.assertCanErrors(&.{});
+    try bad.assertOneTypeError("Type Mismatch");
+
+    var inverse = try TestEnv.initWithImport("Inverse",
+        \\import Secret
+        \\empty : Secret.Secret -> {}
+        \\empty = |value| value
+    , "Secret", &secret);
+    defer inverse.deinit();
+    try inverse.assertCanErrors(&.{});
+    try inverse.assertOneTypeError("Type Mismatch");
 }
 
 test "check - repro - issue 10490 - standard library errors compose through open unions" {

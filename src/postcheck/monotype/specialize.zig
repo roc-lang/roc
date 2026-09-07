@@ -152,7 +152,7 @@ const SpecEntryId = union(enum(u8)) {
 /// the source function type digest, and one closed monomorphic function type
 /// digest (a record is reachable under its requested digest and, once ready
 /// with a different solved type, under its solved digest as an alias).
-const SpecLookupAddress = struct {
+pub const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
     method_scope: [32]u8,
@@ -169,6 +169,12 @@ const SpecLookupAddress = struct {
     evidence_digest: [32]u8,
     codec_contract_digest: [32]u8,
     type_digest: [32]u8,
+
+    /// Share the durable identity bucket between reservation and draft commit.
+    /// Exact type and evidence equality remain the caller's collision checks.
+    pub fn fromIdentity(identity: Ast.SpecIdentity) SpecLookupAddress {
+        return from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+    }
 
     fn from(
         callable: Ast.CallableIdentity,

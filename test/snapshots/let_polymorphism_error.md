@@ -42,8 +42,8 @@ NO CHANGE
 ~~~clojure
 (e-list
 	(elems
-		(e-num (value "42"))
-		(e-dec-small (numerator "42") (denominator-power-of-ten "1") (value "4.2"))
+		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES

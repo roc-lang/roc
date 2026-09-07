@@ -148,7 +148,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 357)
+		(e-call (constraint-fn-var 359)
 			(e-lookup-local
 				(p-assign (ident "do_something"))))))
 ~~~

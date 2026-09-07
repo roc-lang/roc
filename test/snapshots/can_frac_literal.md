@@ -69,10 +69,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Dec"))
-		(patt (type "Error"))
+		(patt (type "Dec"))
 		(patt (type "Dec")))
 	(expressions
 		(expr (type "Dec"))
-		(expr (type "Error"))
+		(expr (type "Dec"))
 		(expr (type "Dec"))))
 ~~~

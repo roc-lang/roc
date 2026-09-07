@@ -96,7 +96,15 @@ NO CHANGE
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "wrong_type_function"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-dispatch-call (method "times") (constraint-fn-var 258)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-runtime-error (tag "erroneous_value_expr")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

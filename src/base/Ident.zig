@@ -49,7 +49,7 @@ pub fn textEndsWith(text: []const u8, suffix: []const u8) bool {
 /// The original text of the identifier.
 raw_text: []const u8,
 
-/// Attributes of the identifier such as if it is effectful, ignored, or reassignable.
+/// Attributes of the identifier such as if it is effectful or ignored.
 attributes: Attributes,
 
 /// Create a new identifier from a string.
@@ -104,7 +104,7 @@ pub const Idx = packed struct(u32) {
     idx: u29,
 
     /// Sentinel value representing no/unset ident
-    pub const NONE: Idx = .{ .attributes = .{ .effectful = true, .ignored = true, .reassignable = true }, .idx = std.math.maxInt(u29) };
+    pub const NONE: Idx = .{ .attributes = .{ .effectful = true, .ignored = true, .reserved = true }, .idx = std.math.maxInt(u29) };
 
     pub fn eql(self: Idx, other: Idx) bool {
         if (comptime builtin.mode == .Debug) {
@@ -132,17 +132,18 @@ pub const Idx = packed struct(u32) {
     }
 };
 
-/// Identifier attributes such as if it is effectful, ignored, or reassignable.
+/// Identifier attributes packed into an identifier index.
 pub const Attributes = packed struct(u3) {
     effectful: bool,
     ignored: bool,
-    reassignable: bool,
+    /// Reserved to preserve the serialized identifier layout.
+    reserved: bool = false,
 
     pub fn fromString(text: []const u8) Attributes {
         return .{
             .effectful = std.mem.endsWith(u8, text, "!"),
             .ignored = std.mem.startsWith(u8, text, "_"),
-            .reassignable = std.mem.startsWith(u8, text, "$"),
+            .reserved = false,
         };
     }
 };
@@ -290,7 +291,7 @@ pub const Store = struct {
         const attributes = Attributes{
             .effectful = false,
             .ignored = false,
-            .reassignable = false,
+            .reserved = false,
         };
 
         const expected_idx = self.attributes.items.items.len;
@@ -435,7 +436,7 @@ test "from_bytes creates valid identifier" {
     try std.testing.expectEqualStrings("valid_name!", result.raw_text);
     try std.testing.expect(result.attributes.effectful == true);
     try std.testing.expect(result.attributes.ignored == false);
-    try std.testing.expect(result.attributes.reassignable == false);
+    try std.testing.expect(result.attributes.reserved == false);
 }
 
 test "from_bytes creates ignored identifier" {
@@ -443,15 +444,15 @@ test "from_bytes creates ignored identifier" {
     try std.testing.expectEqualStrings("_ignored", result.raw_text);
     try std.testing.expect(result.attributes.effectful == false);
     try std.testing.expect(result.attributes.ignored == true);
-    try std.testing.expect(result.attributes.reassignable == false);
+    try std.testing.expect(result.attributes.reserved == false);
 }
 
-test "from_bytes creates reassignable identifier" {
+test "from_bytes preserves dollar-prefixed identifier text" {
     const result = try Ident.from_bytes("$reusable");
     try std.testing.expectEqualStrings("$reusable", result.raw_text);
     try std.testing.expect(result.attributes.effectful == false);
     try std.testing.expect(result.attributes.ignored == false);
-    try std.testing.expect(result.attributes.reassignable == true);
+    try std.testing.expect(result.attributes.reserved == false);
 }
 
 test "Ident.Store empty CompactWriter roundtrip" {

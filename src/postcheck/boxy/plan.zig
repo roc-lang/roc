@@ -5884,7 +5884,7 @@ const Builder = struct {
         template_ref: checked_names.ProcedureTemplateRef,
     ) WorkerEvidenceParams {
         const view = self.moduleForCheckedModuleId(template_ref.artifact);
-        const template = &view.checked_procedure_templates.templates[@intFromEnum(template_ref.template)];
+        const template = &view.checked_procedure_templates.templates.items[@intFromEnum(template_ref.template)];
         return .{
             .view = view,
             .params = view.checked_procedure_templates.evidenceParams(template),
@@ -11202,7 +11202,7 @@ const Builder = struct {
         view: ModuleView,
         expr: checked.CheckedExprId,
     ) ?checked.ArtifactTopLevelProcedureBindingRef {
-        for (view.top_level_procedure_bindings.bindings, 0..) |binding, index| {
+        for (view.top_level_procedure_bindings.bindings.items, 0..) |binding, index| {
             const template_ref = switch (binding.body) {
                 .direct_template => |direct| switch (direct.template) {
                     .checked => |template| template,
@@ -12546,7 +12546,7 @@ test "boxy planner records root wrapper plans from checked root metadata" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
     };
-    var template_table = checked.CheckedProcedureTemplateTable{ .templates = &templates };
+    var template_table = checked.CheckedProcedureTemplateTable{ .templates = .{ .items = &templates, .capacity = templates.len } };
     const root_view = ModuleView{
         .checked_types = view,
         .checked_procedure_templates = &template_table,
@@ -12675,7 +12675,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .body = .{ .callable_eval_template = @enumFromInt(fixtureTableIndex(0)) },
         },
     };
-    var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = &bindings };
+    var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = .{ .items = &bindings, .capacity = bindings.len } };
     const roots = [_]checked.RootRequest{
         .{
             .order = 0,
@@ -12765,7 +12765,7 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
     var import_templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(import_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .hosted),
     };
-    import_checked_module.checked_procedure_templates = .{ .templates = &import_templates };
+    import_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &import_templates, .capacity = import_templates.len } };
 
     const hosted_order_key = "Import.dynamic_hosted";
     var hosted_procs = [_]checked.HostedProc{
@@ -12884,7 +12884,7 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
     var root_templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(root_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
     };
-    root_checked_module.checked_procedure_templates = .{ .templates = &root_templates };
+    root_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &root_templates, .capacity = root_templates.len } };
 
     const imported_use = checked.ProcedureUseTemplate{
         .binding = .{ .imported = imported_binding },
@@ -12995,7 +12995,7 @@ test "boxy planner records relation-owned source type for platform-required dire
     var app_templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(app_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
     };
-    app_checked_module.checked_procedure_templates = .{ .templates = &app_templates };
+    app_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &app_templates, .capacity = app_templates.len } };
     var app_bindings = [_]checked.TopLevelProcedureBinding{
         .{
             .source_scheme = typeSchemeKey(4),
@@ -13005,7 +13005,7 @@ test "boxy planner records relation-owned source type for platform-required dire
             } },
         },
     };
-    app_checked_module.top_level_procedure_bindings = .{ .bindings = &app_bindings };
+    app_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &app_bindings, .capacity = app_bindings.len } };
 
     try platform_checked_module.checked_types.payloads.append(gpa, .{
         .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}),
@@ -13058,7 +13058,7 @@ test "boxy planner records relation-owned source type for platform-required dire
     var platform_templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(platform_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
     };
-    platform_checked_module.checked_procedure_templates = .{ .templates = &platform_templates };
+    platform_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &platform_templates, .capacity = platform_templates.len } };
 
     const required = checked.RequiredAppProcedureRef{
         .artifact = app_checked_module.key,

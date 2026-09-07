@@ -796,6 +796,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_ref => |s| try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = try self.mapLocal(s.target),
                     .op = try self.mapRefOp(s.op),
+                    .take_kind = s.take_kind,
                     .residual_shell_absent_fields = s.residual_shell_absent_fields,
                     .next = try self.cloneStmt(s.next),
                 } }),
@@ -993,6 +994,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 } }),
                 .expect => |s| try self.store.addCFStmt(.{ .expect = .{
                     .condition = try self.mapLocal(s.condition),
+                    .site = s.site,
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .expect_err => |s| try self.store.addCFStmt(.{ .expect_err = .{

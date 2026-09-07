@@ -157,7 +157,7 @@ main! = |_| {}
 				(p-assign (ident "iter")))
 			(e-block
 				(s-var
-					(p-assign (ident "$s"))
+					(p-var-assign (ident "$s"))
 					(e-num (value "0")))
 				(s-for
 					(p-assign (ident "value"))
@@ -165,17 +165,17 @@ main! = |_| {}
 						(p-assign (ident "iter")))
 					(e-block
 						(s-reassign
-							(p-assign (ident "$s"))
+							(p-var-assign (ident "$s"))
 							(e-dispatch-call (method "plus") (constraint-fn-var 347)
 								(receiver
 									(e-lookup-local
-										(p-assign (ident "$s"))))
+										(p-var-assign (ident "$s"))))
 								(args
 									(e-lookup-local
 										(p-assign (ident "value"))))))
 						(e-empty_record)))
 				(e-lookup-local
-					(p-assign (ident "$s")))))
+					(p-var-assign (ident "$s")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

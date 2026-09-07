@@ -395,7 +395,7 @@ const RootCompletionState = struct {
             request_root_ids[i] = root_id;
         }
 
-        const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.len);
+        const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.items.len);
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 
@@ -1247,7 +1247,7 @@ fn lowerDevEvalAndFinishRoots(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        static_strings.entries,
+        static_strings.view(),
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
         lowered.lir_result.boxy_worker_procs.items,

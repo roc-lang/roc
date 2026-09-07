@@ -8,22 +8,18 @@ type=expr
 !3
 ~~~
 # EXPECTED
-MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
+TYPE MISMATCH - bang_on_numeric_literal.md:1:2:1:3
 # PROBLEMS
-── ✗ missing method ───────────────────────────── bang_on_numeric_literal.md:1:1
+── ✗ type mismatch ────────────────────────────── bang_on_numeric_literal.md:1:2
 
-This not method is being called on a value whose type doesn't have that method.
+This number is being used where a non-number type is needed.
 
 !3
-^^
+ ^
 
-The value's type, which does not have a method named not, is:
+Other code expects this to have the type:
 
-    Dec
-
-Hint: This numeric literal was given the type Dec because it was never used as
-any concrete number type. To use a different numeric type, add a suffix or a
-type annotation.
+    Bool
 
 # TOKENS
 ~~~zig
@@ -41,9 +37,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "erroneous_value_expr"))
+(e-call (constraint-fn-var 215)
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+	(e-runtime-error (tag "erroneous_value_expr")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Bool"))
 ~~~

@@ -9,7 +9,7 @@ type=expr
 ~~~
 # EXPECTED
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:2:1:3
-TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:5:1:12
+TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:14:1:26
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 # PROBLEMS
 ── ✗ type mismatch ────────────────── can_list_mismatch_then_nested_error.md:1:2
@@ -31,12 +31,12 @@ Other code expects this to have the type:
         a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
       ]
 
-── ✗ type mismatch ────────────────── can_list_mismatch_then_nested_error.md:1:5
+── ✗ type mismatch ───────────────── can_list_mismatch_then_nested_error.md:1:14
 
 This string literal is being used where a non-string type is needed.
 
 [1, "hello", [3, "world"]]
-    ^^^^^^^
+             ^^^^^^^^^^^^
 
 The type was determined to be:
 
@@ -85,7 +85,7 @@ NO CHANGE
 		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-list
 			(elems
-				(e-num (value "3"))
+				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES

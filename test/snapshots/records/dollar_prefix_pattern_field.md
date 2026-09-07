@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Dollar-prefixed pattern record field names are rejected
+description=A dollar-prefixed punned record pattern is an immutable binding
 type=expr
 ~~~
 # SOURCE
@@ -10,18 +10,9 @@ match person {
 }
 ~~~
 # EXPECTED
-INVALID RECORD FIELD NAME - error_dollar_prefix_pattern_field.md:2:7:2:12
+NIL
 # PROBLEMS
-── ✗ invalid record field name ──────── error_dollar_prefix_pattern_field.md:2:7
-
-Record field names cannot start with a dollar sign.
-
-{ $name } => $name
-  ^^^^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

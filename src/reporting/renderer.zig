@@ -109,6 +109,18 @@ pub fn renderReportWithConfig(report: *const Report, writer: *std.Io.Writer, con
     }
 }
 
+/// Remove trailing line breaks from an owned rendered report.
+///
+/// This consumes `rendered`, including on allocation failure. Keeping this
+/// presentation-specific byte handling in reporting lets compiler stages
+/// consume the rendered result without inspecting or manipulating its bytes.
+pub fn trimOwnedTrailingLineBreaks(allocator: Allocator, rendered: []u8) Allocator.Error![]u8 {
+    errdefer allocator.free(rendered);
+    const trimmed = std.mem.trimEnd(u8, rendered, "\r\n");
+    if (trimmed.len == rendered.len) return rendered;
+    return try allocator.realloc(rendered, trimmed.len);
+}
+
 /// Render a report to terminal with color support.
 pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     try renderReportToTerminalLayout(report, writer, palette, config);
@@ -952,6 +964,13 @@ const RenderCtx = struct {
     annotation_stack: *std.array_list.Managed(Annotation),
 };
 
+fn hasOpenAnnotation(ctx: *const RenderCtx, annotation: Annotation) bool {
+    for (ctx.annotation_stack.items) |open_annotation| {
+        if (open_annotation == annotation) return true;
+    }
+    return false;
+}
+
 /// Inline markup written immediately before and after a span of annotated
 /// content.
 const Span = struct {
@@ -1308,12 +1327,16 @@ const MarkdownStyle = struct {
         try writer.writeAll(text);
     }
 
-    fn openInline(_: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
-        try writer.writeAll(markdown_spans.get(annotation).open);
+    fn openInline(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
+        if (!hasOpenAnnotation(ctx, .code_block)) {
+            try writer.writeAll(markdown_spans.get(annotation).open);
+        }
     }
 
-    fn closeInline(_: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
-        try writer.writeAll(markdown_spans.get(annotation).close);
+    fn closeInline(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
+        if (!hasOpenAnnotation(ctx, .code_block)) {
+            try writer.writeAll(markdown_spans.get(annotation).close);
+        }
     }
 
     fn openRegion(_: *RenderCtx, _: *std.Io.Writer, _: Annotation) error{WriteFailed}!void {}
@@ -1540,6 +1563,47 @@ test "render document with annotations to markdown" {
     try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
     try testing.expectEqualStrings("Hello **world**!", writer.written());
+}
+
+test "styled Roc code block renders colors and clean markdown" {
+    var doc = Document.init(testing.allocator);
+    defer doc.deinit();
+
+    try doc.startAnnotation(.code_block);
+    try doc.addIndent(1);
+    try doc.addKeyword("match");
+    try doc.addText(" ");
+    try doc.addUnqualifiedSymbol("value");
+    try doc.addText(" {");
+    try doc.addLineBreak();
+    try doc.addIndent(2);
+    try doc.addTagName("Ok");
+    try doc.addText("(");
+    try doc.addUnqualifiedSymbol("payload");
+    try doc.addText(") ");
+    try doc.addBinaryOperator("=>");
+    try doc.addText(" ");
+    try doc.addUnqualifiedSymbol("payload");
+    try doc.addLineBreak();
+    try doc.addIndent(1);
+    try doc.addText("}");
+    try doc.endAnnotation();
+
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
+
+    try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
+    try testing.expectEqualStrings(
+        \\    match value {
+        \\        Ok(payload) => payload
+        \\    }
+    , writer.written());
+
+    writer.clearRetainingCapacity();
+    try renderDocumentToTerminal(&doc, &writer.writer, ColorPalette.ANSI, ReportingConfig.initColorTerminal());
+    try testing.expect(std.mem.find(u8, writer.written(), "\x1b[35mmatch") != null);
+    try testing.expect(std.mem.find(u8, writer.written(), "\x1b[34mOk") != null);
+    try testing.expect(std.mem.find(u8, writer.written(), "\x1b[36mpayload") != null);
 }
 
 test "render HTML escaping" {

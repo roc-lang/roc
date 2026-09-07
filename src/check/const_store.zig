@@ -277,6 +277,12 @@ pub const ConstFnEvidence = union(enum(u8)) {
         nested: ConstFnNestedEvidence,
     },
     structural: ConstFnStructuralEvidence,
+    /// A callable-reachable requirement that must be resolved from the
+    /// concrete function type when this stored function is restored.
+    from_callable: struct {
+        index: u32,
+        independent_callable: bool = false,
+    },
     unreachable_value,
     checked_error,
 };
@@ -891,7 +897,7 @@ pub const ConstStore = struct {
                         .from_callable => {},
                     }
                 },
-                .structural, .unreachable_value, .checked_error => {},
+                .structural, .from_callable, .unreachable_value, .checked_error => {},
             }
         }
         return cursor;
@@ -1252,10 +1258,11 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         } },
         .{ .structural = .{ .derivation = .equality } },
         .checked_error,
+        .{ .from_callable = .{ .index = 2, .independent_callable = true } },
     };
     const evidence_frames = [_]ConstFnEvidenceFrame{
         ConstFnEvidenceFrame.init(.root, null, 0, 1),
-        ConstFnEvidenceFrame.init(.{ .generalized = 9 }, 0, 2, 1),
+        ConstFnEvidenceFrame.init(.{ .generalized = 9 }, 0, 2, 2),
     };
     const fn_id = try store.appendFn(.{
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
@@ -1325,6 +1332,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.subtree_len);
     try std.testing.expectEqual(ConstFnEvidence{ .structural = .{ .derivation = .equality } }, loaded_fn.evidence[1]);
     try std.testing.expectEqual(ConstFnEvidence.checked_error, loaded_fn.evidence[2]);
+    try std.testing.expectEqual(ConstFnEvidence{ .from_callable = .{ .index = 2, .independent_callable = true } }, loaded_fn.evidence[3]);
     try std.testing.expectEqualSlices(ConstFnEvidenceFrame, &evidence_frames, loaded_fn.evidence_frames);
     try std.testing.expectEqual(@as(?u32, 1), loaded_fn.evidence_frame_head);
     try std.testing.expectEqual(ConstFnEvidenceScope{ .generalized = 9 }, loaded_fn.evidence_frames[1].scope());

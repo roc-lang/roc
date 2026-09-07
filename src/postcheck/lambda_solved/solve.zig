@@ -103,6 +103,7 @@ const Solver = struct {
     expr_tys: []?Type.TypeVarId,
     pat_tys: []?Type.TypeVarId,
     expr_done: []bool,
+    expr_stack: std.ArrayList(ExprFrame),
     generated_backing_pats: []bool,
     loop_results: std.ArrayList(Type.TypeVarId),
     loop_params: std.ArrayList(Type.Span),
@@ -243,6 +244,7 @@ const Solver = struct {
             .expr_tys = expr_tys,
             .pat_tys = pat_tys,
             .expr_done = expr_done,
+            .expr_stack = .empty,
             .generated_backing_pats = generated_backing_pats,
             .loop_results = .empty,
             .loop_params = .empty,
@@ -285,6 +287,7 @@ const Solver = struct {
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
         self.allocator.free(self.generated_backing_pats);
+        self.expr_stack.deinit(self.allocator);
         self.allocator.free(self.expr_done);
         self.allocator.free(self.pat_tys);
         self.allocator.free(self.expr_tys);
@@ -645,109 +648,200 @@ const Solver = struct {
         }
     }
 
-    fn inferExpr(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
-        const index = @intFromEnum(expr_id);
-        const expected = try self.exprSlot(expr_id);
-        if (self.expr_done[index]) return expected;
-        self.expr_done[index] = true;
+    /// A suspended expression or statement. Sequential spans retain one cursor,
+    /// so their length does not increase either native or continuation depth.
+    const ExprFrame = struct {
+        node: union(enum) { expr: Lifted.ExprId, stmt: Lifted.StmtId },
+        ty: ?Type.TypeVarId = null,
+        finish_slot: ?Type.TypeVarId = null,
+        cursor: usize = 0,
+        branch: usize = 0,
+        binding: usize = 0,
+        match_phase: enum { bind_pattern, bindings, guard, body, next_branch } = .bind_pattern,
+        generated_backing: bool = false,
+    };
 
-        const expr = self.lifted.exprs[index];
+    const ExprRequest = union(enum) {
+        expr: struct {
+            id: Lifted.ExprId,
+            expected: ?Type.TypeVarId = null,
+            generated_backing: bool = false,
+        },
+        stmt: Lifted.StmtId,
+    };
+
+    fn beginExpr(self: *Solver, request: ExprRequest) Allocator.Error!?ExprFrame {
+        switch (request) {
+            .stmt => |stmt| return .{ .node = .{ .stmt = stmt } },
+            .expr => |expr| {
+                const slot = if (expr.expected) |expected| try self.expectExprSlot(expr.id, expected) else null;
+                const ty = try self.exprSlot(expr.id);
+                const index = @intFromEnum(expr.id);
+                if (self.expr_done[index]) {
+                    if (slot) |expected| try self.unify(expected, ty);
+                    return null;
+                }
+                self.expr_done[index] = true;
+                return .{ .node = .{ .expr = expr.id }, .ty = ty, .finish_slot = slot, .generated_backing = expr.generated_backing };
+            },
+        }
+    }
+
+    fn inferredExpr(self: *Solver, expr: Lifted.ExprId) Type.TypeVarId {
+        std.debug.assert(self.expr_done[@intFromEnum(expr)]);
+        return self.program.types.rootCompressed(self.expr_tys[@intFromEnum(expr)].?);
+    }
+
+    fn inferExpr(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
+        std.debug.assert(self.expr_stack.items.len == 0);
+        defer self.expr_stack.clearRetainingCapacity();
+        var frame = (try self.beginExpr(.{ .expr = .{ .id = expr_id } })) orelse return self.inferredExpr(expr_id);
+        while (true) {
+            if (try self.stepExpr(&frame)) |request| {
+                if (try self.beginExpr(request)) |child| {
+                    try self.expr_stack.append(self.allocator, frame);
+                    frame = child;
+                }
+            } else {
+                if (frame.finish_slot) |slot| try self.unify(slot, self.program.types.rootCompressed(frame.ty.?));
+                frame = self.expr_stack.pop() orelse break;
+            }
+        }
+        return self.inferredExpr(expr_id);
+    }
+
+    /// Resume at the next source-ordered child, after all constraints from the
+    /// previous child have been applied. Scope stacks stay live until the
+    /// owning expression's last child returns.
+    fn stepExpr(self: *Solver, frame: *ExprFrame) Allocator.Error!?ExprRequest {
+        const expr_id = switch (frame.node) {
+            .expr => |expr| expr,
+            .stmt => |stmt_id| {
+                const stmt = self.lifted.stmts[@intFromEnum(stmt_id)];
+                if (frame.cursor != 0) {
+                    if (stmt == .let_) try self.bindPattern(stmt.let_.pat, self.inferredExpr(stmt.let_.value));
+                    return null;
+                }
+                frame.cursor = 1;
+                switch (stmt) {
+                    .uninitialized => |pat| {
+                        const pat_ty = try self.lowerTypeFresh(self.lifted.pats[@intFromEnum(pat)].ty);
+                        try self.bindPattern(pat, pat_ty);
+                        return null;
+                    },
+                    .let_ => |let_| return .{ .expr = .{ .id = let_.value } },
+                    .expr, .expect, .dbg => |expr| return .{ .expr = .{ .id = expr } },
+                    .return_ => |ret| return .{ .expr = .{ .id = ret.value, .expected = try self.returnTargetTy(ret.target) } },
+                    .crash => return null,
+                }
+            },
+        };
+        const expr = self.lifted.exprs[@intFromEnum(expr_id)];
+        const expected = frame.ty.?;
+        const cursor = frame.cursor;
+        frame.cursor += 1;
+
+        if (frame.generated_backing) switch (expr.data) {
+            .record => |fields| {
+                const children = self.lifted.fieldExprSpan(fields);
+                return if (cursor < children.len) .{ .expr = .{ .id = children[cursor].value } } else null;
+            },
+            .record_update => |update| {
+                if (cursor == 0) return .{ .expr = .{ .id = update.base } };
+                const children = self.lifted.fieldExprSpan(update.fields);
+                return if (cursor - 1 < children.len) .{ .expr = .{ .id = children[cursor - 1].value } } else null;
+            },
+            .tuple, .tag => {
+                const children = self.lifted.exprSpan(if (expr.data == .tuple) expr.data.tuple else expr.data.tag.payloads);
+                return if (cursor < children.len) .{ .expr = .{ .id = children[cursor] } } else null;
+            },
+            .static_data_candidate, .nominal => {
+                const child = if (expr.data == .nominal) expr.data.nominal else expr.data.static_data_candidate.runtime_expr;
+                return if (cursor == 0) .{ .expr = .{ .id = child, .generated_backing = true } } else null;
+            },
+            .let_ => |let_| {
+                if (cursor == 0) return .{ .expr = .{ .id = let_.value } };
+                if (cursor == 1) {
+                    try self.bindPattern(let_.bind, self.inferredExpr(let_.value));
+                    return .{ .expr = .{ .id = let_.rest, .generated_backing = true } };
+                }
+                return null;
+            },
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .comptime_branch_taken => {},
+        };
+
         switch (expr.data) {
             .local => |local| try self.unify(expected, self.localTy(local)),
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .uninitialized,
-            .uninitialized_payload,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            => {},
-            .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
+            .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .comptime_exhaustiveness_failed, .@"unreachable" => {},
+            .static_data_candidate => |candidate| {
+                if (cursor == 0) return .{ .expr = .{ .id = candidate.runtime_expr, .expected = expected } };
+            },
             .typed_boundary => |boundary| {
-                const producer = try self.inferExpr(boundary.value);
-                try self.unify(expected, producer);
+                if (cursor == 0) return .{ .expr = .{ .id = boundary.value } };
+                try self.unify(expected, self.inferredExpr(boundary.value));
             },
             .list => |items| {
-                const elem_ty = try self.listElem(expected);
-                for (self.lifted.exprSpan(items)) |child| {
-                    _ = try self.expectExpr(child, elem_ty);
-                }
+                const children = self.lifted.exprSpan(items);
+                if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = try self.listElem(expected) } };
             },
             .tuple => |items| {
-                const item_tys = try self.tupleItemsSpan(expected);
+                const tys = try self.tupleItemsSpan(expected);
                 const children = self.lifted.exprSpan(items);
-                if (item_tys.count() != children.len) Common.invariant("tuple expression arity differs from its checked type");
-                for (children, 0..) |child, i| {
-                    const item_ty = self.program.types.spanItem(item_tys, i);
-                    _ = try self.expectExpr(child, item_ty);
-                }
+                if (tys.count() != children.len) Common.invariant("tuple expression arity differs from its checked type");
+                if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = self.program.types.spanItem(tys, cursor) } };
             },
             .record => |fields| {
-                for (self.lifted.fieldExprSpan(fields)) |field| {
-                    _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
+                const children = self.lifted.fieldExprSpan(fields);
+                if (cursor < children.len) {
+                    const field = children[cursor];
+                    return .{ .expr = .{ .id = field.value, .expected = try self.recordField(expected, field.name) } };
                 }
             },
             .record_update => |update| {
-                _ = try self.expectExpr(update.base, expected);
-                for (self.lifted.fieldExprSpan(update.fields)) |field| {
-                    _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
+                if (cursor == 0) return .{ .expr = .{ .id = update.base } };
+                if (cursor == 1) try self.relateRecordUpdate(expected, self.inferredExpr(update.base), update.fields);
+                const children = self.lifted.fieldExprSpan(update.fields);
+                if (cursor - 1 < children.len) {
+                    const field = children[cursor - 1];
+                    return .{ .expr = .{ .id = field.value, .expected = try self.recordField(expected, field.name) } };
                 }
             },
             .tag => |tag| {
-                const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
-                const payloads = self.lifted.exprSpan(tag.payloads);
-                if (payload_tys.count() != payloads.len) Common.invariant("tag expression payload arity differs from its checked type");
-                for (payloads, 0..) |payload, i| {
-                    const expected_payload_ty = self.program.types.spanItem(payload_tys, i);
-                    _ = try self.expectExpr(payload, expected_payload_ty);
-                }
+                const tys = try self.tagPayloadsSpan(expected, tag.name);
+                const children = self.lifted.exprSpan(tag.payloads);
+                if (tys.count() != children.len) Common.invariant("tag expression payload arity differs from its checked type");
+                if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = self.program.types.spanItem(tys, cursor) } };
             },
             .nominal => |backing| {
-                if (try self.namedBacking(expected)) |backing_ty| {
-                    if (try self.hasBuiltinOwner(expected, .fields) or try self.hasBuiltinOwner(expected, .field)) {
-                        try self.inferGeneratedOpaqueBacking(backing);
-                    } else {
-                        _ = try self.expectExpr(backing, backing_ty);
+                if (cursor == 0) {
+                    if (try self.namedBacking(expected)) |ty| {
+                        if (try self.hasBuiltinOwner(expected, .fields) or try self.hasBuiltinOwner(expected, .field)) {
+                            return .{ .expr = .{ .id = backing, .generated_backing = true } };
+                        }
+                        return .{ .expr = .{ .id = backing, .expected = ty } };
                     }
-                } else {
-                    _ = try self.inferExpr(backing);
+                    return .{ .expr = .{ .id = backing } };
                 }
             },
             .let_ => |let_| {
-                const value_ty = try self.inferExpr(let_.value);
-                try self.bindPattern(let_.bind, value_ty);
-                _ = try self.expectExpr(let_.rest, expected);
+                if (cursor == 0) return .{ .expr = .{ .id = let_.value } };
+                if (cursor == 1) {
+                    try self.bindPattern(let_.bind, self.inferredExpr(let_.value));
+                    return .{ .expr = .{ .id = let_.rest, .expected = expected } };
+                }
             },
-            .lambda,
-            .def_ref,
-            .fn_def,
-            => Common.invariant("pre-lift function expression reached Lambda Solved"),
-            .fn_ref => |fn_ref| {
-                try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)]);
-                const captures = self.liftedCapturesForFn(fn_ref.fn_id);
-                const capture_operands = self.lifted.captureOperandSpan(fn_ref.captures);
-                if (captures.len != capture_operands.len) {
-                    Common.invariant("function reference capture count differs from its target");
-                }
-                for (captures, capture_operands) |capture, operand| {
-                    if (operand.id != self.lifted.captureIdOfLocal(capture.local)) {
-                        Common.invariant("function reference capture operand CaptureId did not match its slot");
-                    }
-                    _ = try self.expectExpr(operand.value, self.localTy(capture.local));
-                }
+            .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached Lambda Solved"),
+            .fn_ref => |ref| {
+                if (cursor == 0) try self.unify(expected, self.program.fn_tys.items[@intFromEnum(ref.fn_id)]);
+                return try self.captureRequest(ref.fn_id, ref.captures, cursor);
             },
             .call_value => |call| {
-                const func = try self.functionShape(try self.inferExpr(call.callee));
+                if (cursor == 0) return .{ .expr = .{ .id = call.callee } };
+                const func = try self.functionShape(self.inferredExpr(call.callee));
                 const args = self.lifted.exprSpan(call.args);
                 if (func.args.count() != args.len) Common.invariant("value call arity differs from its checked type");
-                try self.unify(expected, func.ret);
-                for (args, 0..) |arg, i| {
-                    _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
-                }
+                if (cursor == 1) try self.unify(expected, func.ret);
+                if (cursor - 1 < args.len) return .{ .expr = .{ .id = args[cursor - 1], .expected = self.program.types.spanItem(func.args, cursor - 1) } };
             },
             .call_proc => |call| {
                 const args = self.lifted.exprSpan(call.args);
@@ -755,295 +849,228 @@ const Solver = struct {
                     .local => |callee| {
                         const func = try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)]);
                         if (func.args.count() != args.len) Common.invariant("procedure call arity differs from its checked type");
-                        try self.unify(expected, func.ret);
-                        for (args, 0..) |arg, i| {
-                            _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
-                        }
-                        const captures = self.liftedCapturesForFn(callee);
-                        const capture_operands = self.lifted.captureOperandSpan(call.captures);
-                        if (captures.len != capture_operands.len) Common.invariant("procedure call capture count differs from its callee");
-                        for (captures, capture_operands) |capture, operand| {
-                            if (operand.id != self.lifted.captureIdOfLocal(capture.local)) {
-                                Common.invariant("procedure call capture operand CaptureId did not match its slot");
-                            }
-                            _ = try self.expectExpr(operand.value, self.localTy(capture.local));
-                        }
+                        if (cursor == 0) try self.unify(expected, func.ret);
+                        if (cursor < args.len) return .{ .expr = .{ .id = args[cursor], .expected = self.program.types.spanItem(func.args, cursor) } };
+                        return try self.captureRequest(callee, call.captures, cursor - args.len);
                     },
                     .imported => {
-                        for (args) |arg| {
-                            _ = try self.inferExpr(arg);
-                        }
+                        if (cursor < args.len) return .{ .expr = .{ .id = args[cursor] } };
                         if (call.captures.len != 0) Common.invariant("imported direct call carried local capture operands");
                     },
                 }
             },
             .low_level => |call| {
                 const args = self.lifted.exprSpan(call.args);
-                const arg_tys = try self.allocator.alloc(Type.TypeVarId, args.len);
-                defer self.allocator.free(arg_tys);
-                for (args, 0..) |arg, i| {
-                    arg_tys[i] = try self.inferExpr(arg);
-                }
-                try self.bindLowLevelTypes(call.op, expected, arg_tys);
+                if (cursor < args.len) return .{ .expr = .{ .id = args[cursor] } };
+                const tys = try self.allocator.alloc(Type.TypeVarId, args.len);
+                defer self.allocator.free(tys);
+                for (args, tys) |arg, *ty| ty.* = self.inferredExpr(arg);
+                try self.bindLowLevelTypes(call.op, expected, tys);
             },
             .field_access => |field| {
-                var prefix_ty = try self.inferExpr(field.receiver);
+                if (cursor == 0) return .{ .expr = .{ .id = field.receiver } };
+                var ty = self.inferredExpr(field.receiver);
                 const segments = self.lifted.fieldAccessSegmentSpan(field.segments);
                 if (segments.len == 0) Common.invariant("field access path had no segments");
-                for (segments) |segment| {
-                    prefix_ty = try self.recordField(prefix_ty, segment.field);
-                }
-                try self.unify(expected, prefix_ty);
+                for (segments) |segment| ty = try self.recordField(ty, segment.field);
+                try self.unify(expected, ty);
             },
             .tuple_access => |access| {
-                const receiver_ty = try self.inferExpr(access.tuple);
-                const items = try self.tupleItemsSpan(receiver_ty);
+                if (cursor == 0) return .{ .expr = .{ .id = access.tuple } };
+                const items = try self.tupleItemsSpan(self.inferredExpr(access.tuple));
                 if (access.elem_index >= items.count()) Common.invariant("tuple access index exceeds tuple arity");
                 try self.unify(expected, self.program.types.spanItem(items, access.elem_index));
             },
             .structural_eq => |eq| {
-                const lhs = try self.inferExpr(eq.lhs);
-                const rhs = try self.inferExpr(eq.rhs);
-                try self.unify(lhs, rhs);
+                if (cursor == 0) return .{ .expr = .{ .id = eq.lhs } };
+                if (cursor == 1) return .{ .expr = .{ .id = eq.rhs } };
+                try self.unify(self.inferredExpr(eq.lhs), self.inferredExpr(eq.rhs));
             },
             .structural_hash => |h| {
-                _ = try self.inferExpr(h.value);
-                const hasher = try self.inferExpr(h.hasher);
-                // `to_hash` threads the Hasher through, so the result type equals
-                // the Hasher argument's type.
-                try self.unify(expected, hasher);
+                if (cursor == 0) return .{ .expr = .{ .id = h.value } };
+                if (cursor == 1) return .{ .expr = .{ .id = h.hasher } };
+                try self.unify(expected, self.inferredExpr(h.hasher));
             },
             .match_ => |match| {
-                const scrutinee_ty = try self.inferExpr(match.scrutinee);
-                for (self.lifted.branchSpan(match.branches)) |branch| {
-                    try self.bindPattern(branch.pat, scrutinee_ty);
-                    for (self.lifted.stmtSpan(branch.bindings)) |binding| try self.inferStmt(binding);
-                    if (branch.guard) |guard| _ = try self.inferExpr(guard);
-                    _ = try self.expectExpr(branch.body, expected);
+                if (cursor == 0) return .{ .expr = .{ .id = match.scrutinee } };
+                const branches = self.lifted.branchSpan(match.branches);
+                while (frame.branch < branches.len) {
+                    const branch = branches[frame.branch];
+                    switch (frame.match_phase) {
+                        .bind_pattern => {
+                            try self.bindPattern(branch.pat, self.inferredExpr(match.scrutinee));
+                            frame.binding = 0;
+                            frame.match_phase = .bindings;
+                        },
+                        .bindings => {
+                            const bindings = self.lifted.stmtSpan(branch.bindings);
+                            if (frame.binding < bindings.len) {
+                                const stmt = bindings[frame.binding];
+                                frame.binding += 1;
+                                return .{ .stmt = stmt };
+                            }
+                            frame.match_phase = .guard;
+                        },
+                        .guard => {
+                            frame.match_phase = .body;
+                            if (branch.guard) |guard| return .{ .expr = .{ .id = guard } };
+                        },
+                        .body => {
+                            frame.match_phase = .next_branch;
+                            return .{ .expr = .{ .id = branch.body, .expected = expected } };
+                        },
+                        .next_branch => {
+                            frame.branch += 1;
+                            frame.match_phase = .bind_pattern;
+                        },
+                    }
                 }
             },
             .if_ => |if_| {
-                for (self.lifted.ifBranchSpan(if_.branches)) |branch| {
-                    _ = try self.inferExpr(branch.cond);
-                    _ = try self.expectExpr(branch.body, expected);
+                const branches = self.lifted.ifBranchSpan(if_.branches);
+                if (cursor / 2 < branches.len) {
+                    const branch = branches[cursor / 2];
+                    return .{ .expr = if (cursor % 2 == 0) .{ .id = branch.cond } else .{ .id = branch.body, .expected = expected } };
                 }
-                _ = try self.expectExpr(if_.final_else, expected);
+                if (cursor == 2 * branches.len) return .{ .expr = .{ .id = if_.final_else, .expected = expected } };
             },
-            .if_initialized_payload => |payload_switch| {
-                _ = try self.inferExpr(payload_switch.cond);
-                _ = self.localTy(payload_switch.payload);
-                _ = try self.expectExpr(payload_switch.initialized, expected);
-                _ = try self.expectExpr(payload_switch.uninitialized, expected);
+            .if_initialized_payload => |payload| {
+                if (cursor == 0) return .{ .expr = .{ .id = payload.cond } };
+                if (cursor == 1) {
+                    _ = self.localTy(payload.payload);
+                    return .{ .expr = .{ .id = payload.initialized, .expected = expected } };
+                }
+                if (cursor == 2) return .{ .expr = .{ .id = payload.uninitialized, .expected = expected } };
             },
-            .try_sequence => |sequence| {
-                const try_ty = try self.inferExpr(sequence.try_expr);
-                const content = try self.shapeContent(try_ty);
-                if (std.meta.activeTag(content) != .tag_union) Common.invariant("try_sequence input was not a Try tag union");
-                const tags = content.tag_union;
-                var ok_ty: ?Type.TypeVarId = null;
-                var err_ty: ?Type.TypeVarId = null;
-                for (0..tags.count()) |tag_index| {
-                    const tag = self.program.types.tagItem(tags, tag_index);
-                    const text = self.lifted.names.tagLabelText(tag.name);
-                    if (std.mem.eql(u8, text, "Ok")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
-                        ok_ty = self.program.types.spanItem(tag.payloads, 0);
-                    } else if (std.mem.eql(u8, text, "Err")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_sequence Err tag had unexpected payload arity");
-                        err_ty = self.program.types.spanItem(tag.payloads, 0);
+            .try_sequence, .try_record_sequence => {
+                const input = if (expr.data == .try_sequence) expr.data.try_sequence.try_expr else expr.data.try_record_sequence.try_expr;
+                if (cursor == 0) return .{ .expr = .{ .id = input } };
+                if (cursor == 1) {
+                    const content = try self.shapeContent(self.inferredExpr(input));
+                    if (content != .tag_union) Common.invariant("try sequence input was not a Try tag union");
+                    var ok_ty: ?Type.TypeVarId = null;
+                    var err_ty: ?Type.TypeVarId = null;
+                    for (0..content.tag_union.count()) |index| {
+                        const tag = self.program.types.tagItem(content.tag_union, index);
+                        const name = self.lifted.names.tagLabelText(tag.name);
+                        if (std.mem.eql(u8, name, "Ok") or std.mem.eql(u8, name, "Err")) {
+                            if (tag.payloads.count() != 1) Common.invariant("try sequence tag had unexpected payload arity");
+                            if (std.mem.eql(u8, name, "Ok")) ok_ty = self.program.types.spanItem(tag.payloads, 0) else err_ty = self.program.types.spanItem(tag.payloads, 0);
+                        }
                     }
-                }
-                try self.unify(self.localTy(sequence.ok_local), ok_ty orelse Common.invariant("try_sequence input had no Ok tag"));
-                if (sequence.err_target) |target| {
-                    const params = self.activeJoinPoint(target).params;
-                    if (params.count() != 1) Common.invariant("try_sequence error target did not have one parameter");
-                    try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try_sequence input had no Err tag"));
-                }
-                _ = try self.expectExpr(sequence.ok_body, expected);
-            },
-            .try_record_sequence => |sequence| {
-                const try_ty = try self.inferExpr(sequence.try_expr);
-                const content = try self.shapeContent(try_ty);
-                if (std.meta.activeTag(content) != .tag_union) Common.invariant("try_record_sequence input was not a Try tag union");
-                const tags = content.tag_union;
-                var ok_ty: ?Type.TypeVarId = null;
-                var err_ty: ?Type.TypeVarId = null;
-                for (0..tags.count()) |tag_index| {
-                    const tag = self.program.types.tagItem(tags, tag_index);
-                    const text = self.lifted.names.tagLabelText(tag.name);
-                    if (std.mem.eql(u8, text, "Ok")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
-                        ok_ty = self.program.types.spanItem(tag.payloads, 0);
-                    } else if (std.mem.eql(u8, text, "Err")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Err tag had unexpected payload arity");
-                        err_ty = self.program.types.spanItem(tag.payloads, 0);
+                    const ok = ok_ty orelse Common.invariant("try sequence input had no Ok tag");
+                    const target = if (expr.data == .try_sequence) expr.data.try_sequence.err_target else expr.data.try_record_sequence.err_target;
+                    if (expr.data == .try_sequence) {
+                        try self.unify(self.localTy(expr.data.try_sequence.ok_local), ok);
+                    } else {
+                        const seq = expr.data.try_record_sequence;
+                        try self.unify(self.localTy(seq.value_local), try self.recordField(ok, seq.value_field));
+                        try self.unify(self.localTy(seq.rest_local), try self.recordField(ok, seq.rest_field));
                     }
+                    if (target) |id| {
+                        const params = self.activeJoinPoint(id).params;
+                        if (params.count() != 1) Common.invariant("try sequence error target did not have one parameter");
+                        try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try sequence input had no Err tag"));
+                    }
+                    const body = if (expr.data == .try_sequence) expr.data.try_sequence.ok_body else expr.data.try_record_sequence.ok_body;
+                    return .{ .expr = .{ .id = body, .expected = expected } };
                 }
-                const ok_record_ty = ok_ty orelse Common.invariant("try_record_sequence input had no Ok tag");
-                try self.unify(self.localTy(sequence.value_local), try self.recordField(ok_record_ty, sequence.value_field));
-                try self.unify(self.localTy(sequence.rest_local), try self.recordField(ok_record_ty, sequence.rest_field));
-                if (sequence.err_target) |target| {
-                    const params = self.activeJoinPoint(target).params;
-                    if (params.count() != 1) Common.invariant("try_record_sequence error target did not have one parameter");
-                    try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try_record_sequence input had no Err tag"));
-                }
-                _ = try self.expectExpr(sequence.ok_body, expected);
             },
-            .@"unreachable" => {},
             .block => |block| {
-                for (self.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
-                _ = try self.expectExpr(block.final_expr, expected);
+                const statements = self.lifted.stmtSpan(block.statements);
+                if (cursor < statements.len) return .{ .stmt = statements[cursor] };
+                if (cursor == statements.len) return .{ .expr = .{ .id = block.final_expr, .expected = expected } };
             },
             .loop_ => |loop| {
                 const params = self.lifted.typedLocalSpan(loop.params);
                 const initials = self.lifted.exprSpan(loop.initial_values);
                 if (params.len != initials.len) Common.invariant("loop parameter count differs from initial value count");
-                const param_tys = try self.allocator.alloc(Type.TypeVarId, params.len);
-                defer self.allocator.free(param_tys);
-                for (params, 0..) |param, i| {
-                    param_tys[i] = self.localTy(param.local);
-                    _ = try self.expectExpr(initials[i], param_tys[i]);
+                if (cursor < params.len) return .{ .expr = .{ .id = initials[cursor], .expected = self.localTy(params[cursor].local) } };
+                if (cursor == params.len) {
+                    const tys = try self.allocator.alloc(Type.TypeVarId, params.len);
+                    defer self.allocator.free(tys);
+                    for (params, tys) |param, *ty| ty.* = self.localTy(param.local);
+                    try self.loop_results.append(self.allocator, expected);
+                    try self.loop_params.append(self.allocator, try self.program.types.addSpan(tys));
+                    return .{ .expr = .{ .id = loop.body, .expected = expected } };
                 }
-                try self.loop_results.append(self.allocator, expected);
-                try self.loop_params.append(self.allocator, try self.program.types.addSpan(param_tys));
-                defer _ = self.loop_params.pop();
-                defer _ = self.loop_results.pop();
-                _ = try self.expectExpr(loop.body, expected);
+                _ = self.loop_params.pop();
+                _ = self.loop_results.pop();
             },
-            .break_ => |maybe| {
-                if (maybe) |value| {
-                    _ = try self.expectExpr(value, self.currentLoopResult());
-                }
+            .break_ => |value| {
+                if (cursor == 0) if (value) |child| return .{ .expr = .{ .id = child, .expected = self.currentLoopResult() } };
             },
-            .continue_ => |continue_| {
+            .continue_ => |cont| {
                 const params = self.currentLoopParams();
-                const values = self.lifted.exprSpan(continue_.values);
+                const values = self.lifted.exprSpan(cont.values);
                 if (params.count() != values.len) Common.invariant("continue value count differs from loop parameter count");
-                for (values, 0..) |value, i| {
-                    const param_ty = self.program.types.spanItem(params, i);
-                    _ = try self.expectExpr(value, param_ty);
-                }
+                if (cursor < values.len) return .{ .expr = .{ .id = values[cursor], .expected = self.program.types.spanItem(params, cursor) } };
             },
-            .join_point => |join_point| {
-                const params = self.lifted.typedLocalSpan(join_point.params);
-                const param_tys = try self.allocator.alloc(Type.TypeVarId, params.len);
-                defer self.allocator.free(param_tys);
-                for (params, 0..) |param, param_index| {
-                    param_tys[param_index] = self.localTy(param.local);
+            .join_point => |join| {
+                if (cursor == 0) {
+                    const params = self.lifted.typedLocalSpan(join.params);
+                    const tys = try self.allocator.alloc(Type.TypeVarId, params.len);
+                    defer self.allocator.free(tys);
+                    for (params, tys) |param, *ty| ty.* = self.localTy(param.local);
+                    try self.join_points.append(self.allocator, .{ .id = join.id, .params = try self.program.types.addSpan(tys) });
+                    return .{ .expr = .{ .id = join.body, .expected = expected } };
                 }
-                try self.join_points.append(self.allocator, .{
-                    .id = join_point.id,
-                    .params = try self.program.types.addSpan(param_tys),
-                });
-                defer _ = self.join_points.pop();
-                _ = try self.expectExpr(join_point.body, expected);
-                _ = try self.expectExpr(join_point.remainder, expected);
+                if (cursor == 1) return .{ .expr = .{ .id = join.remainder, .expected = expected } };
+                _ = self.join_points.pop();
             },
             .jump => |jump| {
                 const params = self.activeJoinPoint(jump.target).params;
                 const args = self.lifted.exprSpan(jump.args);
                 if (params.count() != args.len) Common.invariant("jump argument count differs from join-point parameter count");
-                for (args, 0..) |arg, arg_index| {
-                    _ = try self.expectExpr(arg, self.program.types.spanItem(params, arg_index));
-                }
+                if (cursor < args.len) return .{ .expr = .{ .id = args[cursor], .expected = self.program.types.spanItem(params, cursor) } };
                 const loop_params = self.lifted.typedLocalSpan(jump.loop_params);
-                const loop_values = self.lifted.exprSpan(jump.loop_values);
-                if (loop_params.len != loop_values.len) Common.invariant("jump loop-update parameter count differs from value count");
-                for (loop_params, loop_values) |param, value| {
-                    _ = try self.expectExpr(value, self.localTy(param.local));
-                }
+                const values = self.lifted.exprSpan(jump.loop_values);
+                if (loop_params.len != values.len) Common.invariant("jump loop-update parameter count differs from value count");
+                if (cursor - args.len < values.len) return .{ .expr = .{ .id = values[cursor - args.len], .expected = self.localTy(loop_params[cursor - args.len].local) } };
             },
-            .return_ => |ret| _ = try self.expectExpr(ret.value, try self.returnTargetTy(ret.target)),
-            .dbg,
-            .expect,
-            => |child| _ = try self.inferExpr(child),
-            .expect_err => |expect_err| _ = try self.inferExpr(expect_err.msg),
-            .comptime_branch_taken => |taken| _ = try self.expectExpr(taken.body, expected),
+            .return_ => |ret| {
+                if (cursor == 0) return .{ .expr = .{ .id = ret.value, .expected = try self.returnTargetTy(ret.target) } };
+            },
+            .dbg, .expect => |child| {
+                if (cursor == 0) return .{ .expr = .{ .id = child } };
+            },
+            .expect_err => |err| {
+                if (cursor == 0) return .{ .expr = .{ .id = err.msg } };
+            },
+            .comptime_branch_taken => |taken| {
+                if (cursor == 0) return .{ .expr = .{ .id = taken.body, .expected = expected } };
+            },
         }
-        return self.program.types.rootCompressed(expected);
+        return null;
     }
 
-    fn inferStmt(self: *Solver, stmt_id: Lifted.StmtId) Allocator.Error!void {
-        switch (self.lifted.stmts[@intFromEnum(stmt_id)]) {
-            .uninitialized => |pat| {
-                const pat_ty = try self.lowerTypeFresh(self.lifted.pats[@intFromEnum(pat)].ty);
-                try self.bindPattern(pat, pat_ty);
-            },
-            .let_ => |let_| {
-                const value_ty = try self.inferExpr(let_.value);
-                try self.bindPattern(let_.pat, value_ty);
-            },
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| _ = try self.inferExpr(expr),
-            .return_ => |ret| _ = try self.expectExpr(ret.value, try self.returnTargetTy(ret.target)),
-            .crash => {},
+    /// Only unchanged fields flow from the base. Replacement fields may have
+    /// distinct specialized representations and callable sets.
+    fn relateRecordUpdate(self: *Solver, result: Type.TypeVarId, base: Type.TypeVarId, updates: Lifted.Span(Lifted.FieldExpr)) Allocator.Error!void {
+        const result_content = try self.shapeContent(result);
+        const base_content = try self.shapeContent(base);
+        if (result_content != .record or base_content != .record) Common.invariant("record update had a non-record type");
+        const result_fields = result_content.record;
+        const base_fields = base_content.record;
+        if (result_fields.count() != base_fields.count()) Common.invariant("record update changed its field names");
+        for (0..result_fields.count()) |index| {
+            const result_field = self.program.types.fieldItem(result_fields, index);
+            const base_field = self.program.types.fieldItem(base_fields, index);
+            if (result_field.name != base_field.name) Common.invariant("record update changed its ordered field names");
+            const replaced = for (self.lifted.fieldExprSpan(updates)) |field| {
+                if (field.name == result_field.name) break true;
+            } else false;
+            if (!replaced) try self.unify(result_field.ty, base_field.ty);
         }
     }
 
-    fn inferGeneratedOpaqueBacking(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!void {
-        const index = @intFromEnum(expr_id);
-        if (self.expr_done[index]) return;
-
-        const expr = self.lifted.exprs[index];
-        const tag = std.meta.activeTag(expr.data);
-        if (tag == .record) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            for (self.lifted.fieldExprSpan(expr.data.record)) |field| {
-                _ = try self.inferExpr(field.value);
-            }
-            return;
-        }
-        if (tag == .record_update) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            const update = expr.data.record_update;
-            _ = try self.inferExpr(update.base);
-            for (self.lifted.fieldExprSpan(update.fields)) |field| {
-                _ = try self.inferExpr(field.value);
-            }
-            return;
-        }
-        if (tag == .tuple) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            for (self.lifted.exprSpan(expr.data.tuple)) |item| {
-                _ = try self.inferExpr(item);
-            }
-            return;
-        }
-        if (tag == .tag) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            for (self.lifted.exprSpan(expr.data.tag.payloads)) |payload| {
-                _ = try self.inferExpr(payload);
-            }
-            return;
-        }
-        if (tag == .static_data_candidate) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            try self.inferGeneratedOpaqueBacking(expr.data.static_data_candidate.runtime_expr);
-            return;
-        }
-        if (tag == .nominal) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            try self.inferGeneratedOpaqueBacking(expr.data.nominal);
-            return;
-        }
-        if (tag == .let_) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            const let_ = expr.data.let_;
-            const value_ty = try self.inferExpr(let_.value);
-            try self.bindPattern(let_.bind, value_ty);
-            try self.inferGeneratedOpaqueBacking(let_.rest);
-            return;
-        }
-        _ = try self.inferExpr(expr_id);
+    fn captureRequest(self: *Solver, fn_id: Lifted.FnId, span: Lifted.Span(Lifted.CaptureOperand), index: usize) Allocator.Error!?ExprRequest {
+        const captures = self.liftedCapturesForFn(fn_id);
+        const operands = self.lifted.captureOperandSpan(span);
+        if (captures.len != operands.len) Common.invariant("capture operand count differs from its target");
+        if (index == operands.len) return null;
+        if (operands[index].id != self.lifted.captureIdOfLocal(captures[index].local)) Common.invariant("capture operand CaptureId did not match its slot");
+        return .{ .expr = .{ .id = operands[index].value, .expected = self.localTy(captures[index].local) } };
     }
 
     fn bindPattern(self: *Solver, pat_id: Lifted.PatId, value_ty: Type.TypeVarId) Allocator.Error!void {
@@ -3440,4 +3467,109 @@ test "inspectable backing unification isolates the structural type variable once
 
 test "lambda solved solve declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
+    return Lifted.Program.init(
+        allocator,
+        names.NameStore.init(allocator),
+        MonoType.Store.init(allocator),
+        .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
+        .empty, // exprs
+        .empty, // pats
+        .empty, // stmts
+        .empty, // locals
+        .empty, // expr_ids
+        .empty, // pat_ids
+        .empty, // typed_locals
+        .empty, // stmt_ids
+        .empty, // field_exprs
+        .empty, // field_access_segments
+        .empty, // fn_def_captures
+        .empty, // capture_operands
+        .empty, // record_destructs
+        .empty, // str_pattern_steps
+        .empty, // branches
+        .empty, // if_branches
+        .empty, // string_literals
+        Lifted.ProcDebugNameMap.init(allocator),
+        .empty, // source_files
+        .empty, // expr_locs
+        .empty, // expr_regions
+        .empty, // stmt_locs
+        .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
+        .empty, // local_names
+        .empty, // static_data_values
+        .empty, // comptime_sites
+        0, // next_symbol
+    );
+}
+
+test "lambda solved traverses deep sequential and nested expressions without native recursion" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const unit_ty = try lifted.types.add(.zst);
+    const unit = try lifted.addExpr(.{ .ty = unit_ty, .data = .unit });
+    var body = unit;
+    for (0..50_000) |_| {
+        const local = try lifted.addLocal(@enumFromInt(@as(u32, @intCast(lifted.localsView().len))), unit_ty);
+        const bind = try lifted.addPat(.{ .ty = unit_ty, .data = .{ .bind = local } });
+        body = try lifted.addExpr(.{ .ty = unit_ty, .data = .{ .typed_boundary = .{ .value = body } } });
+        body = try lifted.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{ .bind = bind, .value = unit, .rest = body } } });
+    }
+    _ = try lifted.addFn(.{ .symbol = @enumFromInt(50_001), .args = .empty(), .captures = .empty(), .body = .{ .roc = body }, .ret = unit_ty });
+    var program = Ast.Program.init(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.solve();
+    for (solver.expr_done) |done| try std.testing.expect(done);
+    try std.testing.expectEqual(solver.inferredExpr(unit), solver.inferredExpr(body));
+}
+
+test "lambda solved compact record updates relate only unchanged field representations" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const u8_ty = try lifted.types.add(.{ .primitive = .u8 });
+    const u16_ty = try lifted.types.add(.{ .primitive = .u16 });
+    const a = try lifted.names.internRecordFieldLabel("a");
+    const b = try lifted.names.internRecordFieldLabel("b");
+    const base_ty = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &.{
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u8_ty, .default = null },
+    }) });
+    const result_ty = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &.{
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u16_ty, .default = null },
+    }) });
+    const local = try lifted.addLocal(@enumFromInt(@as(u32, @intCast(lifted.localsView().len))), base_ty);
+    const base = try lifted.addExpr(.{ .ty = base_ty, .data = .{ .local = local } });
+    const value = try lifted.addExpr(.{ .ty = u16_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 256)), .kind = .i128 } } });
+    const update = try lifted.addExpr(.{ .ty = result_ty, .data = .{ .record_update = .{
+        .base = base,
+        .fields = try lifted.addFieldExprSpan(&.{.{ .name = b, .value = value }}),
+    } } });
+    _ = try lifted.addFn(.{ .symbol = @enumFromInt(1), .args = try lifted.addTypedLocalSpan(&.{.{ .local = local, .ty = base_ty }}), .captures = .empty(), .body = .{ .roc = update }, .ret = result_ty });
+    var program = Ast.Program.init(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.solve();
+    const solved_base = solver.inferredExpr(base);
+    const solved_update = solver.inferredExpr(update);
+    try std.testing.expectEqual(try solver.recordField(solved_base, a), try solver.recordField(solved_update, a));
+    try std.testing.expect((try solver.recordField(solved_base, b)) != (try solver.recordField(solved_update, b)));
 }

@@ -54,22 +54,19 @@ x = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - multiline_string_complex.md:40:5:40:8
+TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-── ✗ missing method ─────────────────────────── multiline_string_complex.md:40:5
+── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:40:6
 
-This not method is being called on a value whose type doesn't have that method.
+This string literal is being used where a non-string type is needed.
 
 e: !\\
-   ^^^
+    ^^
 
-The value's type, which does not have a method named not, is:
+The type was determined to be:
 
-    Str
-
-Hint: For this to work, the type would need to have a method named not
-associated with it in the type's declaration.
+    Bool
 
 ── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:37:3
 
@@ -220,7 +217,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 288) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 289) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -236,7 +233,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 306) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 307) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -265,9 +262,15 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-dispatch-call (method "minus") (constraint-fn-var 358)
+						(receiver
+							(e-runtime-error (tag "erroneous_value_expr")))
+						(args
+							(e-string))))
 				(field (name "e")
-					(e-runtime-error (tag "erroneous_value_expr"))))))
+					(e-call (constraint-fn-var 373)
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block
@@ -283,13 +286,13 @@ With multiple lines
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Bool }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Bool }"))
 		(expr (type "Str"))))
 ~~~

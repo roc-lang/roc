@@ -336,8 +336,7 @@ NO CHANGE
 				(p-assign (ident "update_data")))
 			(e-lookup-local
 				(p-assign (ident "str_container")))
-			(e-string
-				(e-literal (string "world")))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
 		(e-call (constraint-fn-var 432)
@@ -345,7 +344,7 @@ NO CHANGE
 				(p-assign (ident "update_data")))
 			(e-lookup-local
 				(p-assign (ident "str_container")))
-			(e-num (value "99"))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "identity_record"))
 		(e-lambda

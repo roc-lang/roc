@@ -441,9 +441,6 @@ test "NodeStore round trip - Expressions" {
         .e_unary_minus = CIR.Expr.UnaryMinus.init(rand_idx(CIR.Expr.Idx)),
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_unary_not = CIR.Expr.UnaryNot.init(rand_idx(CIR.Expr.Idx)),
-    });
-    try expressions.append(gpa, CIR.Expr{
         .e_field_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .segments = .{
@@ -1349,6 +1346,21 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .mutable,
+            .region = rand_region(),
+        },
+    });
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .immutable,
+            .region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);
@@ -1551,6 +1563,11 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(gpa, CIR.Pattern{
+        .var_assign = .{
+            .ident = rand_ident_idx(),
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
         .as = .{
             .pattern = rand_idx(CIR.Pattern.Idx),
             .ident = rand_ident_idx(),
@@ -1673,7 +1690,7 @@ test "NodeStore round trip - Pattern" {
 test "SurfaceOrigin encode/decode round-trips" {
     const SurfaceOrigin = CIR.Expr.SurfaceOrigin;
     // Every unit form.
-    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus, .unary_not };
+    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus };
     for (unit_origins) |origin| {
         try testing.expectEqual(
             origin,

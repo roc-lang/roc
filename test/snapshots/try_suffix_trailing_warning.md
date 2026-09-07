@@ -30,48 +30,78 @@ TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 # PROBLEMS
 ── ● trailing `?` ────────────────────────── try_suffix_trailing_warning.md:8:11
 
-This ? is applied to the value this function returns:
+It's usually a mistake to use a postfix ? on values being returned implicitly
+at the end of a function like this:
 
 nested(s)?
          ^
 
-A ? here is almost always a mistake. On Err, it returns the error from the
-function early. On Ok, it unwraps the payload and returns that instead of the
-Try, which only type-checks when the payload is itself a Try.
+This is because ? is syntax sugar for doing a match on a Try value like this:
 
-If you meant to return the Try as-is, remove the ?. If you really do want to
-unwrap a nested Try here, write that as a match instead, because a trailing ?
-is confusing to read.
+    match value_before_question_mark {
+        Ok(ok_payload) => ok_payload
+        Err(err_payload) => return Err(err_payload)
+    }
+
+When you use ? on the value at the end of a function, it changes "implicitly
+return this Try value" to "return this Try value if it's an Err, but if it's
+Ok, unwrap its Ok payload and return that instead" - which can only possibly
+type-check when returning Try(Try(..., ...), ...), which is so unusual that
+using ? here is almost always a mistake in practice.
+
+Usually removing the ? here is what makes the most sense, but if you really
+want this behavior, make it clear by using an explicit match instead of the ?
+syntax sugar.
 
 ── ● trailing `?` ───────────────────────── try_suffix_trailing_warning.md:14:19
 
-This ? is applied to the value this function returns:
+It's usually a mistake to use a postfix ? on values being returned implicitly
+at the end of a function like this:
 
 return nested(s)?
                 ^
 
-A ? here is almost always a mistake. On Err, it returns the error from the
-function early. On Ok, it unwraps the payload and returns that instead of the
-Try, which only type-checks when the payload is itself a Try.
+This is because ? is syntax sugar for doing a match on a Try value like this:
 
-If you meant to return the Try as-is, remove the ?. If you really do want to
-unwrap a nested Try here, write that as a match instead, because a trailing ?
-is confusing to read.
+    match value_before_question_mark {
+        Ok(ok_payload) => ok_payload
+        Err(err_payload) => return Err(err_payload)
+    }
+
+When you use ? on the value at the end of a function, it changes "implicitly
+return this Try value" to "return this Try value if it's an Err, but if it's
+Ok, unwrap its Ok payload and return that instead" - which can only possibly
+type-check when returning Try(Try(..., ...), ...), which is so unusual that
+using ? here is almost always a mistake in practice.
+
+Usually removing the ? here is what makes the most sense, but if you really
+want this behavior, make it clear by using an explicit match instead of the ?
+syntax sugar.
 
 ── ● trailing `?` ───────────────────────── try_suffix_trailing_warning.md:16:23
 
-This ? is applied to the value this function returns:
+It's usually a mistake to use a postfix ? on values being returned implicitly
+at the end of a function like this:
 
 if s == "y" nested(s)? else Ok(s)
                      ^
 
-A ? here is almost always a mistake. On Err, it returns the error from the
-function early. On Ok, it unwraps the payload and returns that instead of the
-Try, which only type-checks when the payload is itself a Try.
+This is because ? is syntax sugar for doing a match on a Try value like this:
 
-If you meant to return the Try as-is, remove the ?. If you really do want to
-unwrap a nested Try here, write that as a match instead, because a trailing ?
-is confusing to read.
+    match value_before_question_mark {
+        Ok(ok_payload) => ok_payload
+        Err(err_payload) => return Err(err_payload)
+    }
+
+When you use ? on the value at the end of a function, it changes "implicitly
+return this Try value" to "return this Try value if it's an Err, but if it's
+Ok, unwrap its Ok payload and return that instead" - which can only possibly
+type-check when returning Try(Try(..., ...), ...), which is so unusual that
+using ? here is almost always a mistake in practice.
+
+Usually removing the ? here is what makes the most sense, but if you really
+want this behavior, make it clear by using an explicit match instead of the ?
+syntax sugar.
 
 # TOKENS
 ~~~zig

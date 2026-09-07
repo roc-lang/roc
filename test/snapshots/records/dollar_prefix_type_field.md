@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Dollar-prefixed type record field names are rejected
+description=Dollar-prefixed record type field names are preserved
 type=statement
 ~~~
 # SOURCE
@@ -8,18 +8,9 @@ type=statement
 Person : { $name : Str }
 ~~~
 # EXPECTED
-INVALID RECORD FIELD NAME - error_dollar_prefix_type_field.md:1:12:1:17
+NIL
 # PROBLEMS
-── ✗ invalid record field name ────────── error_dollar_prefix_type_field.md:1:12
-
-Record field names cannot start with a dollar sign.
-
-Person : { $name : Str }
-           ^^^^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,CloseCurly,

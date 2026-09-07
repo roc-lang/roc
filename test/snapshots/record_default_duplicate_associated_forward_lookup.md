@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A forward reference prepares a nested type declaration as a placeholder; when its owner is then redeclared, the owner's associated block is skipped and the placeholder survives to end of mod unfilled. The defaulted-fields passes and the checker's decl generation must treat it as declaring nothing (its `.placeholder` anno used to be read as a TypeAnno and crash).
+description=A forward lookup must not use nested type declarations from a duplicate associated owner. The selected owner has neither Baz nor Qux, so both references are malformed and the duplicate Foo is reported.
 type=snippet
 ~~~
 # SOURCE
@@ -21,9 +21,25 @@ Foo := [B].{
 }
 ~~~
 # EXPECTED
-TYPE REDECLARED - record_default_forward_placeholder_survives.md:11:1:14:2
+MISSING NESTED TYPE - record_default_duplicate_associated_forward_lookup.md:1:5:1:12
+MISSING NESTED TYPE - record_default_duplicate_associated_forward_lookup.md:4:5:4:12
+TYPE REDECLARED - record_default_duplicate_associated_forward_lookup.md:11:1:14:2
 # PROBLEMS
-── ✗ type redeclared ─────── record_default_forward_placeholder_survives.md:11:1
+── ✗ missing nested type ─ record_default_duplicate_associated_forward_lookup.md:1:5
+
+Foo is in scope, but it doesn't have a nested type named Baz.
+
+f : Foo.Baz -> U8
+    ^^^^^^^
+
+── ✗ missing nested type ─ record_default_duplicate_associated_forward_lookup.md:4:5
+
+Foo is in scope, but it doesn't have a nested type named Qux.
+
+g : Foo.Qux -> U8
+    ^^^^^^^
+
+── ✗ type redeclared ─ record_default_duplicate_associated_forward_lookup.md:11:1
 
 The type Foo is being redeclared.
 
@@ -32,7 +48,7 @@ Foo := [B].{
     Qux : { z : U8 }
 }
 
-But Foo was already declared in record_default_forward_placeholder_survives.md:7:1:
+But Foo was already declared in record_default_duplicate_associated_forward_lookup.md:7:1:
 
 Foo := [A].{
     Bar := { x : U8 }
@@ -136,21 +152,21 @@ Foo := [B].{
 		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Foo.Baz") (local))
+				(ty-malformed)
 				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "g"))
 		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Foo.Qux") (local))
+				(ty-malformed)
 				(ty-lookup (name "U8") (builtin)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
 			(ty-tag-name (name "A"))))
 	(s-nominal-decl
-		(ty-header (name "record_default_forward_placeholder_survives.Foo.Bar"))
+		(ty-header (name "record_default_duplicate_associated_forward_lookup.Foo.Bar"))
 		(ty-record
 			(field (field "x")
 				(ty-lookup (name "U8") (builtin)))))
@@ -169,7 +185,7 @@ Foo := [B].{
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "record_default_forward_placeholder_survives.Foo.Bar")))
+			(ty-header (name "record_default_duplicate_associated_forward_lookup.Foo.Bar")))
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions

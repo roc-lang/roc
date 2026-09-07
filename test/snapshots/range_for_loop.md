@@ -15,9 +15,19 @@ total = {
 }
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - range_for_loop.md:3:9:3:13
 # PROBLEMS
-NIL
+── ● var name missing `$` ──────────────────────────────── range_for_loop.md:3:9
+
+The mutable binding sum_ is declared with var but its name does not start with
+$.
+
+var sum_ = 0
+    ^^^^
+
+Rename this binding and all of its uses to $sum_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -75,28 +85,28 @@ total = {
 		(p-assign (ident "total"))
 		(e-block
 			(s-var
-				(p-assign (ident "sum_"))
+				(p-var-assign (ident "sum_"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "i"))
-				(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 248)
+				(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 249)
 					(receiver
 						(e-num (value "1")))
 					(args
 						(e-num (value "5"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "sum_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 310)
+						(p-var-assign (ident "sum_"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 311)
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "sum_"))))
+									(p-var-assign (ident "sum_"))))
 							(args
 								(e-lookup-local
 									(p-assign (ident "i"))))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "sum_"))))
+				(p-var-assign (ident "sum_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~

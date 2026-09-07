@@ -115,8 +115,8 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
-    try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                try self.evidenceForUseSite(record.expr),");
-    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference)");
+    try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                (try self.evidenceForUseSite(record.expr)).vector,");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
     try expectContains(lower_source, "try self.restoreConstFnAtNode(view, fn_id, request_fn_node)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
@@ -455,7 +455,7 @@ test "Monotype iterator result completion stays out of relation replay and retai
     const dispatch_result = sourceSliceBetween(
         lower_source,
         "fn callableDispatchResultTypeNodeInPhase(",
-        "fn materializeEvidence(",
+        "fn materializeConstFnEvidence(",
     );
     try expectContains(dispatch_result, "if (phase == .expression_lowering)");
     try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
@@ -1075,7 +1075,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     try expectContains(seal_source, "try graph.freezeRelations()");
     try expectContains(seal_source, "try self.emitDraftDeferredInspects(body_draft, graph, &sealer)");
     try expectContains(lower_source, "try self.prepareDraftInspectMethods(body_draft, graph, boundary)");
-    try expectContains(lower_source, "try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize)");
+    try expectContains(lower_source, "try self.methodTargetCalleeAtNode(lookup, request_node, null)");
     try expectContains(lower_source, "ctx.frozen_inspect_method_calls = &prepared_methods");
     const freeze = std.mem.find(u8, seal_source, "try graph.freezeRelations()").?;
     const emit = std.mem.find(u8, seal_source, "try self.emitDraftDeferredInspects").?;

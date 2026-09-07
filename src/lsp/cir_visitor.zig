@@ -189,9 +189,6 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_unary_minus => |u| {
                     self.walkExpr(store, u.expr);
                 },
-                .e_unary_not => |u| {
-                    self.walkExpr(store, u.expr);
-                },
                 .e_field_access => |field_access| {
                     self.walkExpr(store, field_access.receiver);
                     if (self.stopped) return;
@@ -548,6 +545,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 },
                 // Leaf patterns - no children to traverse
                 .assign,
+                .var_assign,
                 .num_literal,
                 .num_from_numeral_literal,
                 .small_dec_literal,

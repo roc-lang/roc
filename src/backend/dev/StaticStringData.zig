@@ -9,6 +9,7 @@ const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
 
 const Allocator = std.mem.Allocator;
+const Index = @import("collections").DenseMap(base.StringLiteral.Idx, u32);
 
 /// Codegen lookup entry for a LIR literal backing.
 pub const Entry = struct {
@@ -17,11 +18,28 @@ pub const Entry = struct {
     bytes: []const u8,
 };
 
+/// Producer-owned lookup from byte-offset literal identities to compact rows.
+pub const View = struct {
+    entries: []const Entry = &.{},
+    index: ?*const Index = null,
+
+    pub fn ordinal(self: View, id: base.StringLiteral.Idx) ?u32 {
+        if (self.index) |index| return index.get(id);
+        std.debug.assert(self.entries.len == 0);
+        return null;
+    }
+
+    pub fn find(self: View, id: base.StringLiteral.Idx) ?Entry {
+        return self.entries[self.ordinal(id) orelse return null];
+    }
+};
+
 /// Readonly data exports and lookup entries for literal backing.
 pub const Table = struct {
     allocator: Allocator,
     exports: []StaticDataExport,
     entries: []Entry,
+    index: Index,
 
     pub fn deinit(self: *Table) void {
         for (self.exports) |static_export| {
@@ -38,18 +56,21 @@ pub const Table = struct {
         }
         self.allocator.free(self.exports);
         self.allocator.free(self.entries);
+        self.index.deinit();
         self.* = .{
             .allocator = self.allocator,
             .exports = &.{},
             .entries = &.{},
+            .index = Index.init(self.allocator),
         };
     }
 
+    pub fn view(self: *const Table) View {
+        return .{ .entries = self.entries, .index = &self.index };
+    }
+
     pub fn find(self: *const Table, id: base.StringLiteral.Idx) ?Entry {
-        for (self.entries) |entry| {
-            if (entry.id == id) return entry;
-        }
-        return null;
+        return self.view().find(id);
     }
 };
 
@@ -57,6 +78,8 @@ pub const Table = struct {
 pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget) Allocator.Error!Table {
     const word_size: u32 = @intCast(target.ptrBitWidth() / 8);
 
+    var index = Index.init(allocator);
+    errdefer index.deinit();
     var exports = std.ArrayList(StaticDataExport).empty;
     var entries = std.ArrayList(Entry).empty;
     var exports_live = true;
@@ -111,6 +134,7 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         symbol_owned = false;
         bytes_owned = false;
         relocations_owned = false;
+        try index.putNoClobber(entry.idx, @intCast(entries.items.len));
         try entries.append(allocator, .{
             .id = entry.idx,
             .symbol_name = symbol_name,
@@ -139,6 +163,7 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         .allocator = allocator,
         .exports = owned_exports,
         .entries = owned_entries,
+        .index = index,
     };
 }
 

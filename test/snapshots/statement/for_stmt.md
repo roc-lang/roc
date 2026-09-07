@@ -15,9 +15,19 @@ foo = {
 }
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_stmt.md:3:6:3:12
 # PROBLEMS
-NIL
+── ● var name missing `$` ────────────────────────────────────── for_stmt.md:3:6
+
+The mutable binding result is declared with var but its name does not start
+with $.
+
+var result = 0
+    ^^^^^^
+
+Rename this binding and all of its uses to $result. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -76,7 +86,7 @@ foo = {
 		(p-assign (ident "foo"))
 		(e-block
 			(s-var
-				(p-assign (ident "result"))
+				(p-var-assign (ident "result"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "x"))
@@ -87,17 +97,17 @@ foo = {
 						(e-num (value "3"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "result"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 300)
+						(p-var-assign (ident "result"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 301)
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "result"))))
+									(p-var-assign (ident "result"))))
 							(args
 								(e-lookup-local
 									(p-assign (ident "x"))))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "result"))))
+				(p-var-assign (ident "result"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~

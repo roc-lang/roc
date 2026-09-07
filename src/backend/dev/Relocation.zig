@@ -13,7 +13,8 @@ pub const DataRelocationKind = enum {
     pageoff12,
 };
 
-/// A relocation that needs to be applied during linking.
+/// A named relocation at a linker or process boundary. Machine-code producers
+/// use IndexedRelocation and carry its symbol-name column alongside the code.
 pub const Relocation = union(enum) {
     /// Inline data that should be placed in the data section.
     /// The offset is where in the code the reference to this data appears.
@@ -70,6 +71,40 @@ pub const Relocation = union(enum) {
             .local_data => |*r| r.offset += delta,
             .linked_function => |*r| r.offset += delta,
             .linked_data => |*r| r.offset += delta,
+            .jmp_to_return => |*r| {
+                r.inst_loc += delta;
+                r.offset += delta;
+            },
+        }
+    }
+};
+
+/// A relocation whose producer has already assigned its target identity.
+/// Symbol IDs are scoped to the accompanying SymbolTable name column.
+pub const IndexedRelocation = union(enum) {
+    linked_function: struct { offset: u64, symbol: @import("SymbolTable.zig").Id },
+    linked_data: struct {
+        offset: u64,
+        symbol: @import("SymbolTable.zig").Id,
+        kind: DataRelocationKind = .abs64,
+    },
+    local_data: @FieldType(Relocation, "local_data"),
+    jmp_to_return: @FieldType(Relocation, "jmp_to_return"),
+
+    pub fn getOffset(self: IndexedRelocation) u64 {
+        return switch (self) {
+            .linked_function => |r| r.offset,
+            .linked_data => |r| r.offset,
+            .local_data => |r| r.offset,
+            .jmp_to_return => |r| r.inst_loc,
+        };
+    }
+
+    pub fn adjustOffset(self: *IndexedRelocation, delta: u64) void {
+        switch (self.*) {
+            .linked_function => |*r| r.offset += delta,
+            .linked_data => |*r| r.offset += delta,
+            .local_data => |*r| r.offset += delta,
             .jmp_to_return => |*r| {
                 r.inst_loc += delta;
                 r.offset += delta;

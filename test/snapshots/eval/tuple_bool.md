@@ -8,55 +8,9 @@ type=expr
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
 ~~~
 # EXPECTED
-MISSING METHOD - tuple_bool.md:1:38:1:43
-MISSING METHOD - tuple_bool.md:1:45:1:51
-MISSING METHOD - tuple_bool.md:1:69:1:74
-MISSING METHOD - tuple_bool.md:1:78:1:83
+NIL
 # PROBLEMS
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:38
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                     ^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [True, ..]
-
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:45
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                            ^^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [False, ..]
-
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:69
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                                                    ^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [True, ..]
-
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:78
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                                                             ^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [True, ..]
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,OpBang,UpperIdent,Comma,OpBang,UpperIdent,Comma,UpperIdent,OpAnd,UpperIdent,Comma,OpBang,UpperIdent,OpOr,OpBang,UpperIdent,CloseRound,
@@ -98,8 +52,12 @@ NO CHANGE
 		(e-nominal-external
 			(builtin)
 			(e-tag (name "False")))
-		(e-runtime-error (tag "erroneous_value_expr"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-call (constraint-fn-var 250)
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+			(e-tag (name "True")))
+		(e-call (constraint-fn-var 255)
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+			(e-tag (name "False")))
 		(e-if
 			(if-branches
 				(if-branch
@@ -112,14 +70,18 @@ NO CHANGE
 		(e-if
 			(if-branches
 				(if-branch
-					(e-runtime-error (tag "erroneous_value_expr"))
+					(e-call (constraint-fn-var 270)
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+						(e-tag (name "True")))
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-runtime-error (tag "erroneous_value_expr"))))))
+				(e-call (constraint-fn-var 281)
+					(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+					(e-tag (name "True")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, ..], [False, ..], Bool, Bool, [True, ..], [False, ..], Bool, Bool)"))
+(expr (type "([True, ..], [False, ..], Bool, Bool, Bool, Bool, Bool, Bool)"))
 ~~~

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Dollar-prefixed expression record field names are rejected
+description=Dollar-prefixed expression record field names are preserved
 type=expr
 ~~~
 # SOURCE
@@ -8,18 +8,9 @@ type=expr
 { $name: "Ada" }
 ~~~
 # EXPECTED
-INVALID RECORD FIELD NAME - error_dollar_prefix_expr_field.md:1:3:1:8
+NIL
 # PROBLEMS
-── ✗ invalid record field name ─────────── error_dollar_prefix_expr_field.md:1:3
-
-Record field names cannot start with a dollar sign.
-
-{ $name: "Ada" }
-  ^^^^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

@@ -4,6 +4,7 @@
 //! defaulting have been finalized. It has no lambda sets and no layout data.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const check = @import("check");
 const collections = @import("collections");
 
@@ -2166,6 +2167,15 @@ pub const Store = struct {
         errdefer self.restore(mark_);
         const span_ = try self.addSpan(args);
         const ty = try self.add(.{ .func = .{ .args = span_, .ret = ret } });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    /// Intern a function while reusing an argument span already owned by this
+    /// store. Immutable side-pool spans may be shared between type nodes.
+    pub fn internFuncFromSpan(self: *Store, name_store: *const names.NameStore, args: Span, ret: TypeId) std.mem.Allocator.Error!TypeId {
+        if (builtin.mode == .Debug) requireEpochSpan(args, @intCast(self.spans.len()));
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .func = .{ .args = args, .ret = ret } });
         return try self.internCandidate(name_store, mark_, ty);
     }
 
@@ -4591,6 +4601,27 @@ test "monotype type store acyclic interning reuses child-first function nodes" {
     try std.testing.expectEqual(@as(usize, 2), store.view().types.len);
     try std.testing.expect(store.view().type_digests[@intFromEnum(first)] != null);
     try std.testing.expect(store.specializationDigestsView()[@intFromEnum(first)] != null);
+}
+
+test "monotype type store function interning reuses an existing argument span" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.internZst(&name_store);
+    const str = try store.internPrimitive(&name_store, .str);
+    const original = try store.internFunc(&name_store, &.{unit}, unit);
+    const args = store.get(original).func.args;
+    const spans_len = store.spans.len();
+
+    const with_str_return = try store.internFuncFromSpan(&name_store, args, str);
+    const reused_args = store.get(with_str_return).func.args;
+
+    try std.testing.expectEqual(args, reused_args);
+    try std.testing.expectEqual(spans_len, store.spans.len());
+    try std.testing.expectEqual(with_str_return, try store.internFunc(&name_store, &.{unit}, str));
 }
 
 test "monotype type store recursive transaction interns equal SCC positions" {

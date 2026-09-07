@@ -138,7 +138,7 @@ r = {
 	(s-alias-decl
 		(ty-header (name "C")
 			(ty-args
-				(ty-underscore)
+				(ty-malformed)
 				(ty-rigid-var (name "b"))))
 		(ty-tuple))
 	(s-alias-decl
@@ -161,10 +161,10 @@ r = {
 	(defs
 		(patt (type "{}")))
 	(type_decls
-		(alias (type "C(Error, b)")
+		(alias (type "Error")
 			(ty-header (name "C")
 				(ty-args
-					(ty-underscore)
+					(ty-malformed)
 					(ty-rigid-var (name "b")))))
 		(alias (type "Error")
 			(ty-header (name "D")))

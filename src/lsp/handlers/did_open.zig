@@ -6,7 +6,7 @@ const Allocator = std.mem.Allocator;
 /// Handler for `textDocument/didOpen` notifications.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, params_value: ?std.json.Value) Allocator.Error!void {
+        pub fn call(self: *ServerType, params_value: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = params_value orelse return;
             if (std.meta.activeTag(params) != .object) return;
             const obj = params.object;
@@ -33,7 +33,7 @@ pub fn handler(comptime ServerType: type) type {
 
             try self.doc_store.upsert(uri, version, text);
 
-            self.onDocumentChanged(uri);
+            try self.onDocumentChanged(uri);
         }
     };
 }

@@ -469,7 +469,7 @@ fn evidenceVectorEnd(
                     .from_callable => {},
                 }
             },
-            .structural, .unreachable_value, .checked_error => {},
+            .structural, .from_callable, .unreachable_value, .checked_error => {},
         }
     }
     return cursor;

@@ -205,9 +205,9 @@ EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
 NAME NOT IN SCOPE - fuzz_crash_027.md:65:4:65:5
 NAME NOT IN SCOPE - fuzz_crash_027.md:65:6:65:7
 NAME NOT IN SCOPE - fuzz_crash_027.md:71:7:71:11
-UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_027.md:70:38:70:42
 NOT IMPLEMENTED - fuzz_crash_027.md:74:7:74:12
-UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_027.md:74:23:74:27
 UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
 NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
 NAME NOT IN SCOPE - fuzz_crash_027.md:82:37:82:40
@@ -216,6 +216,7 @@ NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 NAME NOT IN SCOPE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
+VAR NAME MISSING `$` - fuzz_crash_027.md:102:6:102:12
 NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
 UNRECOGNIZED SYNTAX - fuzz_crash_027.md:110:2:110:5
 NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
@@ -689,12 +690,12 @@ Nothing is named ment in this scope.
 
 Is it misspelled, or is there an import missing?
 
-── ● unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
+── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:70:38
 
 Variable rest is defined here and then never used:
 
-# Thnt!
-^
+"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+                                   ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -710,12 +711,12 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ● unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
+── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:74:23
 
 Variable rest is defined here and then never used:
 
-# Thnt!
-^
+[1, 2 | 5, 3, .. as rest] => 123
+                    ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -796,6 +797,17 @@ The type String is not declared in this scope.
 
 main! : List(String) -> Try({}, _)
              ^^^^^^
+
+── ● var name missing `$` ────────────────────────────── fuzz_crash_027.md:102:6
+
+The mutable binding number is declared with var but its name does not start
+with $.
+
+var number = 123
+    ^^^^^^
+
+Rename this binding and all of its uses to $number. The name is only a
+convention; mutability comes from the var declaration.
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_027.md:103:9
 

@@ -54,6 +54,14 @@ fn zeroRegion() Region {
     return .{ .start = Region.Position.zero(), .end = Region.Position.zero() };
 }
 
+fn addBindingPattern(ctx: *ScopeTestContext, ident: Ident.Idx, is_var: bool) Allocator.Error!Pattern.Idx {
+    const pattern: Pattern = if (is_var)
+        .{ .var_assign = .{ .ident = ident } }
+    else
+        .{ .assign = .{ .ident = ident } };
+    return ctx.module_env.addPattern(pattern, zeroRegion());
+}
+
 fn externalTypeBinding(
     module_ident: Ident.Idx,
     original_ident: Ident.Idx,
@@ -107,12 +115,12 @@ test "can add and lookup idents at top level" {
 
     const foo_ident = try ctx.module_env.insertIdent(Ident.for_text("foo"));
     const bar_ident = try ctx.module_env.insertIdent(Ident.for_text("bar"));
-    const foo_pattern: Pattern.Idx = @enumFromInt(1);
-    const bar_pattern: Pattern.Idx = @enumFromInt(2);
+    const foo_pattern = try addBindingPattern(&ctx, foo_ident, false);
+    const bar_pattern = try addBindingPattern(&ctx, bar_ident, false);
 
     // Add identifiers
-    const foo_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, foo_pattern, false, true);
-    const bar_result = ctx.self.scopeIntroduceInternal(gpa, .ident, bar_ident, bar_pattern, false, true);
+    const foo_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, foo_pattern, true);
+    const bar_result = ctx.self.scopeIntroduceInternal(gpa, .ident, bar_ident, bar_pattern, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, foo_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, bar_result);
@@ -132,11 +140,11 @@ test "nested scopes shadow outer scopes" {
     defer ctx.deinit();
 
     const x_ident = try ctx.module_env.insertIdent(Ident.for_text("x"));
-    const outer_pattern: Pattern.Idx = @enumFromInt(1);
-    const inner_pattern: Pattern.Idx = @enumFromInt(2);
+    const outer_pattern = try addBindingPattern(&ctx, x_ident, false);
+    const inner_pattern = try addBindingPattern(&ctx, x_ident, false);
 
     // Add x to outer scope
-    const outer_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, outer_pattern, false, true);
+    const outer_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, outer_pattern, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, outer_result);
 
     // Enter new scope
@@ -147,7 +155,7 @@ test "nested scopes shadow outer scopes" {
     try std.testing.expectEqual(Scope.LookupResult{ .found = outer_pattern }, outer_lookup);
 
     // Add x to inner scope (shadows outer)
-    const inner_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, inner_pattern, false, true);
+    const inner_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, inner_pattern, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .shadowing_warning = outer_pattern }, inner_result);
 
     // Now x should resolve to inner scope
@@ -169,10 +177,10 @@ test "top level var error" {
     defer ctx.deinit();
 
     const var_ident = try ctx.module_env.insertIdent(Ident.for_text("count_"));
-    const pattern: Pattern.Idx = @enumFromInt(1);
+    const pattern = try addBindingPattern(&ctx, var_ident, true);
 
     // Should fail to introduce var at top level
-    const result = ctx.self.scopeIntroduceInternal(gpa, .ident, var_ident, pattern, true, true);
+    const result = ctx.self.scopeIntroduceInternal(gpa, .ident, var_ident, pattern, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .top_level_var_error = {} }, result);
 }
@@ -185,11 +193,11 @@ test "type variables are tracked separately from value identifiers" {
 
     // Create identifiers for 'a' - one for value, one for type
     const a_ident = try ctx.module_env.insertIdent(Ident.for_text("a"));
-    const pattern: Pattern.Idx = @enumFromInt(1);
+    const pattern = try addBindingPattern(&ctx, a_ident, false);
     const type_anno: TypeAnno.Idx = @enumFromInt(1);
 
     // Introduce 'a' as a value identifier
-    const value_result = ctx.self.scopeIntroduceInternal(gpa, .ident, a_ident, pattern, false, true);
+    const value_result = ctx.self.scopeIntroduceInternal(gpa, .ident, a_ident, pattern, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, value_result);
 
     // Introduce 'a' as a type variable - should succeed because they're in separate namespaces
@@ -216,15 +224,15 @@ test "var reassignment within same function" {
     try ctx.self.scopeEnter(gpa, true);
 
     const count_ident = try ctx.module_env.insertIdent(Ident.for_text("count_"));
-    const pattern1: Pattern.Idx = @enumFromInt(1);
-    const pattern2: Pattern.Idx = @enumFromInt(2);
+    const pattern1 = try addBindingPattern(&ctx, count_ident, true);
+    const pattern2 = try addBindingPattern(&ctx, count_ident, false);
 
     // Declare var
-    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Reassign var (not a declaration) - returns the existing pattern for reuse
-    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .var_reassignment_ok = pattern1 }, reassign_result);
 
     // Should still resolve to original pattern (var reassignment reuses existing pattern)
@@ -242,18 +250,18 @@ test "var reassignment across function boundary fails" {
     try ctx.self.scopeEnter(gpa, true);
 
     const count_ident = try ctx.module_env.insertIdent(Ident.for_text("count_"));
-    const pattern1: Pattern.Idx = @enumFromInt(1);
-    const pattern2: Pattern.Idx = @enumFromInt(2);
+    const pattern1 = try addBindingPattern(&ctx, count_ident, true);
+    const pattern2 = try addBindingPattern(&ctx, count_ident, false);
 
     // Declare var in first function
-    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Enter second function scope (function boundary)
     try ctx.self.scopeEnter(gpa, true);
 
     // Try to reassign var from different function - should fail
-    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .var_across_function_boundary = pattern1 }, reassign_result);
 }
 
@@ -265,18 +273,18 @@ test "identifiers with and without underscores are different" {
 
     const sum_ident = try ctx.module_env.insertIdent(Ident.for_text("sum"));
     const sum_underscore_ident = try ctx.module_env.insertIdent(Ident.for_text("sum_"));
-    const pattern1: Pattern.Idx = @enumFromInt(1);
-    const pattern2: Pattern.Idx = @enumFromInt(2);
+    const pattern1 = try addBindingPattern(&ctx, sum_ident, false);
+    const pattern2 = try addBindingPattern(&ctx, sum_underscore_ident, true);
 
     // Enter function scope so we can use var
     try ctx.self.scopeEnter(gpa, true);
 
     // Introduce regular identifier
-    const regular_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_ident, pattern1, false, true);
+    const regular_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_ident, pattern1, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, regular_result);
 
     // Introduce var with underscore - should not conflict
-    const var_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_underscore_ident, pattern2, true, true);
+    const var_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_underscore_ident, pattern2, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, var_result);
 
     // Both should be found independently
@@ -294,12 +302,12 @@ test "aliases work separately from idents" {
     defer ctx.deinit();
 
     const foo_ident = try ctx.module_env.insertIdent(Ident.for_text("Foo"));
-    const ident_pattern: Pattern.Idx = @enumFromInt(1);
+    const ident_pattern = try addBindingPattern(&ctx, foo_ident, false);
     const alias_pattern: Pattern.Idx = @enumFromInt(2);
 
     // Add as both ident and alias (they're in separate namespaces)
-    const ident_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, ident_pattern, false, true);
-    const alias_result = ctx.self.scopeIntroduceInternal(gpa, .alias, foo_ident, alias_pattern, false, true);
+    const ident_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, ident_pattern, true);
+    const alias_result = ctx.self.scopeIntroduceInternal(gpa, .alias, foo_ident, alias_pattern, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, ident_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, alias_result);

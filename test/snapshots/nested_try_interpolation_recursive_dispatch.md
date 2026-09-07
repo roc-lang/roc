@@ -22,19 +22,23 @@ RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:8:11:8:47
 # PROBLEMS
 ── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:8:11
 
-This from_interpolation dispatch would have to call itself to satisfy its own
-type.
+The type requirements for from_interpolation cannot be resolved.
 
 url : Try(Try(Url, [InvalidUrl]), [Outer])
       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The dispatcher type is:
+The method is being selected for this type:
 
     Try(Url, [InvalidUrl])
 
-Hint: Use a more specific result type, or add an associated function whose
-from_interpolation implementation does not require the same dispatch on the
-same type.
+Using from_interpolation for this type requires the same method again, before
+all of its type requirements have been determined.
+
+Recursive function calls are allowed. This error is about a cycle in the type
+requirements, before the function can run.
+
+Hint: Check the argument, result, and additional method requirements of
+from_interpolation to find which requirement leads back to this call.
 
 # TOKENS
 ~~~zig

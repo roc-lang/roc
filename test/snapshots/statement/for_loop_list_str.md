@@ -17,9 +17,19 @@ count = {
 expect count == 3
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_list_str.md:3:6:3:14
 # PROBLEMS
-NIL
+── ● var name missing `$` ───────────────────────────── for_loop_list_str.md:3:6
+
+The mutable binding counter_ is declared with var but its name does not start
+with $.
+
+var counter_ = 0
+    ^^^^^^^^
+
+Rename this binding and all of its uses to $counter_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -79,7 +89,7 @@ NO CHANGE
 		(p-assign (ident "count"))
 		(e-block
 			(s-var
-				(p-assign (ident "counter_"))
+				(p-var-assign (ident "counter_"))
 				(e-num (value "0")))
 			(s-for
 				(p-underscore)
@@ -93,16 +103,16 @@ NO CHANGE
 							(e-literal (string "test")))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "counter_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 317)
+						(p-var-assign (ident "counter_"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 318)
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "counter_"))))
+									(p-var-assign (ident "counter_"))))
 							(args
 								(e-num (value "1")))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "counter_"))))
+				(p-var-assign (ident "counter_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

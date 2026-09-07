@@ -3326,7 +3326,7 @@ pub const Coordinator = struct {
             @intFromPtr(buffer.ptr),
             module_alloc,
             source,
-            mod.name,
+            current_env.module_name,
         ) catch {
             manager.stats.recordInvalidation();
             return false;

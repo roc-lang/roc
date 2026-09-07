@@ -33,25 +33,6 @@ TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 # PROBLEMS
 ── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
 
-The encode method on Dec has an incompatible type.
-
-transform = make_map(|n| n + 1)
-            ^^^^^^^^
-
-The method encode has the type:
-
-    Dec, fmt -> Try(encoded, err)
-      where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]
-
-But I need it to have the type:
-
-    b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
-    -> b]
-
-Hint: This function expects 1 argument but got 2.
-
-── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
-
 The decode method on Dec has an incompatible type.
 
 transform = make_map(|n| n + 1)
@@ -65,6 +46,25 @@ The method decode has the type:
 But I need it to have the type:
 
     I64 -> b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
+    -> b]
+
+Hint: This function expects 1 argument but got 2.
+
+── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
+
+The encode method on Dec has an incompatible type.
+
+transform = make_map(|n| n + 1)
+            ^^^^^^^^
+
+The method encode has the type:
+
+    Dec, fmt -> Try(encoded, err)
+      where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]
+
+But I need it to have the type:
+
+    b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
     -> b]
 
 Hint: This function expects 1 argument but got 2.

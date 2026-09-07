@@ -99,7 +99,7 @@ NO CHANGE
 								(p-assign (ident "r"))))
 						(segments
 							(segment (name "f") (mode "required"))))
-					(e-num (value "1")))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(e-call (constraint-fn-var 250)
 					(e-field-access
 						(receiver

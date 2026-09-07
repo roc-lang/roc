@@ -2810,6 +2810,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     for (can_diagnostics) |diagnostic| {
         const diagnostic_tag = std.meta.activeTag(diagnostic);
         if (diagnostic_tag != .shadowing_warning and
+            diagnostic_tag != .binding_name_does_not_match_mutability and
             diagnostic_tag != .unreachable_string_pattern_capture) error_count += 1;
     }
 
@@ -2818,6 +2819,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         for (can_diagnostics) |diagnostic| {
             const diagnostic_tag = std.meta.activeTag(diagnostic);
             if (diagnostic_tag != .shadowing_warning and
+                diagnostic_tag != .binding_name_does_not_match_mutability and
                 diagnostic_tag != .unreachable_string_pattern_capture)
             {
                 std.log.err("  - {s}", .{@tagName(diagnostic)});
