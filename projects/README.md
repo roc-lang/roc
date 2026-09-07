@@ -76,9 +76,6 @@ batches and of each other:
 - [big/one-report-renderer.md](big/one-report-renderer.md)—collapse
   the four per-target diagnostic renderers onto one walker plus style
   data; delete the duplicated annotation-color switch.
-- [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
-  end the LLVM backend's `@tagName`-substring dispatch for numeric
-  conversion ops (the one backend exempt from switch exhaustiveness).
 - [small/bundle-unbundle-shared-path-rules.md](small/bundle-unbundle-shared-path-rules.md)—
   one archive path-safety validator; the writer's and reader's
   copies already disagree.
