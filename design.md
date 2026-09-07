@@ -1853,6 +1853,13 @@ runtime slice itself is not serialized, a cache consumer supplies the exact
 source-visible name already produced by the current canonicalization, and a
 debug invariant checks it against the serialized `display_module_name_idx`.
 
+Typed CIR module graphs retain the coordinator's explicit resolved import
+indices. They do not index modules by diagnostic names or require those names
+to be unique. Content-identical modules from distinct packages can load the
+same checked cache entry, including its recorded package-qualified display
+name; those names cannot distinguish graph entries. Cross-artifact semantic
+identity remains the checked content identity.
+
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
 alignment decisions, backend choice, object format, code-generation options,
 post-check lowering strategy, or post-check specialization state.

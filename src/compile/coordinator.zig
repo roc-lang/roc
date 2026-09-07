@@ -7819,3 +7819,76 @@ test "exact path spelling preserves case and honors platform separators" {
         try std.testing.expect(!pathsHaveExactSpelling("Dir/Module.roc", "Dir\\Module.roc"));
     }
 }
+
+test "issue 11065: identical modules across packages compile with cold and warm caches" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "cache");
+    try writeCacheKeyPurityFixture(&tmp, "workspace");
+    for ([_][]const u8{ "custom0", "custom1" }) |package| {
+        const dir = try std.fmt.allocPrint(allocator, "workspace/app/{s}", .{package});
+        defer allocator.free(dir);
+        try tmp.dir.createDirPath(io, dir);
+        const root = try std.fmt.allocPrint(allocator, "{s}/main.roc", .{dir});
+        defer allocator.free(root);
+        try tmp.dir.writeFile(io, .{ .sub_path = root, .data = "package [Plugin]\n" });
+        const plugin = try std.fmt.allocPrint(allocator, "{s}/Plugin.roc", .{dir});
+        defer allocator.free(plugin);
+        try tmp.dir.writeFile(io, .{
+            .sub_path = plugin,
+            .data =
+            \\Plugin := [].{
+            \\    value = 42
+            \\}
+            ,
+        });
+    }
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "workspace/app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc", custom0: "./custom0/main.roc", custom1: "./custom1/main.roc" }
+        \\import custom0.Plugin as Custom0
+        \\import custom1.Plugin as Custom1
+        \\expect Custom0.value == 42
+        \\expect Custom1.value == 42
+        \\main! = |_args| Ok({})
+        ,
+    });
+    const cache_dir = try tmp.dir.realPathFileAlloc(io, "cache", allocator);
+    defer allocator.free(cache_dir);
+    const app_path = try tmp.dir.realPathFileAlloc(io, "workspace/app/main.roc", allocator);
+    defer allocator.free(app_path);
+    var cold = try compileAppRootIdentity(allocator, cache_dir, app_path);
+    defer cold.deinit(allocator);
+    var warm = try compileAppRootIdentity(allocator, cache_dir, app_path);
+    defer warm.deinit(allocator);
+    try std.testing.expect(warm.cache_hits > 0);
+    try std.testing.expectEqualSlices(u8, &cold.artifact_key, &warm.artifact_key);
+
+    // The same module name with different content must still resolve through
+    // its own import edge, including after loading the changed graph from cache.
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "workspace/app/custom1/Plugin.roc",
+        .data = "Plugin := [].{ value = 43 }\n",
+    });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "workspace/app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc", custom0: "./custom0/main.roc", custom1: "./custom1/main.roc" }
+        \\import custom0.Plugin as Custom0
+        \\import custom1.Plugin as Custom1
+        \\expect Custom0.value == 42
+        \\expect Custom1.value == 43
+        \\main! = |_args| Ok({})
+        ,
+    });
+    var changed = try compileAppRootIdentity(allocator, cache_dir, app_path);
+    defer changed.deinit(allocator);
+    var changed_warm = try compileAppRootIdentity(allocator, cache_dir, app_path);
+    defer changed_warm.deinit(allocator);
+    try std.testing.expect(changed_warm.cache_hits > 0);
+    try std.testing.expectEqualSlices(u8, &changed.artifact_key, &changed_warm.artifact_key);
+    try std.testing.expect(!std.mem.eql(u8, &cold.artifact_key, &changed.artifact_key));
+}
