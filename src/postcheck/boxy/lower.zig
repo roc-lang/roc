@@ -3529,28 +3529,6 @@ const ProcedureBuilder = struct {
         };
     }
 
-    fn methodWorkerForRepByName(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        method_text: []const u8,
-    ) ?Plan.WorkerPlanId {
-        const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
-        const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const method = source_module.canonical_names.lookupMethodName(method_text) orelse return null;
-        const target_lookup = self.lookupMethodTarget(source_module, owner, source_module, method) orelse return null;
-        const source = switch (target_lookup.target.kind) {
-            .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
-            .local_proc,
-            .structural,
-            => boxyLowerInvariant("boxy nominal method target reached lowering without a procedure worker"),
-        };
-        return self.plan.workerForSourceType(source, .{
-            .module = target_lookup.module.key,
-            .ty = target_lookup.target.callable_ty,
-        });
-    }
-
     const MethodTargetLookup = struct {
         module: ProcedureModuleView,
         target: static_dispatch.MethodTarget,
@@ -3975,22 +3953,7 @@ const ProcedureBuilder = struct {
     }
 
     fn layoutNeedsNestedBoxyDesc(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
-        return switch (self.result.layouts.getLayout(layout_idx).tag) {
-            .box,
-            .erased_box,
-            .list,
-            .list_of_zst,
-            .struct_,
-            .tag_union,
-            => true,
-            .scalar,
-            .box_of_zst,
-            .closure,
-            .erased_callable,
-            .zst,
-            .ptr,
-            => false,
-        };
+        return LirProgram.layoutNeedsNestedBoxyDesc(self.result.layouts.getLayout(layout_idx));
     }
 
     fn tagPayloadStorageDescRepForLayout(
@@ -4148,6 +4111,7 @@ const ProcedureBuilder = struct {
     fn repNeedsTagPayloadDesc(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) bool {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor != null) return true;
+        if (self.plan.inspectMethodForRep(rep_id) != null) return true;
         return switch (rep.kind) {
             .tag_union,
             .bool_tag_union,
@@ -28008,7 +27972,11 @@ const ProcBodyBuilder = struct {
             => try self.assignStringBytesLiteral(target, "<opaque>", next),
             .list => try self.lowerListInspectLocalsInto(target, source, rep_id, next),
             .box => try self.lowerBoxInspectLocalsInto(target, source, rep_id, next),
-            .primitive => |primitive| try self.lowerPrimitiveInspectLocalsInto(target, source, primitive, next),
+            .primitive => |primitive| if (Common.primitiveInspectUsesMethod(primitive))
+                (try self.lowerToInspectMethodInto(target, source, rep_id, next)) orelse
+                    boxyLowerInvariant("SIMD inspect requires its planned to_inspect method")
+            else
+                try self.lowerPrimitiveInspectLocalsInto(target, source, primitive, next),
             .bool_tag_union => try self.lowerBoolInspectLocalsInto(target, source, next),
             .empty_record => try self.assignStringBytesLiteral(target, "{}", next),
             .empty_tag_union => try self.parent.result.store.addCFStmt(.{ .crash = .{
@@ -28048,7 +28016,8 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!?LIR.CFStmtId {
-        const worker_id = self.parent.methodWorkerForRepByName(rep_id, "to_inspect") orelse return null;
+        const method = self.parent.plan.inspectMethodForRep(rep_id) orelse return null;
+        const worker_id = method.worker;
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         if (worker.hidden_descs.len != 0 or worker.hidden_dicts.len != 0) {
             boxyLowerInvariant("boxy to_inspect method worker carried hidden parameters");

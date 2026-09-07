@@ -13925,6 +13925,23 @@ non-unique path may call the allocation-aware list-clone primitive before that
 store. This is mechanical consumption of earlier ARC output, never backend
 reference-count inference.
 
+Automatic inspection (`dbg` and `Str.inspect`) calls each vector's checked
+`to_inspect` body, including when a vector is nested in a structural value.
+Primitive runtime representation does not imply scalar inspection. Monotype
+reserves these method specializations during relation production alongside
+nominal inspection methods; deferred inspection consumes their sealed callee
+slots after relation freeze. Boxy planning records inspection-method demand
+from both `dbg` expressions/statements and `Str.inspect` calls; lowering calls
+the planned inspection worker for the vector representation. Every SIMD
+descriptor carries this method, since a vector has no structural descriptor
+renderer and can reach inspection after erasure through generic code. SIMD
+values never enter the scalar rendering low-level operation table. SIMD fields
+and elements occupy nested descriptor slots even though they own no memory;
+the LIR program defines this positional descriptor contract once for both
+producers and runtime consumers. Descriptor walkers retain spans across calls
+to checked inspection methods, and reacquire table entries afterward: those
+calls can append runtime descriptors and relocate the reference table.
+
 Structural equality treats vectors as ordinary value leaves. Solved-to-LIR
 lowering converts each vector operand to its complete 128-bit bit image and
 uses scalar `U128` equality, so every backend compares every lane without

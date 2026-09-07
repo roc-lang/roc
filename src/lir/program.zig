@@ -189,6 +189,17 @@ pub const BoxyAdapter = struct {
     produces_owned_result: bool,
 };
 
+/// Whether a payload position occupies a slot in `BoxyTypeDesc.nested_descs`.
+/// Vectors need their checked inspect method even though they own no memory.
+/// Descriptor producers and consumers must use the same positional contract.
+pub fn layoutNeedsNestedBoxyDesc(value_layout: layout.Layout) bool {
+    return switch (value_layout.tag) {
+        .box, .erased_box, .list, .list_of_zst, .struct_, .tag_union => true,
+        .scalar => value_layout.getScalar().tag == .vector,
+        .box_of_zst, .closure, .erased_callable, .zst, .ptr => false,
+    };
+}
+
 /// Runtime data for representation and structural operations on a boxy value.
 pub const BoxyTypeDesc = struct {
     payload_layout: layout.Idx,

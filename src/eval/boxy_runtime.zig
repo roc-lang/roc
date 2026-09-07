@@ -802,22 +802,7 @@ pub const BoxyRuntime = struct {
     }
 
     pub fn layoutNeedsBoxyStructuralDesc(self: *const BoxyRuntime, layout_idx: layout_mod.Idx) bool {
-        return switch (self.layout_store.getLayout(layout_idx).tag) {
-            .erased_box,
-            .box,
-            .list,
-            .list_of_zst,
-            .struct_,
-            .tag_union,
-            => true,
-            .scalar,
-            .box_of_zst,
-            .closure,
-            .erased_callable,
-            .zst,
-            .ptr,
-            => false,
-        };
+        return LirProgram.layoutNeedsNestedBoxyDesc(self.layout_store.getLayout(layout_idx));
     }
 
     pub fn boxyDynamicPayloadAllocationContainsRc(desc: *const LirProgram.BoxyTypeDesc) bool {
@@ -5719,7 +5704,9 @@ pub const BoxyRuntime = struct {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
         const struct_idx = struct_layout_val.getStruct().idx;
         const struct_data = self.layout_store.getStructData(struct_idx);
-        const desc_refs = if (desc) |struct_desc| self.requireBoxyDescRefs(struct_desc.nested_descs) else &.{};
+        // A nested to_inspect call can append runtime descriptors and move
+        // their reference table. Retain the span, never a slice across calls.
+        const desc_refs: LIR.BoxySpan = if (desc) |struct_desc| struct_desc.nested_descs else .{};
         const field_names = if (desc) |struct_desc| self.requireBoxyFieldNames(struct_desc.field_names) else &.{};
         var next_desc: usize = 0;
 
@@ -5741,7 +5728,7 @@ pub const BoxyRuntime = struct {
             }
             const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, original_index);
             const field_desc = if (self.layoutNeedsBoxyStructuralDesc(field_layout) and next_desc < desc_refs.len) blk: {
-                const resolved = try hooks.resolveDescRef(desc_refs[next_desc]);
+                const resolved = try hooks.resolveDescRef(self.requireBoxyDescRefs(desc_refs)[next_desc]);
                 next_desc += 1;
                 break :blk resolved;
             } else null;

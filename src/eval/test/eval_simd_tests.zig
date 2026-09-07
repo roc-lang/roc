@@ -45,6 +45,30 @@ fn laneBoundsTests() [lane_bounds_specs.len * 3]TestCase {
     return result;
 }
 
+fn inspectTests() [lane_bounds_specs.len * 3]TestCase {
+    var result: [lane_bounds_specs.len * 3]TestCase = undefined;
+    inline for (lane_bounds_specs, 0..) |spec, i| {
+        const lane = if (spec.type_name[0] == 'I') "-1" else "1";
+        const vector = spec.type_name ++ "(" ++ (lane ++ ", ") ** (spec.lane_count - 1) ++ lane ++ ")";
+        result[i * 3] = .{
+            .name = "SIMD inspect " ++ spec.type_name ++ " direct",
+            .source = "Str.inspect(" ++ spec.type_name ++ ".splat(" ++ lane ++ "))",
+            .expected = .{ .inspect_str = "\"" ++ vector ++ "\"" },
+        };
+        result[i * 3 + 1] = .{
+            .name = "SIMD inspect " ++ spec.type_name ++ " nested",
+            .source = "Str.inspect({ vector: [" ++ spec.type_name ++ ".splat(" ++ lane ++ ")] })",
+            .expected = .{ .inspect_str = "\"{ vector: [" ++ vector ++ "] }\"" },
+        };
+        result[i * 3 + 2] = .{
+            .name = "SIMD inspect " ++ spec.type_name ++ " generic",
+            .source = "{ inspect = |value| Str.inspect(value)\n inspect(" ++ spec.type_name ++ ".splat(" ++ lane ++ ")) }",
+            .expected = .{ .inspect_str = "\"" ++ vector ++ "\"" },
+        };
+    }
+    return result;
+}
+
 fn differentialSource() []const u8 {
     const package_import = "import oracle.SimdOracle";
     const direct_import = "import SimdOracle";
@@ -84,4 +108,4 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
-} ++ laneBoundsTests();
+} ++ laneBoundsTests() ++ inspectTests();
