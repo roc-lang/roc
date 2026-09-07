@@ -18097,7 +18097,7 @@ const BodyContext = struct {
 
         const arg_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
         const arg_expr = try self.localExpr(arg_local, value_ty);
-        const body = try self.inspectBody(arg_expr, value_ty, value_ty, str_ty);
+        const body = try self.inspectBody(arg_expr, value_ty, str_ty);
         const args = try self.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = value_ty }});
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
@@ -18114,12 +18114,11 @@ const BodyContext = struct {
         self: *BodyContext,
         value: DraftExprId,
         value_ty: Type.TypeId,
-        shape_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        return switch (self.typeStore().get(shape_ty)) {
+        return switch (self.typeStore().get(value_ty)) {
             .primitive => |primitive| if (Common.primitiveInspectUsesMethod(primitive))
-                (try self.toInspectCall(value, shape_ty, str_ty)) orelse
+                (try self.toInspectCall(value, value_ty, str_ty)) orelse
                     Common.invariant("SIMD inspect requires its checked to_inspect method")
             else
                 try self.primitiveInspect(value, primitive, str_ty),
@@ -18140,7 +18139,18 @@ const BodyContext = struct {
                 if (backing.use != .inspectable) {
                     break :blk try self.stringExpr("<opaque>", str_ty);
                 }
-                break :blk try self.inspectBody(value, value_ty, backing.ty, str_ty);
+                const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing.ty);
+                const backing_pat = try self.addPat(.{
+                    .ty = value_ty,
+                    .data = .{ .nominal = try self.bindPat(backing_local, backing.ty) },
+                });
+                const backing_value = try self.localExpr(backing_local, backing.ty);
+                const body = try self.inspectBody(backing_value, backing.ty, str_ty);
+                break :blk try self.addExpr(.{ .ty = str_ty, .data = .{ .let_ = .{
+                    .bind = backing_pat,
+                    .value = value,
+                    .rest = body,
+                } } });
             },
             .record => |fields| try self.inspectRecord(value, self.typeStore().fieldSpan(fields), str_ty),
             .tuple => |items| try self.inspectTuple(value, self.typeStore().span(items), str_ty),

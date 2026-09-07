@@ -1,13 +1,19 @@
 app [main!] { pf: platform "../fx-open/platform/main.roc" }
 
+Vec := U8x16
+Outer := Vec
+
 main! = |args| {
 	lane = args.len().to_u8_wrap()
 	v = U8x16.default().with_lane(1, lane)
+	dbg Outer.(Vec.(v))
 	dbg v
 	dbg Str.inspect(v)
 	inspect = |value| Str.inspect(value)
 	if Str.inspect(v) != U8x16.to_inspect(v) {
 		Err(IncorrectU8x16Inspection)
+	} else if inspect(Outer.(Vec.(v))) != U8x16.to_inspect(v) {
+		Err(IncorrectNominalInspection)
 	} else if inspect({ vector: [v] }) != "{ vector: [${U8x16.to_inspect(v)}] }" {
 		Err(IncorrectNestedInspection)
 	} else if inspect({ vector: v, words: ["ok"] }) != "{ vector: ${U8x16.to_inspect(v)}, words: [\"ok\"] }" {

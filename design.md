@@ -13927,8 +13927,10 @@ reference-count inference.
 
 Automatic inspection (`dbg` and `Str.inspect`) calls each vector's checked
 `to_inspect` body, including when a vector is nested in a structural value.
-Primitive runtime representation does not imply scalar inspection. Monotype
-reserves these method specializations during relation production alongside
+Nominal inspection without a custom method explicitly destructures each
+inspectable backing layer before inspecting or passing that backing to a
+method. Primitive runtime representation does not imply scalar inspection.
+Monotype reserves these method specializations during relation production alongside
 nominal inspection methods; deferred inspection consumes their sealed callee
 slots after relation freeze. Boxy planning records inspection-method demand
 from both `dbg` expressions/statements and `Str.inspect` calls; lowering calls

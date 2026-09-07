@@ -3423,6 +3423,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
     const build_result = try rocBuildOnce(ctx, .{
         .path = args.path,
         .opt = args.opt,
+        .specialization_strategy = args.specialization_strategy,
         .target = args.target,
         .output = exe_path,
         .debug = false,
