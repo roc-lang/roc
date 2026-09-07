@@ -1,11 +1,12 @@
 app [main!] { pf: platform "../fx-open/platform/main.roc" }
 
 Vec := U8x16
+
 Outer := Vec
 
 main! = |args| {
 	lane = args.len().to_u8_wrap()
-	v = U8x16.default().with_lane(1, lane)
+	v = U8x16.from_lanes(0, lane, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	dbg Outer.(Vec.(v))
 	dbg v
 	dbg Str.inspect(v)
@@ -41,4 +42,4 @@ main! = |args| {
 	}
 }
 
-expect Str.inspect(U8x16.default()) == "U8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
+expect Str.inspect(U8x16.default()) == "U8x16.from_lanes(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"

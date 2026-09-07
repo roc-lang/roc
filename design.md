@@ -13925,6 +13925,11 @@ non-unique path may call the allocation-aware list-clone primitive before that
 store. This is mechanical consumption of earlier ARC output, never backend
 reference-count inference.
 
+Each integer SIMD type exposes an infallible, fixed-arity `from_lanes`
+constructor, with lane 0 first and statically checked lane types. Inspection
+renders this constructor applied to decimal lane values, so the expression
+can be pasted into the REPL to reconstruct the same vector type and bits.
+
 Automatic inspection (`dbg` and `Str.inspect`) calls each vector's checked
 `to_inspect` body, including when a vector is nested in a structural value.
 Nominal inspection without a custom method explicitly destructures each

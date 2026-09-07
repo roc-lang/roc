@@ -17546,6 +17546,28 @@ Builtin :: [].{
 			## ```
 			splat : U8 -> U8x16
 
+			## Build a [U8x16] from 16 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8 -> U8x16
+			from_lanes = |lane0, lane1, lane2, lane3, lane4, lane5, lane6, lane7, lane8, lane9, lane10, lane11, lane12, lane13, lane14, lane15| {
+				U8x16.splat(lane0)
+					.with_lane(1, lane1)
+					.with_lane(2, lane2)
+					.with_lane(3, lane3)
+					.with_lane(4, lane4)
+					.with_lane(5, lane5)
+					.with_lane(6, lane6)
+					.with_lane(7, lane7)
+					.with_lane(8, lane8)
+					.with_lane(9, lane9)
+					.with_lane(10, lane10)
+					.with_lane(11, lane11)
+					.with_lane(12, lane12)
+					.with_lane(13, lane13)
+					.with_lane(14, lane14)
+					.with_lane(15, lane15)
+			}
+
 			## Build a [U8x16] from exactly 16 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 16.
 			from_list : List(U8) -> Try(U8x16, [WrongLength, ..])
@@ -17589,9 +17611,9 @@ Builtin :: [].{
 			to_hash : U8x16, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `U8x16(1, 2, 3, ...)`.
+			## Render a [U8x16.from_lanes] expression that reconstructs this vector.
 			to_inspect : U8x16 -> Str
-			to_inspect = |vector| Str.concat("U8x16(", Str.concat(Str.join_with(List.map(U8x16.to_list(vector), U8.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("U8x16.from_lanes(", Str.concat(Str.join_with(List.map(U8x16.to_list(vector), U8.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
@@ -18092,6 +18114,28 @@ Builtin :: [].{
 			## ```
 			splat : I8 -> I8x16
 
+			## Build a [I8x16] from 16 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : I8, I8, I8, I8, I8, I8, I8, I8, I8, I8, I8, I8, I8, I8, I8, I8 -> I8x16
+			from_lanes = |lane0, lane1, lane2, lane3, lane4, lane5, lane6, lane7, lane8, lane9, lane10, lane11, lane12, lane13, lane14, lane15| {
+				I8x16.splat(lane0)
+					.with_lane(1, lane1)
+					.with_lane(2, lane2)
+					.with_lane(3, lane3)
+					.with_lane(4, lane4)
+					.with_lane(5, lane5)
+					.with_lane(6, lane6)
+					.with_lane(7, lane7)
+					.with_lane(8, lane8)
+					.with_lane(9, lane9)
+					.with_lane(10, lane10)
+					.with_lane(11, lane11)
+					.with_lane(12, lane12)
+					.with_lane(13, lane13)
+					.with_lane(14, lane14)
+					.with_lane(15, lane15)
+			}
+
 			## Build an [I8x16] from exactly 16 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 16.
 			from_list : List(I8) -> Try(I8x16, [WrongLength, ..])
@@ -18135,9 +18179,9 @@ Builtin :: [].{
 			to_hash : I8x16, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `I8x16(1, 2, 3, ...)`.
+			## Render a [I8x16.from_lanes] expression that reconstructs this vector.
 			to_inspect : I8x16 -> Str
-			to_inspect = |vector| Str.concat("I8x16(", Str.concat(Str.join_with(List.map(I8x16.to_list(vector), I8.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("I8x16.from_lanes(", Str.concat(Str.join_with(List.map(I8x16.to_list(vector), I8.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
@@ -18573,6 +18617,20 @@ Builtin :: [].{
 			## ```
 			splat : U16 -> U16x8
 
+			## Build a [U16x8] from 8 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : U16, U16, U16, U16, U16, U16, U16, U16 -> U16x8
+			from_lanes = |lane0, lane1, lane2, lane3, lane4, lane5, lane6, lane7| {
+				U16x8.splat(lane0)
+					.with_lane(1, lane1)
+					.with_lane(2, lane2)
+					.with_lane(3, lane3)
+					.with_lane(4, lane4)
+					.with_lane(5, lane5)
+					.with_lane(6, lane6)
+					.with_lane(7, lane7)
+			}
+
 			## Build a [U16x8] from exactly 8 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 8.
 			from_list : List(U16) -> Try(U16x8, [WrongLength, ..])
@@ -18616,9 +18674,9 @@ Builtin :: [].{
 			to_hash : U16x8, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `U16x8(1, 2, 3, ...)`.
+			## Render a [U16x8.from_lanes] expression that reconstructs this vector.
 			to_inspect : U16x8 -> Str
-			to_inspect = |vector| Str.concat("U16x8(", Str.concat(Str.join_with(List.map(U16x8.to_list(vector), U16.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("U16x8.from_lanes(", Str.concat(Str.join_with(List.map(U16x8.to_list(vector), U16.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
@@ -19066,6 +19124,20 @@ Builtin :: [].{
 			## ```
 			splat : I16 -> I16x8
 
+			## Build a [I16x8] from 8 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : I16, I16, I16, I16, I16, I16, I16, I16 -> I16x8
+			from_lanes = |lane0, lane1, lane2, lane3, lane4, lane5, lane6, lane7| {
+				I16x8.splat(lane0)
+					.with_lane(1, lane1)
+					.with_lane(2, lane2)
+					.with_lane(3, lane3)
+					.with_lane(4, lane4)
+					.with_lane(5, lane5)
+					.with_lane(6, lane6)
+					.with_lane(7, lane7)
+			}
+
 			## Build an [I16x8] from exactly 8 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 8.
 			from_list : List(I16) -> Try(I16x8, [WrongLength, ..])
@@ -19109,9 +19181,9 @@ Builtin :: [].{
 			to_hash : I16x8, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `I16x8(1, 2, 3, ...)`.
+			## Render a [I16x8.from_lanes] expression that reconstructs this vector.
 			to_inspect : I16x8 -> Str
-			to_inspect = |vector| Str.concat("I16x8(", Str.concat(Str.join_with(List.map(I16x8.to_list(vector), I16.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("I16x8.from_lanes(", Str.concat(Str.join_with(List.map(I16x8.to_list(vector), I16.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
@@ -19603,6 +19675,16 @@ Builtin :: [].{
 			## ```
 			splat : U32 -> U32x4
 
+			## Build a [U32x4] from 4 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : U32, U32, U32, U32 -> U32x4
+			from_lanes = |lane0, lane1, lane2, lane3| {
+				U32x4.splat(lane0)
+					.with_lane(1, lane1)
+					.with_lane(2, lane2)
+					.with_lane(3, lane3)
+			}
+
 			## Build a [U32x4] from exactly 4 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 4.
 			from_list : List(U32) -> Try(U32x4, [WrongLength, ..])
@@ -19646,9 +19728,9 @@ Builtin :: [].{
 			to_hash : U32x4, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `U32x4(1, 2, 3, 4)`.
+			## Render a [U32x4.from_lanes] expression that reconstructs this vector.
 			to_inspect : U32x4 -> Str
-			to_inspect = |vector| Str.concat("U32x4(", Str.concat(Str.join_with(List.map(U32x4.to_list(vector), U32.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("U32x4.from_lanes(", Str.concat(Str.join_with(List.map(U32x4.to_list(vector), U32.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
@@ -20041,6 +20123,16 @@ Builtin :: [].{
 			## ```
 			splat : I32 -> I32x4
 
+			## Build a [I32x4] from 4 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : I32, I32, I32, I32 -> I32x4
+			from_lanes = |lane0, lane1, lane2, lane3| {
+				I32x4.splat(lane0)
+					.with_lane(1, lane1)
+					.with_lane(2, lane2)
+					.with_lane(3, lane3)
+			}
+
 			## Build an [I32x4] from exactly 4 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 4.
 			from_list : List(I32) -> Try(I32x4, [WrongLength, ..])
@@ -20084,9 +20176,9 @@ Builtin :: [].{
 			to_hash : I32x4, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `I32x4(-1, 2, -3, 4)`.
+			## Render a [I32x4.from_lanes] expression that reconstructs this vector.
 			to_inspect : I32x4 -> Str
-			to_inspect = |vector| Str.concat("I32x4(", Str.concat(Str.join_with(List.map(I32x4.to_list(vector), I32.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("I32x4.from_lanes(", Str.concat(Str.join_with(List.map(I32x4.to_list(vector), I32.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
@@ -20506,6 +20598,14 @@ Builtin :: [].{
 			## ```
 			splat : U64 -> U64x2
 
+			## Build a [U64x2] from 2 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : U64, U64 -> U64x2
+			from_lanes = |lane0, lane1| {
+				U64x2.splat(lane0)
+					.with_lane(1, lane1)
+			}
+
 			## Build a [U64x2] from exactly 2 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 2.
 			from_list : List(U64) -> Try(U64x2, [WrongLength, ..])
@@ -20549,9 +20649,9 @@ Builtin :: [].{
 			to_hash : U64x2, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `U64x2(1, 2)`.
+			## Render a [U64x2.from_lanes] expression that reconstructs this vector.
 			to_inspect : U64x2 -> Str
-			to_inspect = |vector| Str.concat("U64x2(", Str.concat(Str.join_with(List.map(U64x2.to_list(vector), U64.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("U64x2.from_lanes(", Str.concat(Str.join_with(List.map(U64x2.to_list(vector), U64.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
@@ -20872,6 +20972,14 @@ Builtin :: [].{
 			## ```
 			splat : I64 -> I64x2
 
+			## Build a [I64x2] from 2 lane values, lane 0 first.
+			## The argument count and lane types are checked at compile time.
+			from_lanes : I64, I64 -> I64x2
+			from_lanes = |lane0, lane1| {
+				I64x2.splat(lane0)
+					.with_lane(1, lane1)
+			}
+
 			## Build an [I64x2] from exactly 2 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 2.
 			from_list : List(I64) -> Try(I64x2, [WrongLength, ..])
@@ -20915,9 +21023,9 @@ Builtin :: [].{
 			to_hash : I64x2, Hasher -> Hasher
 			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
 
-			## Render the lanes for debugging, e.g. `I64x2(-1, 2)`.
+			## Render a [I64x2.from_lanes] expression that reconstructs this vector.
 			to_inspect : I64x2 -> Str
-			to_inspect = |vector| Str.concat("I64x2(", Str.concat(Str.join_with(List.map(I64x2.to_list(vector), I64.to_str), ", "), ")"))
+			to_inspect = |vector| Str.concat("I64x2.from_lanes(", Str.concat(Str.join_with(List.map(I64x2.to_list(vector), I64.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.

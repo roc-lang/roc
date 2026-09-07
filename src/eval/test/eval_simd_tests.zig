@@ -49,7 +49,7 @@ fn inspectTests() [lane_bounds_specs.len * 4]TestCase {
     var result: [lane_bounds_specs.len * 4]TestCase = undefined;
     inline for (lane_bounds_specs, 0..) |spec, i| {
         const lane = if (spec.type_name[0] == 'I') "-1" else "1";
-        const vector = spec.type_name ++ "(" ++ (lane ++ ", ") ** (spec.lane_count - 1) ++ lane ++ ")";
+        const vector = spec.type_name ++ ".from_lanes(" ++ (lane ++ ", ") ** (spec.lane_count - 1) ++ lane ++ ")";
         result[i * 4] = .{
             .name = "SIMD inspect " ++ spec.type_name ++ " direct",
             .source = "Str.inspect(" ++ spec.type_name ++ ".splat(" ++ lane ++ "))",
@@ -69,6 +69,23 @@ fn inspectTests() [lane_bounds_specs.len * 4]TestCase {
             .name = "SIMD inspect " ++ spec.type_name ++ " nominal",
             .source = "{ Vec := " ++ spec.type_name ++ "\n Str.inspect(Vec.(" ++ spec.type_name ++ ".splat(" ++ lane ++ "))) }",
             .expected = .{ .inspect_str = "\"" ++ vector ++ "\"" },
+        };
+    }
+    return result;
+}
+
+fn laneConstructorTests() [lane_bounds_specs.len]TestCase {
+    var result: [lane_bounds_specs.len]TestCase = undefined;
+    inline for (lane_bounds_specs, 0..) |spec, i| {
+        comptime var lanes: []const u8 = "";
+        inline for (0..spec.lane_count) |lane| {
+            lanes = lanes ++ (if (lane == 0) "" else ", ") ++
+                (if (spec.type_name[0] == 'I') "-" else "") ++ std.fmt.comptimePrint("{d}", .{lane + 1});
+        }
+        result[i] = .{
+            .name = "SIMD from_lanes " ++ spec.type_name ++ " preserves lane order",
+            .source = spec.type_name ++ ".from_lanes(" ++ lanes ++ ").to_list()",
+            .expected = .{ .inspect_str = "[" ++ lanes ++ "]" },
         };
     }
     return result;
@@ -113,4 +130,4 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
-} ++ laneBoundsTests() ++ inspectTests();
+} ++ laneBoundsTests() ++ inspectTests() ++ laneConstructorTests();

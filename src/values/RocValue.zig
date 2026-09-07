@@ -227,7 +227,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 var out = std.array_list.AlignedManaged(u8, null).init(allocator);
                 errdefer out.deinit();
                 try out.appendSlice(vectorName(kind));
-                try out.append('(');
+                try out.appendSlice(".from_lanes(");
                 for (0..kind.laneCount()) |lane_index| {
                     const raw = vectorLane(bits, kind, @intCast(lane_index));
                     const rendered = if (kind.isSigned())
@@ -542,13 +542,13 @@ test "format vectors preserves lane kind and little-endian lane order" {
     const unsigned = RocValue{ .ptr = @ptrCast(&unsigned_bits), .lay = Layout.vector(.u8x16) };
     const unsigned_result = try unsigned.format(allocator, ctx);
     defer allocator.free(unsigned_result);
-    try std.testing.expectEqualStrings("U8x16(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)", unsigned_result);
+    try std.testing.expectEqualStrings("U8x16.from_lanes(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)", unsigned_result);
 
     const signed_bits: u128 = 0x0004fffd0002ffff7fff80000001fffe;
     const signed = RocValue{ .ptr = @ptrCast(&signed_bits), .lay = Layout.vector(.i16x8) };
     const signed_result = try signed.format(allocator, ctx);
     defer allocator.free(signed_result);
-    try std.testing.expectEqualStrings("I16x8(-2, 1, -32768, 32767, -1, 2, -3, 4)", signed_result);
+    try std.testing.expectEqualStrings("I16x8.from_lanes(-2, 1, -32768, 32767, -1, 2, -3, 4)", signed_result);
 }
 
 test "format dec with strip" {
