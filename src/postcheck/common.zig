@@ -163,6 +163,14 @@ pub fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
     };
 }
 
+/// SIMD inspection is implemented by checked Roc bodies, unlike scalar rendering.
+pub fn primitiveInspectUsesMethod(primitive: checked.CheckedPrimitive) bool {
+    return switch (primitive) {
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
+        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => false,
+    };
+}
+
 /// The low-level op that renders a primitive scalar as a `Str`. This is the
 /// single source of truth shared by every post-check inspect lowering; call it
 /// rather than writing a second switch over `CheckedPrimitive`. Bool renders

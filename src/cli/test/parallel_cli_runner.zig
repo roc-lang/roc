@@ -414,6 +414,7 @@ const CustomCase = enum {
     issue_10492_build_default_app_args,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
+    simd_inspect_repl_roundtrip,
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
@@ -1397,6 +1398,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on x64win", .body = .{ .custom = .default_platform_stack_overflow_x64win } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on arm64win", .body = .{ .custom = .default_platform_stack_overflow_arm64win } },
     .{ .id = 0, .suite = .subcommands, .name = "roc version outputs at least 5 chars to stdout", .body = .{ .command = .{ .args = &.{"version"}, .stdout_min_len = 5 } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD from_lanes rejects too few lanes", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "U32x4.from_lanes(1, 2, 3)\n", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "expects 4 arguments, but it got 3" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD from_lanes rejects too many lanes", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "U32x4.from_lanes(1, 2, 3, 4, 5)\n", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "expects 4 arguments, but it got 5" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD from_lanes rejects out-of-range lane", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "U32x4.from_lanes(1, 2, 3, -1)\n", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "does not fit in the inferred type" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD inspect REPL round trip preserves type and bits", .body = .{ .custom = .simd_inspect_repl_roundtrip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl batch mode suppresses welcome banner", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "", .stdout_exact = "", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates simple expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1\n", .contains = &.{.{ .stream = .stdout, .text = "2" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "Roc REPL" }, .{ .stream = .stdout, .text = ">" }, .{ .stream = .stdout, .text = "Goodbye" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc repl inspects a typed numeric parse result", .body = .{ .command = .{ .args = &.{ "repl", "--specialize=no" }, .stdin = "U8.from_str(\"7\")\n", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "Ok(7)" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -1775,6 +1780,34 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc U128 addition overflow crashes (issue 9360, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9360_integer_add_overflow_u128.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer addition overflowed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc I128 subtraction underflow crashes (issue 9361, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9361_integer_sub_underflow_i128.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer subtraction overflowed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc runtime-count U128 shift links in a standalone dev executable", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_u128_shift_dev_link.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "undefined symbol" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD without inspection boxy build (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--specialize=no", "--output=simd_no_inspect" }, .roc_file = "test/cli/runtime_simd_no_inspect.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD without inspection boxy (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/runtime_simd_no_inspect.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stdout, .text = "Incorrect" }, .{ .stream = .stderr, .text = "Incorrect" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection dbg-only specialize=yes", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/cli/runtime_simd_dbg.roc", .exit = .success, .contains = &.{
+        .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I8x16.from_lanes(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: U16x8.from_lanes(1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I16x8.from_lanes(1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: U32x4.from_lanes(1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I32x4.from_lanes(1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: U64x2.from_lanes(1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I64x2.from_lanes(1, 1)" },
+    } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection dbg-only specialize=no", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/runtime_simd_dbg.roc", .exit = .success, .contains = &.{
+        .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I8x16.from_lanes(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: U16x8.from_lanes(1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I16x8.from_lanes(1, 1, 1, 1, 1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: U32x4.from_lanes(1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I32x4.from_lanes(1, 1, 1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: U64x2.from_lanes(1, 1)" },
+        .{ .stream = .stderr, .text = "ROC DBG: I64x2.from_lanes(1, 1)" },
+    } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_inspect.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stdout, .text = "Incorrect" }, .{ .stream = .stderr, .text = "Incorrect" } }, .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)" }, .{ .stream = .stderr, .text = "ROC DBG: \"U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\"" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection boxy (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/runtime_simd_inspect.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stdout, .text = "Incorrect" }, .{ .stream = .stderr, .text = "Incorrect" } }, .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)" }, .{ .stream = .stderr, .text = "ROC DBG: \"U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\"" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_inspect.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stdout, .text = "Incorrect" }, .{ .stream = .stderr, .text = "Incorrect" } }, .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)" }, .{ .stream = .stderr, .text = "ROC DBG: \"U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\"" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection boxy (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/runtime_simd_inspect.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stdout, .text = "Incorrect" }, .{ .stream = .stderr, .text = "Incorrect" } }, .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)" }, .{ .stream = .stderr, .text = "ROC DBG: \"U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\"" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_inspect.roc", .exit = .{ .code = 2 }, .not_contains = &.{ .{ .stream = .stdout, .text = "Incorrect" }, .{ .stream = .stderr, .text = "Incorrect" } }, .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)" }, .{ .stream = .stderr, .text = "ROC DBG: \"U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\"" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "SIMD automatic inspection boxy (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/runtime_simd_inspect.roc", .exit = .{ .code = 2 }, .not_contains = &.{ .{ .stream = .stdout, .text = "Incorrect" }, .{ .stream = .stderr, .text = "Incorrect" } }, .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)" }, .{ .stream = .stderr, .text = "ROC DBG: \"U8x16.from_lanes(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)\"" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -2918,6 +2951,7 @@ fn runCustomCase(
         .issue_10492_build_default_app_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
+        .simd_inspect_repl_roundtrip => customSimdInspectReplRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -3078,6 +3112,55 @@ fn outputArg(allocator: Allocator, path: []const u8) CliRunnerError![]const u8 {
 fn fileExistsWithSize(io: std.Io, path: []const u8) CliRunnerError!u64 {
     const stat = try std.Io.Dir.cwd().statFile(io, path, .{});
     return stat.size;
+}
+
+fn customSimdInspectReplRoundtrip(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const types = [_][]const u8{ "U8x16", "I8x16", "U16x8", "I16x8", "U32x4", "I32x4", "U64x2", "I64x2" };
+    // Exercise signed extrema, unsigned maxima, zero, and distinct lane order.
+    const patterns = [_]u128{ 0x80000000000000007fffffffffffffff, 0x0f0e0d0c0b0a09080706050403020100 };
+    var source: std.Io.Writer.Allocating = .init(allocator);
+    defer source.deinit();
+    for (types) |ty| {
+        for (patterns) |bits| source.writer.print("{s}.from_u128_bits({d})\n", .{ ty, bits }) catch
+            return customInfraFailure(allocator, timer, "failed to write SIMD source", .{});
+    }
+    for ([_][]const u8{ "--specialize=yes", "--specialize=no" }) |strategy| {
+        const args = [_][]const u8{ "repl", strategy };
+        const child_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "SIMD round trip timed out");
+        const rendered = runRocInEnv(io, allocator, env, &args, null, .absolute, &.{}, source.written(), child_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "SIMD REPL failed: {}", .{err});
+        if (checkCommandExpectation(allocator, rendered, .{ .args = &args, .exit = .success, .stderr_exact = "" })) |message|
+            return failureFromRun(allocator, timer, rendered, message);
+
+        var replay: std.Io.Writer.Allocating = .init(allocator);
+        defer replay.deinit();
+        var lines = std.mem.tokenizeAny(u8, rendered.stdout, "\r\n");
+        for (types) |ty| {
+            for (patterns) |bits| {
+                const expression = lines.next() orelse
+                    return failureFromRun(allocator, timer, rendered, "missing SIMD inspection output");
+                // Calling this type's method checks the reconstructed type too.
+                replay.writer.print("{s}.to_u128_bits({s}) == {d}\n", .{ ty, expression, bits }) catch
+                    return customInfraFailure(allocator, timer, "failed to write SIMD replay", .{});
+            }
+        }
+        if (lines.next() != null) return failureFromRun(allocator, timer, rendered, "unexpected SIMD inspection output");
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &args,
+            .stdin = replay.written(),
+            .exit = .success,
+            .stdout_exact = "True\n" ** (types.len * patterns.len),
+            .stderr_exact = "",
+        })) |failure| return failure;
+    }
+    return null;
 }
 
 fn customCliCacheRootsDistinct(io: std.Io, allocator: Allocator, timer: *harness.Timer) ?TestResult {

@@ -1413,11 +1413,12 @@ pub const MonoLlvmCodeGen = struct {
         }
         try self.declareRuntimeErrorHelper();
         try self.compileRuntimeErrorHelper();
+        // Runtime entry bodies install these thunk pointers in dispatch tables.
+        try self.generateBoxyDictProcThunks();
         for (procs, 0..) |proc, i| {
             if (proc.is_static_initializer) continue;
             try self.compileProcBody(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
-        try self.generateBoxyDictProcThunks();
     }
 
     fn generateBoxyDictProcThunks(self: *MonoLlvmCodeGen) Error!void {

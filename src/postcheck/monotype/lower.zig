@@ -18131,7 +18131,7 @@ const BodyContext = struct {
 
         const arg_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
         const arg_expr = try self.localExpr(arg_local, value_ty);
-        const body = try self.inspectBody(arg_expr, value_ty, value_ty, str_ty);
+        const body = try self.inspectBody(arg_expr, value_ty, str_ty);
         const args = try self.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = value_ty }});
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
@@ -18148,11 +18148,14 @@ const BodyContext = struct {
         self: *BodyContext,
         value: DraftExprId,
         value_ty: Type.TypeId,
-        shape_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        return switch (self.typeStore().get(shape_ty)) {
-            .primitive => |primitive| try self.primitiveInspect(value, primitive, str_ty),
+        return switch (self.typeStore().get(value_ty)) {
+            .primitive => |primitive| if (Common.primitiveInspectUsesMethod(primitive))
+                (try self.toInspectCall(value, value_ty, str_ty)) orelse
+                    Common.invariant("SIMD inspect requires its checked to_inspect method")
+            else
+                try self.primitiveInspect(value, primitive, str_ty),
             .named => |named| blk: {
                 if (named.builtin_owner) |owner| {
                     switch (owner) {
@@ -18170,7 +18173,18 @@ const BodyContext = struct {
                 if (backing.use != .inspectable) {
                     break :blk try self.stringExpr("<opaque>", str_ty);
                 }
-                break :blk try self.inspectBody(value, value_ty, backing.ty, str_ty);
+                const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing.ty);
+                const backing_pat = try self.addPat(.{
+                    .ty = value_ty,
+                    .data = .{ .nominal = try self.bindPat(backing_local, backing.ty) },
+                });
+                const backing_value = try self.localExpr(backing_local, backing.ty);
+                const body = try self.inspectBody(backing_value, backing.ty, str_ty);
+                break :blk try self.addExpr(.{ .ty = str_ty, .data = .{ .let_ = .{
+                    .bind = backing_pat,
+                    .value = value,
+                    .rest = body,
+                } } });
             },
             .record => |fields| try self.inspectRecord(value, self.typeStore().fieldSpan(fields), str_ty),
             .tuple => |items| try self.inspectTuple(value, self.typeStore().span(items), str_ty),
@@ -18224,22 +18238,7 @@ const BodyContext = struct {
                     if (named.args.len != 1) Common.invariant("List inspect graph node did not have one type argument");
                     return try self.prepareInspectMethodsAtNode(named.args[0], str_ty, seen);
                 }
-                if (self.methodOwnerFromNode(node)) |owner| {
-                    if (try self.lookupMethodTargetByName(owner, "to_inspect")) |raw_lookup| {
-                        const lookup = try self.withLocalProcContext(raw_lookup);
-                        for (self.draft.prepared_inspect_methods.items) |prepared| {
-                            if (self.graph.sameClass(prepared.value_node, node)) return false;
-                        }
-                        const ret_node = try self.graph.importMono(str_ty);
-                        const request_node = try self.graphFunctionNode(&.{node}, ret_node);
-                        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, null);
-                        try self.draft.prepared_inspect_methods.append(self.allocator, .{
-                            .value_node = node,
-                            .callee = callee,
-                        });
-                        return true;
-                    }
-                }
+                if (try self.prepareInspectMethodAtNode(node, str_ty)) |added| return added;
                 const backing = named.backing orelse return false;
                 if (backing.use != .inspectable) return false;
                 return try self.prepareInspectMethodsAtNode(backing.node, str_ty, seen);
@@ -18262,9 +18261,13 @@ const BodyContext = struct {
                 }
                 return added;
             },
+            .primitive => |primitive| {
+                if (!Common.primitiveInspectUsesMethod(primitive)) return false;
+                return (try self.prepareInspectMethodAtNode(node, str_ty)) orelse
+                    Common.invariant("SIMD inspect requires its checked to_inspect method");
+            },
             .redirect => unreachable,
             .unresolved,
-            .primitive,
             .func,
             .empty_tag_union,
             .empty_record,
@@ -18272,6 +18275,28 @@ const BodyContext = struct {
             .zst,
             => return false,
         }
+    }
+
+    /// Reserve method bodies while specialization relations remain open.
+    /// Null means this owner has no inspect method; false means it was reserved.
+    fn prepareInspectMethodAtNode(self: *BodyContext, node: NodeId, str_ty: Type.TypeId) Allocator.Error!?bool {
+        if (self.methodOwnerFromNode(node)) |owner| {
+            if (try self.lookupMethodTargetByName(owner, "to_inspect")) |raw_lookup| {
+                const lookup = try self.withLocalProcContext(raw_lookup);
+                for (self.draft.prepared_inspect_methods.items) |prepared| {
+                    if (self.graph.sameClass(prepared.value_node, node)) return false;
+                }
+                const ret_node = try self.graph.importMono(str_ty);
+                const request_node = try self.graphFunctionNode(&.{node}, ret_node);
+                const callee = try self.methodTargetCalleeAtNode(lookup, request_node, null);
+                try self.draft.prepared_inspect_methods.append(self.allocator, .{
+                    .value_node = node,
+                    .callee = callee,
+                });
+                return true;
+            }
+        }
+        return null;
     }
 
     fn primitiveInspect(self: *BodyContext, value: DraftExprId, primitive: Type.Primitive, str_ty: Type.TypeId) Allocator.Error!DraftExprId {

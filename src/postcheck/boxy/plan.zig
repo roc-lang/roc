@@ -6515,6 +6515,18 @@ const Builder = struct {
     }
 
     fn materializeInspectMethodPlans(self: *Builder) Allocator.Error!void {
+        // A vector descriptor must carry its renderer even when inspection is
+        // reached only after erasure through a generic function. SIMD has no
+        // structural descriptor renderer: its checked method is the capability.
+        const representation_count = self.plan.representations.items.len;
+        for (0..representation_count) |index| {
+            const rep = self.plan.representations.items[index];
+            if (rep.kind != .primitive or !Common.primitiveInspectUsesMethod(rep.kind.primitive)) continue;
+            var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+            defer seen.deinit();
+            try self.materializeInspectMethodsForRep(@enumFromInt(index), &seen);
+        }
+
         const direct_count = self.plan.direct_calls.items.len;
         var direct_index: usize = 0;
         while (direct_index < direct_count) : (direct_index += 1) {
@@ -9802,6 +9814,14 @@ const Builder = struct {
         return view.callable_eval_templates.templates[raw];
     }
 
+    fn analyzeInspectExpr(self: *Builder, view: ModuleView, expr_id: checked.CheckedExprId) Allocator.Error!void {
+        try self.analyzeExprTypes(view, expr_id);
+        const rep = try self.analyzeType(view, view.checked_bodies.expr(expr_id).ty);
+        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        try self.materializeInspectMethodsForRep(rep, &seen);
+    }
+
     fn analyzeExprTypes(self: *Builder, view: ModuleView, expr_id: checked.CheckedExprId) Allocator.Error!void {
         const worker = self.active_worker orelse
             boxyPlanInvariant("checked expression was analyzed outside a worker body");
@@ -9900,9 +9920,9 @@ const Builder = struct {
                 try self.analyzeExprTypes(view, binop.lhs);
                 try self.analyzeExprTypes(view, binop.rhs);
             },
+            .dbg => |child| try self.analyzeInspectExpr(view, child),
             .unary_minus,
             .unary_not,
-            .dbg,
             .expect,
             => |child| try self.analyzeExprTypes(view, child),
             .field_access => |access| try self.analyzeExprTypes(view, access.receiver),
@@ -10875,7 +10895,7 @@ const Builder = struct {
             .where_alias_decl,
             .runtime_error,
             => {},
-            .dbg,
+            .dbg => |expr| try self.analyzeInspectExpr(view, expr),
             .expr,
             .expect,
             => |expr| try self.analyzeExprTypes(view, expr),
