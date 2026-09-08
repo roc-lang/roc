@@ -11126,7 +11126,7 @@ const Builder = struct {
         view: ModuleView,
         ref_id: checked.ResolvedValueRefId,
     ) ?WorkerSource {
-        const record = self.resolvedValueRecord(view, ref_id);
+        const record = view.resolved_value_refs.callableTarget(ref_id);
         return switch (record.ref) {
             .local_proc => |local| if (self.topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                 .{ .procedure_binding = binding }
@@ -11157,7 +11157,7 @@ const Builder = struct {
         view: ModuleView,
         ref_id: checked.ResolvedValueRefId,
     ) ?StoredFnSource {
-        const record = self.resolvedValueRecord(view, ref_id);
+        const record = view.resolved_value_refs.callableTarget(ref_id);
         return switch (record.ref) {
             .top_level_proc,
             .promoted_top_level_proc,
