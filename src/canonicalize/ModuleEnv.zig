@@ -872,10 +872,17 @@ pub const BindingScheme = extern struct {
 /// the complete callable graph and metadata without reconstructing either from
 /// the receiver's final shape.
 pub const BindingSchemeCodecRequirement = extern struct {
+    /// Binding source var, or a synthetic pristine imported scheme var. The
+    /// latter has no CIR node but still owns a complete evidence schema.
     node_idx: u32,
     scheme_root: u32,
     receiver_var: u32,
     constraint_index: u32,
+    /// The checker retired definition-side validation because this relation
+    /// must be instantiated before a concrete codec can be selected.
+    requires_instantiation: u32,
+    /// Persist the producer's classification for checked-environment rechecks.
+    is_synthetic: u32,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -4586,12 +4593,16 @@ pub fn recordBindingSchemeCodecRequirement(
     scheme_root: TypeVar,
     receiver_var: TypeVar,
     constraint_index: u32,
+    requires_instantiation: bool,
+    is_synthetic: bool,
 ) std.mem.Allocator.Error!void {
     const entry = BindingSchemeCodecRequirement{
         .node_idx = @intFromEnum(node_idx),
         .scheme_root = @intFromEnum(scheme_root),
         .receiver_var = @intFromEnum(receiver_var),
         .constraint_index = constraint_index,
+        .requires_instantiation = @intFromBool(requires_instantiation),
+        .is_synthetic = @intFromBool(is_synthetic),
     };
     const entries = self.binding_scheme_codec_requirements.items.items;
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
@@ -4601,6 +4612,7 @@ pub fn recordBindingSchemeCodecRequirement(
             existing.receiver_var == entry.receiver_var and
             existing.constraint_index == entry.constraint_index)
         {
+            std.debug.assert(existing.requires_instantiation == entry.requires_instantiation and existing.is_synthetic == entry.is_synthetic);
             return;
         }
     }

@@ -182,7 +182,9 @@ pub const Constants = struct {
     /// 83: Where methods retain their complete type annotation in CIR.
     /// 84: Literal patterns record their exact failure owner, including
     ///     statements and definitions as well as expressions.
-    pub const CACHE_VERSION = 84;
+    /// 85: Scheme codec requirements retain instantiation and synthetic-owner
+    ///     classifications across checked-environment rechecks.
+    pub const CACHE_VERSION = 85;
 };
 
 /// Configuration for the Roc cache system.

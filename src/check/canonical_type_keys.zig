@@ -92,6 +92,23 @@ pub fn identityVarsFromVar(
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
+/// Enumerate a complete scheme under one identity numbering. The callable's
+/// slots keep their canonical order; explicit relation roots append only
+/// identities not already reachable from that callable.
+pub fn identityVarsFromScheme(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    root: Var,
+    relation_roots: []const Var,
+) Allocator.Error![]types.Var {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    try builder.writeVar(root);
+    for (relation_roots) |relation_root| try builder.writeVar(relation_root);
+    return try allocator.dupe(types.Var, builder.identity_variables.items);
+}
+
 /// Append the identity variables reachable from `var_`, method requirements
 /// included, to `out` in the canonical slot order.
 pub fn appendIdentityVarsFromVar(

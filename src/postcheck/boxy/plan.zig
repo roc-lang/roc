@@ -281,8 +281,17 @@ pub const WorkerEvidenceDescriptorParam = struct {
     hidden_desc_index: u32,
 };
 
+/// Checked module and absolute evidence-pool index of a scheme requirement.
+pub const SchemeDictionaryKey = struct {
+    module: checked.ModuleId,
+    param: u32,
+};
+
 /// Hidden worker parameter that supplies one or more method dictionaries.
 pub const HiddenDictionaryParam = struct {
+    scheme_param: ?SchemeDictionaryKey = null,
+    /// Explicit scheme requirements have their own checked evidence slot.
+    evidence_index: ?u32 = null,
     source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     dictionaries: Span,
@@ -643,6 +652,7 @@ pub const DictionaryDispatchPlan = struct {
     call: CheckedExprIdentity,
     caller: WorkerPlanId,
     dispatcher_rep: TypeRepId,
+    scheme_requirement: ?DictionaryRequirementId = null,
     method: MethodNameId,
     source_fn_type: CheckedTypeIdentity,
     operands: Span,
@@ -1400,6 +1410,9 @@ const Builder = struct {
     body_statements_seen: std.AutoHashMap(BodyStatementVisit, void),
     generated_codec_shapes_seen: std.AutoHashMap(GeneratedCodecShapeVisit, void),
     worker_dictionary_uses: std.ArrayList(WorkerDictionaryUse),
+    scheme_dictionary_params: collections.DenseMap(WorkerPlanId, []const HiddenDictionaryParam),
+    scheme_dictionaries: std.AutoHashMap(SchemeDictionaryKey, HiddenDictionaryParam),
+    scheme_dictionary_uses: std.ArrayList(struct { worker: WorkerPlanId, param: HiddenDictionaryParam }),
     active_worker: ?WorkerPlanId,
     inspect_demand_count: usize = 0,
 
@@ -1427,12 +1440,20 @@ const Builder = struct {
             .body_statements_seen = std.AutoHashMap(BodyStatementVisit, void).init(allocator),
             .generated_codec_shapes_seen = std.AutoHashMap(GeneratedCodecShapeVisit, void).init(allocator),
             .worker_dictionary_uses = .empty,
+            .scheme_dictionary_params = collections.DenseMap(WorkerPlanId, []const HiddenDictionaryParam).init(allocator),
+            .scheme_dictionaries = std.AutoHashMap(SchemeDictionaryKey, HiddenDictionaryParam).init(allocator),
+            .scheme_dictionary_uses = .empty,
             .active_worker = null,
         };
     }
 
     fn deinit(self: *Builder) void {
         self.worker_dictionary_uses.deinit(self.allocator);
+        var scheme_params = self.scheme_dictionary_params.valueIterator();
+        while (scheme_params.next()) |params| self.allocator.free(params.*);
+        self.scheme_dictionary_params.deinit();
+        self.scheme_dictionaries.deinit();
+        self.scheme_dictionary_uses.deinit(self.allocator);
         self.generated_codec_shapes_seen.deinit();
         self.body_statements_seen.deinit();
         self.body_patterns_seen.deinit();
@@ -2574,9 +2595,9 @@ const Builder = struct {
                                 .encoder_value_thunk,
                                 => unreachable,
                             },
-                            .shape = codec.shape,
+                            .shape = typeRef(contract.view, contract.derivation.shape_ty),
                             .runtime_type = runtime_type,
-                            .capture_type = encoding_type,
+                            .capture_type = typeRef(contract.view, contract.derivation.encoding_ty),
                             .contract_derivation = codec.contract_derivation,
                             .contract_expr = codec.contract_expr,
                         } },
@@ -3627,7 +3648,7 @@ const Builder = struct {
         encoding_type: CheckedTypeIdentity,
         method_text: []const u8,
     ) Allocator.Error!void {
-        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, method_text, null);
+        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, method_text, sequence_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(encode_call.arg_types);
         if (arg_types.len != 3) boxyPlanInvariant("generated sequence encoder call did not have three arguments");
         const body_rep = try self.analyzeType(self.moduleForId(arg_types[2].module), arg_types[2].ty);
@@ -3680,7 +3701,7 @@ const Builder = struct {
         elem_type: CheckedTypeIdentity,
         encoding_type: CheckedTypeIdentity,
     ) Allocator.Error!void {
-        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_list", null);
+        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_list", list_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(encode_call.arg_types);
         if (arg_types.len != 3) boxyPlanInvariant("generated list encoder call did not have three arguments");
         const body_rep = try self.analyzeType(self.moduleForId(arg_types[2].module), arg_types[2].ty);
@@ -4004,7 +4025,7 @@ const Builder = struct {
     ) Allocator.Error!void {
         const fields = try self.generatedRecordCheckedFields(record_shape);
         defer self.allocator.free(fields);
-        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_record", null);
+        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_record", record_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(encode_call.arg_types);
         if (arg_types.len != 3) {
             boxyPlanInvariant("generated encode_record call did not have three arguments");
@@ -5850,6 +5871,7 @@ const Builder = struct {
 
     const WorkerEvidenceParams = struct {
         view: ModuleView,
+        start: u32,
         params: []const static_dispatch.EvidenceParamRecord,
     };
 
@@ -5873,8 +5895,7 @@ const Builder = struct {
             .nested_expr => |expr_ref| blk: {
                 const view = self.moduleForId(expr_ref.module);
                 const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
-                const params = self.nestedExprEvidenceParams(view, site_expr) orelse break :blk null;
-                break :blk .{ .view = view, .params = params };
+                break :blk self.nestedExprEvidenceParams(view, site_expr);
             },
             .generated_codec,
             .generated_field_iterator,
@@ -5891,6 +5912,7 @@ const Builder = struct {
         const template = &view.checked_procedure_templates.templates.items[@intFromEnum(template_ref.template)];
         return .{
             .view = view,
+            .start = template.evidence_params.start,
             .params = view.checked_procedure_templates.evidenceParams(template),
         };
     }
@@ -5899,7 +5921,7 @@ const Builder = struct {
         _: *Builder,
         view: ModuleView,
         expr: checked.CheckedExprId,
-    ) ?[]const static_dispatch.EvidenceParamRecord {
+    ) ?WorkerEvidenceParams {
         for (view.checked_procedure_templates.dispatch_scopes) |scope| {
             if (scope.checked_expr != expr) continue;
             const start: usize = scope.evidence_params.start;
@@ -5909,7 +5931,7 @@ const Builder = struct {
             {
                 boxyPlanInvariant("nested procedure evidence span was outside the checked parameter pool");
             }
-            return view.checked_procedure_templates.evidence_params_pool[start..][0..len];
+            return .{ .view = view, .start = @intCast(start), .params = view.checked_procedure_templates.evidence_params_pool[start..][0..len] };
         }
         return null;
     }
@@ -5933,6 +5955,70 @@ const Builder = struct {
             },
             .callable_eval_template => null,
         };
+    }
+
+    /// Materialize captured composite scheme requirements once per worker. These are
+    /// scheme-owned dictionaries, not constraints on a representation shared
+    /// with unrelated expressions.
+    fn schemeDictionaryParams(self: *Builder, worker: WorkerPlan) Allocator.Error![]const HiddenDictionaryParam {
+        if (self.scheme_dictionary_params.get(worker.id)) |params| return params;
+        var pending = std.ArrayList(HiddenDictionaryParam).empty;
+        errdefer pending.deinit(self.allocator);
+        if (self.workerEvidenceParams(worker.source)) |schema| {
+            for (schema.params, 0..) |param, index| {
+                if (param.source != .scheme_requirement) continue;
+                var hidden = try self.schemeDictionary(.{ .module = schema.view.key, .param = schema.start + @as(u32, @intCast(index)) });
+                hidden.evidence_index = @intCast(index);
+                try pending.append(self.allocator, hidden);
+            }
+        }
+        const params = try pending.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(params);
+        try self.scheme_dictionary_params.put(worker.id, params);
+        return params;
+    }
+
+    fn schemeDictionary(self: *Builder, key: SchemeDictionaryKey) Allocator.Error!HiddenDictionaryParam {
+        if (self.scheme_dictionaries.get(key)) |param| return param;
+        const view = self.moduleForId(key.module);
+        const schema = view.checked_procedure_templates.evidence_params_pool;
+        if (key.param >= schema.len or schema[key.param].source != .scheme_requirement)
+            boxyPlanInvariant("composite dictionary did not name a checked scheme requirement");
+        const param = schema[key.param];
+        const rep = try self.analyzeType(view, param.dispatcher_ty);
+        _ = try self.analyzeType(view, param.callable_ty);
+        const start: u32 = @intCast(self.plan.dictionaries.items.len);
+        try self.plan.dictionaries.append(self.allocator, .{
+            .source_type = typeRef(view, param.dispatcher_ty),
+            .constraint_index = key.param,
+            .slot = try self.internDictionaryMethodSlot(view.key, param.method),
+            .fn_name = param.method,
+            .fn_ty = typeRef(view, param.callable_ty),
+            .origin = .method_call,
+            .binop_negated = false,
+            .num_literal = null,
+        });
+        const hidden = HiddenDictionaryParam{
+            .scheme_param = key,
+            .source_type = typeRef(view, param.dispatcher_ty),
+            .rep = rep,
+            .dictionaries = .{ .start = start, .len = 1 },
+        };
+        try self.scheme_dictionaries.put(key, hidden);
+        return hidden;
+    }
+
+    /// A lexical capture carries the same checked requirement identity as its
+    /// owner. Add that dictionary to the worker ABI through the existing fixed
+    /// point, so arbitrary closure depth needs no type or method matching.
+    fn requireWorkerSchemeDictionary(self: *Builder, worker: WorkerPlanId, key: SchemeDictionaryKey) Allocator.Error!HiddenDictionaryParam {
+        const param = try self.schemeDictionary(key);
+        if (self.workerBindsDictionarySpan(worker, param.dictionaries)) return param;
+        for (self.scheme_dictionary_uses.items) |use| {
+            if (use.worker == worker and use.param.dictionaries.start == param.dictionaries.start) return param;
+        }
+        try self.scheme_dictionary_uses.append(self.allocator, .{ .worker = worker, .param = param });
+        return param;
     }
 
     fn materializeWorkerHiddenDictionaryParams(self: *Builder) Allocator.Error!void {
@@ -5961,7 +6047,15 @@ const Builder = struct {
                 try self.collectHiddenDictionariesForRep(worker.rep, &pending, &seen_reps);
             }
 
+            try pending.appendSlice(self.allocator, try self.schemeDictionaryParams(worker));
             const body_start: u32 = @intCast(pending.items.len);
+            for (self.scheme_dictionary_uses.items) |use| {
+                if (use.worker != worker.id) continue;
+                const present = for (pending.items) |param| {
+                    if (param.dictionaries.start == use.param.dictionaries.start and param.dictionaries.len == use.param.dictionaries.len) break true;
+                } else false;
+                if (!present) try pending.append(self.allocator, use.param);
+            }
             for (self.worker_dictionary_uses.items) |use| {
                 if (use.worker != worker.id) continue;
                 try self.collectHiddenDictionariesForRep(use.rep, &pending, &seen_reps);
@@ -6482,6 +6576,7 @@ const Builder = struct {
             const inspect_demand_count = self.inspect_demand_count;
             const generated_codec_call_count = self.plan.generated_codec_calls.items.len;
             const worker_dictionary_use_count = self.worker_dictionary_uses.items.len;
+            const scheme_dictionary_use_count = self.scheme_dictionary_uses.items.len;
             const nested_callable_use_count = self.plan.nested_callable_uses.items.len;
 
             try self.materializeDirectCallTypeSubstitutions();
@@ -6513,6 +6608,7 @@ const Builder = struct {
                 inspect_demand_count == self.inspect_demand_count and
                 generated_codec_call_count == self.plan.generated_codec_calls.items.len and
                 worker_dictionary_use_count == self.worker_dictionary_uses.items.len and
+                scheme_dictionary_use_count == self.scheme_dictionary_uses.items.len and
                 nested_callable_use_count == self.plan.nested_callable_uses.items.len)
             {
                 return;
@@ -7270,7 +7366,7 @@ const Builder = struct {
         const path = path_view.checked_procedure_templates.evidenceParamPath(param);
         const call_path: []const static_dispatch.EvidencePathStep = switch (param.source) {
             .scheme_callable => path,
-            .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
+            .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
         };
         const source_arg_index = evidencePathSourceArgIndex(call_path, call_arg_types.len);
 
@@ -7710,12 +7806,37 @@ const Builder = struct {
         defer pending.deinit(self.allocator);
         var next_evidence: usize = 0;
         for (params, 0..) |param, param_index| {
+            if (param.scheme_param != null and param.evidence_index == null) {
+                const caller = caller_id orelse boxyPlanInvariant("captured codec dictionary had no calling worker");
+                const source = try self.requireWorkerSchemeDictionary(caller, param.scheme_param.?);
+                try pending.append(self.allocator, .{
+                    .worker_dictionaries = param.dictionaries,
+                    .source_type = source.source_type,
+                    .rep = source.rep,
+                    .source = .{ .bound_dictionaries = source.dictionaries },
+                });
+                continue;
+            }
+            if (param.evidence_index) |index| next_evidence = index;
             const evidence_source = try self.evidenceDictionarySource(
                 evidence_view,
                 evidence,
                 &next_evidence,
                 param.dictionaries,
             );
+            if (evidence_source.bound_evidence) |bound| {
+                const caller = caller_id orelse boxyPlanInvariant("forwarded checked dictionary had no calling worker");
+                const view = evidence_view orelse boxyPlanInvariant("forwarded codec evidence had no checked module");
+                const source = try self.requireWorkerSchemeDictionary(caller, .{ .module = view.key, .param = bound });
+                try pending.append(self.allocator, .{
+                    .worker_dictionaries = param.dictionaries,
+                    .source_type = source.source_type,
+                    .rep = source.rep,
+                    .method_evidence = evidence_source.method_evidence,
+                    .source = .{ .bound_dictionaries = source.dictionaries },
+                });
+                continue;
+            }
             const substituted_rep = substitutions.get(param.rep);
             if (param_index < body_param_start and substituted_rep == null and evidence_source.rep == null) {
                 boxyPlanInvariant("boxy callable dictionary parameter had no checked call substitution or dispatch evidence");
@@ -8440,6 +8561,7 @@ const Builder = struct {
     }
 
     const CallableEvidenceSource = struct {
+        bound_evidence: ?u32 = null,
         rep: ?TypeRepId = null,
         method_evidence: Span = .{},
     };
@@ -8480,6 +8602,7 @@ const Builder = struct {
         }
         if (selected.items.len != dictionaries.len) return .{};
         var found: ?TypeRepId = null;
+        var bound_evidence: ?u32 = null;
         var methods = std.ArrayList(DictionaryMethodEvidence).empty;
         defer methods.deinit(self.allocator);
         try methods.ensureTotalCapacity(self.allocator, selected.items.len);
@@ -8567,7 +8690,15 @@ const Builder = struct {
                         .resolution = resolution,
                     };
                 },
-                .constraint, .from_callable => .{
+                .constraint => |constraint| blk: {
+                    if (selected.items.len == 1) bound_evidence = constraint.scheme_param;
+                    break :blk .{
+                        .requirement_type = requirement.fn_ty,
+                        .callable_type = requirement.fn_ty,
+                        .resolution = .constraint,
+                    };
+                },
+                .from_callable, .from_scheme => .{
                     .requirement_type = requirement.fn_ty,
                     .callable_type = requirement.fn_ty,
                     .resolution = .constraint,
@@ -8589,6 +8720,7 @@ const Builder = struct {
         try self.plan.dictionary_method_evidence.appendSlice(self.allocator, methods.items);
         return .{
             .rep = found,
+            .bound_evidence = bound_evidence,
             .method_evidence = .{ .start = method_start, .len = @intCast(methods.items.len) },
         };
     }
@@ -10711,16 +10843,26 @@ const Builder = struct {
         const dispatcher_rep = try self.analyzeType(view, dispatch.dispatcher_ty);
         const target = directDispatchTarget(view.static_dispatch_plans, dispatch.resolution);
         if (target == null) {
-            try self.recordActiveWorkerDictionaryUse(dispatcher_rep);
-            if (self.plan.representations.items[@intFromEnum(dispatcher_rep)].dictionaries.len != 0) {
+            const caller = self.active_worker orelse
+                boxyPlanInvariant("boxy dictionary dispatch was analyzed outside a worker body");
+            const scheme_requirement: ?DictionaryRequirementId = if (dispatch.resolution == .evidence_dependent and dispatch.resolution.evidence_dependent.scheme_param != null) blk: {
+                const dictionary = try self.requireWorkerSchemeDictionary(caller, .{
+                    .module = view.key,
+                    .param = dispatch.resolution.evidence_dependent.scheme_param.?,
+                });
+                break :blk @enumFromInt(dictionary.dictionaries.start);
+            } else blk: {
+                try self.recordActiveWorkerDictionaryUse(dispatcher_rep);
+                break :blk null;
+            };
+            if (scheme_requirement != null or self.plan.representations.items[@intFromEnum(dispatcher_rep)].dictionaries.len != 0) {
                 const call_ref = CheckedExprIdentity{ .module = view.key, .expr = call_expr };
-                const caller = self.active_worker orelse
-                    boxyPlanInvariant("boxy dictionary dispatch was analyzed outside a worker body");
                 if (self.plan.dictionaryDispatchPlanForCall(call_ref, caller) == null) {
                     try self.plan.dictionary_dispatches.append(self.allocator, .{
                         .call = call_ref,
                         .caller = caller,
                         .dispatcher_rep = dispatcher_rep,
+                        .scheme_requirement = scheme_requirement,
                         .method = dispatch.method,
                         .source_fn_type = typeRef(view, dispatch.callable_ty),
                         .operands = try self.appendDispatchCallOperands(dispatch, view.static_dispatch_plans),
