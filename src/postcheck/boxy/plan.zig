@@ -247,6 +247,9 @@ pub const TypeRepresentation = struct {
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.
     inspect_opaque: bool = false,
+    /// Inspection is demanded at this representation, including when its
+    /// concrete value is supplied through a generic worker boundary.
+    inspect_demanded: bool = false,
 };
 
 /// Reason a representation must carry an explicit runtime descriptor.
@@ -1398,6 +1401,7 @@ const Builder = struct {
     generated_codec_shapes_seen: std.AutoHashMap(GeneratedCodecShapeVisit, void),
     worker_dictionary_uses: std.ArrayList(WorkerDictionaryUse),
     active_worker: ?WorkerPlanId,
+    inspect_demand_count: usize = 0,
 
     fn init(allocator: Allocator, input: ProgramInput) Builder {
         const root_view = if (input.root_view) |root_view|
@@ -6475,6 +6479,7 @@ const Builder = struct {
             const representation_count = self.plan.representations.items.len;
             const dictionary_count = self.plan.dictionaries.items.len;
             const inspect_method_count = self.plan.inspect_methods.items.len;
+            const inspect_demand_count = self.inspect_demand_count;
             const generated_codec_call_count = self.plan.generated_codec_calls.items.len;
             const worker_dictionary_use_count = self.worker_dictionary_uses.items.len;
             const nested_callable_use_count = self.plan.nested_callable_uses.items.len;
@@ -6505,6 +6510,7 @@ const Builder = struct {
                 representation_count == self.plan.representations.items.len and
                 dictionary_count == self.plan.dictionaries.items.len and
                 inspect_method_count == self.plan.inspect_methods.items.len and
+                inspect_demand_count == self.inspect_demand_count and
                 generated_codec_call_count == self.plan.generated_codec_calls.items.len and
                 worker_dictionary_use_count == self.worker_dictionary_uses.items.len and
                 nested_callable_use_count == self.plan.nested_callable_uses.items.len)
@@ -6524,9 +6530,7 @@ const Builder = struct {
             if (substitutions.len != 1) {
                 boxyPlanInvariant("Str.inspect direct call plan had unexpected substitution arity");
             }
-            var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
-            defer seen.deinit();
-            try self.materializeInspectMethodsForRep(substitutions[0].operand_rep, &seen);
+            try self.materializeInspectMethodsForRep(substitutions[0].operand_rep);
         }
 
         const nested_callable_count = self.plan.nested_callable_uses.items.len;
@@ -6543,9 +6547,72 @@ const Builder = struct {
             }
             const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
             const arg_rep = children[function.args_start].rep;
-            var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
-            defer seen.deinit();
-            try self.materializeInspectMethodsForRep(arg_rep, &seen);
+            try self.materializeInspectMethodsForRep(arg_rep);
+        }
+
+        if (self.inspect_demand_count == 0) return;
+        // Reuse the call-site type relations already recorded by planning.
+        // Demands cross generic boundaries before descriptor construction, so
+        // a descriptor carries the worker required by any of its consumers.
+        var pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer pairs.deinit();
+        const substitution_count = self.plan.call_type_substitutions.items.len;
+        for (0..substitution_count) |index| {
+            const substitution = self.plan.call_type_substitutions.items[index];
+            try self.propagateInspectDemand(substitution.worker_rep, substitution.call_rep, &pairs);
+            try self.propagateInspectDemand(substitution.call_rep, substitution.operand_rep, &pairs);
+        }
+        const call_count = self.plan.direct_calls.items.len;
+        for (0..call_count) |index| {
+            const call = self.plan.direct_calls.items[index];
+            const ret = call.ret_substitution orelse continue;
+            try self.propagateInspectDemand(ret.worker_rep, ret.call_rep, &pairs);
+        }
+        inline for (.{ "callable_uses", "nested_callable_uses" }) |field| {
+            const count = @field(self.plan, field).items.len;
+            for (0..count) |index| {
+                const use = @field(self.plan, field).items[index];
+                const call_rep = self.plan.repForSourceType(use.callable_ty) orelse
+                    boxyPlanInvariant("inspect callable use had no planned type");
+                try self.propagateInspectDemand(self.plan.workers.items[@intFromEnum(use.worker)].rep, call_rep, &pairs);
+            }
+        }
+    }
+
+    fn propagateInspectDemand(
+        self: *Builder,
+        worker_rep_id: TypeRepId,
+        call_rep_id: TypeRepId,
+        seen: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        if (worker_rep_id == call_rep_id) return;
+        const key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) | @intFromEnum(call_rep_id);
+        if ((try seen.getOrPut(key)).found_existing) return;
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
+        if (worker_rep.inspect_demanded) try self.materializeInspectMethodsForRep(call_rep_id);
+        if (call_rep.inspect_demanded) try self.materializeInspectMethodsForRep(worker_rep_id);
+
+        // Aliases and transparent nominal backings are explicit checked edges.
+        if (self.repQuery().structuralWrapperBackingRep(worker_rep_id)) |backing| {
+            if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
+                return try self.propagateInspectDemand(backing, call_backing, seen);
+            }
+            return try self.propagateInspectDemand(backing, call_rep_id, seen);
+        }
+        if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |backing| {
+            return try self.propagateInspectDemand(worker_rep_id, backing, seen);
+        }
+        for (0..worker_rep.children.len) |index| {
+            const child = self.plan.children.items[@as(usize, worker_rep.children.start) + index];
+            const call_children = self.plan.childSlice(call_rep.children);
+            if (self.rowInstantiationTarget(worker_rep_id, call_rep_id, child)) |row| {
+                try self.propagateInspectDemand(child.rep, row, seen);
+            } else if (self.namedQuery().findMatchingChildByRole(call_children, child)) |call_child| {
+                try self.propagateInspectDemand(child.rep, call_child.rep, seen);
+            } else if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, child)) |call_child| {
+                try self.propagateInspectDemand(child.rep, call_child.rep, seen);
+            }
         }
     }
 
@@ -6566,13 +6633,19 @@ const Builder = struct {
     fn materializeInspectMethodsForRep(
         self: *Builder,
         rep_id: TypeRepId,
-        seen: *collections.DenseMap(TypeRepId, void),
     ) Allocator.Error!void {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return;
-
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.inspect_demanded) return;
+        self.plan.representations.items[@intFromEnum(rep_id)].inspect_demanded = true;
+        self.inspect_demand_count += 1;
+        if (rep.kind == .erased_callable) return;
         const view = self.moduleForId(rep.source_type.module);
+        if (rep.kind == .primitive) {
+            switch (Common.primitiveInspectLowering(rep.kind.primitive)) {
+                .low_level, .bool_tag_union => return,
+                .builtin_method => {},
+            }
+        }
         if (methodOwnerForModuleType(view, rep.source_type.ty)) |owner| {
             if (self.lookupMethodTargetByText(view, owner, "to_inspect")) |lookup| {
                 if (self.plan.inspectMethodForRep(rep_id) == null) {
@@ -6593,7 +6666,7 @@ const Builder = struct {
 
         for (0..rep.children.len) |child_index| {
             const child = self.plan.children.items[@as(usize, rep.children.start) + child_index];
-            try self.materializeInspectMethodsForRep(child.rep, seen);
+            try self.materializeInspectMethodsForRep(child.rep);
         }
     }
 
@@ -9902,9 +9975,9 @@ const Builder = struct {
             },
             .unary_minus,
             .unary_not,
-            .dbg,
             .expect,
             => |child| try self.analyzeExprTypes(view, child),
+            .dbg => |child| try self.analyzeInspectExprTypes(view, child),
             .field_access => |access| try self.analyzeExprTypes(view, access.receiver),
             .interpolation => |interpolation| {
                 try self.analyzeExprTypes(view, interpolation.first);
@@ -9928,9 +10001,7 @@ const Builder = struct {
             .method_eq => |plan| try self.analyzeDispatchCallTarget(view, expr_id, plan),
             .tuple_access => |access| try self.analyzeExprTypes(view, access.tuple),
             .expect_err => |expect_err| {
-                try self.analyzeExprTypes(view, expect_err.expr);
-                const child_expr = view.checked_bodies.expr(expect_err.expr);
-                _ = try self.analyzeType(view, child_expr.ty);
+                try self.analyzeInspectExprTypes(view, expect_err.expr);
             },
             .return_ => |ret| try self.analyzeExprTypes(view, ret.expr),
             .for_ => |for_| {
@@ -9942,6 +10013,12 @@ const Builder = struct {
             .hosted_lambda => |hosted| for (hosted.args) |arg| try self.analyzePatternTypes(view, arg),
             .run_low_level => |run| try self.analyzeExprSliceTypes(view, run.args),
         }
+    }
+
+    fn analyzeInspectExprTypes(self: *Builder, view: ModuleView, expr_id: checked.CheckedExprId) Allocator.Error!void {
+        try self.analyzeExprTypes(view, expr_id);
+        const rep = try self.analyzeType(view, view.checked_bodies.expr(expr_id).ty);
+        try self.materializeInspectMethodsForRep(rep);
     }
 
     fn analyzeQuoteConversionTypes(
@@ -10875,10 +10952,10 @@ const Builder = struct {
             .where_alias_decl,
             .runtime_error,
             => {},
-            .dbg,
             .expr,
             .expect,
             => |expr| try self.analyzeExprTypes(view, expr),
+            .dbg => |expr| try self.analyzeInspectExprTypes(view, expr),
             .for_ => |for_| {
                 try self.analyzeIteratorForPlan(view, for_.plan);
                 try self.analyzePatternTypes(view, for_.pattern);

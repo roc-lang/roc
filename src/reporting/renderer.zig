@@ -1,5 +1,5 @@
 //! Provides functions to render Reports and Documents to various
-//! output formats without the complexity of vtables or interfaces.
+//! output formats through one document walker and compile-time styles.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -11,7 +11,6 @@ const Document = @import("document.zig").Document;
 const DocumentElement = @import("document.zig").DocumentElement;
 const Annotation = @import("document.zig").Annotation;
 const SourceCodeDisplayRegion = @import("document.zig").SourceCodeDisplayRegion;
-const SourceCodeWithUnderlines = @import("document.zig").SourceCodeWithUnderlines;
 const SourceCodeMultiRegion = @import("document.zig").SourceCodeMultiRegion;
 const SourceLocation = @import("document.zig").SourceLocation;
 const UnderlineRegion = @import("document.zig").UnderlineRegion;
@@ -190,120 +189,91 @@ const PrimaryRegion = struct {
     line_text: []const u8,
 };
 
-fn findPrimaryRegion(elements: []const DocumentElement) ?PrimaryRegion {
-    for (elements, 0..) |el, i| {
-        switch (el) {
-            .source_code_region => |r| return .{
-                .index = i,
-                .filename = r.filename,
-                .start_line = r.start_line,
-                .start_column = r.start_column,
-                .end_line = r.end_line,
-                .end_column = r.end_column,
-                .line_text = r.line_text,
-            },
-            .source_code_with_underlines => |d| {
-                const dr = d.display_region;
-                var sc = dr.start_column;
-                var ec = dr.end_column;
-                if (d.underline_regions.len > 0) {
-                    sc = d.underline_regions[0].start_column;
-                    ec = d.underline_regions[0].end_column;
-                }
-                return .{
-                    .index = i,
-                    .filename = dr.filename,
-                    .start_line = dr.start_line,
-                    .start_column = sc,
-                    .end_line = dr.end_line,
-                    .end_column = ec,
-                    .line_text = dr.line_text,
-                };
-            },
-            .text,
-            .annotated,
-            .line_break,
-            .indent,
-            .space,
-            .horizontal_rule,
-            .annotation_start,
-            .annotation_end,
-            .raw,
-            .reflowing_text,
-            .link,
-            .vertical_stack,
-            .horizontal_concat,
-            .source_code_multi_region,
-            .source_location,
-            => {},
-        }
+/// The report chooses its first top-level source block. Selection is a walker
+/// projection, so recognizing source elements is shared with rendering.
+const SourceSelection = struct {
+    index: usize = 0,
+    region: ?PrimaryRegion = null,
+};
+
+fn findPrimaryRegion(elements: []const DocumentElement, gpa: Allocator) (Allocator.Error || error{WriteFailed})!?PrimaryRegion {
+    var selection = SourceSelection{};
+    var annotations = std.array_list.Managed(Annotation).init(gpa);
+    defer annotations.deinit();
+    var sink = std.Io.Writer.fixed(&.{});
+    var ctx = RenderCtx{
+        .config = ReportingConfig.initColorTerminal(),
+        .palette = ColorPalette.NO_COLOR,
+        .annotation_stack = &annotations,
+        .source_selection = &selection,
+    };
+    for (elements, 0..) |element, index| {
+        selection.index = index;
+        try renderElementAs(.color_terminal, element, &sink, &ctx);
+        if (selection.region) |region| return region;
     }
     return null;
 }
 
-/// Append the plain text of a run of elements (line breaks become spaces), and
-/// record the terminal color of each appended byte so the summary text can
-/// keep inline code, symbols, etc. colored. `colors` ends up the same length as
-/// `plain`. In a no-color palette every color is "" and this is just plain text.
-/// Terminal output never adds markup characters. ANSI color distinguishes code
-/// spans when enabled; plain output remains literal text suitable for copying.
-fn wantsBacktick(_: ColorPalette, _: Annotation) bool {
-    return false;
+/// The report's primary and secondary blocks both use the first explicit
+/// underline for their focused span, or the display span when none is present.
+fn reportRegion(layout: source_region.Layout, index: usize) PrimaryRegion {
+    const display = layout.display;
+    const start_column = if (layout.underlines.len > 0) layout.underlines[0].start_column else display.start_column;
+    const end_column = if (layout.underlines.len > 0) layout.underlines[0].end_column else display.end_column;
+    return .{ .index = index, .filename = display.filename, .start_line = display.start_line, .start_column = start_column, .end_line = display.end_line, .end_column = end_column, .line_text = display.line_text };
 }
+
+/// Source-block hook for report prose below the summary. Nested document
+/// structures keep their normal style; only top-level blocks receive framing.
+const BelowContent = struct {
+    writer: *std.Io.Writer,
+    buffer: *std.Io.Writer.Allocating,
+    highlight_color: []const u8,
+    gpa: Allocator,
+    started: bool = false,
+
+    fn writeSource(self: *BelowContent, palette: ColorPalette, layout: source_region.Layout) (Allocator.Error || error{WriteFailed})!void {
+        const region = reportRegion(layout, 0);
+        const text = std.mem.trim(u8, self.buffer.written(), " \n\r\t");
+        if (!self.started) {
+            try self.writer.writeByte('\n');
+            self.started = true;
+        }
+        try renderSecondaryRegion(self.writer, palette, self.highlight_color, region.start_line, region.start_column, region.end_line, region.end_column, region.line_text, text, self.gpa);
+        self.buffer.clearRetainingCapacity();
+    }
+};
+
+/// The report header projects inline elements into text and per-byte colors.
+/// Structural elements belong below the header and are omitted by the walker.
+const SummaryText = struct {
+    plain: *std.array_list.Managed(u8),
+    colors: *std.array_list.Managed([]const u8),
+
+    fn append(self: SummaryText, text: []const u8, color: []const u8) Allocator.Error!void {
+        try self.plain.appendSlice(text);
+        try self.colors.appendNTimes(color, text.len);
+    }
+};
 
 fn collectStyledText(
     elements: []const DocumentElement,
     palette: ColorPalette,
     plain: *std.array_list.Managed(u8),
     colors: *std.array_list.Managed([]const u8),
-) Allocator.Error!void {
-    for (elements) |el| {
-        switch (el) {
-            .text, .reflowing_text, .raw => |t| for (t) |b| {
-                try plain.append(b);
-                try colors.append("");
-            },
-            .annotated => |a| {
-                const c = palette.colorForAnnotation(a.annotation);
-                const tick = wantsBacktick(palette, a.annotation);
-                if (tick) {
-                    try plain.append('`');
-                    try colors.append(c);
-                }
-                for (a.content) |b| {
-                    try plain.append(b);
-                    try colors.append(c);
-                }
-                if (tick) {
-                    try plain.append('`');
-                    try colors.append(c);
-                }
-            },
-            .line_break => {
-                try plain.append(' ');
-                try colors.append("");
-            },
-            .space => |n| {
-                var i: u32 = 0;
-                while (i < n) : (i += 1) {
-                    try plain.append(' ');
-                    try colors.append("");
-                }
-            },
-            .indent,
-            .horizontal_rule,
-            .annotation_start,
-            .annotation_end,
-            .link,
-            .vertical_stack,
-            .horizontal_concat,
-            .source_code_region,
-            .source_code_multi_region,
-            .source_code_with_underlines,
-            .source_location,
-            => {},
-        }
-    }
+) (Allocator.Error || error{WriteFailed})!void {
+    var annotations = std.array_list.Managed(Annotation).init(plain.allocator);
+    defer annotations.deinit();
+    var sink = std.Io.Writer.Allocating.init(plain.allocator);
+    defer sink.deinit();
+    var ctx = RenderCtx{
+        .config = ReportingConfig.initColorTerminal(),
+        .palette = palette,
+        .annotation_stack = &annotations,
+        .summary = .{ .plain = plain, .colors = colors },
+    };
+    for (elements) |element| try renderElementAs(.color_terminal, element, &sink.writer, &ctx);
 }
 
 /// Emit `line` (a slice of `plain`) with its per-byte colors. Unstyled bytes do
@@ -448,7 +418,7 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
     const gpa = report.document.allocator;
     const elements = report.document.elements.items;
 
-    const region = findPrimaryRegion(elements) orelse {
+    const region = (try findPrimaryRegion(elements, gpa)) orelse {
         try renderReportPlainFallback(report, writer, palette, config);
         return;
     };
@@ -492,75 +462,7 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
 
     try writer.writeByte('\n');
 
-    var snippet = std.array_list.Managed([]u8).init(gpa);
-    defer {
-        for (snippet.items) |l| gpa.free(l);
-        snippet.deinit();
-    }
-    var leads = std.array_list.Managed(usize).init(gpa);
-    defer leads.deinit();
-    {
-        var it = std.mem.splitScalar(u8, region.line_text, '\n');
-        while (it.next()) |line| {
-            var i: usize = 0;
-            var lead: usize = 0;
-            while (i < line.len and (line[i] == ' ' or line[i] == '\t')) : (i += 1) {
-                lead += if (line[i] == '\t') 4 else 1;
-            }
-            const rest = line[i..];
-            const buf = try gpa.alloc(u8, lead + rest.len);
-            @memset(buf[0..lead], ' ');
-            @memcpy(buf[lead..], rest);
-            try snippet.append(buf);
-            try leads.append(lead);
-        }
-    }
-    var common: usize = std.math.maxInt(usize);
-    for (snippet.items, leads.items) |l, lead| {
-        if (lead < l.len) common = @min(common, lead);
-    }
-    if (common == std.math.maxInt(usize)) common = 0;
-
-    var start_col_adj = region.start_column;
-    var end_col_adj = region.end_column;
-    {
-        var orig_lead: usize = 0;
-        while (orig_lead < region.line_text.len and
-            (region.line_text[orig_lead] == ' ' or region.line_text[orig_lead] == '\t')) : (orig_lead += 1)
-        {}
-        const exp0: i64 = if (leads.items.len > 0) @intCast(leads.items[0]) else 0;
-        const delta: i64 = exp0 - @as(i64, @intCast(common)) - @as(i64, @intCast(orig_lead));
-        start_col_adj = @intCast(@max(@as(i64, @intCast(region.start_column)) + delta, 1));
-        end_col_adj = @intCast(@max(@as(i64, @intCast(region.end_column)) + delta, 1));
-    }
-
-    {
-        var line_no = region.start_line;
-        for (snippet.items) |full_line| {
-            const code_line = full_line[@min(common, full_line.len)..];
-            const is_underline_line = region.start_line == region.end_line and line_no == region.start_line;
-
-            for (code_line) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
-            try writer.writeByte('\n');
-
-            if (is_underline_line) {
-                const start_byte = @min(@as(usize, start_col_adj -| 1), code_line.len);
-                const end_byte = @max(@min(@as(usize, end_col_adj -| 1), code_line.len), start_byte);
-
-                const lead = source_region.displayWidth(code_line[0..start_byte]);
-                try source_region.printSpaces(writer, @intCast(lead));
-
-                const span_width = if (end_byte > start_byte) source_region.displayWidth(code_line[start_byte..end_byte]) else 0;
-                const ulen = if (span_width > 0) span_width else 1;
-
-                try writer.writeAll(icon_info.color);
-                try writer.splatBytesAll("^", ulen);
-                try writer.writeAll(palette.reset);
-                try writer.writeByte('\n');
-            }
-            line_no += 1;
-        }
-    }
+    try writeReportSnippet(writer, palette, icon_info.color, region.start_line, region.start_column, region.end_line, region.end_column, region.line_text, gpa);
 
     try renderBelowContent(writer, palette, config, icon_info.color, elements, below_start, region.index, gpa);
 }
@@ -581,57 +483,14 @@ fn renderBelowContent(
     defer buf.deinit();
     var ann = std.array_list.Managed(Annotation).init(gpa);
     defer ann.deinit();
-    var ctx = RenderCtx{ .config = config, .palette = palette, .annotation_stack = &ann };
-
-    var started = false;
+    var below = BelowContent{ .writer = writer, .buffer = &buf, .highlight_color = highlight_color, .gpa = gpa };
+    var ctx = RenderCtx{ .config = config, .palette = palette, .annotation_stack = &ann, .below_content = &below };
     var idx = @min(below_start, region_idx);
     while (idx < elements.len) : (idx += 1) {
         if (idx == region_idx) continue;
-        switch (elements[idx]) {
-            .source_code_region => |r| {
-                const text = std.mem.trim(u8, buf.written(), " \n\r\t");
-                if (!started) {
-                    try writer.writeByte('\n');
-                    started = true;
-                }
-                try renderSecondaryRegion(writer, palette, highlight_color, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text, text, gpa);
-                buf.clearRetainingCapacity();
-            },
-            .source_code_with_underlines => |d| {
-                const dr = d.display_region;
-                var sc = dr.start_column;
-                var ec = dr.end_column;
-                if (d.underline_regions.len > 0) {
-                    sc = d.underline_regions[0].start_column;
-                    ec = d.underline_regions[0].end_column;
-                }
-                const text = std.mem.trim(u8, buf.written(), " \n\r\t");
-                if (!started) {
-                    try writer.writeByte('\n');
-                    started = true;
-                }
-                try renderSecondaryRegion(writer, palette, highlight_color, dr.start_line, sc, dr.end_line, ec, dr.line_text, text, gpa);
-                buf.clearRetainingCapacity();
-            },
-            .text,
-            .annotated,
-            .line_break,
-            .indent,
-            .space,
-            .horizontal_rule,
-            .annotation_start,
-            .annotation_end,
-            .raw,
-            .reflowing_text,
-            .link,
-            .vertical_stack,
-            .horizontal_concat,
-            .source_code_multi_region,
-            .source_location,
-            => try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx),
-        }
+        try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx);
     }
-    try flushBelowText(writer, &buf, width, &started);
+    try flushBelowText(writer, &buf, width, &below.started);
     try writer.writeByte('\n');
 }
 
@@ -668,7 +527,7 @@ fn renderSecondaryRegion(
     line_text: []const u8,
     preceding_text: []const u8,
     gpa: Allocator,
-) error{WriteFailed}!void {
+) (Allocator.Error || error{WriteFailed})!void {
     const body = std.mem.trim(u8, preceding_text, " \n\r\t");
 
     if (body.len > 0) {
@@ -679,74 +538,25 @@ fn renderSecondaryRegion(
     if (line_text.len > 0) {
         try writer.writeByte('\n');
 
-        var snippet = std.array_list.Managed([]u8).init(gpa);
-        defer {
-            for (snippet.items) |l| gpa.free(l);
-            snippet.deinit();
-        }
-        var leads = std.array_list.Managed(usize).init(gpa);
-        defer leads.deinit();
-        {
-            var it = std.mem.splitScalar(u8, line_text, '\n');
-            while (it.next()) |line| {
-                var i: usize = 0;
-                var lead: usize = 0;
-                while (i < line.len and (line[i] == ' ' or line[i] == '\t')) : (i += 1) {
-                    lead += if (line[i] == '\t') 4 else 1;
-                }
-                const rest = line[i..];
-                const buf = gpa.alloc(u8, lead + rest.len) catch return error.WriteFailed;
-                @memset(buf[0..lead], ' ');
-                @memcpy(buf[lead..], rest);
-                snippet.append(buf) catch return error.WriteFailed;
-                leads.append(lead) catch return error.WriteFailed;
-            }
-        }
-        var common: usize = std.math.maxInt(usize);
-        for (snippet.items, leads.items) |l, lead| {
-            if (lead < l.len) common = @min(common, lead);
-        }
-        if (common == std.math.maxInt(usize)) common = 0;
+        writeReportSnippet(writer, palette, highlight_color, start_line, start_column, end_line, end_column, line_text, gpa) catch return error.WriteFailed;
+    }
+}
 
-        var start_col_adj = start_column;
-        var end_col_adj = end_column;
-        {
-            var orig_lead: usize = 0;
-            while (orig_lead < line_text.len and
-                (line_text[orig_lead] == ' ' or line_text[orig_lead] == '\t')) : (orig_lead += 1)
-            {}
-            const exp0: i64 = if (leads.items.len > 0) @intCast(leads.items[0]) else 0;
-            const delta: i64 = exp0 - @as(i64, @intCast(common)) - @as(i64, @intCast(orig_lead));
-            start_col_adj = @intCast(@max(@as(i64, @intCast(start_column)) + delta, 1));
-            end_col_adj = @intCast(@max(@as(i64, @intCast(end_column)) + delta, 1));
-        }
-
-        {
-            var line_no = start_line;
-            for (snippet.items) |full_line| {
-                const code_line = full_line[@min(common, full_line.len)..];
-                const is_underline_line = start_line == end_line and line_no == start_line;
-
-                for (code_line) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
-                try writer.writeByte('\n');
-
-                if (is_underline_line) {
-                    const start_byte = @min(@as(usize, start_col_adj -| 1), code_line.len);
-                    const end_byte = @max(@min(@as(usize, end_col_adj -| 1), code_line.len), start_byte);
-
-                    const lead = source_region.displayWidth(code_line[0..start_byte]);
-                    try source_region.printSpaces(writer, @intCast(lead));
-
-                    const span_width = if (end_byte > start_byte) source_region.displayWidth(code_line[start_byte..end_byte]) else 0;
-                    const ulen = if (span_width > 0) span_width else 1;
-
-                    try writer.writeAll(highlight_color);
-                    try writer.splatBytesAll("^", ulen);
-                    try writer.writeAll(palette.reset);
-                    try writer.writeByte('\n');
-                }
-                line_no += 1;
-            }
+/// Report framing consumes the shared dedented source layout.
+fn writeReportSnippet(writer: *std.Io.Writer, palette: ColorPalette, highlight_color: []const u8, start_line: u32, start_column: u32, end_line: u32, end_column: u32, text: []const u8, gpa: Allocator) (Allocator.Error || error{WriteFailed})!void {
+    var snippet = try source_region.Snippet.init(gpa, text, start_column, end_column);
+    defer snippet.deinit();
+    for (snippet.rows.items, 0..) |row, index| {
+        const line = snippet.line(row);
+        for (line) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
+        try writer.writeByte('\n');
+        if (source_region.underlineAppliesToLine(start_line, end_line, start_line + @as(u32, @intCast(index)))) {
+            const caret = snippet.caret(line);
+            try source_region.printSpaces(writer, caret.padding);
+            try writer.writeAll(highlight_color);
+            try writer.splatBytesAll("^", caret.length);
+            try writer.writeAll(palette.reset);
+            try writer.writeByte('\n');
         }
     }
 }
@@ -951,9 +761,9 @@ fn renderDocumentAs(comptime target: RenderTarget, document: *const Document, wr
 // distinguishes one target from another lives in that target's style struct
 // (`styleFor`): per-annotation span tables, escaping, structural literals
 // (indent/space/line-break units), and hooks for the pieces whose shape is
-// genuinely target-specific (source-region framing). The hooks compute their
-// caret rows and padding through the shared region math in `source_region.zig`
-// and `writeCaretRowForLine`, so layout can never diverge between targets.
+// target-specific (source-region framing). Hooks consume the line and span
+// layout produced by `source_region.zig`; `writeCaretRowForLine` emits those
+// spans with the selected style.
 
 /// Rendering state threaded through the walker: the configuration, the color
 /// palette (only the terminal target reads it; other targets pass NO_COLOR),
@@ -962,6 +772,10 @@ const RenderCtx = struct {
     config: ReportingConfig,
     palette: ColorPalette,
     annotation_stack: *std.array_list.Managed(Annotation),
+    summary: ?SummaryText = null,
+    source_selection: ?*SourceSelection = null,
+    below_content: ?*BelowContent = null,
+    depth: usize = 0,
 };
 
 fn hasOpenAnnotation(ctx: *const RenderCtx, annotation: Annotation) bool {
@@ -1046,6 +860,33 @@ const html_spans: std.enums.EnumArray(Annotation, Span) = blk: {
     break :blk spans;
 };
 
+/// LSP deliberately emits plain spans for every annotation. An explicit table
+/// makes adding an annotation a decision for this style, too.
+const lsp_spans = std.enums.EnumArray(Annotation, Span).init(.{
+    .emphasized = .{},
+    .keyword = .{},
+    .type_variable = .{},
+    .error_highlight = .{},
+    .warning_highlight = .{},
+    .suggestion = .{},
+    .code_block = .{},
+    .inline_code = .{},
+    .symbol = .{},
+    .path = .{},
+    .literal = .{},
+    .comment = .{},
+    .underline = .{},
+    .dimmed = .{},
+    .symbol_qualified = .{},
+    .symbol_unqualified = .{},
+    .module_name = .{},
+    .record_field = .{},
+    .tag_name = .{},
+    .binary_operator = .{},
+    .source_region = .{},
+    .reflowing_text = .{},
+});
+
 /// The style struct for a render target.
 fn styleFor(comptime target: RenderTarget) type {
     return switch (target) {
@@ -1063,34 +904,55 @@ fn styleFor(comptime target: RenderTarget) type {
 fn renderElementAs(comptime target: RenderTarget, element: DocumentElement, writer: *std.Io.Writer, ctx: *RenderCtx) (Allocator.Error || error{WriteFailed})!void {
     const S = styleFor(target);
     switch (element) {
-        .text => |text| try S.writeText(ctx, writer, text),
+        .text => |text| if (ctx.source_selection == null) {
+            if (ctx.summary) |summary| try summary.append(text, "") else try S.writeText(ctx, writer, text);
+        },
         .annotated => |annotated| {
+            if (ctx.source_selection != null) return;
+            if (ctx.summary) |summary| return summary.append(annotated.content, ctx.palette.colorForAnnotation(annotated.annotation));
             try S.openInline(ctx, writer, annotated.annotation);
             try S.writeText(ctx, writer, annotated.content);
             try S.closeInline(ctx, writer, annotated.annotation);
         },
-        .line_break => try writer.writeAll(S.line_break),
-        .link => |url| try S.writeLink(writer, url),
+        .line_break => if (ctx.source_selection == null) {
+            if (ctx.summary) |summary| try summary.append(" ", "") else try writer.writeAll(S.line_break);
+        },
+        .link => |url| if (ctx.summary == null and ctx.source_selection == null) try S.writeLink(writer, url),
         .indent => |levels| {
+            if (ctx.summary != null or ctx.source_selection != null) return;
             var i: u32 = 0;
             while (i < levels) : (i += 1) {
                 try writer.writeAll(S.indent_unit);
             }
         },
-        .space => |count| try writer.splatBytesAll(S.space_unit, count),
-        .horizontal_rule => |width| try S.writeRule(writer, width, ctx.config),
+        .space => |count| {
+            if (ctx.source_selection != null) return;
+            if (ctx.summary) |summary| {
+                for (0..count) |_| try summary.append(" ", "");
+            } else try writer.splatBytesAll(S.space_unit, count);
+        },
+        .horizontal_rule => |width| if (ctx.summary == null and ctx.source_selection == null) try S.writeRule(writer, width, ctx.config),
         .annotation_start => |annotation| {
+            if (ctx.summary != null or ctx.source_selection != null) return;
             try ctx.annotation_stack.append(annotation);
             try S.openRegion(ctx, writer, annotation);
         },
         .annotation_end => {
+            if (ctx.summary != null or ctx.source_selection != null) return;
             if (ctx.annotation_stack.pop()) |popped| {
                 try S.closeRegion(ctx, writer, popped);
             }
         },
-        .raw => |content| try writer.writeAll(content),
-        .reflowing_text => |text| try S.writeText(ctx, writer, text),
+        .raw => |content| if (ctx.source_selection == null) {
+            if (ctx.summary) |summary| try summary.append(content, "") else try writer.writeAll(content);
+        },
+        .reflowing_text => |text| if (ctx.source_selection == null) {
+            if (ctx.summary) |summary| try summary.append(text, "") else try S.writeText(ctx, writer, text);
+        },
         .vertical_stack => |elements| {
+            if (ctx.summary != null or ctx.source_selection != null) return;
+            ctx.depth += 1;
+            defer ctx.depth -= 1;
             try writer.writeAll(S.stack_open);
             for (elements, 0..) |elem, i| {
                 if (i > 0) try writer.writeAll("\n");
@@ -1099,27 +961,37 @@ fn renderElementAs(comptime target: RenderTarget, element: DocumentElement, writ
             try writer.writeAll(S.stack_close);
         },
         .horizontal_concat => |elements| {
+            if (ctx.summary != null or ctx.source_selection != null) return;
+            ctx.depth += 1;
+            defer ctx.depth -= 1;
             try writer.writeAll(S.concat_open);
             for (elements) |elem| {
                 try renderElementAs(target, elem, writer, ctx);
             }
             try writer.writeAll(S.concat_close);
         },
-        .source_code_region => |region| try S.writeSourceRegion(ctx, writer, region),
-        .source_code_with_underlines => |data| try S.writeSourceUnderlines(ctx, writer, data),
-        .source_code_multi_region => |multi| try S.writeMultiRegion(ctx, writer, multi),
-        .source_location => |location| try S.writeSourceLocation(ctx, writer, location),
+        .source_code_region => |region| {
+            const underline = regionUnderline(region);
+            try writeSourceLayoutAs(target, ctx, writer, source_region.Layout.init(region, &underline, true));
+        },
+        .source_code_with_underlines => |data| try writeSourceLayoutAs(target, ctx, writer, source_region.Layout.init(data.display_region, data.underline_regions, false)),
+        .source_code_multi_region => |multi| if (ctx.summary == null and ctx.source_selection == null) try S.writeMultiRegion(ctx, writer, multi),
+        .source_location => |location| if (ctx.summary == null and ctx.source_selection == null) try S.writeSourceLocation(ctx, writer, location),
     }
 }
 
-/// Whether any underline region draws a caret row under line `line_num`.
-fn lineHasCaretRow(regions: []const UnderlineRegion, line_num: u32) bool {
-    for (regions) |underline| {
-        if (source_region.underlineAppliesToLine(underline.start_line, underline.end_line, line_num)) {
-            return true;
-        }
+/// Dispatch already-computed source layout to the current report projection
+/// or target style. This hook never examines a document element.
+fn writeSourceLayoutAs(comptime target: RenderTarget, ctx: *RenderCtx, writer: *std.Io.Writer, layout: source_region.Layout) (Allocator.Error || error{WriteFailed})!void {
+    if (ctx.source_selection) |selection| {
+        selection.region = reportRegion(layout, selection.index);
+    } else if (ctx.summary != null) {
+        return;
+    } else if (ctx.below_content != null and ctx.depth == 0) {
+        try ctx.below_content.?.writeSource(ctx.palette, layout);
+    } else {
+        try styleFor(target).writeSourceLayout(ctx, writer, layout);
     }
-    return false;
 }
 
 /// Write one caret row: the `^^^` line drawn under a source line. The padding
@@ -1132,24 +1004,18 @@ fn writeCaretRowForLine(
     comptime target: RenderTarget,
     ctx: *RenderCtx,
     writer: *std.Io.Writer,
-    line: []const u8,
-    regions: []const UnderlineRegion,
-    line_num: u32,
+    line: source_region.Line,
 ) error{WriteFailed}!void {
-    var col_position: u32 = 1;
-    for (regions) |underline| {
-        if (!source_region.underlineAppliesToLine(underline.start_line, underline.end_line, line_num)) {
-            continue;
-        }
-        try source_region.printUnderlineGap(writer, line, col_position, underline.start_column);
+    var spans = line.spans();
+    while (spans.next()) |span| {
+        try source_region.printUnderlineGap(writer, line.text, span.previous_column, span.start_column);
         if (target == .color_terminal) {
-            try writer.writeAll(ctx.palette.colorForAnnotation(underline.annotation));
+            try writer.writeAll(ctx.palette.colorForAnnotation(span.annotation));
         }
-        try writer.splatBytesAll("^", source_region.calculateUnderlineLength(underline.start_column, underline.end_column));
+        try writer.splatBytesAll("^", span.length);
         if (target == .color_terminal) {
             try writer.writeAll(ctx.palette.reset);
         }
-        col_position = underline.end_column;
     }
     try writer.writeByte('\n');
 }
@@ -1199,8 +1065,8 @@ fn writeBlankGutter(writer: *std.Io.Writer, palette: ColorPalette, line_num_widt
 }
 
 /// Style description for the color terminal target: ANSI colors from the
-/// palette, backticked code spans when the palette has no color, and source
-/// regions drawn with line-number gutters.
+/// palette, literal plain text without colors, and source regions drawn with
+/// line-number gutters.
 const TerminalStyle = struct {
     const line_break = "\n";
     const indent_unit = "    ";
@@ -1216,11 +1082,9 @@ const TerminalStyle = struct {
 
     fn openInline(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
         try writer.writeAll(ctx.palette.colorForAnnotation(annotation));
-        if (wantsBacktick(ctx.palette, annotation)) try writer.writeByte('`');
     }
 
     fn closeInline(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
-        if (wantsBacktick(ctx.palette, annotation)) try writer.writeByte('`');
         if (ctx.palette.colorForAnnotation(annotation).len > 0) {
             try writer.writeAll(ctx.palette.reset);
             if (ctx.annotation_stack.items.len > 0) {
@@ -1251,46 +1115,19 @@ const TerminalStyle = struct {
         try writeGlyphRule(writer, "─", width, config);
     }
 
-    fn writeSourceRegion(ctx: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
+    fn writeSourceLayout(ctx: *RenderCtx, writer: *std.Io.Writer, layout: source_region.Layout) error{WriteFailed}!void {
         const palette = ctx.palette;
-        const line_num_width = source_region.calculateLineNumberWidth(region.end_line);
-
-        const underline = regionUnderline(region);
-        const color = palette.colorForAnnotation(region.region_annotation);
-        var line_num = region.start_line;
-        var iter = std.mem.splitScalar(u8, region.line_text, '\n');
-        while (iter.next()) |line| {
-            try writeGutter(writer, palette, line_num, line_num_width);
-            try writer.writeAll(color);
-            try writer.writeAll(line);
-            try writer.writeAll(palette.reset);
+        var lines = layout.lines();
+        while (lines.next()) |line| {
+            try writeGutter(writer, palette, line.number, layout.line_number_width);
+            if (layout.highlight_source) try writer.writeAll(palette.colorForAnnotation(layout.display.region_annotation));
+            try writer.writeAll(line.text);
+            if (layout.highlight_source) try writer.writeAll(palette.reset);
             try writer.writeByte('\n');
-
-            if (lineHasCaretRow(&underline, line_num)) {
-                try writeBlankGutter(writer, palette, line_num_width);
-                try writeCaretRowForLine(.color_terminal, ctx, writer, line, &underline, line_num);
+            if (line.hasCarets()) {
+                try writeBlankGutter(writer, palette, layout.line_number_width);
+                try writeCaretRowForLine(.color_terminal, ctx, writer, line);
             }
-            line_num += 1;
-        }
-    }
-
-    fn writeSourceUnderlines(ctx: *RenderCtx, writer: *std.Io.Writer, data: SourceCodeWithUnderlines) error{WriteFailed}!void {
-        const palette = ctx.palette;
-        const display = data.display_region;
-        const line_num_width = source_region.calculateLineNumberWidth(display.end_line);
-
-        var line_num = display.start_line;
-        var iter = std.mem.splitScalar(u8, display.line_text, '\n');
-        while (iter.next()) |line| {
-            try writeGutter(writer, palette, line_num, line_num_width);
-            try writer.writeAll(line);
-            try writer.writeByte('\n');
-
-            if (lineHasCaretRow(data.underline_regions, line_num)) {
-                try writeBlankGutter(writer, palette, line_num_width);
-                try writeCaretRowForLine(.color_terminal, ctx, writer, line, data.underline_regions, line_num);
-            }
-            line_num += 1;
         }
     }
 
@@ -1349,35 +1186,13 @@ const MarkdownStyle = struct {
         try writer.writeAll("\n---\n");
     }
 
-    fn writeSourceRegion(ctx: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
+    fn writeSourceLayout(ctx: *RenderCtx, writer: *std.Io.Writer, layout: source_region.Layout) error{WriteFailed}!void {
         try writer.writeAll("```roc\n");
-        try writer.writeAll(region.line_text);
+        try writer.writeAll(layout.display.line_text);
         try writer.writeAll("\n```\n");
-
-        const underline = regionUnderline(region);
-        var line_num = region.start_line;
-        var iter = std.mem.splitScalar(u8, region.line_text, '\n');
-        while (iter.next()) |line| {
-            if (lineHasCaretRow(&underline, line_num)) {
-                try writeCaretRowForLine(.markdown, ctx, writer, line, &underline, line_num);
-            }
-            line_num += 1;
-        }
-    }
-
-    fn writeSourceUnderlines(ctx: *RenderCtx, writer: *std.Io.Writer, data: SourceCodeWithUnderlines) error{WriteFailed}!void {
-        const display = data.display_region;
-        try writer.writeAll("```roc\n");
-        try writer.writeAll(display.line_text);
-        try writer.writeAll("\n```\n");
-
-        var line_num = display.start_line;
-        var iter = std.mem.splitScalar(u8, display.line_text, '\n');
-        while (iter.next()) |line| {
-            if (lineHasCaretRow(data.underline_regions, line_num)) {
-                try writeCaretRowForLine(.markdown, ctx, writer, line, data.underline_regions, line_num);
-            }
-            line_num += 1;
+        var lines = layout.lines();
+        while (lines.next()) |line| {
+            if (line.hasCarets()) try writeCaretRowForLine(.markdown, ctx, writer, line);
         }
     }
 
@@ -1439,18 +1254,16 @@ const HtmlStyle = struct {
         try writer.print("<hr style=\"width: {d}ch;\">\n", .{width orelse config.getMaxLineWidth()});
     }
 
-    fn writeSourceRegion(_: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
+    fn writeSourceLayout(ctx: *RenderCtx, writer: *std.Io.Writer, layout: source_region.Layout) error{WriteFailed}!void {
         try writer.writeAll("<div class=\"source-region\">");
-        try writer.print("<pre class=\"{s}\">", .{region.region_annotation.semanticName()});
-        try writeEscapedHtml(writer, region.line_text);
-        try writer.writeAll("</pre></div>");
-    }
-
-    fn writeSourceUnderlines(_: *RenderCtx, writer: *std.Io.Writer, data: SourceCodeWithUnderlines) error{WriteFailed}!void {
-        const display = data.display_region;
-        try writer.writeAll("<div class=\"source-region\">");
-        try writer.writeAll("<pre class=\"source-code\">");
-        try writeEscapedHtml(writer, display.line_text);
+        const class = if (layout.highlight_source) layout.display.region_annotation.semanticName() else "source-code";
+        try writer.print("<pre class=\"{s}\">", .{class});
+        var lines = layout.lines();
+        while (lines.next()) |line| {
+            try writeEscapedHtml(writer, line.text);
+            try writer.writeByte('\n');
+            if (line.hasCarets()) try writeCaretRowForLine(.html, ctx, writer, line);
+        }
         try writer.writeAll("</pre></div>");
     }
 
@@ -1488,9 +1301,13 @@ const LspStyle = struct {
         try writer.writeAll(text);
     }
 
-    fn openInline(_: *RenderCtx, _: *std.Io.Writer, _: Annotation) error{WriteFailed}!void {}
+    fn openInline(_: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
+        try writer.writeAll(lsp_spans.get(annotation).open);
+    }
 
-    fn closeInline(_: *RenderCtx, _: *std.Io.Writer, _: Annotation) error{WriteFailed}!void {}
+    fn closeInline(_: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
+        try writer.writeAll(lsp_spans.get(annotation).close);
+    }
 
     fn openRegion(_: *RenderCtx, _: *std.Io.Writer, _: Annotation) error{WriteFailed}!void {}
 
@@ -1502,15 +1319,13 @@ const LspStyle = struct {
         try writeGlyphRule(writer, "-", width, config);
     }
 
-    fn writeSourceRegion(_: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
-        try writer.writeAll(region.line_text);
-        try writer.writeByte('\n');
-    }
-
-    fn writeSourceUnderlines(_: *RenderCtx, writer: *std.Io.Writer, data: SourceCodeWithUnderlines) error{WriteFailed}!void {
-        const display = data.display_region;
-        try writer.writeAll(display.line_text);
-        try writer.writeByte('\n');
+    fn writeSourceLayout(ctx: *RenderCtx, writer: *std.Io.Writer, layout: source_region.Layout) error{WriteFailed}!void {
+        var lines = layout.lines();
+        while (lines.next()) |line| {
+            try writer.writeAll(line.text);
+            try writer.writeByte('\n');
+            if (line.hasCarets()) try writeCaretRowForLine(.language_server, ctx, writer, line);
+        }
     }
 
     fn writeMultiRegion(_: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
@@ -1650,4 +1465,35 @@ test "render horizontal rule" {
     try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
     try testing.expectEqualStrings("\n---\n", writer.written());
+}
+
+test "report source selection uses only top-level source blocks and explicit focused span" {
+    const region = SourceCodeDisplayRegion{ .line_text = "alpha beta", .start_line = 2, .start_column = 1, .end_line = 2, .end_column = 11, .region_annotation = .error_highlight, .filename = "selection.roc" };
+    var nested = [_]DocumentElement{.{ .source_code_region = region }};
+    var underlines = [_]UnderlineRegion{.{ .start_line = 2, .start_column = 7, .end_line = 2, .end_column = 11, .annotation = .warning_highlight }};
+    const elements = [_]DocumentElement{
+        .{ .horizontal_concat = &nested },
+        .{ .text = "summary" },
+        .{ .source_code_with_underlines = .{ .display_region = region, .underline_regions = &underlines } },
+        .{ .source_code_region = region },
+    };
+    try testing.expect((try findPrimaryRegion(elements[0..2], testing.allocator)) == null);
+    const selected = (try findPrimaryRegion(&elements, testing.allocator)).?;
+    try testing.expectEqual(@as(usize, 2), selected.index);
+    try testing.expectEqual(@as(u32, 7), selected.start_column);
+    try testing.expectEqual(@as(u32, 11), selected.end_column);
+}
+
+test "report below-source hook preserves nested source style and top-level framing" {
+    const region = SourceCodeDisplayRegion{ .line_text = "alpha", .start_line = 2, .start_column = 1, .end_line = 2, .end_column = 6, .region_annotation = .error_highlight, .filename = "below.roc" };
+    var nested = [_]DocumentElement{.{ .source_code_region = region }};
+    const elements = [_]DocumentElement{
+        .{ .source_code_region = region },
+        .{ .horizontal_concat = &nested },
+        .{ .source_code_region = region },
+    };
+    var out = std.Io.Writer.Allocating.init(testing.allocator);
+    defer out.deinit();
+    try renderBelowContent(&out.writer, ColorPalette.NO_COLOR, ReportingConfig.initColorTerminal(), "", &elements, 1, 0, testing.allocator);
+    try testing.expectEqualStrings("\n2 │ alpha\n  │ ^^^^^\n\nalpha\n^^^^^\n\n", out.written());
 }

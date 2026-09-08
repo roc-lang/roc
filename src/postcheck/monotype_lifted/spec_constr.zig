@@ -5365,6 +5365,9 @@ const Cloner = struct {
         switch (expr.data) {
             .local => |local| {
                 if (self.subst.getForClone(self.pass.program, local)) |value| {
+                    if (!sameType(self.pass.program, expr.ty, valueType(self.pass.program, value))) {
+                        return try self.wrapTypedBoundaryValue(expr.ty, value);
+                    }
                     const resolved_local = switch (value) {
                         .expr => |resolved| localExpr(self.pass.program, resolved),
                         .runtime_anchor => |anchor| localExpr(self.pass.program, anchor.runtime),
@@ -15201,7 +15204,9 @@ test "substitution resolves equivalent named types with distinct checked provena
     defer cloner.deinit();
     try cloner.subst.put(&program, first, .{ .expr = replacement_expr });
     const cloned = try cloner.cloneExpr(second_expr);
-    try std.testing.expectEqual(replacement, program.getExpr(cloned).data.local);
+    const boundary = program.getExpr(cloned).data.typed_boundary;
+    try std.testing.expectEqual(second_ty, program.getExpr(cloned).ty);
+    try std.testing.expectEqual(replacement, program.getExpr(boundary.value).data.local);
 }
 
 test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {

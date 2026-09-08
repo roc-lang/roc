@@ -57,32 +57,62 @@ x = {
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:40:6
-
-This string literal is being used where a non-string type is needed.
-
-e: !\\
-    ^^
-
-The type was determined to be:
-
-    Bool
-
-── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:37:3
-
-The minus method on Dec has an incompatible type.
-
-0 - \\
-^
-
-The method minus has the type:
-
-    Dec, Dec -> Dec
-
-But I need it to have the type:
-
-    Dec, Str -> Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 40 6) (end 40 8))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "multiline_string_complex.md") (start 40 6) (end 40 8) (annotation error) (line-text "\te: !\\\\"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Bool")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 37 3) (end 37 4))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "method on")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "has an incompatible type."))
+		(document
+			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
+			(line-break)
+			(reflow "The method")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec, Dec -> Dec")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need it to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec, Str -> Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwPackage,
@@ -269,7 +299,7 @@ With multiple lines
 							(e-string))))
 				(field (name "e")
 					(e-call (constraint-fn-var 373)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17379") (target-def "17379"))
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17421") (target-def "17421"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))

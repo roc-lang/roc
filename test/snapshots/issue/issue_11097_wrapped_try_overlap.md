@@ -16,21 +16,34 @@ use = run(|_| Err(PersistFailed(Foo)))
 # EXPECTED
 TYPE MISMATCH - issue_11097_wrapped_try_overlap.md:3:6:3:30
 # PROBLEMS
-── ✗ type mismatch ────────────────────── issue_11097_wrapped_try_overlap.md:3:6
-
-This expression is used in an unexpected way.
-
-_ = save({}) ? PersistFailed
-    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    [PersistFailed([Foo, ..]), ..]
-
-But you are trying to use it as:
-
-    []
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 3 6) (end 3 30))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 3 6) (end 3 30) (annotation error) (line-text "\t_ = save({}) ? PersistFailed"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[PersistFailed([Foo, ..]), ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

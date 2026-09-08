@@ -20,21 +20,34 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12
 # PROBLEMS
-── ✗ type mismatch ─ generalize_annotated_value_unannotated_not_generalized.md:9:8
-
-This expression is used in an unexpected way.
-
-strs = bare
-       ^^^^
-
-It has the type:
-
-    List(U64)
-
-But the annotation says it should be:
-
-    List(Str)
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 9 8) (end 9 12))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "generalize_annotated_value_unannotated_not_generalized.md") (start 9 8) (end 9 12) (annotation error) (line-text "strs = bare"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(Str)")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

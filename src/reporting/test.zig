@@ -51,7 +51,9 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\<h1 class="report-title">syntax problem</h1>
         \\<div class="report-content">
         \\Using more than one <span class="operator">+</span> like this requires parentheses, to clarify how things should be grouped.<br>
-        \\<div class="source-region"><pre class="error">example.roc</pre></div></div>
+        \\<div class="source-region"><pre class="error">example.roc
+        \\         ^^^^^^^^^^
+        \\</pre></div></div>
         \\</div>
         \\
     ;
@@ -65,6 +67,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\
         \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
         \\example.roc
+        \\         ^^^^^^^^^^
         \\
     ;
     try expectMultilineEqual(expected_lsp, writer.written());

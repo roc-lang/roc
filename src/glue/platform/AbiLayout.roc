@@ -55,6 +55,16 @@ AbiLayout := {
 			}
 		}
 
+	## Compiler-produced storage classification, including zero-sized Roc payloads.
+	tag_union_has_payload : AbiLayout -> Bool
+	tag_union_has_payload = |layout|
+		match layout.details {
+			AbiTagUnion(tag_union) => tag_union.has_payload
+			_ => {
+				crash "glue invariant violated: expected tag union ABI layout"
+			}
+		}
+
 	discriminant_offset : AbiLayout, AbiWidth -> U64
 	discriminant_offset = |layout, width|
 		match layout.details {

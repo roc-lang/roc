@@ -39,6 +39,10 @@ const UnifyFinishAction = union(enum) {
         var_: Type.TypeVarId,
         target: Type.TypeVarId,
     },
+    link_structural_to_inspectable_named: struct {
+        structural: Type.TypeVarId,
+        named: Type.TypeVarId,
+    },
     set_left_erased_link_right: struct {
         lhs: Type.TypeVarId,
         rhs: Type.TypeVarId,
@@ -1454,7 +1458,14 @@ const Solver = struct {
         defer cloner.deinit();
         const content = try cloner.lowerContent(self.lifted.types.get(leaf.id));
         self.program.types.set(root, content);
+        self.registerNamedBacking(content);
         return content;
+    }
+
+    fn registerNamedBacking(self: *Solver, content: Type.Content) void {
+        if (content == .named) {
+            if (content.named.backing) |backing| self.program.types.markNamedBacking(backing.ty);
+        }
     }
 
     fn resolvedContentAt(self: *Solver, root: Type.TypeVarId) Allocator.Error!Type.Content {
@@ -1793,11 +1804,17 @@ const Solver = struct {
         structural_ty: Type.TypeVarId,
         backing_ty: Type.TypeVarId,
     ) Allocator.Error!void {
-        try stack.append(self.allocator, .{ .process = .{
-            .lhs = structural_ty,
-            .rhs = backing_ty,
-            .structural_isolated = true,
-        } });
+        try stack.append(self.allocator, .{
+            .process = .{
+                // Keep the owned backing as the representative when the
+                // structural shapes are merged. The isolated clone may later be
+                // related to a nominal root, but a backing must never resolve to
+                // the nominal type that owns it.
+                .lhs = backing_ty,
+                .rhs = structural_ty,
+                .structural_isolated = true,
+            },
+        });
     }
 
     fn processUnifyPair(
@@ -2053,6 +2070,12 @@ const Solver = struct {
             .none => {},
             .link_rhs_to_lhs => |link| self.program.types.set(link.rhs, .{ .link = link.lhs }),
             .link_var_to_root => |link| self.program.types.set(link.var_, .{ .link = self.program.types.rootCompressed(link.target) }),
+            .link_structural_to_inspectable_named => |link| {
+                const structural_root = self.program.types.rootCompressed(link.structural);
+                const named_root = self.program.types.rootCompressed(link.named);
+                if (structural_root == named_root or self.program.types.isOwnedNamedBacking(structural_root)) return;
+                self.program.types.set(structural_root, .{ .link = named_root });
+            },
             .set_left_erased_link_right => |set| {
                 self.program.types.set(set.lhs, .{ .erased = .{
                     .source_fn_ty = set.source_fn_ty,
@@ -2179,10 +2202,12 @@ const Solver = struct {
             structural_ty
         else
             try self.program.types.add(structural_content);
-        stack.items[finish_index].finish.action = .{ .link_var_to_root = .{
-            .var_ = structural_ty,
-            .target = named_ty,
-        } };
+        if (!structural_isolated) {
+            stack.items[finish_index].finish.action = .{ .link_structural_to_inspectable_named = .{
+                .structural = structural_ty,
+                .named = named_ty,
+            } };
+        }
         try self.pushIsolatedStructuralPair(stack, working_structural, backing.ty);
         return true;
     }
@@ -2305,7 +2330,9 @@ const Solver = struct {
     /// shape into its producer-authored generated-private representation.
     /// Monotype has already sealed both representations, so this relation
     /// deliberately preserves every composite and named root. Only callable
-    /// slots (and still-open Lambda Solved slots) are unified.
+    /// slots (and still-open Lambda Solved slots) are unified. A checked-public
+    /// inspectable named type may correspond to its structural backing in the
+    /// private witness; walk through that backing without linking either root.
     fn relateGeneratedPrivateEvidence(
         self: *Solver,
         public_ty: Type.TypeVarId,
@@ -2420,7 +2447,15 @@ const Solver = struct {
                 try self.relateGeneratedPrivateEvidence(public_fn.ret, private_fn.ret);
             },
             .named => |public_named| {
-                if (private_content_tag != .named) Common.invariant("generated-private evidence relation received different type structure");
+                if (private_content_tag != .named) {
+                    const public_backing = public_named.backing orelse
+                        Common.invariant("generated-private evidence relation could not traverse a public named type without backing");
+                    if (public_backing.authority != .checked_public or public_backing.use != .inspectable) {
+                        Common.invariant("generated-private evidence relation could not traverse an opaque public named type");
+                    }
+                    try self.relateGeneratedPrivateEvidence(public_backing.ty, private_root);
+                    return;
+                }
                 const private_named = private.named;
                 const same_identity = public_named.kind == private_named.kind and
                     std.meta.eql(public_named.def, private_named.def) and
@@ -3118,7 +3153,9 @@ const TypeCloner = struct {
         }
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
-        self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
+        const lowered = try self.lowerContent(self.solver.lifted.types.get(ty));
+        self.solver.program.types.set(reserved, lowered);
+        self.solver.registerNamedBacking(lowered);
         if (shareable) try self.solver.shared_clones.put(ty, reserved);
         return reserved;
     }
@@ -3463,6 +3500,101 @@ test "inspectable backing unification isolates the structural type variable once
 
     try std.testing.expectEqual(vars_before_unify + 1, program.types.vars.items.len);
     try std.testing.expectEqual(program.types.root(outer_named), program.types.root(structural));
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, try solver.shapeContent(structural));
+}
+
+test "inspectable backing unification never redirects an owned backing to its nominal type" {
+    const allocator = std.testing.allocator;
+
+    var program: Ast.Program = undefined;
+    program.types = Type.Store.init(allocator);
+    defer program.types.deinit();
+
+    const backing = try program.types.add(.{ .primitive = .u64 });
+    const named = try program.types.add(.{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = backing, .use = .inspectable },
+    } });
+    const backing_representative = try program.types.add(.{ .primitive = .u64 });
+
+    var solver: Solver = undefined;
+    solver.allocator = allocator;
+    solver.program = &program;
+    solver.lifted = undefined;
+    solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
+    defer solver.active_unifications.deinit();
+    solver.unify_stack = .empty;
+    defer solver.unify_stack.deinit(allocator);
+    program.types.markNamedBacking(backing);
+    program.types.set(backing, .{ .link = backing_representative });
+    solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator);
+    defer solver.solved_set_pool.deinit();
+    solver.mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator);
+    defer solver.mono_set_pool.deinit();
+
+    try solver.unify(backing, named);
+
+    try std.testing.expectEqual(backing_representative, program.types.root(backing));
+    try std.testing.expect(program.types.root(backing) != program.types.root(named));
+    try std.testing.expect(program.types.isOwnedNamedBacking(backing));
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, program.types.rootContent(backing));
+}
+
+test "generated-private evidence traverses a public inspectable named backing" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var program = Ast.Program.init(allocator, lifted);
+    lifted = undefined;
+    defer program.deinit();
+
+    const field_name = try program.lifted.names.internRecordFieldLabel("step");
+    const ret_ty = try program.types.add(.zst);
+    const public_callable = try program.types.add(.unbound);
+    const private_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = @enumFromInt(1),
+        .captures = .empty(),
+    }}) });
+    const public_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = public_callable,
+        .ret = ret_ty,
+    } });
+    const private_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = private_callable,
+        .ret = ret_ty,
+    } });
+    const public_backing = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = public_fn,
+        .default = null,
+    }}) });
+    const private_record = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = private_fn,
+        .default = null,
+    }}) });
+    const public_named = try program.types.add(.{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = public_backing, .use = .inspectable },
+    } });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.relateGeneratedPrivateEvidence(public_named, private_record);
+
+    try std.testing.expectEqual(
+        program.types.rootCompressed(public_callable),
+        program.types.rootCompressed(private_callable),
+    );
+    try std.testing.expect(program.types.rootCompressed(public_named) != program.types.rootCompressed(private_record));
+    try std.testing.expect(program.types.rootCompressed(public_backing) != program.types.rootCompressed(private_record));
 }
 
 test "lambda solved solve declarations are referenced" {

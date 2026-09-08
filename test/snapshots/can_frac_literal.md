@@ -14,17 +14,25 @@ z = 0.5
 # EXPECTED
 INVALID NUMBER - can_frac_literal.md:3:5:3:12
 # PROBLEMS
-── ✗ invalid number ──────────────────────────────────── can_frac_literal.md:3:5
-
-This number literal does not fit in the inferred type.
-
-y = 1.23e45
-    ^^^^^^^
-
-The inferred type is:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 3 5) (end 3 12))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "can_frac_literal.md") (start 3 5) (end 3 12) (annotation error) (line-text "y = 1.23e45"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Float,

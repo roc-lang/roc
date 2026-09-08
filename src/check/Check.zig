@@ -1816,7 +1816,7 @@ const HoistSelectionTransaction = struct {
                         root.pattern = pattern;
                     }
                 },
-                .pattern_extraction => {
+                .pattern_extraction, .pattern_error => {
                     std.debug.assert(root.pattern != null);
                     std.debug.assert(root.pattern.? == pattern);
                 },
@@ -2160,7 +2160,7 @@ const HoistSelectionTransaction = struct {
             self.checker.selected_hoisted_roots.appendAssumeCapacity(root);
             switch (root.body) {
                 .expr => self.checker.hoist_selected_exprs.putAssumeCapacityNoClobber(root.expr, root_index),
-                .pattern_extraction => {},
+                .pattern_extraction, .pattern_error => {},
                 .pattern_validation => {},
             }
         }
@@ -2885,6 +2885,7 @@ pub fn selectedHoistedRootIsTopLevel(self: *const Self, root: hoist_roots.Select
     const pattern = switch (root.body) {
         .expr => root.pattern orelse return false,
         .pattern_extraction => |extraction| extraction.scrutinee_pattern,
+        .pattern_error => |pattern| pattern,
         .pattern_validation => |validation| validation.scrutinee_pattern,
     };
     return self.patternIsTopLevelDef(pattern);
@@ -3736,6 +3737,10 @@ fn invalidateExprSubtreeMetadata(self: *Self, root: CIR.Expr.Idx) Allocator.Erro
         try self.markHoistInvalidatedExprChildren(work.items[next], &work);
     }
 
+    self.retireInvalidatedRecordDefaults(root);
+}
+
+fn retireInvalidatedRecordDefaults(self: *Self, root: ?CIR.Expr.Idx) void {
     // Replacing the root makes every construction in its old subtree
     // unreachable. Retire the omission plans attached to those constructions
     // before checked-artifact publication consumes the surviving source tree.
@@ -3771,6 +3776,60 @@ fn markHoistInvalidatedExprSpan(
     }
 }
 
+/// Pattern trees are finite source trees. Retire their literal evidence along
+/// with the expression or statement that discards them, before publication.
+fn retirePatternSubtreeMetadata(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    return self.retirePatternMetadata(pattern_idx, null);
+}
+
+/// A rejected definition keeps its binder identities in the pattern tree;
+/// only literal leaves become checked errors, and its RHS is a checked error.
+fn retirePatternMetadata(self: *Self, pattern_idx: CIR.Pattern.Idx, diagnostic: ?CIR.Diagnostic.Idx) Allocator.Error!void {
+    if (self.cir.store.retireLiteralDispatchPlan(ModuleEnv.nodeIdxFrom(pattern_idx))) |plan| {
+        try self.retired_literal_dispatch_plans.append(self.gpa, plan);
+    }
+    switch (self.cir.store.getPattern(pattern_idx)) {
+        .as => |as| try self.retirePatternMetadata(as.pattern, diagnostic),
+        .applied_tag => |tag| try self.retirePatternSpanMetadataWithError(tag.args, diagnostic),
+        .nominal => |nominal| try self.retirePatternMetadata(nominal.backing_pattern, diagnostic),
+        .nominal_external => |nominal| try self.retirePatternMetadata(nominal.backing_pattern, diagnostic),
+        .tuple => |tuple| try self.retirePatternSpanMetadataWithError(tuple.patterns, diagnostic),
+        .list => |list| {
+            try self.retirePatternSpanMetadataWithError(list.patterns, diagnostic);
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |pattern| try self.retirePatternMetadata(pattern, diagnostic);
+            }
+        },
+        .record_destructure => |record| {
+            for (self.cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                switch (self.cir.store.getRecordDestruct(destruct_idx).kind) {
+                    .Required, .SubPattern, .Rest => |pattern| try self.retirePatternMetadata(pattern, diagnostic),
+                }
+            }
+        },
+        .str_interpolation => |str| {
+            var offset: u32 = 0;
+            while (offset < str.steps.span.len) : (offset += 1) {
+                if (self.cir.store.getStrPatternStep(str.steps, offset).capture) |capture| {
+                    try self.retirePatternMetadata(capture, diagnostic);
+                }
+            }
+        },
+        .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal => {
+            if (diagnostic) |diag| self.cir.store.replacePatternWithRuntimeError(pattern_idx, diag);
+        },
+        .assign, .var_assign, .underscore, .runtime_error => {},
+    }
+}
+
+fn retirePatternSpanMetadata(self: *Self, patterns: CIR.Pattern.Span) Allocator.Error!void {
+    return self.retirePatternSpanMetadataWithError(patterns, null);
+}
+
+fn retirePatternSpanMetadataWithError(self: *Self, patterns: CIR.Pattern.Span, diagnostic: ?CIR.Diagnostic.Idx) Allocator.Error!void {
+    for (self.cir.store.slicePatterns(patterns)) |pattern| try self.retirePatternMetadata(pattern, diagnostic);
+}
+
 fn markHoistInvalidatedStatementSpan(
     self: *Self,
     span: CIR.Statement.Span,
@@ -3787,13 +3846,24 @@ fn markHoistInvalidatedStatementExprs(
     work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
 ) Allocator.Error!void {
     switch (self.cir.store.getStatement(statement)) {
-        .s_decl => |decl| try self.markHoistInvalidatedExpr(decl.expr, work),
-        .s_var => |var_| try self.markHoistInvalidatedExpr(var_.expr, work),
-        .s_reassign => |reassign| try self.markHoistInvalidatedExpr(reassign.expr, work),
+        .s_decl => |decl| {
+            try self.retirePatternSubtreeMetadata(decl.pattern);
+            try self.markHoistInvalidatedExpr(decl.expr, work);
+        },
+        .s_var => |var_| {
+            try self.retirePatternSubtreeMetadata(var_.pattern_idx);
+            try self.markHoistInvalidatedExpr(var_.expr, work);
+        },
+        .s_reassign => |reassign| {
+            try self.retirePatternSubtreeMetadata(reassign.pattern_idx);
+            try self.markHoistInvalidatedExpr(reassign.expr, work);
+        },
+        .s_var_uninitialized => |var_| try self.retirePatternSubtreeMetadata(var_.pattern_idx),
         .s_dbg => |dbg| try self.markHoistInvalidatedExpr(dbg.expr, work),
         .s_expr => |expr| try self.markHoistInvalidatedExpr(expr.expr, work),
         .s_expect => |expect| try self.markHoistInvalidatedExpr(expect.body, work),
         .s_for => |for_| {
+            try self.retirePatternSubtreeMetadata(for_.patt);
             try self.markHoistInvalidatedExpr(for_.expr, work);
             try self.markHoistInvalidatedExpr(for_.body, work);
         },
@@ -3813,7 +3883,6 @@ fn markHoistInvalidatedStatementExprs(
             try self.markHoistInvalidatedExpr(ret.expr, work);
             try self.markHoistInvalidatedExpr(ret.lambda, work);
         },
-        .s_var_uninitialized,
         .s_crash,
         .s_break,
         .s_import,
@@ -3840,6 +3909,9 @@ fn markHoistInvalidatedExprChildren(
             try self.markHoistInvalidatedExpr(match.cond, work);
             for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
                 const branch = self.cir.store.getMatchBranch(branch_idx);
+                for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |pattern| {
+                    try self.retirePatternSubtreeMetadata(self.cir.store.getMatchBranchPattern(pattern).pattern);
+                }
                 if (branch.guard) |guard| try self.markHoistInvalidatedExpr(guard, work);
                 try self.markHoistInvalidatedExpr(branch.value, work);
             }
@@ -3870,7 +3942,10 @@ fn markHoistInvalidatedExprChildren(
         .e_nominal => |nominal| try self.markHoistInvalidatedExpr(nominal.backing_expr, work),
         .e_nominal_external => |nominal| try self.markHoistInvalidatedExpr(nominal.backing_expr, work),
         .e_closure => |closure| try self.markHoistInvalidatedExpr(closure.lambda_idx, work),
-        .e_lambda => |lambda| try self.markHoistInvalidatedExpr(lambda.body, work),
+        .e_lambda => |lambda| {
+            try self.retirePatternSpanMetadata(lambda.args);
+            try self.markHoistInvalidatedExpr(lambda.body, work);
+        },
         .e_binop => |binop| {
             try self.markHoistInvalidatedExpr(binop.lhs, work);
             try self.markHoistInvalidatedExpr(binop.rhs, work);
@@ -3912,6 +3987,7 @@ fn markHoistInvalidatedExprChildren(
             try self.markHoistInvalidatedExpr(ret.lambda, work);
         },
         .e_for => |for_| {
+            try self.retirePatternSubtreeMetadata(for_.patt);
             try self.markHoistInvalidatedExpr(for_.expr, work);
             try self.markHoistInvalidatedExpr(for_.body, work);
         },
@@ -3973,7 +4049,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         const selected = self.selected_hoisted_roots.items[root_index];
         const validation = switch (selected.body) {
             .pattern_validation => |value| value,
-            .expr, .pattern_extraction => unreachable,
+            .expr, .pattern_extraction, .pattern_error => unreachable,
         };
         std.debug.assert(validation.scrutinee_pattern == entry.key_ptr.*);
     }
@@ -3982,7 +4058,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         const root_index: u32 = @intCast(i);
         switch (root.body) {
             .expr => std.debug.assert(self.hoist_selected_exprs.get(root.expr) == root_index),
-            .pattern_extraction => {},
+            .pattern_extraction, .pattern_error => {},
             .pattern_validation => |validation| std.debug.assert(self.hoist_selected_pattern_validations.get(validation.scrutinee_pattern) == root_index),
         }
         if (root.pattern) |pattern| {
@@ -3990,7 +4066,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         } else {
             switch (root.body) {
                 .expr => {},
-                .pattern_extraction => std.debug.panic("check invariant violated: pattern extraction hoisted root had no binding pattern", .{}),
+                .pattern_extraction, .pattern_error => std.debug.panic("check invariant violated: pattern extraction hoisted root had no binding pattern", .{}),
                 .pattern_validation => {},
             }
         }
@@ -4326,7 +4402,7 @@ test "hoisted pattern extraction root selection is atomic when binding map alloc
     try std.testing.expectEqual(@as(?u32, 0), state.checker.hoist_selected_bindings.get(result_pattern));
     const selected_extraction = switch (state.checker.selected_hoisted_roots.items[0].body) {
         .pattern_extraction => |selected| selected,
-        .expr, .pattern_validation => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation, .pattern_error => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(extraction.base_expr, selected_extraction.base_expr);
     try std.testing.expectEqual(extraction.scrutinee_pattern, selected_extraction.scrutinee_pattern);
@@ -7623,7 +7699,7 @@ fn mkFlexWithFromNumeralConstraint(
     self: *Self,
     source_node: ?CIR.Node.Idx,
     occurrence_failure_expr: ?CIR.Expr.Idx,
-    pattern_failure_expr: ?CIR.Expr.Idx,
+    pattern_failure_owner: ?CIR.Node.Idx,
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
 ) Allocator.Error!Var {
@@ -7697,7 +7773,7 @@ fn mkFlexWithFromNumeralConstraint(
     try self.unifyWith(flex_var, flex_content, env);
 
     if (source_node) |node_idx| {
-        try self.cir.recordNumeralDispatchPlan(node_idx, flex_var, fn_var, pattern_failure_expr);
+        try self.cir.recordNumeralDispatchPlan(node_idx, flex_var, fn_var, pattern_failure_owner);
     }
     try self.recordOpenLiteralVar(flex_var, &.{constraint}, occurrence_failure_expr);
 
@@ -7711,7 +7787,7 @@ fn mkFlexWithFromQuoteConstraint(
     self: *Self,
     source_node: ?CIR.Node.Idx,
     region: Region,
-    pattern_failure_expr: ?CIR.Expr.Idx,
+    pattern_failure_owner: ?CIR.Node.Idx,
     env: *Env,
 ) Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -7759,7 +7835,7 @@ fn mkFlexWithFromQuoteConstraint(
     };
     const fn_var = try self.freshFromContent(func_content, env, region);
     if (source_node) |node_idx| {
-        try self.cir.recordQuoteDispatchPlan(node_idx, flex_var, fn_var, pattern_failure_expr);
+        try self.cir.recordQuoteDispatchPlan(node_idx, flex_var, fn_var, pattern_failure_owner);
     }
 
     const constraint = types_mod.StaticDispatchConstraint{
@@ -7816,7 +7892,7 @@ fn checkNumeralLiteral(
     occurrence_var: Var,
     region: Region,
     comptime occurrence: NumeralOccurrence,
-    pattern_failure_expr: ?CIR.Expr.Idx,
+    pattern_failure_owner: ?CIR.Node.Idx,
     env: *Env,
 ) Allocator.Error!void {
     const suffix_target = self.cir.numericSuffixTargetForNode(node_idx);
@@ -7824,7 +7900,7 @@ fn checkNumeralLiteral(
     var num_literal_info = try self.exactNumeralInfoForLiteral(literal, region);
     const failure_expr: ?CIR.Expr.Idx = switch (occurrence) {
         .expression => @enumFromInt(@intFromEnum(node_idx)),
-        .pattern => pattern_failure_expr,
+        .pattern => if (pattern_failure_owner) |owner| self.literalFailureOwnerExpr(owner) else null,
     };
     const is_int_unbound = switch (occurrence) {
         .expression => blk: {
@@ -7843,7 +7919,7 @@ fn checkNumeralLiteral(
     const flex_var = try self.mkFlexWithFromNumeralConstraint(
         node_idx,
         failure_expr,
-        pattern_failure_expr,
+        pattern_failure_owner,
         num_literal_info,
         env,
     );
@@ -8733,8 +8809,8 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_validation_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
-        const intrinsic = !self.hoistExprInvalidated(root.expr) and try self.hoistedRootIsIntrinsicallyKept(root);
-        const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root.*));
+        const intrinsic = (root.body == .pattern_error or !self.hoistExprInvalidated(root.expr)) and try self.hoistedRootIsIntrinsicallyKept(root);
+        const deps = intrinsic and (root.body == .pattern_error or try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root.*)));
         if (!intrinsic) continue;
         if (!deps) continue;
 
@@ -8742,7 +8818,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         kept_count += 1;
         switch (root.body) {
             .expr => kept_expr_count += 1,
-            .pattern_extraction => {},
+            .pattern_extraction, .pattern_error => {},
             .pattern_validation => kept_validation_count += 1,
         }
         if (root.pattern != null) kept_pattern_count += 1;
@@ -8771,7 +8847,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (!keep_roots[i]) continue;
         const extraction = switch (root.body) {
             .pattern_extraction => |extraction| extraction,
-            .expr, .pattern_validation => continue,
+            .expr, .pattern_validation, .pattern_error => continue,
         };
         const validation_index = self.hoist_selected_pattern_validations.get(extraction.scrutinee_pattern) orelse continue;
         if (!keep_roots[validation_index]) continue;
@@ -8802,7 +8878,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         const root_index: u32 = @intCast(kept);
         switch (self.selected_hoisted_roots.items[kept].body) {
             .expr => self.hoist_selected_exprs.putAssumeCapacityNoClobber(self.selected_hoisted_roots.items[kept].expr, root_index),
-            .pattern_extraction => {},
+            .pattern_extraction, .pattern_error => {},
             .pattern_validation => |validation| self.hoist_selected_pattern_validations.putAssumeCapacityNoClobber(validation.scrutinee_pattern, root_index),
         }
         if (self.selected_hoisted_roots.items[kept].pattern) |pattern| {
@@ -8830,6 +8906,11 @@ fn hoistedRootIsIntrinsicallyKept(
         ModuleEnv.varFrom(pattern)
     else
         ModuleEnv.varFrom(root.expr);
+
+    if (root.body == .pattern_error) {
+        root.value_kind = if (self.varIsFunctionType(type_var)) .callable_binding else .data_constant;
+        return true;
+    }
 
     if (root.body == .pattern_extraction) {
         const is_function = self.varIsFunctionType(type_var);
@@ -8873,6 +8954,11 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
     defer keep_oracle.deinit(self.gpa);
 
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
+        if (root.body == .pattern_error) {
+            std.debug.assert(root.pattern != null);
+            std.debug.assert(self.cir.store.getExpr(root.expr) == .e_runtime_error);
+            continue;
+        }
         keep_oracle.current_root_index = i;
         if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root))) {
             hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
@@ -9147,7 +9233,7 @@ const HoistedRootKeepOracle = struct {
                     if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted expression root");
                     entry.value_ptr.* = root_index;
                 },
-                .pattern_extraction => {},
+                .pattern_extraction, .pattern_error => {},
                 .pattern_validation => {},
             }
             if (root.pattern) |pattern| {
@@ -10240,10 +10326,91 @@ fn constraintSourceExpr(
             return @enumFromInt(plan.node_idx);
         }
         if (pattern_failure_expr == null) {
-            if (plan.patternFailureExpr()) |raw| pattern_failure_expr = @enumFromInt(raw);
+            if (plan.patternFailureOwner()) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
         }
     }
     return pattern_failure_expr;
+}
+
+/// Constraint provenance can name only expressions. A statement or definition
+/// retains its exact owner in the literal plan instead of borrowing its RHS.
+fn literalFailureOwnerExpr(self: *const Self, owner: CIR.Node.Idx) ?CIR.Expr.Idx {
+    return if (isExprNodeTag(self.cir.store.nodes.get(owner).tag)) @enumFromInt(@intFromEnum(owner)) else null;
+}
+
+fn poisonPatternBindings(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(pattern, &bindings);
+    for (bindings.items) |binding| {
+        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+    }
+}
+
+/// Consume the owner recorded when the literal pattern was checked. This is
+/// diagnostic recovery only; it never changes solved types or successful plans.
+fn poisonLiteralFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!void {
+    const tag = self.cir.store.nodes.get(owner).tag;
+    if (tag == .malformed) return;
+    // A parameter can fail while its lambda is still checking returns.
+    // Keep the function structure until the ordinary erroneous-value sweep.
+    if (tag == .expr_lambda or tag == .expr_closure) {
+        try self.erroneous_value_exprs.put(self.gpa, @enumFromInt(@intFromEnum(owner)), {});
+        return;
+    }
+    const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+        .region = self.cir.store.getNodeRegion(owner),
+    } });
+    if (self.literalFailureOwnerExpr(owner)) |expr| {
+        try self.replaceExprWithRuntimeError(expr, diagnostic);
+        try self.erroneous_value_exprs.put(self.gpa, expr, {});
+        return;
+    }
+    if (tag == .def) {
+        const def = self.cir.store.getDef(@enumFromInt(@intFromEnum(owner)));
+        try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+        try self.retirePatternMetadata(def.pattern, diagnostic);
+        try self.replaceExprWithRuntimeError(def.expr, diagnostic);
+        try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+        // Extraction/validation roots synthesize a match over this RHS.
+        // A rejected destructure has no pattern evaluation to select.
+        try self.hoist_invalidated_exprs.put(self.gpa, def.expr, {});
+        var bindings = std.ArrayList(PatternBinding).empty;
+        defer bindings.deinit(self.gpa);
+        try self.collectPatternBindings(def.pattern, &bindings);
+        for (bindings.items) |binding| {
+            try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+            const root_index = try self.ensureHoistedPatternExtractionRoot(binding.pattern_idx, .{
+                .base_expr = def.expr,
+                .scrutinee_pattern = def.pattern,
+                .result_pattern = binding.pattern_idx,
+            });
+            self.selected_hoisted_roots.items[root_index].body = .{ .pattern_error = def.pattern };
+        }
+        return;
+    }
+
+    // The remaining producer-owned contexts are binding and loop statements.
+    const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(owner));
+    const pattern = switch (self.cir.store.getStatement(stmt_idx)) {
+        .s_decl => |decl| decl.pattern,
+        .s_var => |var_| var_.pattern_idx,
+        .s_var_uninitialized => |var_| var_.pattern_idx,
+        .s_reassign => |reassign| reassign.pattern_idx,
+        .s_for => |for_| for_.patt,
+        .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable,
+    };
+    try self.poisonPatternBindings(pattern);
+    var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer work.deinit(self.gpa);
+    try self.markHoistInvalidatedStatementExprs(stmt_idx, &work);
+    var next: usize = 0;
+    while (next < work.items.len) : (next += 1) {
+        try self.markHoistInvalidatedExprChildren(work.items[next], &work);
+    }
+    self.retireInvalidatedRecordDefaults(null);
+    self.cir.store.replaceStatementWithRuntimeError(stmt_idx, diagnostic);
 }
 
 fn literalDispatchPlanMatchesConstraint(
@@ -10299,8 +10466,8 @@ fn literalPatternFailureExprForConstraint(
         if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-        const raw = plan.patternFailureExpr() orelse continue;
-        return @enumFromInt(raw);
+        const raw = plan.patternFailureOwner() orelse continue;
+        return self.literalFailureOwnerExpr(@enumFromInt(raw));
     }
     return null;
 }
@@ -10312,10 +10479,9 @@ fn literalPatternFailureExprForConstraint(
 fn poisonLiteralFailureOwners(
     self: *Self,
     deferred: DeferredConstraintCheck,
-    failed_constraint: StaticDispatchConstraint,
 ) Allocator.Error!bool {
     const dispatcher_root = self.types.resolveVar(deferred.var_).var_;
-    var owners: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    var owners: std.ArrayListUnmanaged(CIR.Node.Idx) = .empty;
     defer owners.deinit(self.gpa);
 
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
@@ -10327,10 +10493,10 @@ fn poisonLiteralFailureOwners(
             if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
             if (self.types.resolveVar(@enumFromInt(plan.fn_var)).var_ != literal_fn_root) continue;
             const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
-            const owner: CIR.Expr.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
+            const owner: CIR.Node.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
                 @enumFromInt(plan.node_idx)
             else
-                @enumFromInt(plan.patternFailureExpr() orelse continue);
+                @enumFromInt(plan.patternFailureOwner() orelse continue);
             var already_recorded = false;
             for (owners.items) |recorded| {
                 if (recorded == owner) {
@@ -10343,7 +10509,7 @@ fn poisonLiteralFailureOwners(
     }
 
     for (owners.items) |owner| {
-        try self.poisonConstraintFailureSource(deferred.var_, failed_constraint, owner);
+        try self.poisonLiteralFailureOwner(owner);
     }
     return owners.items.len != 0;
 }
@@ -10393,7 +10559,12 @@ fn poisonConstraintFailureSource(
     explicit_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const expr_idx = explicit_expr orelse self.constraintSourceExpr(dispatcher_var, constraint) orelse return;
-    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return;
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_runtime_error) return;
+    if (expr == .e_lambda or expr == .e_closure) {
+        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        return;
+    }
     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
         .region = self.cir.store.getExprRegion(expr_idx),
     } });
@@ -10434,7 +10605,7 @@ fn poisonConstraintFailure(
         if (explicitDeferredConstraintFailureExpr(deferred)) |owner_expr| {
             try self.poisonConstraintFailureSource(dispatcher_var, constraint, owner_expr);
             found_owner = true;
-        } else if (try self.poisonLiteralFailureOwners(deferred, constraint)) {
+        } else if (try self.poisonLiteralFailureOwners(deferred)) {
             found_owner = true;
         }
     }
@@ -12291,14 +12462,7 @@ fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocat
 
 /// The fixed runtime symbols every host defines; platform headers may not
 /// reuse them for provides or hosted entries.
-const reserved_host_symbols = [_][]const u8{
-    "roc_alloc",
-    "roc_dealloc",
-    "roc_realloc",
-    "roc_dbg",
-    "roc_expect_failed",
-    "roc_crashed",
-};
+const reserved_host_symbols = @import("builtins").shim_symbols.runtime_set;
 
 fn checkHostSymbol(
     self: *Self,
@@ -13176,10 +13340,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         try self.setVarRank(def_var, env);
         try self.setVarRank(ptrn_var, env);
 
-        const def_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(def.pattern)) .{ .match_branch = null } else .bound;
+        const def_pattern_ctx: PatternCtx = .{ .polarity = if (self.patternNeedsExhaustiveness(def.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(def_idx) };
 
         // Check the pattern
-        try self.checkPattern(def.pattern, def_pattern_ctx, env);
+        if (!try self.checkPattern(def.pattern, def_pattern_ctx, env)) {
+            try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+        }
     }
 
     // Extract function name from the pattern (for better error messages)
@@ -13512,10 +13678,7 @@ fn collectAnnotationTypeAnnos(
             switch (self.cir.store.getWhereClause(where_idx)) {
                 .w_method => |method| {
                     try pending.append(allocator, method.var_);
-                    for (self.cir.store.sliceTypeAnnos(method.args)) |arg_idx| {
-                        try pending.append(allocator, arg_idx);
-                    }
-                    try pending.append(allocator, method.ret);
+                    try pending.append(allocator, method.anno);
                 },
                 // A where alias reference's arguments are generated in place
                 // (`generateWhereAliasReferenceArgs`), so its node tree must be
@@ -13713,8 +13876,10 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             const member_def = self.cir.store.getDef(member_def_idx);
             try self.setVarRank(ModuleEnv.varFrom(member_def_idx), env);
             try self.setVarRank(ModuleEnv.varFrom(member_def.pattern), env);
-            const member_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(member_def.pattern)) .{ .match_branch = null } else .bound;
-            try self.checkPattern(member_def.pattern, member_pattern_ctx, env);
+            const member_pattern_ctx: PatternCtx = .{ .polarity = if (self.patternNeedsExhaustiveness(member_def.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(member_def_idx) };
+            if (!try self.checkPattern(member_def.pattern, member_pattern_ctx, env)) {
+                try self.erroneous_value_exprs.put(self.gpa, member_def.expr, {});
+            }
         }
 
         for (scc.defs) |member_def_idx| {
@@ -14941,10 +15106,11 @@ fn declareOwnedStaticDispatchConstraints(
     owner_var: Var,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    const where_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx));
     switch (self.cir.store.getWhereClause(where_idx)) {
         .w_method => |method| {
-            const func_var = try self.fresh(env, where_region);
+            // The annotation owns the callable variable. Declare its identity
+            // before generating its type so recursive constraints can refer to it.
+            const func_var = ModuleEnv.varFrom(method.anno);
 
             try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
                 .where_clause = where_idx,
@@ -14983,20 +15149,7 @@ fn completeOwnedStaticDispatchConstraint(
 
     try self.generateAnnoTypeInPlace(method.var_, env, ctx);
 
-    const args_anno_slice = self.cir.store.sliceTypeAnnos(method.args);
-    for (args_anno_slice) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
-    }
-    const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
-
-    try self.generateAnnoTypeInPlace(method.ret, env, ctx);
-    const ret_var = ModuleEnv.varFrom(method.ret);
-
-    const func_content = if (method.effectful)
-        try self.types.mkFuncEffectful(anno_arg_vars, ret_var)
-    else
-        try self.types.mkFuncPure(anno_arg_vars, ret_var);
-    try self.unifyWith(entry.constraint.fn_var, func_content, env);
+    try self.generateAnnoTypeInPlace(method.anno, env, ctx);
     self.scratch_static_dispatch_constraints.items.items[constraint_index].state = .completed;
 }
 
@@ -16682,39 +16835,25 @@ const TryArgs = struct {
 /// The "polarity" of a tag union or record
 const Polarity = enum { open, closed };
 
-/// The context that this pattern is being called in
-/// This determines if, for tag unions & records, they should be inferred
-/// as open or closed
-const PatternCtx = union(enum) {
-    bound,
-    fn_arg,
-    from_annotation,
-    for_,
-    match_branch: ?CIR.Expr.Idx,
-
-    fn toPolarity(self: PatternCtx) Polarity {
-        return switch (self) {
-            .bound, .fn_arg, .for_ => .closed,
-            .from_annotation, .match_branch => .open,
-        };
-    }
-
-    fn failureExpr(self: PatternCtx) ?CIR.Expr.Idx {
-        return switch (self) {
-            .match_branch => |expr_idx| expr_idx,
-            .bound, .fn_arg, .from_annotation, .for_ => null,
-        };
-    }
+/// Pattern polarity and diagnostic ownership are independent: an annotation
+/// opens the inferred row, but its lambda still owns a failed parameter.
+const PatternCtx = struct {
+    polarity: Polarity,
+    failure_owner: CIR.Node.Idx,
 };
 
-/// Check the types for the provided pattern, saving the type in-place
+/// Check the pattern in-place and return whether its constructors are valid.
+/// Recursive children report rejection during checking; owners consume this
+/// fact without rediscovering errors from the solved pattern type.
 fn checkPattern(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     ctx: PatternCtx,
     env: *Env,
-) std.mem.Allocator.Error!void {
-    _ = try self.checkPatternHelp(pattern_idx, ctx, env, .in_place);
+) std.mem.Allocator.Error!bool {
+    var valid = true;
+    _ = try self.checkPatternHelp(pattern_idx, ctx, env, .in_place, &valid);
+    return valid;
 }
 
 /// Check the types for the provided pattern, either as fresh var or in-place
@@ -16724,6 +16863,7 @@ fn checkPatternHelp(
     ctx: PatternCtx,
     env: *Env,
     comptime out_var: OutVar,
+    valid: *bool,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -16752,7 +16892,7 @@ fn checkPatternHelp(
             // A literal pattern converts through from_quote and compares the
             // matched value against the converted constant, so the type also
             // needs equality.
-            const failure_expr = ctx.failureExpr();
+            const failure_expr = ctx.failure_owner;
             const flex_var = try self.mkFlexWithFromQuoteConstraint(
                 ModuleEnv.nodeIdxFrom(pattern_idx),
                 pattern_region,
@@ -16771,7 +16911,7 @@ fn checkPatternHelp(
                 const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
                 if (step.capture) |capture_idx| {
                     const capture_region = self.cir.store.getPatternRegion(capture_idx);
-                    const capture_var = try self.checkPatternHelp(capture_idx, ctx, env, .in_place);
+                    const capture_var = try self.checkPatternHelp(capture_idx, ctx, env, .in_place, valid);
                     const capture_str_var = try self.freshStr(env, capture_region);
                     _ = try self.unify(capture_var, capture_str_var, env);
                 }
@@ -16779,7 +16919,7 @@ fn checkPatternHelp(
         },
         // as //
         .as => |p| {
-            const var_ = try self.checkPatternHelp(p.pattern, ctx, env, out_var);
+            const var_ = try self.checkPatternHelp(p.pattern, ctx, env, out_var, valid);
             _ = try self.unify(var_, pattern_var, env);
         },
         // tuple //
@@ -16793,7 +16933,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
                         for (elems_slice) |single_elem_ptrn_idx| {
-                            const elem_var = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var);
+                            const elem_var = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var, valid);
                             try self.scratch_vars.append(elem_var);
                         }
 
@@ -16804,7 +16944,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
                         for (elems_slice) |single_elem_ptrn_idx| {
-                            _ = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var);
+                            _ = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var, valid);
                         }
 
                         // Add to types store
@@ -16833,12 +16973,12 @@ fn checkPatternHelp(
                 // constrain the rest of the list
 
                 // Check the first elem
-                const elem_var = try self.checkPatternHelp(elems[0], ctx, env, out_var);
+                const elem_var = try self.checkPatternHelp(elems[0], ctx, env, out_var, valid);
 
                 // Iterate over the remaining elements
                 var last_elem_ptrn_idx = elems[0];
                 for (elems[1..], 1..) |elem_ptrn_idx, i| {
-                    const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, ctx, env, out_var);
+                    const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, ctx, env, out_var, valid);
 
                     // Unify each element's var with the list's elem var
                     const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
@@ -16851,7 +16991,7 @@ fn checkPatternHelp(
                     // to the elem_var to catch their individual errors
                     if (!result.isEstablished()) {
                         for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            _ = try self.checkPatternHelp(remaining_elem_expr_idx, ctx, env, out_var);
+                            _ = try self.checkPatternHelp(remaining_elem_expr_idx, ctx, env, out_var, valid);
                         }
 
                         // Break to avoid cascading errors
@@ -16870,7 +17010,7 @@ fn checkPatternHelp(
             // This is if the pattern is like `.. as x`.
             if (list.rest_info) |rest_info| {
                 if (rest_info.pattern) |rest_pattern_idx| {
-                    const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, ctx, env, out_var);
+                    const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, ctx, env, out_var, valid);
 
                     _ = try self.unify(pattern_var, rest_pattern_var, env);
                 }
@@ -16889,7 +17029,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
                         for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            const arg_var = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var);
+                            const arg_var = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var, valid);
                             try self.scratch_vars.append(arg_var);
                         }
 
@@ -16901,7 +17041,7 @@ fn checkPatternHelp(
                         // Process each tag arg
                         const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
                         for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            _ = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var);
+                            _ = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var, valid);
                         }
 
                         // Add to types store
@@ -16912,7 +17052,7 @@ fn checkPatternHelp(
             };
 
             // Create the type
-            const ext_var = switch (ctx.toPolarity()) {
+            const ext_var = switch (ctx.polarity) {
                 .open => try self.fresh(env, pattern_region),
                 .closed => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, pattern_region),
             };
@@ -16926,10 +17066,10 @@ fn checkPatternHelp(
         // nominal //
         .nominal => |nominal| {
             // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var);
+            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var, valid);
 
             // Use shared nominal type checking logic
-            _ = try self.checkNominalTypeUsage(
+            const result = try self.checkNominalTypeUsage(
                 pattern_var,
                 actual_backing_var,
                 ModuleEnv.varFrom(nominal.nominal_type_decl),
@@ -16939,15 +17079,16 @@ fn checkPatternHelp(
                 .exact,
                 null,
             );
+            if (result == .err) valid.* = false;
         },
         .nominal_external => |nominal| {
             // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var);
+            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var, valid);
 
             // Resolve the external type declaration
             if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
                 // Use shared nominal type checking logic
-                _ = try self.checkNominalTypeUsage(
+                const result = try self.checkNominalTypeUsage(
                     pattern_var,
                     actual_backing_var,
                     ext_ref.local_var,
@@ -16957,7 +17098,9 @@ fn checkPatternHelp(
                     .exact,
                     null,
                 );
+                if (result == .err) valid.* = false;
             } else {
+                valid.* = false;
                 try self.markErroneous(pattern_var);
             }
         },
@@ -16977,10 +17120,10 @@ fn checkPatternHelp(
                 const field_pattern_var = blk: {
                     switch (destruct.kind) {
                         .Required => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var);
+                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var, valid);
                         },
                         .SubPattern => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var);
+                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var, valid);
                         },
                         .Rest => |sub_pattern_idx| {
                             // If this pattern is rest pattern:
@@ -16988,7 +17131,7 @@ fn checkPatternHelp(
                             //               ^^^^
                             //
                             // Then capture this as the ext var, then  continue
-                            const ext_var = try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var);
+                            const ext_var = try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var, valid);
                             _ = try self.unify(destruct_var, ext_var, env);
                             mb_ext_var = ext_var;
 
@@ -17052,12 +17195,12 @@ fn checkPatternHelp(
         },
         // nums //
         .num_from_numeral_literal => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env);
         },
         .num_literal => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env),
+                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env),
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(num.kind), env),
             }
@@ -17075,7 +17218,7 @@ fn checkPatternHelp(
                 // Explicit suffix like `3.14dec` - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env);
             }
         },
         .small_dec_literal => |dec| {
@@ -17083,10 +17226,11 @@ fn checkPatternHelp(
                 // Explicit suffix - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failureExpr(), env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env);
             }
         },
         .runtime_error => {
+            valid.* = false;
             try self.markErroneous(pattern_var);
         },
     }
@@ -17945,6 +18089,12 @@ fn beginExprCheckFrame(
 }
 
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+    return self.checkExprWithFunctionOwner(expr_idx, env, expected, expr_idx);
+}
+
+/// A closure supplies its executable owner when delegating to its structural
+/// lambda child. Descendant expressions start their own ownership normally.
+fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -19091,11 +19241,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const arg_vars_alloc = arg_vars_sfa.get();
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
             defer arg_vars_alloc.free(arg_vars);
-            const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
+            const pattern_ctx: PatternCtx = .{ .polarity = if (mb_anno_func != null) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(function_owner) };
             for (0..arg_count) |i| {
                 const pattern_idx = self.cir.store.patternAt(lambda.args, i);
                 arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
-                try self.checkPattern(pattern_idx, pattern_ctx, env);
+                if (!try self.checkPattern(pattern_idx, pattern_ctx, env)) {
+                    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+                }
             }
 
             // A lambda in call-argument position gets its parameters seeded
@@ -19220,6 +19372,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 const body_result = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
                 if (body_result.isProblem()) {
+                    // Preserve platform unification's exact relation, and refine
+                    // only the recorded diagnostic with the position we checked.
+                    std.debug.assert(body_result == .problem);
+                    const mismatch = &self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch;
+                    if (mismatch.context == .platform_requirement) {
+                        const requirement_context = mismatch.context.platform_requirement;
+                        mismatch.context = .{ .platform_requirement_return = requirement_context };
+                    }
                     try self.erroneous_value_exprs.put(self.gpa, lambda.body, {});
                 }
                 break :blk lambda_body_does_fx;
@@ -19295,13 +19455,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (suppress_group_member_generalize) {
                 self.suppress_generalize_expr = closure.lambda_idx;
             }
-            does_fx = try self.checkExprInCallPosition(
-                closure.lambda_idx,
-                env,
-                nested_expected,
-                is_call_arg,
-                is_immediate_callee,
-            ) or does_fx;
+            does_fx = blk: {
+                const saved_call_arg = self.checking_call_arg;
+                const saved_immediate_callee = self.checking_immediate_callee;
+                self.checking_call_arg = is_call_arg;
+                self.checking_immediate_callee = is_immediate_callee;
+                defer self.checking_call_arg = saved_call_arg;
+                defer self.checking_immediate_callee = saved_immediate_callee;
+                break :blk try self.checkExprWithFunctionOwner(closure.lambda_idx, env, nested_expected, expr_idx) or does_fx;
+            };
             // The inner lambda owns generalization, while every source lookup
             // names the closure wrapper. Register that explicit source-level
             // alias instead of recovering the relationship from the mutable
@@ -21233,10 +21395,12 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const decl_fn_frame = decl_is_fn and !decl_predeclared;
                 if (decl_fn_frame) try env.var_pool.pushRank();
 
-                const decl_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(decl_stmt.pattern)) .{ .match_branch = null } else .bound;
+                const decl_pattern_ctx: PatternCtx = .{ .polarity = if (self.patternNeedsExhaustiveness(decl_stmt.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(stmt_idx) };
 
                 // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, decl_pattern_ctx, env);
+                if (!try self.checkPattern(decl_stmt.pattern, decl_pattern_ctx, env)) {
+                    try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+                }
 
                 // Extract function name from the pattern (for better error messages)
                 const saved_func_name = self.enclosing_func_name;
@@ -21348,10 +21512,12 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
-                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .{ .match_branch = null } else .bound;
+                const var_pattern_ctx: PatternCtx = .{ .polarity = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(stmt_idx) };
 
                 // Check the pattern
-                try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                if (!try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env)) {
+                    try self.erroneous_value_exprs.put(self.gpa, var_stmt.expr, {});
+                }
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // Check the annotation, if it exists. A mutable `var` never
@@ -21393,9 +21559,11 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var_uninitialized => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
-                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .{ .match_branch = null } else .bound;
+                const var_pattern_ctx: PatternCtx = .{ .polarity = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(stmt_idx) };
 
-                try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                const valid_pattern = try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                // Canonicalization permits only a binder without an initializer.
+                std.debug.assert(valid_pattern);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // A mutable `var` never generalizes, so a type variable its
@@ -21427,8 +21595,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // The pattern occurrence itself must therefore always be
                 // checked here so its structural type and any fresh binders are
                 // established explicitly before we unify it with the RHS.
-                const reassign_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(reassign.pattern_idx)) .{ .match_branch = null } else .bound;
-                try self.checkPattern(reassign.pattern_idx, reassign_pattern_ctx, env);
+                const reassign_pattern_ctx: PatternCtx = .{ .polarity = if (self.patternNeedsExhaustiveness(reassign.pattern_idx)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(stmt_idx) };
+                if (!try self.checkPattern(reassign.pattern_idx, reassign_pattern_ctx, env)) {
+                    try self.erroneous_value_exprs.put(self.gpa, reassign.expr, {});
+                }
                 self.discardHoistBindingCandidate(reassign.pattern_idx);
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
@@ -22534,7 +22704,7 @@ fn checkMatchExpr(
         // pattern unifications short-circuit rather than cascading.)
         for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPattern(branch_ptrn.pattern, .{ .match_branch = expr_idx }, env);
+            if (!try self.checkPattern(branch_ptrn.pattern, .{ .polarity = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) had_type_error = true;
 
             if (!cond_always_crashes) {
                 const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
@@ -22607,7 +22777,7 @@ fn checkMatchExpr(
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPattern(branch_ptrn.pattern, .{ .match_branch = expr_idx }, env);
+            if (!try self.checkPattern(branch_ptrn.pattern, .{ .polarity = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) had_type_error = true;
 
             // Check the pattern against the cond
             if (!cond_always_crashes) {
@@ -22680,7 +22850,7 @@ fn checkMatchExpr(
                     for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                         // Check the pattern's sub types
                         const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-                        try self.checkPattern(other_branch_ptrn.pattern, .{ .match_branch = expr_idx }, env);
+                        if (!try self.checkPattern(other_branch_ptrn.pattern, .{ .polarity = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env)) had_type_error = true;
 
                         // Check the pattern against the cond
                         if (!cond_always_crashes) {
@@ -23553,15 +23723,18 @@ fn checkIteratorForLoop(
     var does_fx = false;
     const child_expected = expected.forStatement();
 
-    const pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(pattern)) .{ .match_branch = null } else .for_;
-    try self.checkPattern(pattern, pattern_ctx, env);
+    const pattern_ctx: PatternCtx = .{ .polarity = if (self.patternNeedsExhaustiveness(pattern)) .open else .closed, .failure_owner = loop_node };
+    const valid_pattern = try self.checkPattern(pattern, pattern_ctx, env);
     const item_var: Var = ModuleEnv.varFrom(pattern);
 
     does_fx = try self.checkExpr(iterable, env, child_expected) or does_fx;
     const iterable_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(iterable));
     const iterable_var: Var = ModuleEnv.varFrom(iterable);
 
-    const iterable_is_erroneous = if (loop_expr) |expr|
+    if (!valid_pattern) {
+        if (loop_expr) |expr| try self.retireCallLikeExpr(expr.expr_idx, expr.expr_var);
+    }
+    const iterable_is_erroneous = !valid_pattern or if (loop_expr) |expr|
         try self.retireCallLikeExprWithErroneousOperands(expr.expr_idx, expr.expr_var, &.{iterable})
     else
         self.callLikeOperandsContainErroneousValue(&.{iterable});
@@ -33960,6 +34133,11 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     const plans = self.cir.store.literalDispatchPlans();
     if (plans.len == 0) return;
 
+    // Allocate only for rejected patterns. Finish sealing before retiring any
+    // subtree: retirement swap-removes records from the dense plan array.
+    var failed_pattern_owners: std.ArrayListUnmanaged(CIR.Node.Idx) = .empty;
+    defer failed_pattern_owners.deinit(self.gpa);
+
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
@@ -34078,7 +34256,81 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             );
         };
         self.cir.finalizeLiteralDispatchResolution(@enumFromInt(plan.node_idx), resolution);
+        if (resolution == .checked_error) {
+            if (plan.patternFailureOwner()) |owner| {
+                try failed_pattern_owners.append(self.gpa, @enumFromInt(owner));
+            }
+        }
     }
+    // Equivalent literals may have one owner. Sort only the failure worklist
+    // so a large rejected destructure is not invalidated once per literal.
+    std.mem.sort(CIR.Node.Idx, failed_pattern_owners.items, {}, struct {
+        fn lessThan(_: void, a: CIR.Node.Idx, b: CIR.Node.Idx) bool {
+            return @intFromEnum(a) < @intFromEnum(b);
+        }
+    }.lessThan);
+    var previous_owner: ?CIR.Node.Idx = null;
+    for (failed_pattern_owners.items) |owner| {
+        if (previous_owner == owner) continue;
+        previous_owner = owner;
+        try self.poisonLiteralFailureOwner(owner);
+    }
+    if (failed_pattern_owners.items.len != 0) {
+        try self.poisonErroneousValueExprs();
+        try self.pruneSelectedHoistedRootsAfterSolving();
+        try self.poisonErroneousValueUses();
+    }
+}
+
+test "literal pattern recovery retires all discarded parameter evidence" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Repro",
+        \\Pt := { n: U64 }
+        \\bad : List(Pt) -> U8
+        \\bad = |[3, 4]| 0
+        \\quoted : Pt -> U8
+        \\quoted = |"bad"| 0
+        \\good : U64
+        \\good = 123
+    );
+    defer test_env.deinit();
+    try std.testing.expect(test_env.checker.problems.len() != 0);
+    try test_env.assertDefTypeOptions("good", "U64", .{ .allow_type_errors = true });
+
+    // No detached parameter plan may survive even though its raw pattern node
+    // still exists in the append-only CIR store.
+    for (test_env.module_env.store.literalDispatchPlans()) |plan| {
+        try std.testing.expect(plan.patternFailureOwner() == null);
+        try std.testing.expect(plan.dispatchResolution() == .builtin_direct);
+    }
+    var retired_patterns: usize = 0;
+    for (test_env.checker.retired_literal_dispatch_plans.items) |plan| {
+        if (plan.patternFailureOwner() != null) retired_patterns += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), retired_patterns);
+}
+
+test "literal pattern recovery preserves a generalized definition after a rejected use" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Repro",
+        \\Pt := { n: U64 }
+        \\f = |x| match x {
+        \\    3 => Bool.True
+        \\    _ => Bool.False
+        \\}
+        \\bad = f({ n: 0 })
+        \\good = f(3.U8)
+    );
+    defer test_env.deinit();
+    try std.testing.expect(test_env.checker.problems.len() != 0);
+    try test_env.assertDefTypeOptions("good", "Bool", .{ .allow_type_errors = true });
+    var found_generalized_pattern = false;
+    for (test_env.module_env.store.literalDispatchPlans()) |plan| {
+        if (plan.patternFailureOwner() == null) continue;
+        try std.testing.expectEqual(LiteralDispatchPlan.Resolution.specialization_dispatch, plan.dispatchResolution());
+        found_generalized_pattern = true;
+    }
+    try std.testing.expect(found_generalized_pattern);
 }
 
 test "literal dispatch finalization records builtin direct resolution" {
@@ -37619,12 +37871,7 @@ fn validateDerivedParseVar(
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, walk, context, failure_expr),
-            .record => blk: {
-                if (walk.visited.contains(resolved.var_)) break :blk .ok;
-                try walk.visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedParseRecord(var_, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
-            },
-            .record_unbound => blk: {
+            .record, .record_unbound, .empty_record => blk: {
                 if (walk.visited.contains(resolved.var_)) break :blk .ok;
                 try walk.visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseRecord(var_, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
@@ -37638,29 +37885,6 @@ fn validateDerivedParseVar(
                 if (walk.visited.contains(resolved.var_)) break :blk .ok;
                 try walk.visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseTuple(resolved.var_, tuple, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
-            },
-            .empty_record => blk: {
-                switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region, failure_expr, walk)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| break :blk result,
-                }
-                switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_start, err_var, constraint, env, region, failure_expr)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| break :blk result,
-                }
-                switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_field, err_var, constraint, env, region, failure_expr)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| break :blk result,
-                }
-                switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_after_field, err_var, constraint, env, region, failure_expr)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| break :blk result,
-                }
-                switch (try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region, failure_expr, walk)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| break :blk result,
-                }
-                break :blk .ok;
             },
             .empty_tag_union => .unsupported,
             .fn_pure, .fn_effectful, .fn_unbound => .unsupported,

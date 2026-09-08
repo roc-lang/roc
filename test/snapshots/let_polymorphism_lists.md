@@ -46,129 +46,189 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
-── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:12:26
-
-I was parsing an expression, and this token cannot start an expression here.
-
-all_int_list = int_list ++ my_empty_list
-                         ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found + here.
-
-── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:12:28
-
-I was parsing a statement, and this token cannot start a statement here.
-
-all_int_list = int_list ++ my_empty_list
-                           ^^^^^^^^^^^^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found my_empty_list here.
-Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
-
-── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:13:26
-
-I was parsing an expression, and this token cannot start an expression here.
-
-all_str_list = str_list ++ my_empty_list
-                         ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found + here.
-
-── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:13:28
-
-I was parsing a statement, and this token cannot start a statement here.
-
-all_str_list = str_list ++ my_empty_list
-                           ^^^^^^^^^^^^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found my_empty_list here.
-Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
-
-── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:14:30
-
-I was parsing an expression, and this token cannot start an expression here.
-
-all_float_list = float_list ++ my_empty_list
-                             ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found + here.
-
-── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:14:32
-
-I was parsing a statement, and this token cannot start a statement here.
-
-all_float_list = float_list ++ my_empty_list
-                               ^^^^^^^^^^^^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found my_empty_list here.
-Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
-
-── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:12:16
-
-I don't recognize this syntax.
-
-all_int_list = int_list ++ my_empty_list
-               ^^^^^^^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:13:16
-
-I don't recognize this syntax.
-
-all_str_list = str_list ++ my_empty_list
-               ^^^^^^^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:14:18
-
-I don't recognize this syntax.
-
-all_float_list = float_list ++ my_empty_list
-                 ^^^^^^^^^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 12 26) (end 12 27))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "+")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "let_polymorphism_lists.md") (start 12 26) (end 12 27) (annotation error) (line-text "all_int_list = int_list ++ my_empty_list"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 12 28) (end 12 41))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "my_empty_list")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.")
+			(line-break)
+			(line-break)
+			(source-region (file "let_polymorphism_lists.md") (start 12 28) (end 12 41) (annotation error) (line-text "all_int_list = int_list ++ my_empty_list"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 13 26) (end 13 27))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "+")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "let_polymorphism_lists.md") (start 13 26) (end 13 27) (annotation error) (line-text "all_str_list = str_list ++ my_empty_list"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 13 28) (end 13 41))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "my_empty_list")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.")
+			(line-break)
+			(line-break)
+			(source-region (file "let_polymorphism_lists.md") (start 13 28) (end 13 41) (annotation error) (line-text "all_str_list = str_list ++ my_empty_list"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 14 30) (end 14 31))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "+")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "let_polymorphism_lists.md") (start 14 30) (end 14 31) (annotation error) (line-text "all_float_list = float_list ++ my_empty_list"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 14 32) (end 14 45))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "my_empty_list")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.")
+			(line-break)
+			(line-break)
+			(source-region (file "let_polymorphism_lists.md") (start 14 32) (end 14 45) (annotation error) (line-text "all_float_list = float_list ++ my_empty_list"))))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 12 16) (end 12 27))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "let_polymorphism_lists.md") (start 12 16) (end 12 27) (annotation error) (line-text "all_int_list = int_list ++ my_empty_list"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 13 16) (end 13 27))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "let_polymorphism_lists.md") (start 13 16) (end 13 27) (annotation error) (line-text "all_str_list = str_list ++ my_empty_list"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 14 18) (end 14 31))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "let_polymorphism_lists.md") (start 14 18) (end 14 31) (annotation error) (line-text "all_float_list = float_list ++ my_empty_list"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

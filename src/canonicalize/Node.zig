@@ -148,7 +148,6 @@ pub const Tag = enum {
     ty_malformed,
     // Where clause
     where_method,
-    where_method_effectful,
     where_alias,
     where_malformed,
     // Patterns
@@ -1101,8 +1100,7 @@ pub const Payload = extern union {
     pub const WhereClause = extern struct {
         var_idx: u32,
         name: u32,
-        args_ret_idx: u32, // Index into span_with_node_data: (args.start, args.len, ret)
-        effectful: u32,
+        anno: u32,
     };
 
     pub const WhereMalformed = extern struct {

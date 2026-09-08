@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
-── ✗ invalid number ───────────────────────── can_list_number_doesnt_fit.md:1:14
-
-This number literal does not fit in the inferred type.
-
-[1.U8, 2.U8, 300]
-             ^^^
-
-The inferred type is:
-
-    U8
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 1 14) (end 1 17))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "can_list_number_doesnt_fit.md") (start 1 14) (end 1 17) (annotation error) (line-text "[1.U8, 2.U8, 300]"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U8")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,CloseSquare,

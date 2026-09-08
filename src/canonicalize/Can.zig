@@ -21976,26 +21976,13 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 break :blk try self.env.insertIdent(Ident.for_text(method_name_clean));
             };
 
-            // Canonicalize argument types
-            const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
-            const args_start = self.env.store.scratchTypeAnnoTop();
-            for (args_slice) |arg_idx| {
-                var arg_ctx = TypeAnnoCtx.init(type_anno_ctx);
-                const canonicalized_arg = try self.runTypeAnnoKernel(arg_idx, &arg_ctx);
-                try self.env.store.addScratchTypeAnno(canonicalized_arg);
-            }
-            const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
-
-            // Canonicalize return type
-            var ret_ctx = TypeAnnoCtx.init(type_anno_ctx);
-            const ret = try self.runTypeAnnoKernel(mm.ret_anno, &ret_ctx);
+            var anno_ctx = TypeAnnoCtx.init(type_anno_ctx);
+            const anno = try self.runTypeAnnoKernel(mm.anno, &anno_ctx);
 
             return try self.env.addWhereClause(WhereClause{ .w_method = .{
                 .var_ = var_anno_idx,
                 .method_name = method_ident,
-                .args = args_span,
-                .ret = ret,
-                .effectful = mm.effectful,
+                .anno = anno,
             } }, region);
         },
         .mod_alias => |ma| {

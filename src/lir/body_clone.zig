@@ -948,6 +948,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .rc_effect = s.rc_effect,
                     .unique_args = s.unique_args,
                     .interchangeable = s.interchangeable,
+                    .simd_concat_count = s.simd_concat_count,
                     .args = try self.mapLocalSpan(s.args),
                     .next = try self.cloneStmt(s.next),
                 } }),

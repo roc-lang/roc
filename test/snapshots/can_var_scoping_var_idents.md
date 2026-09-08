@@ -17,17 +17,30 @@ testFunc = |input| {
 # EXPECTED
 VAR NAME MISSING `$` - can_var_scoping_var_idents.md:4:6:4:10
 # PROBLEMS
-── ● var name missing `$` ──────────────────── can_var_scoping_var_idents.md:4:6
-
-The mutable binding sum_ is declared with var but its name does not start with
-$.
-
-var sum_ = input * 2 # Var with underscore - should not conflict
-    ^^^^
-
-Rename this binding and all of its uses to $sum_. The name is only a
-convention; mutability comes from the var declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 4 6) (end 4 10))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "sum_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$sum_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "can_var_scoping_var_idents.md") (start 4 6) (end 4 10) (annotation warning) (line-text "\tvar sum_ = input * 2 # Var with underscore - should not conflict")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

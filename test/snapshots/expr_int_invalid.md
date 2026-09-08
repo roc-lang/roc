@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 INVALID NUMBER - expr_int_invalid.md:1:1:1:42
 # PROBLEMS
-── ✗ invalid number ──────────────────────────────────── expr_int_invalid.md:1:1
-
-This number literal does not fit in the inferred type.
-
-99999999999999999999999999999999999999999
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The inferred type is:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 1 1) (end 1 42))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "expr_int_invalid.md") (start 1 1) (end 1 42) (annotation error) (line-text "99999999999999999999999999999999999999999"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 Int,

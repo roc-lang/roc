@@ -3336,53 +3336,15 @@ const Formatter = struct {
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
                 try fmt.pushAll(" :");
-                const args_coll = fmt.ast.store.getCollection(c.args);
-                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
-
+                const anno_region = fmt.nodeRegion(@intFromEnum(c.anno));
                 fmt.curr_indent = start_indent;
-                if (args_coll.span.len > 0) {
-                    if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
-                    // Format function arguments without parentheses (like regular function types)
-                    for (args, 0..) |arg_idx, i| {
-                        const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
-                        if (multiline and i > 0) {
-                            try fmt.flushCommentsBeforeDiscard(arg_region.start);
-                            try fmt.ensureNewline();
-                            try fmt.pushIndent();
-                        }
-                        try fmt.formatTypeAnnoDiscard(arg_idx);
-                        if (i < args.len - 1) {
-                            if (multiline) {
-                                try fmt.push(',');
-                            } else {
-                                try fmt.pushAll(", ");
-                            }
-                        } else {
-                            if (multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                                try fmt.pushAll(if (c.effectful) "=>" else "->");
-                            } else {
-                                try fmt.pushAll(if (c.effectful) " =>" else " ->");
-                            }
-                        }
-                    }
-                } else if (c.effectful) {
-                    try fmt.pushAll(" () =>");
-                }
-                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
+                if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
-                try fmt.formatTypeAnnoDiscard(c.ret_anno);
+                try fmt.formatTypeAnnoDiscard(c.anno);
             },
             .mod_alias => |c| {
                 // Format as: a.WhereAlias
@@ -6075,4 +6037,15 @@ test "fmt spaces out a #! that is not on the first line" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("x = 1\n# !/usr/bin/env roc\n", result);
+}
+
+test "where method annotations preserve whole holes parentheses and nullary arrows" {
+    const source =
+        \\helper : a -> Str where [a.hole : _, a.parenthesized : (_ -> _), a.nullary : () -> _, a.effect! : () => _]
+        \\helper = |_| "ok"
+        \\
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(source, result);
 }

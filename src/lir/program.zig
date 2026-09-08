@@ -144,7 +144,7 @@ pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
 
 /// Runtime metadata for one tag in a boxy tag-union descriptor.
 pub const BoxyTagVariant = struct {
-    name: base.StringLiteral.Idx,
+    name: LIR.BoxyNameId,
     discriminant: u16,
     /// Number of source-language payloads carried by this tag. A single
     /// aggregate payload is distinct from a multi-payload tag whose runtime
@@ -333,7 +333,7 @@ pub const Result = struct {
     boxy_dict_refs: std.ArrayList(BoxyDictRef),
     boxy_tag_variants: std.ArrayList(BoxyTagVariant),
     boxy_tag_payload_descs: std.ArrayList(BoxyTagPayloadDesc),
-    boxy_field_names: std.ArrayList(base.StringLiteral.Idx),
+    boxy_field_names: std.ArrayList(LIR.BoxyNameId),
     boxy_adapt_steps: std.ArrayList(BoxyAdaptStep),
     boxy_payload_steps: std.ArrayList(BoxyPayloadStep),
     boxy_method_slots: std.ArrayList(BoxyMethodSlot),

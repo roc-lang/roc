@@ -8,6 +8,7 @@ const reporting = @import("reporting");
 const roc_target = @import("roc_target");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
+const CoordinatorError = @import("../coordinator.zig").CoordinatorError;
 const CoreCtx = @import("ctx").CoreCtx;
 
 const Issue10865TestError = std.Io.Dir.CreateDirPathError ||
@@ -17,12 +18,8 @@ const Issue10865TestError = std.Io.Dir.CreateDirPathError ||
     Coordinator.AppDiscoveryError ||
     eval.BuiltinModules.InitError ||
     std.Thread.SpawnError ||
-    error{
-        BuiltinLowLevelAnnotationMustBeFunction,
-        LowLevelOperationsNotFound,
-        TestUnexpectedResult,
-        UnsupportedBuiltinAnnotationOnly,
-    };
+    CoordinatorError ||
+    error{TestUnexpectedResult};
 
 fn expectTypeHeaderResult(source: []const u8, expected_title: ?[]const u8) Issue10865TestError!void {
     const gpa = std.testing.allocator;

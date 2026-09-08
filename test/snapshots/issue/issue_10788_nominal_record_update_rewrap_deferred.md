@@ -14,21 +14,34 @@ Sc := { depth : U8, n : U64 }.{
 # EXPECTED
 INVALID NOMINAL RECORD - issue_10788_nominal_record_update_rewrap_deferred.md:4:31:4:48
 # PROBLEMS
-── ✗ invalid nominal record ─ issue_10788_nominal_record_update_rewrap_deferred.md:4:31
-
-I'm having trouble with this nominal type that wraps a record.
-
-f = |xs| List.map(xs, |x| Sc.{ ..x, depth: 1 })
-                             ^^^^^^^^^^^^^^^^^
-
-The record I found is:
-
-    Sc
-
-But the nominal type expects:
-
-    { depth: U8, n: U64 }
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Nominal Record")
+		(region (start 4 31) (end 4 48))
+		(headline
+			(reflow "I'm having trouble with this nominal type that wraps a record."))
+		(document
+			(source-region (file "issue_10788_nominal_record_update_rewrap_deferred.md") (start 4 31) (end 4 48) (annotation error) (line-text "\tf = |xs| List.map(xs, |x| Sc.{ ..x, depth: 1 })"))
+			(line-break)
+			(text "The record I found is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Sc")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "But the nominal type expects:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ depth: U8, n: U64 }")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Dot,OpenCurly,

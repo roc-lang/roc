@@ -543,6 +543,14 @@ pub fn extractModuleDocsWithOptions(
         }
     }
 
+    // Type modules expose only their main type and its associated namespace.
+    // Filter before re-parenting so declaration ownership is still explicit in
+    // every entry's name. Builtin follows the same visibility rule; its public
+    // children are promoted to separate documentation pages afterwards.
+    if (module_env.module_kind == .type_module) {
+        try filterTypeModuleEntries(gpa, &entries_list, local_module_name);
+    }
+
     // Build hierarchical structure: move methods under their parent types
     var i: usize = 0;
     while (i < entries_list.items.len) {
@@ -580,24 +588,11 @@ pub fn extractModuleDocsWithOptions(
         i += 1;
     }
 
-    // Type module visibility: only the main type entry and its children are public.
-    // Any other top-level definitions are private helpers and should be excluded.
-    // For example, in Color.roc only `Color := ...` and its methods are visible;
-    // helper functions or types defined outside `Color` are not documented.
-    //
-    // The Builtin module is a special case—it contains many top-level types
-    // (Str, List, Bool, etc.) that need complex re-parenting rather than simple
-    // filtering, so it is handled separately below.
-    const is_builtin = std.mem.eql(u8, module_env.module_name, "Builtin");
-    if (module_env.module_kind == .type_module and !is_builtin) {
-        try filterTypeModuleEntries(gpa, &entries_list, local_module_name);
-    }
-
     // Re-parent Builtin opaque type's children to their proper parent types.
     // The Builtin module has a single opaque "Builtin" entry with hundreds of
     // children like "Bool.not", "List.append", "Num.Dec.abs". We split those
     // dotted names and move each child under the matching top-level type.
-    if (is_builtin) {
+    if (std.mem.eql(u8, module_env.module_name, "Builtin")) {
         try reparentBuiltinChildren(gpa, &entries_list);
     }
 
@@ -842,8 +837,8 @@ fn isUnderExposedName(exposed_names: *const std.StringHashMapUnmanaged(void), na
 /// In a type module (e.g. `Color.roc`), only the entry whose name matches the
 /// module name is public. All other top-level entries—helper functions, internal
 /// types, etc.—are private to the module and excluded from documentation.
-/// The main type entry's children (methods defined inside `Color := [...].{...}`)
-/// are preserved as nested entries.
+/// Associated entries still have their qualified names (e.g. `Color.to_str`)
+/// because this runs before the hierarchical pass.
 fn filterTypeModuleEntries(
     gpa: Allocator,
     entries_list: *std.ArrayList(DocModel.DocEntry),
@@ -852,16 +847,57 @@ fn filterTypeModuleEntries(
     var idx: usize = 0;
     while (idx < entries_list.items.len) {
         const entry = &entries_list.items[idx];
-        // At this point the hierarchical pass has already moved associated
-        // entries under their parent. Anything still at top level is a sibling
-        // declaration, so a type module keeps only its main type entry.
-        if (std.mem.eql(u8, entry.name, module_name)) {
+        const root_name = if (std.mem.findScalar(u8, entry.name, '.')) |dot| entry.name[0..dot] else entry.name;
+        if (std.mem.eql(u8, root_name, module_name)) {
             idx += 1;
         } else {
             var removed = entries_list.orderedRemove(idx);
             removed.deinit(gpa);
         }
     }
+}
+
+test "Builtin docs exclude private sibling types and preserve public nested types" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\Builtin :: [].{
+        \\    Public :: [PublicTag].{
+        \\        Nested : [NestedTag]
+        \\        identity : Public -> Public
+        \\        identity = |value| value
+        \\    }
+        \\    PublicAlias : [AliasTag]
+        \\}
+        \\ScannedJsonString : { after : [End], body : [NoEscapes, HasEscapes] }
+        \\PrivateNominal := [PrivateTag].{
+        \\    Nested : [PrivateNestedTag]
+        \\}
+        \\PrivateOpaque :: [PrivateOpaqueTag]
+        \\private_helper : ScannedJsonString -> ScannedJsonString
+        \\private_helper = |value| value
+    ;
+    var env = try ModuleEnv.init(gpa, source);
+    defer env.deinit();
+    const ast = try @import("parse").file(gpa, &env.common);
+    defer ast.deinit();
+    try std.testing.expectEqual(0, ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(0, ast.parse_diagnostics.items.len);
+    try env.initCIRFields("Builtin");
+    var can = try @import("can").Can.initBuiltin(@import("can").CoreCtx.testing(gpa, gpa), &env, ast);
+    defer can.deinit();
+    try can.canonicalizeFile();
+    const diagnostics = try env.getDiagnostics();
+    defer gpa.free(diagnostics);
+    try std.testing.expectEqual(0, diagnostics.len);
+
+    var docs = try extractModuleDocs(gpa, &env, "Builtin", null);
+    defer docs.deinit(gpa);
+    try std.testing.expectEqual(2, docs.entries.len);
+    try std.testing.expectEqualStrings("Public", docs.entries[0].name);
+    try std.testing.expectEqualStrings("PublicAlias", docs.entries[1].name);
+    try std.testing.expectEqual(2, docs.entries[0].children.len);
+    try std.testing.expect(findEntryByName(docs.entries[0].children, "Nested"));
+    try std.testing.expect(findEntryByName(docs.entries[0].children, "identity"));
 }
 
 fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel.DocEntry)) Allocator.Error!void {
@@ -939,18 +975,6 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
             }
         }
         j += 1;
-    }
-
-    // Remove top-level value entries that are not part of the public API.
-    var k: usize = 0;
-    while (k < entries_list.items.len) {
-        const entry = &entries_list.items[k];
-        if (entry.kind == .value and entry.children.len == 0) {
-            var removed = entries_list.orderedRemove(k);
-            removed.deinit(gpa);
-            continue;
-        }
-        k += 1;
     }
 }
 
@@ -1473,40 +1497,8 @@ fn extractWhereMethodSignature(
     reference_routing: PublicReferenceRouting,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
 ) Allocator.Error!*const DocType {
-    const args_slice = module_env.store.sliceTypeAnnos(method.args);
-    const args = try gpa.alloc(*const DocType, args_slice.len);
-    var args_len: usize = 0;
-    var args_moved = false;
-    errdefer if (!args_moved) {
-        for (args[0..args_len]) |arg| {
-            arg.deinit(gpa);
-            gpa.destroy(arg);
-        }
-        gpa.free(args);
-    };
-
-    for (args_slice) |arg_idx| {
-        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, arg_idx) orelse
-            try allocDocType(gpa, .@"error");
-        args_len += 1;
-    }
-
-    const ret = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, method.ret) orelse
+    return try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, method.anno) orelse
         try allocDocType(gpa, .@"error");
-    var ret_moved = false;
-    errdefer if (!ret_moved) {
-        ret.deinit(gpa);
-        gpa.destroy(ret);
-    };
-
-    const signature = try allocDocType(gpa, .{ .function = .{
-        .args = args,
-        .ret = ret,
-        .effectful = method.effectful,
-    } });
-    args_moved = true;
-    ret_moved = true;
-    return signature;
 }
 
 fn extractWhereTypeVarName(

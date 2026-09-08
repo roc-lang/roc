@@ -1691,6 +1691,7 @@ const CollectedAbiLayoutDetails = union(enum) {
         discriminant_size: u64,
         discriminant_offset32: u64,
         discriminant_offset64: u64,
+        has_payload: bool,
         tags: []const CollectedAbiTagLayout,
     },
 };
@@ -2855,6 +2856,7 @@ const TypeTable = struct {
                 .discriminant_size = 0,
                 .discriminant_offset32 = 0,
                 .discriminant_offset64 = 0,
+                .has_payload = false,
                 .tags = try self.abiZeroSizedTagLayouts(tu),
             } };
         }
@@ -2878,6 +2880,7 @@ const TypeTable = struct {
             self.gpa.free(tags);
         }
 
+        var has_payload = false;
         for (tu.tags, 0..) |tag, i| {
             const variant_layout_idx = info.variants.get(@intCast(i)).payload_layout;
             const variant_layout = store.getLayout(variant_layout_idx);
@@ -2891,6 +2894,7 @@ const TypeTable = struct {
                 .payload_size64 = store.sizeAt(variant_layout, .u64),
                 .payload_alignment64 = variant_layout.alignment(.u64).toByteUnits(),
             };
+            has_payload = has_payload or tags[i].payload_size32 > 0 or tags[i].payload_size64 > 0;
             populated += 1;
         }
 
@@ -2898,6 +2902,7 @@ const TypeTable = struct {
             .discriminant_size = info.data.discriminant_size,
             .discriminant_offset32 = info.data.discriminant_offset.get(.u32),
             .discriminant_offset64 = info.data.discriminant_offset.get(.u64),
+            .has_payload = has_payload,
             .tags = tags,
         } };
     }
@@ -3975,6 +3980,7 @@ fn writeAbiLayoutDetails(
             writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "discriminant_offset32", u64, tu.discriminant_offset32);
             writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "discriminant_offset64", u64, tu.discriminant_offset64);
             writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "discriminant_size", u64, tu.discriminant_size);
+            writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "has_payload", bool, tu.has_payload);
             writer.writeField(value_base, payload_layout, "AbiTagUnionLayout", "tags", RocList, buildAbiTagLayoutList(writer, tu.tags, tags_slot.layout_idx));
             writer.writeTagDiscriminant(value_base, details_layout, tag_index);
         },
@@ -4775,4 +4781,258 @@ fn moduleLocalMemberName(
     if (source_name.len == module_name.len) return try allocator.dupe(u8, source_name);
     if (source_name[module_name.len] != '.') return try allocator.dupe(u8, source_name);
     return try allocator.dupe(u8, source_name[module_name.len + 1 ..]);
+}
+
+// Lock the schema-directed marshaller against the actual checked glue platform.
+// No Zig extern record mirror participates in this boundary.
+test "glue platform marshalling schema matches checked Roc records" {
+    const gpa = std.testing.allocator;
+    var diagnostics = std.Io.Writer.Allocating.init(gpa);
+    defer diagnostics.deinit();
+    var spec = compileGlueSpec(gpa, &diagnostics.writer, "src/glue/src/DebugGlue.roc", true, reporting.ReportingConfig.initMarkdown(), .lss, std.testing.io) catch |err| {
+        std.debug.print("{s}", .{diagnostics.written()});
+        return err;
+    };
+    defer spec.deinit(gpa);
+    try checkGluePlatformMarshallingSchema(&spec);
+}
+
+const GlueSchemaLockError = error{GlueSchemaMismatch};
+
+fn expectGlueSchemaEqual(expected: anytype, actual: anytype) GlueSchemaLockError!void {
+    if (expected != actual) return error.GlueSchemaMismatch;
+}
+
+// Expected wire types are independent of the marshaller implementation. Every
+// record field and tag payload is reached through checked schema identity and
+// committed LIR layout metadata, never source order or a reconstructed layout.
+const GlueProtocolLock = struct {
+    schemas: *const lir.CheckedPipeline.RuntimeValueSchemaStore,
+    layouts: *const layout.Store,
+
+    const Type = enum {
+        u64_,
+        str_,
+        bool_,
+        unit,
+        types,
+        entry_point,
+        provides_entry,
+        module_info,
+        function_info,
+        hosted_info,
+        record_field_info,
+        type_info,
+        file,
+        abi_layout,
+        abi_details,
+        abi_record,
+        abi_field,
+        abi_union,
+        abi_tag,
+        rc_plan,
+        type_repr,
+        function_repr,
+        record_repr,
+        record_field,
+        union_repr,
+        tag_variant,
+        list_u64,
+        list_types,
+        list_entry_point,
+        list_provides_entry,
+        list_module_info,
+        list_function_info,
+        list_hosted_info,
+        list_record_field_info,
+        list_type_info,
+        list_file,
+        list_abi_field,
+        list_abi_tag,
+        list_record_field,
+        list_tag_variant,
+    };
+    const Member = struct { name: []const u8, type: Type };
+
+    fn check(self: @This(), idx: layout.Idx, comptime expected: Type) GlueSchemaLockError!void {
+        switch (expected) {
+            .u64_ => try expectGlueSchemaEqual(.u64, idx),
+            .str_ => try expectGlueSchemaEqual(.str, idx),
+            .bool_ => try expectGlueSchemaEqual(.bool, idx),
+            .unit => try expectGlueSchemaEqual(.zst, idx),
+            .list_u64 => try self.list(idx, .u64_),
+            .list_types => try self.list(idx, .types),
+            .list_entry_point => try self.list(idx, .entry_point),
+            .list_provides_entry => try self.list(idx, .provides_entry),
+            .list_module_info => try self.list(idx, .module_info),
+            .list_function_info => try self.list(idx, .function_info),
+            .list_hosted_info => try self.list(idx, .hosted_info),
+            .list_record_field_info => try self.list(idx, .record_field_info),
+            .list_type_info => try self.list(idx, .type_info),
+            .list_file => try self.list(idx, .file),
+            .list_abi_field => try self.list(idx, .abi_field),
+            .list_abi_tag => try self.list(idx, .abi_tag),
+            .list_record_field => try self.list(idx, .record_field),
+            .list_tag_variant => try self.list(idx, .tag_variant),
+            .types => try self.record(idx, "Types", &.{
+                .{ .name = "entrypoints", .type = .list_entry_point },         .{ .name = "modules", .type = .list_module_info },
+                .{ .name = "provides_entries", .type = .list_provides_entry }, .{ .name = "types", .type = .list_type_info },
+            }),
+            .entry_point => try self.record(idx, "EntryPoint", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "type_id", .type = .u64_ } }),
+            .provides_entry => try self.record(idx, "ProvidesEntry", &.{ .{ .name = "ffi_symbol", .type = .str_ }, .{ .name = "name", .type = .str_ }, .{ .name = "type_id", .type = .u64_ } }),
+            .module_info => try self.record(idx, "ModuleTypeInfo", &.{
+                .{ .name = "functions", .type = .list_function_info }, .{ .name = "hosted_functions", .type = .list_hosted_info },
+                .{ .name = "main_type", .type = .str_ },               .{ .name = "name", .type = .str_ },
+            }),
+            .function_info => try self.record(idx, "FunctionInfo", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "type_str", .type = .str_ } }),
+            .hosted_info => try self.record(idx, "HostedFunctionInfo", &.{
+                .{ .name = "arg_fields", .type = .list_record_field_info }, .{ .name = "arg_type_ids", .type = .list_u64 },
+                .{ .name = "ffi_symbol", .type = .str_ },                   .{ .name = "index", .type = .u64_ },
+                .{ .name = "name", .type = .str_ },                         .{ .name = "ret_fields", .type = .list_record_field_info },
+                .{ .name = "ret_type_id", .type = .u64_ },                  .{ .name = "type_str", .type = .str_ },
+            }),
+            .record_field_info => try self.record(idx, "RecordFieldInfo", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "type_str", .type = .str_ } }),
+            .type_info => try self.record(idx, "TypeInfo", &.{ .{ .name = "layout", .type = .abi_layout }, .{ .name = "rc", .type = .rc_plan }, .{ .name = "repr", .type = .type_repr } }),
+            .file => try self.record(idx, "File", &.{ .{ .name = "content", .type = .str_ }, .{ .name = "name", .type = .str_ } }),
+            .abi_layout => try self.record(idx, "AbiLayout", &.{
+                .{ .name = "alignment32", .type = .u64_ },    .{ .name = "alignment64", .type = .u64_ }, .{ .name = "contains_refcounted", .type = .bool_ },
+                .{ .name = "details", .type = .abi_details }, .{ .name = "size32", .type = .u64_ },      .{ .name = "size64", .type = .u64_ },
+            }),
+            .abi_details => try self.tagUnion(idx, "AbiLayoutDetails", &.{ .{ .name = "AbiBuiltin", .type = .unit }, .{ .name = "AbiRecord", .type = .abi_record }, .{ .name = "AbiTagUnion", .type = .abi_union } }),
+            .abi_record => try self.record(idx, "AbiRecordLayout", &.{.{ .name = "fields", .type = .list_abi_field }}),
+            .abi_field => try self.record(idx, "AbiFieldLayout", &.{
+                .{ .name = "alignment32", .type = .u64_ },    .{ .name = "alignment64", .type = .u64_ }, .{ .name = "is_padding", .type = .bool_ },
+                .{ .name = "name", .type = .str_ },           .{ .name = "offset32", .type = .u64_ },    .{ .name = "offset64", .type = .u64_ },
+                .{ .name = "original_index", .type = .u64_ }, .{ .name = "size32", .type = .u64_ },      .{ .name = "size64", .type = .u64_ },
+                .{ .name = "type_id", .type = .u64_ },
+            }),
+            .abi_union => try self.record(idx, "AbiTagUnionLayout", &.{
+                .{ .name = "discriminant_offset32", .type = .u64_ }, .{ .name = "discriminant_offset64", .type = .u64_ },
+                .{ .name = "discriminant_size", .type = .u64_ },     .{ .name = "tags", .type = .list_abi_tag },
+            }),
+            .abi_tag => try self.record(idx, "AbiTagLayout", &.{
+                .{ .name = "discriminant", .type = .u64_ },             .{ .name = "name", .type = .str_ },                .{ .name = "payload", .type = .list_u64 },
+                .{ .name = "payload_fields", .type = .list_abi_field }, .{ .name = "payload_alignment32", .type = .u64_ }, .{ .name = "payload_alignment64", .type = .u64_ },
+                .{ .name = "payload_size32", .type = .u64_ },           .{ .name = "payload_size64", .type = .u64_ },
+            }),
+            .rc_plan => try self.tagUnion(idx, "HostRcPlan", &.{ .{ .name = "RcNoop", .type = .unit }, .{ .name = "RcRefcounted", .type = .unit } }),
+            .type_repr => try self.tagUnion(idx, "TypeRepr", &.{
+                .{ .name = "RocBool", .type = .unit },          .{ .name = "RocBox", .type = .u64_ },   .{ .name = "RocDec", .type = .unit },
+                .{ .name = "RocF32", .type = .unit },           .{ .name = "RocF64", .type = .unit },   .{ .name = "RocFunction", .type = .function_repr },
+                .{ .name = "RocI128", .type = .unit },          .{ .name = "RocI16", .type = .unit },   .{ .name = "RocI32", .type = .unit },
+                .{ .name = "RocI64", .type = .unit },           .{ .name = "RocI8", .type = .unit },    .{ .name = "RocList", .type = .u64_ },
+                .{ .name = "RocRecord", .type = .record_repr }, .{ .name = "RocStr", .type = .unit },   .{ .name = "RocTagUnion", .type = .union_repr },
+                .{ .name = "RocU128", .type = .unit },          .{ .name = "RocU16", .type = .unit },   .{ .name = "RocU32", .type = .unit },
+                .{ .name = "RocU64", .type = .unit },           .{ .name = "RocU8", .type = .unit },    .{ .name = "RocU8x16", .type = .unit },
+                .{ .name = "RocI8x16", .type = .unit },         .{ .name = "RocU16x8", .type = .unit }, .{ .name = "RocI16x8", .type = .unit },
+                .{ .name = "RocU32x4", .type = .unit },         .{ .name = "RocI32x4", .type = .unit }, .{ .name = "RocU64x2", .type = .unit },
+                .{ .name = "RocI64x2", .type = .unit },         .{ .name = "RocUnit", .type = .unit },  .{ .name = "RocUnknown", .type = .str_ },
+            }),
+            .function_repr => try self.record(idx, "FunctionRepr", &.{ .{ .name = "args", .type = .list_u64 }, .{ .name = "ret", .type = .u64_ } }),
+            .record_repr => try self.record(idx, "RecordRepr", &.{ .{ .name = "anonymous", .type = .bool_ }, .{ .name = "fields", .type = .list_record_field }, .{ .name = "name", .type = .str_ } }),
+            .record_field => try self.record(idx, "RecordField", &.{ .{ .name = "is_padding", .type = .bool_ }, .{ .name = "name", .type = .str_ }, .{ .name = "type_id", .type = .u64_ } }),
+            .union_repr => try self.record(idx, "TagUnionRepr", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "tags", .type = .list_tag_variant } }),
+            .tag_variant => try self.record(idx, "TagVariant", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "payload", .type = .list_u64 } }),
+        }
+    }
+
+    fn list(self: @This(), idx: layout.Idx, comptime element: Type) GlueSchemaLockError!void {
+        const value = self.layouts.getLayout(idx);
+        try expectGlueSchemaEqual(.list, value.tag);
+        try self.check(value.getIdx(), element);
+    }
+
+    fn record(self: @This(), idx: layout.Idx, comptime name: []const u8, comptime fields: []const Member) GlueSchemaLockError!void {
+        const value = self.layouts.getLayout(idx);
+        try expectGlueSchemaEqual(.struct_, value.tag);
+        const schema = for (self.schemas.records.items) |candidate| {
+            if (std.mem.eql(u8, name, candidate.type_name)) break candidate;
+        } else return error.GlueSchemaMismatch;
+        try expectGlueSchemaEqual(fields.len, schema.fields.len);
+        try expectGlueSchemaEqual(fields.len, self.layouts.getStructInfo(value).fields.len);
+        inline for (fields) |field| {
+            const logical_index = schema.fieldLogicalIndex(field.name) orelse return error.GlueSchemaMismatch;
+            const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(value.getStruct().idx, logical_index);
+            try self.check(field_layout, field.type);
+        }
+    }
+
+    fn tagUnion(self: @This(), idx: layout.Idx, comptime name: []const u8, comptime tags: []const Member) GlueSchemaLockError!void {
+        const value = self.layouts.getLayout(idx);
+        try expectGlueSchemaEqual(.tag_union, value.tag);
+        const schema = for (self.schemas.tag_unions.items) |candidate| {
+            if (std.mem.eql(u8, name, candidate.type_name)) break candidate;
+        } else return error.GlueSchemaMismatch;
+        const info = self.layouts.getTagUnionInfo(value);
+        try expectGlueSchemaEqual(tags.len, schema.tags.len);
+        try expectGlueSchemaEqual(tags.len, info.variants.len);
+        inline for (tags) |tag| {
+            const discriminant = schema.tagDiscriminant(tag.name) orelse return error.GlueSchemaMismatch;
+            if (discriminant >= info.variants.len) return error.GlueSchemaMismatch;
+            try self.check(info.variants.get(discriminant).payload_layout, tag.type);
+        }
+    }
+};
+
+fn checkGluePlatformMarshallingSchema(spec: *const CompiledGlueSpec) GlueSchemaLockError!void {
+    const lock = GlueProtocolLock{ .schemas = &spec.lowered.runtime_value_schemas, .layouts = &spec.lowered.lir_result.layouts };
+    try expectGlueSchemaEqual(@as(usize, 1), spec.arg_layouts.len);
+    try lock.check(spec.arg_layouts[0], .list_types);
+    const proc = spec.lowered.lir_result.store.getProcSpec(spec.glue_proc);
+    try lock.tagUnion(proc.ret_layout, "Builtin.Try", &.{ .{ .name = "Err", .type = .str_ }, .{ .name = "Ok", .type = .list_file } });
+}
+
+// Deliberately mutate checked Roc declarations, not a handwritten layout table.
+// Each change must fail the same lock that checks the unmodified platform.
+test "glue platform schema lock rejects field rename addition and type mutation" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const mutations = [_]struct { path: []const u8, source: []const u8 }{
+        .{ .path = "EntryPoint.roc", .source = "EntryPoint := { renamed : Str, type_id : U64 }" },
+        .{ .path = "EntryPoint.roc", .source = "EntryPoint := { name : Str, type_id : U64, added : U64 }" },
+        .{ .path = "EntryPoint.roc", .source = "EntryPoint := { name : Str, type_id : U32 }" },
+        .{ .path = "ProvidesEntry.roc", .source = "ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U32 }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
+        .{ .path = "RecordField.roc", .source = "RecordField := { is_padding : Bool, name : Str, type_id : U32 }" },
+        .{ .path = "HostRcPlan.roc", .source = "HostRcPlan := [RcNoop(U64), RcRefcounted]" },
+    };
+    for (mutations) |mutation| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.createDirPath(io, "platform");
+        var source_dir = try std.Io.Dir.cwd().openDir(io, "src/glue/platform", .{ .iterate = true });
+        defer source_dir.close(io);
+        var iterator = source_dir.iterate();
+        while (try iterator.next(io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".roc")) continue;
+            const destination = try std.fs.path.join(gpa, &.{ "platform", entry.name });
+            defer gpa.free(destination);
+            try source_dir.copyFile(entry.name, tmp.dir, destination, io, .{});
+        }
+        const mutation_path = try std.fs.path.join(gpa, &.{ "platform", mutation.path });
+        defer gpa.free(mutation_path);
+        try tmp.dir.writeFile(io, .{ .sub_path = mutation_path, .data = mutation.source });
+        try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+            \\app [make_glue] { pf: platform "platform/main.roc" }
+            \\import pf.Types exposing [Types]
+            \\import pf.File exposing [File]
+            \\make_glue : List(Types) -> Try(List(File), Str)
+            \\make_glue = |input| {
+            \\    dbg input
+            \\    Ok([])
+            \\}
+        });
+        const app_path = try tmp.dir.realPathFileAlloc(io, "main.roc", gpa);
+        defer gpa.free(app_path);
+        var diagnostics = std.Io.Writer.Allocating.init(gpa);
+        defer diagnostics.deinit();
+        var spec = compileGlueSpec(gpa, &diagnostics.writer, app_path, true, reporting.ReportingConfig.initMarkdown(), .lss, io) catch |err| {
+            std.debug.print("{s}", .{diagnostics.written()});
+            return err;
+        };
+        defer spec.deinit(gpa);
+        try std.testing.expectError(error.GlueSchemaMismatch, checkGluePlatformMarshallingSchema(&spec));
+    }
 }

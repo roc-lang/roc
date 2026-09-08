@@ -345,6 +345,7 @@ const LoweredFnBody = struct {
     body: LIR.CFStmtId,
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
+    tail_calls: ?LIR.TailCalls,
 };
 
 const PendingLocalName = struct {
@@ -362,6 +363,7 @@ const CompletedFnBodyShard = struct {
     body: LIR.CFStmtId,
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
+    tail_calls: ?LIR.TailCalls,
     discovered_fns: []Type.FnId,
     folded_map_matches: []Lifted.Program.FoldedMatch,
     local_names: []PendingLocalName,
@@ -563,6 +565,7 @@ const Lowerer = struct {
     /// selected erased-callable result slot. A later lexical producer uses
     /// this explicit provenance to inherit the return destination.
     return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
+    tail_call_scratch: lir_core.TailCallBuilder,
     /// Multiple distinct eager producers can feed one later runtime choice,
     /// but the hidden reuse owner is affine and cannot be offered to all of
     /// them. Keep that candidate group disqualified until every producer has
@@ -603,6 +606,7 @@ const Lowerer = struct {
         loop_stack: std.ArrayList(LoopContext),
         join_stack: std.ArrayList(JoinContext),
         return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
+        tail_call_scratch: lir_core.TailCallBuilder,
         erased_owner_states: std.ArrayList(ErasedOwnerState),
         erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
 
@@ -617,6 +621,7 @@ const Lowerer = struct {
                 .loop_stack = .empty,
                 .join_stack = .empty,
                 .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
+                .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
                 .erased_owner_states = .empty,
                 .erased_call_owner_uses = .empty,
             };
@@ -626,6 +631,7 @@ const Lowerer = struct {
             self.erased_call_owner_uses.deinit(self.allocator);
             self.erased_owner_states.deinit(self.allocator);
             self.return_forwarding_locals.deinit();
+            self.tail_call_scratch.deinit();
             self.join_stack.deinit(self.allocator);
             self.loop_stack.deinit(self.allocator);
             self.local_types.deinit();
@@ -772,6 +778,7 @@ const Lowerer = struct {
             .loop_stack = .empty,
             .join_stack = .empty,
             .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
+            .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
             .erased_owner_state_prefix = &.{},
             .erased_owner_states = .empty,
             .erased_call_owner_uses = .empty,
@@ -795,6 +802,7 @@ const Lowerer = struct {
         self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
+        self.tail_call_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
@@ -848,6 +856,7 @@ const Lowerer = struct {
         self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
+        self.tail_call_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
@@ -904,6 +913,7 @@ const Lowerer = struct {
         self.loop_stack = .empty;
         self.join_stack = .empty;
         self.return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(self.allocator);
+        self.tail_call_scratch = lir_core.TailCallBuilder.initScratch(self.allocator);
         self.return_forwarding_ambiguous = false;
         self.return_forwarding_repeatable_depth = 0;
         self.erased_owner_states = .empty;
@@ -1078,6 +1088,7 @@ const Lowerer = struct {
         worker.current_erased_reuse = null;
         worker.current_return_target = null;
         worker.return_forwarding_locals = workspace.return_forwarding_locals;
+        worker.tail_call_scratch = workspace.tail_call_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
@@ -1112,6 +1123,7 @@ const Lowerer = struct {
         workspace.loop_stack = self.loop_stack;
         workspace.join_stack = self.join_stack;
         workspace.return_forwarding_locals = self.return_forwarding_locals;
+        workspace.tail_call_scratch = self.tail_call_scratch;
         workspace.erased_owner_states = self.erased_owner_states;
         workspace.erased_call_owner_uses = self.erased_call_owner_uses;
         if (deinit_store) self.result.store.deinit();
@@ -1202,6 +1214,7 @@ const Lowerer = struct {
             .body = body.body,
             .frame_locals = body.frame_locals,
             .stack_probe = body.stack_probe,
+            .tail_calls = body.tail_calls,
             .discovered_fns = discovered_fns,
             .folded_map_matches = folded_map_matches,
             .local_names = local_names,
@@ -1697,6 +1710,10 @@ const Lowerer = struct {
             Common.invariant("Solved-LIR committed a Roc procedure without a body");
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
+        proc.tail_calls = if (shard.tail_calls) |sites| .{
+            .head = appended.relocation.stmt(shard.prefix, sites.head),
+            .loop = sites.loop,
+        } else null;
         try self.folded_map_matches.appendSlice(self.allocator, shard.folded_map_matches);
         self.fn_written.items[@intFromEnum(shard.fn_id)] = true;
     }
@@ -1825,6 +1842,11 @@ const Lowerer = struct {
 
         switch (source_fn.body) {
             .roc => |body_expr| {
+                const tail_calls = &self.tail_call_scratch;
+                tail_calls.reset(proc_id);
+                const saved_tail_builder = self.result.store.tail_call_builder;
+                self.result.store.tail_call_builder = tail_calls;
+                defer self.result.store.tail_call_builder = saved_tail_builder;
                 const saved_ret_ty = self.current_ret_ty;
                 const saved_proc_locals = self.current_proc_locals;
                 const saved_current_fn = self.current_fn;
@@ -1893,12 +1915,14 @@ const Lowerer = struct {
                     .body = body,
                     .frame_locals = frame_locals,
                     .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
+                    .tail_calls = try tail_calls.finish(&self.result.store),
                 };
                 if (!self.worker_callback) {
                     const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
                     proc_ptr.body = body;
                     proc_ptr.frame_locals = frame_locals;
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
+                    proc_ptr.tail_calls = lowered_body.?.tail_calls;
                 }
             },
             .hosted => {
@@ -11335,6 +11359,7 @@ fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.
     return .{
         .allocator = allocator,
         .vars = try cloneArrayList(SolvedType.Content, allocator, &source.vars),
+        .owned_named_backings = try cloneArrayList(bool, allocator, &source.owned_named_backings),
         .spans = try cloneArrayList(SolvedType.TypeVarId, allocator, &source.spans),
         .fields = try cloneArrayList(SolvedType.Field, allocator, &source.fields),
         .tags = try cloneArrayList(SolvedType.Tag, allocator, &source.tags),

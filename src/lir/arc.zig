@@ -354,13 +354,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const boxy_rc_descs = try computeBoxyRcDescs(store);
     defer store.allocator.free(boxy_rc_descs);
 
-    const local_contains_refcounted = try computeLocalContainsRefcounted(store.allocator, store, layouts, boxy_rc_descs);
-    defer store.allocator.free(local_contains_refcounted);
+    const borrow_anchor_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
+    defer store.allocator.free(borrow_anchor_refcounted);
+    const emission_refcounted = try computeEmissionContainsRefcounted(store.allocator, store, layouts, borrow_anchor_refcounted);
+    defer emission_refcounted.deinit(store.allocator);
+    const local_contains_refcounted = emission_refcounted.slice();
     inserter.local_contains_refcounted = local_contains_refcounted;
     inserter.boxy_rc_descs = boxy_rc_descs;
-
-    const borrow_anchor_refcounted = try computeBorrowAnchorRefcounted(store.allocator, store, layouts, local_contains_refcounted);
-    defer store.allocator.free(borrow_anchor_refcounted);
 
     var solution = try arc_solve.solve(
         store.allocator,
@@ -625,9 +625,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             else
                 variants.sigs.items[proc_index - solution.sigs.len];
         }
-        const certified_boxy_rc_descs = try computeBoxyRcDescs(store);
-        defer store.allocator.free(certified_boxy_rc_descs);
-        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, certified_boxy_rc_descs, .{
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{
             .sigs = all_sigs,
             .outcomes = solution.outcomes,
         }, options.roots);
@@ -650,27 +648,57 @@ fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.Bo
     return descs[index];
 }
 
-fn computeLocalContainsRefcounted(
+/// Emission shares the immutable solver table unless a capture view must be
+/// excluded. Only the owned variant needs to be freed by the emission consumer.
+const EmissionRefcounted = union(enum) {
+    shared: []const bool,
+    owned: []bool,
+
+    fn slice(self: EmissionRefcounted) []const bool {
+        return switch (self) {
+            .shared => |values| values,
+            .owned => |values| values,
+        };
+    }
+
+    fn deinit(self: EmissionRefcounted, allocator: Allocator) void {
+        switch (self) {
+            .shared => {},
+            .owned => |values| allocator.free(values),
+        }
+    }
+
+    fn exclude(self: *EmissionRefcounted, allocator: Allocator, local: LIR.LocalId) Allocator.Error!void {
+        const index = @intFromEnum(local);
+        if (!self.slice()[index]) return;
+        const values = switch (self.*) {
+            .shared => |shared| values: {
+                const owned = try allocator.dupe(bool, shared);
+                self.* = .{ .owned = owned };
+                break :values owned;
+            },
+            .owned => |owned| owned,
+        };
+        values[index] = false;
+    }
+};
+
+/// Derive RC emission eligibility from the solver's representation table.
+/// A capture view anchors borrows but owns no aggregate RC unit.
+fn computeEmissionContainsRefcounted(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
-) ResourceError![]bool {
-    const local_count = store.localCount();
-    if (boxy_rc_descs.len != local_count) arcInvariant("ARC Boxy descriptor table did not cover every local");
-    const contains = try allocator.alloc(bool, local_count);
-    errdefer allocator.free(contains);
-    for (0..local_count) |index| {
-        const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-        const local = store.getLocal(local_id);
-        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
-    }
+    borrow_anchor_refcounted: []const bool,
+) ResourceError!EmissionRefcounted {
+    if (borrow_anchor_refcounted.len != store.localCount()) arcInvariant("ARC resource table did not cover every local");
+    var contains = EmissionRefcounted{ .shared = borrow_anchor_refcounted };
+    errdefer contains.deinit(allocator);
     // An `erased_capture_load` whose aggregate contains descriptor-driven
     // fields is an explicit borrowed view into the executing callable's capture
     // allocation. The view has no aggregate descriptor of its own, so it cannot
     // use a layout-driven concrete helper. Keep it out of emission;
-    // `computeBorrowAnchorRefcounted` adds it back to the solver domain so its
-    // projected fields remain tied to the callable.
+    // the solver table retains it so projected fields remain tied to the callable.
     var visited = std.AutoHashMap(layout_mod.Idx, void).init(allocator);
     defer visited.deinit();
     var stack = std.ArrayList(layout_mod.Idx).empty;
@@ -682,49 +710,7 @@ fn computeLocalContainsRefcounted(
             const target = stmt.assign_low_level.target;
             const target_layout = store.getLocal(target).layout_idx;
             if (try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
-                contains[@intFromEnum(target)] = false;
-            }
-        }
-    }
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_ref) {
-                const assign = stmt.assign_ref;
-                switch (assign.op) {
-                    .local => |source| changed = markLocalRcIfSourceRc(contains, assign.target, source) or changed,
-                    .nominal => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .list_reinterpret => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .field,
-                    .tag_payload,
-                    .tag_payload_struct,
-                    .discriminant,
-                    => {},
-                }
-            } else if (stmt == .assign_list) {
-                const assign = stmt.assign_list;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed;
-            } else if (stmt == .assign_struct) {
-                const assign = stmt.assign_struct;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed;
-            } else if (stmt == .assign_tag) {
-                const assign = stmt.assign_tag;
-                if (assign.payload) |payload| {
-                    changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
-                }
-                if (assign.target_desc != null) {
-                    changed = markLocalRc(contains, assign.target) or changed;
-                }
-            } else if (stmt == .assign_boxy_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_box.target) or changed;
-            } else if (stmt == .assign_boxy_reuse_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_reuse_box.target) or changed;
-            } else if (stmt == .assign_boxy_tag) {
-                changed = markLocalRc(contains, stmt.assign_boxy_tag.target) or changed;
+                try contains.exclude(allocator, target);
             }
         }
     }
@@ -732,62 +718,8 @@ fn computeLocalContainsRefcounted(
     return contains;
 }
 
-/// Borrow-anchor refcounted set for the ARC solver. Extends the emission-time
-/// refcounted set with payload-read projections (`.field`, `.tag_payload`,
-/// `.tag_payload_struct`) whose result carries descriptor-driven dynamic
-/// (`erased_box`) content borrowed out of a refcounted source. Such a
-/// projection is an alias into its source's allocation whose extracted boxes
-/// stay live past the projection, so the source's release must land after the
-/// projection's last use. An erased capture load similarly produces a view of
-/// the capture storage owned by the pinned callable frame. These intermediate
-/// views own no RC unit: their dynamic payloads are refcounted by descriptor,
-/// which the layout-only refcount check cannot see, so the views carry no Boxy
-/// descriptor of their own. Marking them refcounted for the solver alone lets
-/// projections join an explicit liveness group. Emission keeps consulting the
-/// narrower `local_contains_refcounted`, so a solver-only anchor is never
-/// forced to carry an RC helper it lacks.
-fn computeBorrowAnchorRefcounted(
-    allocator: Allocator,
-    store: *const LirStore,
-    layouts: *const layout_mod.Store,
-    local_contains_refcounted: []const bool,
-) ResourceError![]bool {
-    const anchor = try allocator.dupe(bool, local_contains_refcounted);
-    errdefer allocator.free(anchor);
-
-    var visited = std.AutoHashMap(layout_mod.Idx, void).init(allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(layout_mod.Idx).empty;
-    defer stack.deinit(allocator);
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_low_level) {
-                const assign = stmt.assign_low_level;
-                if (assign.op != .erased_capture_load) continue;
-                const target_layout = store.getLocal(assign.target).layout_idx;
-                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
-                changed = markLocalRc(anchor, assign.target) or changed;
-            } else if (stmt == .assign_ref) {
-                const assign = stmt.assign_ref;
-                if (assign.op != .field and assign.op != .tag_payload and assign.op != .tag_payload_struct) continue;
-                const source_index = @intFromEnum(refOpSource(assign.op));
-                if (source_index >= anchor.len or !anchor[source_index]) continue;
-                const target_layout = store.getLocal(assign.target).layout_idx;
-                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
-                changed = markLocalRc(anchor, assign.target) or changed;
-            }
-        }
-    }
-    return anchor;
-}
-
 /// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
-/// (`box_of_zst`) content. Recursive tag unions reference themselves through
+/// (`erased_box`) content. Recursive tag unions reference themselves through
 /// their layout indices, so the walk tracks visited indices; `visited` and
 /// `stack` are caller-owned scratch reused across queries.
 fn layoutMayContainBoxyDynamic(
@@ -821,29 +753,6 @@ fn layoutMayContainBoxyDynamic(
             },
             .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
         }
-    }
-    return false;
-}
-
-fn markLocalRc(contains: []bool, local: LIR.LocalId) bool {
-    const index = @intFromEnum(local);
-    if (index >= contains.len or contains[index]) return false;
-    contains[index] = true;
-    return true;
-}
-
-fn markLocalRcIfSourceRc(contains: []bool, target: LIR.LocalId, source: LIR.LocalId) bool {
-    const source_index = @intFromEnum(source);
-    if (source_index >= contains.len or !contains[source_index]) return false;
-    return markLocalRc(contains, target);
-}
-
-fn markLocalRcIfSpanContainsRc(store: *const LirStore, contains: []bool, target: LIR.LocalId, span: LIR.LocalSpan) bool {
-    const locals = store.getLocalSpan(span);
-    for (0..GuardedList.borrowLen(locals)) |span_index| {
-        const local = GuardedList.at(locals, span_index);
-        const local_index = @intFromEnum(local);
-        if (local_index < contains.len and contains[local_index]) return markLocalRc(contains, target);
     }
     return false;
 }
@@ -1289,7 +1198,7 @@ const ArcPlanStep = struct {
     retain_assign_ref_target: bool = true,
     take_assign_ref_target: bool = false,
     /// Absent committed field places on a same-layout representation-shell
-    /// alias, in the dismantle container's compact field-mask domain.
+    /// alias, indexed by the fields' semantic record positions.
     residual_shell_absent_mask: u64 = 0,
     residual_shell_all_rc_fields_absent: bool = false,
     retain_set_target: bool = true,
@@ -1905,8 +1814,8 @@ const Inserter = struct {
 
         var semantic_fields: [64]u32 = undefined;
         var count: usize = 0;
-        for (container.fields, 0..) |field, index| {
-            const field_mask = @as(u64, 1) << @intCast(index);
+        for (container.fields) |field| {
+            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
             if ((absent_mask & field_mask) == 0) continue;
             semantic_fields[count] = field.field_idx;
             count += 1;
@@ -2142,6 +2051,7 @@ const Inserter = struct {
                     .unique_args = step.unique_args,
                     .args = assign.args,
                     .interchangeable = assign.interchangeable,
+                    .simd_concat_count = assign.simd_concat_count,
                     .next = next,
                 } });
             },
@@ -7245,34 +7155,6 @@ const Inserter = struct {
         return .{ .op = op, .layout_idx = layout_idx };
     }
 
-    fn layoutMayContainBoxyDynamic(self: *const Inserter, layout_idx: layout_mod.Idx) bool {
-        const layout_val = self.layouts.getLayout(layout_idx);
-        return switch (layout_val.tag) {
-            .box_of_zst => true,
-            .box => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
-            .list => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
-            .list_of_zst => false,
-            .struct_ => blk: {
-                const info = self.layouts.getStructInfo(layout_val);
-                for (0..info.fields.len) |index| {
-                    const field = info.fields.get(@intCast(index));
-                    if (self.layoutMayContainBoxyDynamic(field.layout)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => blk: {
-                const info = self.layouts.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |index| {
-                    const payload_layout = info.variants.get(@intCast(index)).payload_layout;
-                    if (self.layoutMayContainBoxyDynamic(payload_layout)) break :blk true;
-                }
-                break :blk false;
-            },
-            .closure => self.layoutMayContainBoxyDynamic(layout_val.getClosure().captures_layout_idx),
-            .zst, .scalar, .erased_callable, .ptr => false,
-        };
-    }
-
     fn nestedDropOp(op: layout_mod.RcOp) layout_mod.RcOp {
         return switch (op) {
             .incref => .incref,
@@ -8428,6 +8310,50 @@ const ArcTest = struct {
     }
 };
 
+test "ARC emission shares solver resources without allocating when no capture is excluded" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    _ = try f.local(f.list_str);
+    const result = try f.local(.i64);
+    _ = try f.ret(result);
+    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
+    defer f.allocator.free(borrow_anchors);
+
+    const emission = try computeEmissionContainsRefcounted(testing.failing_allocator, &f.store, &f.layouts, borrow_anchors);
+    defer emission.deinit(testing.failing_allocator);
+    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
+    try testing.expectEqualSlices(bool, &.{ true, false }, emission.slice());
+}
+
+test "ARC emission exclusions copy once and preserve solver resources on allocation failure" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const first_list = try f.local(f.list_str);
+    const scalar = try f.local(.i64);
+    const second_list = try f.local(f.list_str);
+    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
+    defer f.allocator.free(borrow_anchors);
+
+    var emission = EmissionRefcounted{ .shared = borrow_anchors };
+    defer emission.deinit(testing.allocator);
+
+    // Already ineligible locals need no copy, even with an allocator that fails.
+    try emission.exclude(testing.failing_allocator, scalar);
+    try testing.expectError(error.OutOfMemory, emission.exclude(testing.failing_allocator, first_list));
+    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
+    try testing.expectEqualSlices(bool, &.{ true, false, true }, emission.slice());
+
+    try emission.exclude(testing.allocator, first_list);
+    const owned = emission.slice().ptr;
+    try testing.expect(owned != borrow_anchors.ptr);
+    try emission.exclude(testing.failing_allocator, second_list);
+    try testing.expect(emission.slice().ptr == owned);
+    try testing.expectEqualSlices(bool, &.{ false, false, false }, emission.slice());
+    try testing.expectEqualSlices(bool, &.{ true, false, true }, borrow_anchors);
+}
+
 test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -8454,25 +8380,22 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
         .next = field_read,
     } });
 
-    const boxy_descs = try computeBoxyRcDescs(&f.store);
-    defer f.allocator.free(boxy_descs);
-    const local_contains_refcounted = try computeLocalContainsRefcounted(
+    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(
         f.allocator,
         &f.store,
         &f.layouts,
-        boxy_descs,
-    );
-    defer f.allocator.free(local_contains_refcounted);
-    const borrow_anchors = try computeBorrowAnchorRefcounted(
-        f.allocator,
-        &f.store,
-        &f.layouts,
-        local_contains_refcounted,
     );
     defer f.allocator.free(borrow_anchors);
+    const local_contains_refcounted = try computeEmissionContainsRefcounted(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        borrow_anchors,
+    );
+    defer local_contains_refcounted.deinit(f.allocator);
 
-    try testing.expect(!local_contains_refcounted[@intFromEnum(capture_view)]);
-    try testing.expect(local_contains_refcounted[@intFromEnum(captured_value)]);
+    try testing.expect(!local_contains_refcounted.slice()[@intFromEnum(capture_view)]);
+    try testing.expect(local_contains_refcounted.slice()[@intFromEnum(captured_value)]);
     try testing.expect(borrow_anchors[@intFromEnum(capture_view)]);
     try testing.expect(borrow_anchors[@intFromEnum(captured_value)]);
 }
@@ -10062,6 +9985,48 @@ test "RC complete payload moves while parent representation has a later scalar f
     // manufacturing another unit, while the certifier keeps the shell read
     // distinct from any later RC-bearing use.
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
+}
+
+test "RC residual shell metadata uses semantic field indices" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .i64 },
+        .{ .index = 2, .layout = .str },
+    });
+    const first_scalar = try f.local(.i64);
+    const second_scalar = try f.local(.i64);
+    const payload = try f.local(.str);
+    const record = try f.local(record_layout);
+    const taken = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const shell = try f.local(record_layout);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const read_scalar = try f.assignRefField(result, shell, 0, ret);
+    const alias_shell = try f.assignRefLocal(shell, record, read_scalar);
+    const consume_payload = try f.assignCall(call_result, &.{taken}, alias_shell);
+    const take_payload = try f.assignRefField(taken, record, 2, consume_payload);
+    const make_record = try f.assignStruct(record, &.{ first_scalar, second_scalar, payload }, take_payload);
+    const make_payload = try f.assignStr(payload, "payload", make_record);
+    const make_second_scalar = try f.assignI64(second_scalar, 2, make_payload);
+    const body = try f.assignI64(first_scalar, 1, make_second_scalar);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    var found = false;
+    for (0..f.store.cfStmtCount()) |stmt_index| {
+        const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_ref or stmt.assign_ref.target != shell) continue;
+        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        if (absent.len == 0) continue;
+        try testing.expectEqual(@as(usize, 1), absent.len);
+        try testing.expectEqual(@as(u32, 2), GuardedList.at(absent, 0));
+        found = true;
+    }
+    try testing.expect(found);
 }
 
 test "RC early_return emits correct number of decrefs for multi-use symbol" {
@@ -14419,6 +14384,43 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     try f.run();
     try f.expectRc(source, 1, 1, 0);
     try f.expectRc(adapted, 0, 1, 0);
+}
+
+test "RC descriptor-bearing tag aliases and aggregates follow their committed layout" {
+    for ([_]layout_mod.Idx{ .i64, .str }) |payload_layout| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+
+        const tag_layout = try f.layouts.putTagUnion(&.{ .zst, payload_layout });
+        const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = tag_layout }});
+        const payload = try f.local(payload_layout);
+        const tag = try f.local(tag_layout);
+        const alias = try f.local(tag_layout);
+        const record = try f.local(record_layout);
+        const result = try f.local(.i64);
+        const ret = try f.ret(result);
+        const result_stmt = try f.assignI64(result, 0, ret);
+        const record_stmt = try f.assignStruct(record, &.{alias}, result_stmt);
+        const alias_stmt = try f.assignRefLocal(alias, tag, record_stmt);
+        const tag_stmt = try f.store.addCFStmt(.{ .assign_tag = .{
+            .target = tag,
+            .target_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+            .variant_index = 1,
+            .discriminant = 1,
+            .payload = payload,
+            .next = alias_stmt,
+        } });
+        _ = try f.addProc(&.{payload}, tag_stmt, .i64);
+
+        // Certification checks the owning side too: a descriptor must neither
+        // invent a scalar resource nor hide the string stored in the record.
+        try f.run();
+        if (payload_layout == .i64) {
+            try testing.expectEqual(@as(usize, 0), f.countAllRc());
+        } else {
+            try testing.expect(f.countAllRc() > 0);
+        }
+    }
 }
 
 test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {

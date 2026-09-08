@@ -10,17 +10,24 @@ type=expr
 # EXPECTED
 POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 # PROBLEMS
-── ✗ polymorphic value ──────────────────────────── unary_negation_access.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
--rec1.field
-^^^^^^^^^^^
-
-Its type is:
-a where [a.negate : a -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 1 1) (end 1 12))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "unary_negation_access.md") (start 1 1) (end 1 12) (annotation error) (line-text "-rec1.field"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "a where [a.negate : a -> a]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 OpUnaryMinus,LowerIdent,NoSpaceDotLowerIdent,

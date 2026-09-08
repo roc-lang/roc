@@ -1,26 +1,35 @@
+const host_alloc = @import("host_alloc");
 var heap: [1024 * 1024]u8 align(16) = undefined;
-var heap_top: usize = 0;
+var allocator: std.heap.FixedBufferAllocator = .init(&heap);
 
-export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    const effective_alignment = @max(alignment, 1);
-    const start = std.mem.alignForward(usize, heap_top, effective_alignment);
-    const end = start + length;
-    if (end > heap.len) @trap();
-    heap_top = end;
-    return &heap[start];
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return host_alloc.alloc(allocator.allocator(), length, alignment) orelse @trap();
 }
 
-export fn roc_dealloc(_: *anyopaque, _: usize) callconv(.c) void {}
-
-export fn roc_realloc(_: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return roc_alloc(new_length, alignment);
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    host_alloc.dealloc(allocator.allocator(), ptr, alignment);
 }
 
-export fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return host_alloc.realloc(allocator.allocator(), ptr, new_length, alignment) orelse @trap();
+}
 
-export fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {}
+comptime {
+    host_alloc.exportRuntimeFns(.{
+        .alloc = &hostAlloc,
+        .dealloc = &hostDealloc,
+        .realloc = &hostRealloc,
+        .dbg = &hostDbg,
+        .expect_failed = &hostExpectFailed,
+        .crashed = &hostCrashed,
+    });
+}
 
-export fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
+fn hostDbg(_: [*]const u8, _: usize) callconv(.c) void {}
+
+fn hostExpectFailed(_: [*]const u8, _: usize) callconv(.c) void {}
+
+fn hostCrashed(_: [*]const u8, _: usize) callconv(.c) void {
     @trap();
 }
 

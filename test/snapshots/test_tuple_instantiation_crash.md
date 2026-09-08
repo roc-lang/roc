@@ -18,17 +18,42 @@ main = swap(1, 2)
 # EXPECTED
 TOO MANY ARGS - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
-── ✗ too many args ─────────────────────── test_tuple_instantiation_crash.md:9:8
-
-The swap function expects 1 argument, but it got 2 instead.
-
-main = swap(1, 2)
-       ^^^^^^^^^^
-
-The swap function has the type:
-
-    (a, b) -> (b, a)
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Too Many Args")
+		(region (start 9 8) (end 9 18))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "swap")
+			(reflow " function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but it got")
+			(reflow " ")
+			(reflow "2")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "test_tuple_instantiation_crash.md") (start 9 8) (end 9 18) (annotation error) (line-text "main = swap(1, 2)"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(annotated code "swap")
+			(reflow " function has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(a, b) -> (b, a)")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -10,18 +10,22 @@ a = a
 # EXPECTED
 INVALID ASSIGNMENT TO ITSELF - self_referential_variable_8942.md:1:5:1:6
 # PROBLEMS
-── ✗ invalid assignment to itself ──────── self_referential_variable_8942.md:1:5
-
-The value a is assigned to itself, which would cause an infinite loop at
-runtime.
-
-a = a
-    ^
-
-Only functions can reference themselves (for recursion). For non-function
-values, the right-hand side must be fully computable without referring to the
-value being assigned.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Assignment To Itself")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "a")
+			(reflow " is assigned to itself, which would cause an infinite loop at runtime."))
+		(document
+			(reflow "Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.")
+			(line-break)
+			(line-break)
+			(source-region (file "self_referential_variable_8942.md") (start 1 5) (end 1 6) (annotation error) (line-text "a = a")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,

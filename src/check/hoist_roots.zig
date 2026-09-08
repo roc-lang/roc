@@ -7,7 +7,7 @@ const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
 /// Version tag for the checked-stage hoisted-root selection algorithm.
-pub const selection_algorithm_version: u64 = 4;
+pub const selection_algorithm_version: u64 = 5;
 
 /// Collection of hoisted roots selected for a checked module.
 pub const SelectedHoistedRootSet = struct {
@@ -33,6 +33,9 @@ pub const PatternValidation = struct {
 pub const Body = union(enum) {
     expr,
     pattern_extraction: PatternExtraction,
+    /// A rejected top-level destructure exports a crash for each binder.
+    /// The payload retains the owning source pattern identity.
+    pattern_error: CIR.Pattern.Idx,
     pattern_validation: PatternValidation,
 };
 
@@ -79,6 +82,7 @@ pub const SelectedHoistedRoot = struct {
 pub fn cloneBody(_: Allocator, body: Body) Allocator.Error!Body {
     return switch (body) {
         .expr => .expr,
+        .pattern_error => |pattern| .{ .pattern_error = pattern },
         .pattern_extraction => |extraction| .{ .pattern_extraction = extraction },
         .pattern_validation => |validation| .{ .pattern_validation = validation },
     };
@@ -87,7 +91,7 @@ pub fn cloneBody(_: Allocator, body: Body) Allocator.Error!Body {
 /// Releases allocator-owned data inside a hoisted-root body.
 pub fn deinitBody(_: Allocator, body: Body) void {
     switch (body) {
-        .expr => {},
+        .expr, .pattern_error => {},
         .pattern_extraction => {},
         .pattern_validation => {},
     }

@@ -1728,33 +1728,41 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     const outer_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = outer_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = item,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = item,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(outer_method);
     const item_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = item_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = outer_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = outer_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(item_method);
     const detached_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = detached,
         .method_name = method_name,
-        .args = no_args,
-        .ret = detached_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = detached_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(detached_method);
     const enclosing_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = enclosing_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = outer_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = outer_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(enclosing_method);
 

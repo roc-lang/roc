@@ -17,17 +17,30 @@ total = {
 # EXPECTED
 VAR NAME MISSING `$` - range_for_loop.md:3:9:3:13
 # PROBLEMS
-── ● var name missing `$` ──────────────────────────────── range_for_loop.md:3:9
-
-The mutable binding sum_ is declared with var but its name does not start with
-$.
-
-var sum_ = 0
-    ^^^^
-
-Rename this binding and all of its uses to $sum_. The name is only a
-convention; mutability comes from the var declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 9) (end 3 13))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "sum_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$sum_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "range_for_loop.md") (start 3 9) (end 3 13) (annotation warning) (line-text "    var sum_ = 0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

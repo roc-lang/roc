@@ -44,6 +44,7 @@ const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 const Coordinator = @import("../coordinator.zig").Coordinator;
+const CoordinatorError = @import("../coordinator.zig").CoordinatorError;
 const CoreCtx = @import("ctx").CoreCtx;
 
 const File = struct {
@@ -62,11 +63,7 @@ const HarnessError = StageError ||
     Coordinator.AppDiscoveryError ||
     eval.BuiltinModules.InitError ||
     std.Thread.SpawnError ||
-    error{
-        BuiltinLowLevelAnnotationMustBeFunction,
-        LowLevelOperationsNotFound,
-        UnsupportedBuiltinAnnotationOnly,
-    };
+    CoordinatorError;
 
 /// Everything `buildRoot` can fail with: staging the fixture, then driving a
 /// full `BuildEnv` build over it.

@@ -39,9 +39,9 @@ EndOfFile,
 				(ty (name "Str")))
 			(where
 				(method (mod-of "a") (name "to_str")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "function"))
 			(e-lambda
@@ -83,7 +83,7 @@ _ = function(value)
 			(args
 				(p-assign (ident "convertible")))
 			(e-block
-				(e-dispatch-call (method "to_str") (constraint-fn-var 242)
+				(e-dispatch-call (method "to_str") (constraint-fn-var 241)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "convertible"))))
@@ -94,16 +94,16 @@ _ = function(value)
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "value"))
 		(e-string
 			(e-literal (string "my string"))))
 	(d-let
 		(p-underscore)
-		(e-call (constraint-fn-var 256)
+		(e-call (constraint-fn-var 255)
 			(e-lookup-local
 				(p-assign (ident "function")))
 			(e-lookup-local

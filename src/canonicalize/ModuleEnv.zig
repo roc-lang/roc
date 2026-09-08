@@ -4666,14 +4666,14 @@ pub fn recordNumeralDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
-    pattern_failure_expr: ?CIR.Expr.Idx,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
     try self.store.recordLiteralDispatchPlan(
         node_idx,
         .numeral,
         target_var,
         fn_var,
-        if (pattern_failure_expr) |expr_idx| @intFromEnum(expr_idx) else null,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
     );
 }
 
@@ -4698,14 +4698,14 @@ pub fn recordQuoteDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
-    pattern_failure_expr: ?CIR.Expr.Idx,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
     try self.store.recordLiteralDispatchPlan(
         node_idx,
         .quote,
         target_var,
         fn_var,
-        if (pattern_failure_expr) |expr_idx| @intFromEnum(expr_idx) else null,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
     );
 }
 

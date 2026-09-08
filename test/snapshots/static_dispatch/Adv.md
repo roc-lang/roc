@@ -48,47 +48,91 @@ TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────────────────────────── Adv.md:17:28
-
-This number is being used where a non-number type is needed.
-
-next_val = val.update_str(100)
-                          ^^^
-
-Other code expects this to have the type:
-
-    Str
-
-── ✗ missing method ─────────────────────────────────────────────── Adv.md:23:17
-
-This update_strr method is being called on a value whose type doesn't have that
-method.
-
-next_val = val.update_strr(100)
-               ^^^^^^^^^^^
-
-The value's type, which does not have a method named update_strr, is:
-
-    Adv
-
-Hint: For this to work, the type would need to have a method named update_strr
-associated with it in the type's declaration.
-
-── ✗ missing method ─────────────────────────────────────────────── Adv.md:28:21
-
-This update method is being called on a value whose type doesn't have that
-method.
-
-next_val = "Hello".update(100)
-                   ^^^^^^
-
-The value's type, which does not have a method named update, is:
-
-    Str
-
-Hint: For this to work, the type would need to have a method named update
-associated with it in the type's declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 17 28) (end 17 31))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "Adv.md") (start 17 28) (end 17 31) (annotation error) (line-text "\tnext_val = val.update_str(100)"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 23 17) (end 23 28))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "update_strr")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Adv.md") (start 23 17) (end 23 28) (annotation error) (line-text "\tnext_val = val.update_strr(100)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "update_strr")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Adv")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "update_strr")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 28 21) (end 28 27))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Adv.md") (start 28 21) (end 28 27) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "update")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,

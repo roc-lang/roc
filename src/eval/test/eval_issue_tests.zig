@@ -1238,4 +1238,240 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"hi!\"" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11170
+        // `Str.inspect` of a SIMD vector must render through the vector's
+        // `to_inspect` method in `Builtin.roc`, the same string `dbg` prints.
+        .name = "issue 11170: Str.inspect of a SIMD vector renders its lanes",
+        .source = "U8x16.default().with_lane(1, 1)",
+        .expected = .{ .inspect_str = "U8x16(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)" },
+    },
+    .{
+        .name = "issue 11170: U8x16 inspect preserves lane order and bounds",
+        .source = "U8x16.default().with_lane(0, 0).with_lane(15, 255)",
+        .expected = .{ .inspect_str = "U8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255)" },
+    },
+    .{
+        .name = "issue 11170: I8x16 inspect preserves lane order and bounds",
+        .source = "I8x16.default().with_lane(0, -128).with_lane(15, 127)",
+        .expected = .{ .inspect_str = "I8x16(-128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 127)" },
+    },
+    .{
+        .name = "issue 11170: U16x8 inspect preserves lane order and bounds",
+        .source = "U16x8.default().with_lane(0, 0).with_lane(7, 65535)",
+        .expected = .{ .inspect_str = "U16x8(0, 0, 0, 0, 0, 0, 0, 65535)" },
+    },
+    .{
+        .name = "issue 11170: I16x8 inspect preserves lane order and bounds",
+        .source = "I16x8.default().with_lane(0, -32768).with_lane(7, 32767)",
+        .expected = .{ .inspect_str = "I16x8(-32768, 0, 0, 0, 0, 0, 0, 32767)" },
+    },
+    .{
+        .name = "issue 11170: U32x4 inspect preserves lane order and bounds",
+        .source = "U32x4.default().with_lane(0, 0).with_lane(3, 4294967295)",
+        .expected = .{ .inspect_str = "U32x4(0, 0, 0, 4294967295)" },
+    },
+    .{
+        .name = "issue 11170: I32x4 inspect preserves lane order and bounds",
+        .source = "I32x4.default().with_lane(0, -2147483648).with_lane(3, 2147483647)",
+        .expected = .{ .inspect_str = "I32x4(-2147483648, 0, 0, 2147483647)" },
+    },
+    .{
+        .name = "issue 11170: U64x2 inspect preserves lane order and bounds",
+        .source = "U64x2.default().with_lane(0, 0).with_lane(1, 18446744073709551615)",
+        .expected = .{ .inspect_str = "U64x2(0, 18446744073709551615)" },
+    },
+    .{
+        .name = "issue 11170: I64x2 inspect preserves lane order and bounds",
+        .source = "I64x2.default().with_lane(0, -9223372036854775808).with_lane(1, 9223372036854775807)",
+        .expected = .{ .inspect_str = "I64x2(-9223372036854775808, 9223372036854775807)" },
+    },
+    .{
+        .name = "issue 11170: deferred inspect of nested SIMD values",
+        .source_kind = .module,
+        .source =
+        \\render = |value| Str.inspect(value)
+        \\main = render({ vectors: [U64x2.default().with_lane(1, 9)], pair: (I64x2.splat(-1), Some(U32x4.splat(7))) }) == "{ pair: (I64x2(-1, -1), Some(U32x4(7, 7, 7, 7))), vectors: [U64x2(0, 9)] }"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11170: inspect destructures a nominal SIMD backing",
+        .source_kind = .module,
+        .source =
+        \\Vector := U64x2
+        \\main = Vector.(U64x2.default().with_lane(1, 9))
+        ,
+        .expected = .{ .inspect_str = "U64x2(0, 9)" },
+    },
+    .{
+        .name = "issue 11170: deferred inspect destructures nested nominal SIMD backings",
+        .source_kind = .module,
+        .source =
+        \\Vector := U64x2
+        \\Wrapped := Vector
+        \\render = |value| Str.inspect(value)
+        \\main = render(Wrapped.(Vector.(U64x2.default().with_lane(1, 9)))) == "U64x2(0, 9)"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11170: nominal custom inspect takes precedence over SIMD backing",
+        .source_kind = .module,
+        .source =
+        \\Vector := U64x2.{
+        \\    to_inspect = |_vector| "custom vector"
+        \\}
+        \\main = Vector.(U64x2.default())
+        ,
+        .expected = .{ .inspect_str = "custom vector" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11189
+        .name = "issue 11189: namespaced comparison helper called from a nested fold_with_index",
+        .source_kind = .module,
+        .source =
+        \\Point : { x : F64, y : F64 }
+        \\
+        \\Internals := {}.{
+        \\    proper = |a, b, c, d| {
+        \\        if a.x == b.x and c.y == d.y {
+        \\            c.x > a.x.min(b.x) and c.x < a.x.max(b.x) and a.y > c.y.min(d.y) and a.y < c.y.max(d.y)
+        \\        } else if a.y == b.y and c.x == d.x {
+        \\            a.x > c.x.min(d.x) and a.x < c.x.max(d.x) and c.y > a.y.min(b.y) and c.y < a.y.max(b.y)
+        \\        } else if a.x == b.x and c.x == d.x and a.x == c.x {
+        \\            a.y.min(b.y) < c.y.max(d.y) and a.y.max(b.y) > c.y.min(d.y)
+        \\        } else {
+        \\            False
+        \\        }
+        \\    }
+        \\
+        \\    simple = |points| points.fold_with_index(
+        \\        True,
+        \\        |simple, a, i| match points.get(i + 1) {
+        \\            Err(_) => simple
+        \\            Ok(b) => points.fold_with_index(
+        \\                simple,
+        \\                |clear, c, j| if j <= i + 1 {
+        \\                    clear
+        \\                } else {
+        \\                    match points.get(j + 1) {
+        \\                        Ok(d) => clear and !Internals.proper(a, b, c, d)
+        \\                        Err(_) => clear
+        \\                    }
+        \\                },
+        \\            )
+        \\        },
+        \\    )
+        \\}
+        \\
+        \\valid : List(Point) -> Bool
+        \\valid = |points| Internals.simple(points)
+        \\
+        \\main = valid([])
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11189: comparison branches execute at independent F64 and F32 specializations",
+        .source_kind = .module,
+        .source =
+        \\Point : { x : F64, y : F64 }
+        \\
+        \\Internals := {}.{
+        \\    proper = |a, b, c, d| {
+        \\        if a.x == b.x and c.y == d.y {
+        \\            c.x > a.x.min(b.x) and c.x < a.x.max(b.x) and a.y > c.y.min(d.y) and a.y < c.y.max(d.y)
+        \\        } else if a.y == b.y and c.x == d.x {
+        \\            a.x > c.x.min(d.x) and a.x < c.x.max(d.x) and c.y > a.y.min(b.y) and c.y < a.y.max(b.y)
+        \\        } else if a.x == b.x and c.x == d.x and a.x == c.x {
+        \\            a.y.min(b.y) < c.y.max(d.y) and a.y.max(b.y) > c.y.min(d.y)
+        \\        } else {
+        \\            False
+        \\        }
+        \\    }
+        \\
+        \\    simple = |points| points.fold_with_index(
+        \\        True,
+        \\        |simple, a, i| match points.get(i + 1) {
+        \\            Err(_) => simple
+        \\            Ok(b) => points.fold_with_index(
+        \\                simple,
+        \\                |clear, c, j| if j <= i + 1 {
+        \\                    clear
+        \\                } else {
+        \\                    match points.get(j + 1) {
+        \\                        Ok(d) => clear and !Internals.proper(a, b, c, d)
+        \\                        Err(_) => clear
+        \\                    }
+        \\                },
+        \\            )
+        \\        },
+        \\    )
+        \\}
+        \\
+        \\valid : List(Point) -> Bool
+        \\valid = |points| Internals.simple(points)
+        \\
+        \\valid32 : List({ x : F32, y : F32 }) -> Bool
+        \\valid32 = |points| Internals.simple(points)
+        \\
+        \\main = (
+        \\    valid([]),
+        \\    valid([{ x: 0, y: 0 }, { x: 0, y: 3 }, { x: 0, y: 1 }, { x: 0, y: 2 }]),
+        \\    valid32([{ x: 0, y: 0 }, { x: 0, y: 3 }, { x: 0, y: 1 }, { x: 0, y: 2 }]),
+        \\    valid([{ x: 0, y: 0 }, { x: 0, y: 2 }, { x: -1, y: 1 }, { x: 1, y: 1 }]),
+        \\    valid([{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 1, y: -1 }, { x: 1, y: 1 }]),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(True, False, False, True, True)" },
+    },
+    .{
+        .name = "issue 11189: hidden comparison receivers cross three nested folds",
+        .source_kind = .module,
+        .source =
+        \\Helpers := {}.{
+        \\    ordered = |a, b| a.min(b) <= a.max(b)
+        \\    run = |xs| xs.fold(True, |ok, a|
+        \\        xs.fold(ok, |yes, b|
+        \\            xs.fold(yes, |still, _| still and Helpers.ordered(a, b))))
+        \\}
+        \\
+        \\main = {
+        \\    xs : List(F64)
+        \\    xs = [2, 1]
+        \\    ys : List(I64)
+        \\    ys = [3, 1]
+        \\    (Helpers.run(xs), Helpers.run(ys))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True)" },
+    },
+    .{
+        .name = "issue 11189: stored functions restore hidden comparison bindings independently",
+        .source_kind = .module,
+        .source =
+        \\Factory := {}.{
+        \\    ordered = |a, b| a.min(b) < a.max(b)
+        \\    make = |a, b| |{}| Factory.ordered(a, b)
+        \\}
+        \\
+        \\p : {} -> Bool
+        \\p = {
+        \\    a : F64
+        \\    a = 1
+        \\    Factory.make(a, 2)
+        \\}
+        \\
+        \\q : {} -> Bool
+        \\q = {
+        \\    a : I64
+        \\    a = 3
+        \\    Factory.make(a, 3)
+        \\}
+        \\
+        \\main = (p({}), q({}))
+        ,
+        .expected = .{ .inspect_str = "(True, False)" },
+    },
 };

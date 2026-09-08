@@ -444,17 +444,18 @@ const DefKind = union(enum) {
     borrow_capable: u32,
 };
 
-/// Compute whether each LIR local's committed representation contains RC state.
+/// Classify committed representations once, in local order. Descriptors select
+/// dynamic RC behavior; their presence does not imply an ownership resource.
+/// Constructors and aliases preserve the RC shape already committed in layouts,
+/// including nested erased boxes, so classification requires no value-flow solve.
+/// Capture views participate here as borrow anchors; emission excludes them in
+/// its separate table. Certification independently classifies the final store.
 pub fn computeLocalContainsRefcounted(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
 ) SolveError![]bool {
     const local_count = store.localCount();
-    if (boxy_rc_descs.len != 0 and boxy_rc_descs.len != local_count) {
-        solveInvariant("ARC Boxy descriptor table did not cover every local");
-    }
     const contains = try allocator.alloc(bool, local_count);
     errdefer allocator.free(contains);
     for (0..local_count) |index| {
@@ -463,62 +464,7 @@ pub fn computeLocalContainsRefcounted(
         contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
     }
 
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_ref) {
-                const assign = stmt.assign_ref;
-                switch (assign.op) {
-                    .local => |source| changed = markLocalRcIfSourceRc(contains, assign.target, source) or changed,
-                    .nominal => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .list_reinterpret => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .field, .tag_payload, .tag_payload_struct, .discriminant => {},
-                }
-            } else if (stmt == .assign_list) {
-                const assign = stmt.assign_list;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed;
-            } else if (stmt == .assign_struct) {
-                const assign = stmt.assign_struct;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed;
-            } else if (stmt == .assign_tag) {
-                const assign = stmt.assign_tag;
-                if (assign.payload) |payload| changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
-                if (assign.target_desc != null) changed = markLocalRc(contains, assign.target) or changed;
-            } else if (stmt == .assign_boxy_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_box.target) or changed;
-            } else if (stmt == .assign_boxy_reuse_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_reuse_box.target) or changed;
-            } else if (stmt == .assign_boxy_tag) {
-                changed = markLocalRc(contains, stmt.assign_boxy_tag.target) or changed;
-            }
-        }
-    }
     return contains;
-}
-
-fn markLocalRc(contains: []bool, local: LIR.LocalId) bool {
-    const index = @intFromEnum(local);
-    if (index >= contains.len or contains[index]) return false;
-    contains[index] = true;
-    return true;
-}
-
-fn markLocalRcIfSourceRc(contains: []bool, target: LIR.LocalId, source: LIR.LocalId) bool {
-    const source_index = @intFromEnum(source);
-    if (source_index >= contains.len or !contains[source_index]) return false;
-    return markLocalRc(contains, target);
-}
-
-fn markLocalRcIfSpanContainsRc(store: *const LirStore, contains: []bool, target: LIR.LocalId, span: LIR.LocalSpan) bool {
-    const locals = store.getLocalSpan(span);
-    for (0..GuardedList.borrowLen(locals)) |span_index| {
-        const local_index = @intFromEnum(GuardedList.at(locals, span_index));
-        if (local_index < contains.len and contains[local_index]) return markLocalRc(contains, target);
-    }
-    return false;
 }
 
 /// Dense module-wide domain of locals that participate in ARC equations.

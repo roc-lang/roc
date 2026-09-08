@@ -2482,6 +2482,7 @@ fn buildAndCopyStrongIntrinsicWasmHostObject(
     b: *std.Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
 ) *Step {
@@ -2497,6 +2498,7 @@ fn buildAndCopyStrongIntrinsicWasmHostObject(
         }),
     });
     configureBackend(obj, target);
+    obj.root_module.addImport("host_alloc", roc_modules.host_alloc);
     obj.link_function_sections = true;
     obj.link_data_sections = true;
     obj.bundle_compiler_rt = false;
@@ -2515,6 +2517,7 @@ fn buildAndCopyExportsFixtureWasmHostObject(
     b: *std.Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
 ) *Step {
@@ -2530,6 +2533,7 @@ fn buildAndCopyExportsFixtureWasmHostObject(
         }),
     });
     configureBackend(obj, target);
+    obj.root_module.addImport("host_alloc", roc_modules.host_alloc);
     obj.link_function_sections = true;
     obj.link_data_sections = true;
     obj.bundle_compiler_rt = false;
@@ -2881,6 +2885,7 @@ fn setupTestPlatforms(
         b,
         wasm_target,
         optimize,
+        roc_modules,
         strip,
         omit_frame_pointer,
     ));
@@ -2888,6 +2893,7 @@ fn setupTestPlatforms(
         b,
         wasm_target,
         optimize,
+        roc_modules,
         strip,
         omit_frame_pointer,
     ));
@@ -2958,7 +2964,7 @@ pub fn build(b: *std.Build) void {
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
     const run_check_glue_abi_step = b.step("run-check-glue-abi", "Check generated Zig glue against the canonical host ABI");
-    const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized x86-64 integer SIMD kernels select native instructions");
+    const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized integer SIMD kernels select native instructions");
     const run_check_match_extension_codegen_step = b.step("run-check-match-extension-codegen", "Check the pinned instruction counts for the match-extension loop");
     const run_check_baseline_codegen_step = b.step("run-check-baseline-codegen", "Check that v1 targets emit no instruction above the architecture baseline");
     const run_check_str_eq_same_allocation_step = b.step("run-check-str-eq-same-allocation", "Check that comparing a string against itself does not read its bytes");
@@ -3607,6 +3613,13 @@ pub fn build(b: *std.Build) void {
         // track as inputs, so always regenerate.
         run_glue_abi.has_side_effects = true;
 
+        const run_zig_union_layouts = b.addRunArtifact(roc_exe);
+        run_zig_union_layouts.addArgs(&.{ "glue", "--no-cache" });
+        run_zig_union_layouts.addFileArg(b.path("src/glue/src/ZigGlue.roc"));
+        const zig_union_layouts_dir = run_zig_union_layouts.addOutputDirectoryArg("glue-zig-union-layouts");
+        run_zig_union_layouts.addFileArg(b.path("test/glue/tag-union-layouts/main.roc"));
+        run_zig_union_layouts.has_side_effects = true;
+
         const lock_targets = [_]struct { name: []const u8, target: std.Build.ResolvedTarget }{
             .{ .name = "x64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }) },
             .{ .name = "arm64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }) },
@@ -3630,6 +3643,19 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = glue_abi_dir.path(b, "roc_platform_abi.zig"),
             });
             run_check_glue_abi_step.dependOn(&lock_obj.step);
+
+            const union_lock_obj = b.addObject(.{
+                .name = b.fmt("glue_zig_union_layouts_{s}", .{lock_target.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("test/glue/tag-union-layouts/compile_lock.zig"),
+                    .target = lock_target.target,
+                    .optimize = optimize,
+                }),
+            });
+            union_lock_obj.root_module.addAnonymousImport("glue_abi", .{
+                .root_source_file = zig_union_layouts_dir.path(b, "roc_platform_abi.zig"),
+            });
+            run_check_glue_abi_step.dependOn(&union_lock_obj.step);
         }
 
         const run_c_glue_abi = b.addRunArtifact(roc_exe);
@@ -3638,6 +3664,27 @@ pub fn build(b: *std.Build) void {
         const c_glue_abi_dir = run_c_glue_abi.addOutputDirectoryArg("glue-c-abi");
         run_c_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
         run_c_glue_abi.has_side_effects = true;
+
+        const run_rust_glue_abi = b.addRunArtifact(roc_exe);
+        run_rust_glue_abi.addArgs(&.{ "glue", "--no-cache" });
+        run_rust_glue_abi.addFileArg(b.path("src/glue/src/RustGlue.roc"));
+        const rust_glue_abi_dir = run_rust_glue_abi.addOutputDirectoryArg("glue-rust-abi");
+        run_rust_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
+        run_rust_glue_abi.has_side_effects = true;
+
+        const foreign_abi_generator = b.addExecutable(.{
+            .name = "generate_foreign_abi_lock",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/glue/generate_abi_lock.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+                .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
+            }),
+        });
+        const generate_foreign_lock = b.addRunArtifact(foreign_abi_generator);
+        const canonical_header = generate_foreign_lock.addOutputFileArg("canonical_host_abi.h");
+        generate_foreign_lock.addFileArg(rust_glue_abi_dir.path(b, "roc_platform_abi.rs"));
+        const rust_with_canonical_lock = generate_foreign_lock.addOutputFileArg("roc_platform_abi_lock.rs");
 
         const c_lock_targets = [_]struct { name: []const u8, triple: []const u8, simd128: bool }{
             .{ .name = "x64_linux", .triple = "x86_64-linux-musl", .simd128 = false },
@@ -3663,18 +3710,24 @@ pub fn build(b: *std.Build) void {
             if (lock_target.simd128) compile_c_lock.addArg("-msimd128");
             compile_c_lock.addArg("-I");
             compile_c_lock.addDirectoryArg(c_glue_abi_dir);
+            compile_c_lock.addArg("-I");
+            compile_c_lock.addDirectoryArg(canonical_header.dirname());
             compile_c_lock.addFileArg(b.path("test/glue/c_abi_compile_lock.c"));
             compile_c_lock.addArg("-o");
             _ = compile_c_lock.addOutputFileArg(b.fmt("c-abi-lock-{s}.o", .{lock_target.name}));
             run_check_glue_abi_step.dependOn(&compile_c_lock.step);
         }
 
-        const run_rust_glue_abi = b.addRunArtifact(roc_exe);
-        run_rust_glue_abi.addArgs(&.{ "glue", "--no-cache" });
-        run_rust_glue_abi.addFileArg(b.path("src/glue/src/RustGlue.roc"));
-        const rust_glue_abi_dir = run_rust_glue_abi.addOutputDirectoryArg("glue-rust-abi");
-        run_rust_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
-        run_rust_glue_abi.has_side_effects = true;
+        const run_rust_union_layouts = b.addRunArtifact(roc_exe);
+        run_rust_union_layouts.addArgs(&.{ "glue", "--no-cache" });
+        run_rust_union_layouts.addFileArg(b.path("src/glue/src/RustGlue.roc"));
+        const rust_union_layouts_dir = run_rust_union_layouts.addOutputDirectoryArg("glue-rust-union-layouts");
+        run_rust_union_layouts.addFileArg(b.path("test/glue/tag-union-layouts/main.roc"));
+        run_rust_union_layouts.has_side_effects = true;
+
+        const rust_union_lock_files = b.addWriteFiles();
+        _ = rust_union_lock_files.addCopyFile(rust_union_layouts_dir.path(b, "roc_platform_abi.rs"), "roc_platform_abi.rs");
+        const rust_union_lock_source = rust_union_lock_files.addCopyFile(b.path("test/glue/tag-union-layouts/compile_lock.rs"), "compile_lock.rs");
 
         const native_arch = target.result.cpu.arch;
         const native_rust_target: ?[]const u8 = switch (roc_target.classifyOs(target.result.os.tag)) {
@@ -3702,10 +3755,27 @@ pub fn build(b: *std.Build) void {
                 lock_target.triple,
             });
             if (lock_target.simd128) compile_rust_lock.addArgs(&.{ "-C", "target-feature=+simd128" });
-            compile_rust_lock.addFileArg(rust_glue_abi_dir.path(b, "roc_platform_abi.rs"));
+            compile_rust_lock.addFileArg(rust_with_canonical_lock);
             compile_rust_lock.addArg("-o");
             _ = compile_rust_lock.addOutputFileArg(b.fmt("rust-abi-lock-{s}.rmeta", .{lock_target.name}));
             run_check_glue_abi_step.dependOn(&compile_rust_lock.step);
+
+            const compile_rust_union_lock = b.addSystemCommand(&.{
+                "rustc",
+                "--edition=2021",
+                "-D",
+                "warnings",
+                "--crate-type=lib",
+                "--emit=metadata",
+                "--cfg",
+                "no_roc_std_helpers",
+                "--target",
+                lock_target.triple,
+            });
+            compile_rust_union_lock.addFileArg(rust_union_lock_source);
+            compile_rust_union_lock.addArg("-o");
+            _ = compile_rust_union_lock.addOutputFileArg(b.fmt("rust-union-layouts-{s}.rmeta", .{lock_target.name}));
+            run_check_glue_abi_step.dependOn(&compile_rust_union_lock.step);
         }
     }
 
@@ -5061,6 +5131,7 @@ pub fn build(b: *std.Build) void {
         configureBackend(wasm_test_exe, target);
         wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         wasm_test_exe.root_module.addImport("build_options", roc_modules.build_options);
+        wasm_test_exe.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
 
         const install = b.addInstallArtifact(wasm_test_exe, .{});
         build_test_wasm_static_lib_runner_step.dependOn(&install.step);
@@ -5528,6 +5599,22 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    for (main_exe_result.boundary_link_tests, 0..) |maybe_test, index| {
+        if (maybe_test) |boundary_test| test_suites.register(.{
+            .step_suffix = if (index == 0) "machine-code-boundary-link" else "interpreter-boundary-link",
+            .description = "Link canonical symbols through a real shim archive",
+            .compile = boundary_test,
+        });
+    }
+
+    if (main_exe_result.machine_code_shim_archive_test) |archive_test| {
+        test_suites.register(.{
+            .step_suffix = "machine-code-shim-archive",
+            .description = "Run machine-code shim archive contract tests",
+            .compile = archive_test,
+        });
+    }
+
     if (main_exe_result.machine_code_shim_archive_check) |machine_code_shim_archive_check| {
         run_check_machine_code_shim_archive_step.dependOn(machine_code_shim_archive_check);
     }
@@ -5799,6 +5886,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                 .{ .name = "collections", .module = roc_modules.collections },
                 .{ .name = "backend", .module = roc_modules.backend },
+                .{ .name = "builtins", .module = roc_modules.builtins },
                 .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 .{ .name = "build_options", .module = roc_modules.build_options },
             },
@@ -6263,8 +6351,14 @@ pub fn build(b: *std.Build) void {
     // Only supported on Linux ARM64, matching CI's coverage runner. Other local
     // targets still keep the run-coverage-parser step, but it reports unsupported
     // instead of invoking a kcov binary that cannot trace reliably on that host.
+    //
+    // Declaring these steps is also what asks zig for the lazy kcov package, so
+    // on linux-aarch64 even a build that only wants the roc binary fails without
+    // it. -Dcoverage=false skips the declaration, which is how a packager builds
+    // roc without supplying kcov at all.
+    const enable_coverage = b.option(bool, "coverage", "Declare the kcov coverage steps, which is what pulls in the kcov dependency (default: true; only has an effect on linux-aarch64)") orelse true;
     const is_linux_arm64 = target.result.os.tag == .linux and target.result.cpu.arch == .aarch64;
-    const is_coverage_supported = is_linux_arm64;
+    const is_coverage_supported = is_linux_arm64 and enable_coverage;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
@@ -6458,7 +6552,7 @@ pub fn build(b: *std.Build) void {
                     std.debug.print("=" ** 60 ++ "\n", .{});
                     std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
                     std.debug.print("=" ** 60 ++ "\n\n", .{});
-                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64.\n", .{});
+                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64, and only when -Dcoverage is left on.\n", .{});
                     std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
                     std.debug.print("=" ** 60 ++ "\n", .{});
                 }
@@ -7230,10 +7324,76 @@ fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
     return obj.getEmittedBinDirectory().path(b, zcu_name);
 }
 
+/// The run shim uses builtin function addresses directly. It must not link the
+/// exported builtins payload used by compiled object output: those exports would
+/// expose compiler internals to the platform linker.
+fn addMachineCodeShimLib(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+    shim_host_abi_module: *std.Build.Module,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
+) *Step.Compile {
+    const machine_code_shim_lib = b.addLibrary(.{
+        .name = "roc_machine_code_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/machine_code_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+        .linkage = .static,
+    });
+    configureBackend(machine_code_shim_lib, target);
+    // Only the modules the shim actually imports. The full compiler module set
+    // would put libc in the shim's dependency graph (the bundle module links
+    // zstd), and `link_libc` is resolved over the whole graph regardless of
+    // which modules are reachable from the root source file.
+    machine_code_shim_lib.root_module.addImport("base", roc_modules.base);
+    machine_code_shim_lib.root_module.addImport("backend", roc_modules.backend);
+    machine_code_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // The machine-code runtime needs Boxy support, not the interpreter's
+    // assembly trampoline. Keep the same Zig dependencies without attaching
+    // that unrelated globally-exported assembly object to the archive.
+    const shim_eval = b.createModule(.{ .root_source_file = b.path("src/eval/mod.zig") });
+    var eval_imports = roc_modules.eval.import_table.iterator();
+    while (eval_imports.next()) |entry| shim_eval.addImport(entry.key_ptr.*, entry.value_ptr.*);
+    machine_code_shim_lib.root_module.addImport("eval", shim_eval);
+    machine_code_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
+    machine_code_shim_lib.root_module.addImport("lir", roc_modules.lir);
+    machine_code_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    machine_code_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    machine_code_shim_lib.root_module.addImport("shim_io", b.createModule(.{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    machine_code_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
+    machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
+    // The shim defines its compiler-private stack probe internally. Do not
+    // bundle the complete compiler-rt object: its broad set of weak definitions
+    // can participate in platform symbol resolution, and COFF rejects duplicate
+    // definitions of memcpy and the integer/float libcalls outright.
+    machine_code_shim_lib.bundle_compiler_rt = false;
+    // Linux IO uses direct syscalls. Do not pull Zig's libc-dependent IO
+    // implementation into the archive. Codegen's C memory/math libcalls are
+    // declared separately by the archive's target ABI contract.
+    if (target.result.os.tag == .linux) machine_code_shim_lib.root_module.link_libc = false;
+
+    return machine_code_shim_lib;
+}
+
 const MainExeResult = struct {
     exe: *Step.Compile,
     machine_code_shim_test: ?*Step.Compile,
     machine_code_shim_archive_check: ?*Step,
+    boundary_link_tests: [2]?*Step.Compile,
+    machine_code_shim_archive_test: ?*Step.Compile,
 };
 fn addMainExe(
     b: *std.Build,
@@ -7433,52 +7593,12 @@ fn addMainExe(
     copy_interpreter_shim.addCopyFileToSource(interpreter_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_interpreter_shim.step);
 
-    // Create machine-code shim static library for dev backend run images.
-    const machine_code_shim_lib = b.addLibrary(.{
-        .name = "roc_machine_code_shim",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/machine_code_shim/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
-            .pic = true,
-        }),
-        .linkage = .static,
-    });
-    configureBackend(machine_code_shim_lib, target);
-    // Only the modules the shim actually imports. The full compiler module set
-    // would put libc in the shim's dependency graph (the bundle module links
-    // zstd), and `link_libc` is resolved over the whole graph regardless of
-    // which modules are reachable from the root source file.
-    machine_code_shim_lib.root_module.addImport("base", roc_modules.base);
-    machine_code_shim_lib.root_module.addImport("backend", roc_modules.backend);
-    machine_code_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
-    machine_code_shim_lib.root_module.addImport("eval", roc_modules.eval);
-    machine_code_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
-    machine_code_shim_lib.root_module.addImport("lir", roc_modules.lir);
-    machine_code_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    machine_code_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    machine_code_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_machine_code", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    machine_code_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
-    machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
-    machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
-    // The shim defines its compiler-private stack probe internally. Do not
-    // bundle the complete compiler-rt object: its broad set of weak definitions
-    // can participate in platform symbol resolution, and COFF rejects duplicate
-    // definitions of memcpy and the integer/float libcalls outright.
-    machine_code_shim_lib.bundle_compiler_rt = false;
-    // On Linux the shim reaches the kernel directly, so the executables it is
-    // linked into need no libc. Declaring that here makes the Zig compiler
-    // enforce it: any new libc dependency in the shim's module graph becomes a
-    // compile error rather than an undefined symbol at the user's link step.
-    if (target.result.os.tag == .linux) machine_code_shim_lib.root_module.link_libc = false;
+    const machine_code_shim_lib = addMachineCodeShimLib(b, roc_modules, target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
 
     var machine_code_shim_test_for_registry: ?*Step.Compile = null;
     var machine_code_shim_archive_check_for_registry: ?*Step = null;
+    var boundary_link_tests: [2]?*Step.Compile = .{ null, null };
+    var machine_code_shim_archive_test_for_registry: ?*Step.Compile = null;
     if (add_machine_code_shim_test) {
         const machine_code_shim_test = b.addTest(.{
             .name = "machine_code_shim",
@@ -7516,32 +7636,132 @@ fn addMainExe(
         add_tracy(b, roc_modules.build_options, machine_code_shim_test, b.graph.host, false, flag_enable_tracy);
         machine_code_shim_test_for_registry = machine_code_shim_test;
 
-        // Run mode hands the linker the platform's own inputs plus this shim
-        // and nothing else. Check that compiler-private support does not escape
-        // the shim object as an undefined or global symbol. The checker reads
-        // ELF archive members directly.
-        if (target.result.ofmt == .elf) {
-            const machine_code_shim_archive_check = b.addExecutable(.{
-                .name = "machine_code_shim_archive_check",
+        const boundary_link_step = b.step("run-test-shim-boundary-link", "Link canonical host symbols through both real shim archives");
+        for ([_]*Step.Compile{ machine_code_shim_lib, interpreter_shim_lib }, 0..) |shim_lib, index| {
+            const options = b.addOptions();
+            options.addOption(bool, "is_interpreter", index == 1);
+            const boundary_link_test = b.addTest(.{
+                .name = if (index == 0) "machine-code-boundary-link" else "interpreter-boundary-link",
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
-                    .target = b.graph.host,
-                    .optimize = .Debug,
+                    .root_source_file = b.path("src/machine_code_shim/boundary_link_test.zig"),
+                    .target = target,
+                    .optimize = optimize,
                 }),
             });
-            configureBackend(machine_code_shim_archive_check, b.graph.host);
-            const run_machine_code_shim_archive_check = b.addRunArtifact(machine_code_shim_archive_check);
-            run_machine_code_shim_archive_check.addFileArg(machine_code_shim_lib.getEmittedBin());
-            machine_code_shim_archive_check_for_registry = &run_machine_code_shim_archive_check.step;
+            configureBackend(boundary_link_test, target);
+            boundary_link_test.root_module.addImport("builtins", roc_modules.builtins);
+            boundary_link_test.root_module.addOptions("boundary_test_options", options);
+            boundary_link_test.root_module.addObject(machine_code_shim_test_host);
+            boundary_link_test.root_module.linkLibrary(shim_lib);
+            const run_boundary_link_test = b.addRunArtifact(boundary_link_test);
+            boundary_link_step.dependOn(&run_boundary_link_test.step);
+            boundary_link_tests[index] = boundary_link_test;
         }
     }
 
-    const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
+    // Build-time only: validate the exact archive that will be installed and
+    // embedded. This executable is never linked into Roc or a user's program.
+    const archive_checker = b.addExecutable(.{
+        .name = "machine_code_shim_archive_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    archive_checker.root_module.addAnonymousImport("shim_symbols", .{
+        .root_source_file = b.path("src/builtins/shim_symbols.zig"),
+    });
+    configureBackend(archive_checker, b.graph.host);
+    const check_archive = b.addRunArtifact(archive_checker);
+    check_archive.addArg(@tagName(target.result.os.tag));
+    check_archive.addFileArg(machine_code_shim_lib.getEmittedBin());
+    const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
+    const checked_machine_code_shim = check_archive.addOutputFileArg(machine_code_shim_filename);
+    machine_code_shim_archive_check_for_registry = &check_archive.step;
+
+    // Cross-check every shipped native ABI from any developer host. No target
+    // executable is run: the host checker reads each target's object format.
+    if (add_machine_code_shim_test) {
+        const checks = b.step("check-machine-code-shim-targets", "Check all shipped shim symbol contracts");
+        checks.dependOn(&check_archive.step);
+        const queries = [_]std.Target.Query{
+            .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
+            .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl },
+            .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+            .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu },
+            .{ .cpu_arch = .x86_64, .os_tag = .macos },
+            .{ .cpu_arch = .aarch64, .os_tag = .macos },
+            .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu },
+            .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu },
+            .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc },
+            .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc },
+        };
+        for (queries) |query| {
+            const cross_target = b.resolveTargetQuery(query);
+            if (target.result.cpu.arch == cross_target.result.cpu.arch and
+                target.result.os.tag == cross_target.result.os.tag and
+                target.result.abi == cross_target.result.abi) continue;
+            const cross_shim = addMachineCodeShimLib(b, roc_modules, cross_target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
+            add_tracy(b, roc_modules.build_options, cross_shim, b.graph.host, false, flag_enable_tracy);
+            const check_cross = b.addRunArtifact(archive_checker);
+            check_cross.addArg(@tagName(cross_target.result.os.tag));
+            check_cross.addFileArg(cross_shim.getEmittedBin());
+            _ = check_cross.addOutputFileArg(if (cross_target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a");
+            checks.dependOn(&check_cross.step);
+        }
+        // Link real COFF consumers with deliberate platform/private collisions.
+        // Both target ABIs must accept the prepared archive and its rebuilt index.
+        for ([_]std.Target.Cpu.Arch{ .x86_64, .aarch64 }) |arch| {
+            const fixture_target = b.resolveTargetQuery(.{ .cpu_arch = arch, .os_tag = .windows, .abi = .msvc });
+            const fixture = b.addLibrary(.{
+                .name = "shim_contract_fixture",
+                .linkage = .static,
+                .root_module = b.createModule(.{ .target = fixture_target, .optimize = .Debug, .link_libc = false }),
+            });
+            fixture.root_module.addCSourceFile(.{ .file = b.path("src/machine_code_shim/test/private_symbols.c") });
+            fixture.bundle_compiler_rt = false;
+            const prepare_fixture = b.addRunArtifact(archive_checker);
+            prepare_fixture.addArg("windows");
+            prepare_fixture.addFileArg(fixture.getEmittedBin());
+            const prepared_fixture = prepare_fixture.addOutputFileArg("shim.lib");
+            const consumer = b.addExecutable(.{
+                .name = "shim_contract_consumer",
+                .root_module = b.createModule(.{ .target = fixture_target, .optimize = .Debug, .link_libc = false }),
+            });
+            consumer.root_module.addCSourceFile(.{ .file = b.path("src/machine_code_shim/test/private_symbols_host.c") });
+            consumer.root_module.addObjectFile(prepared_fixture);
+            consumer.bundle_compiler_rt = false;
+            consumer.entry = .{ .symbol_name = "mainCRTStartup" };
+            consumer.subsystem = .Console;
+            checks.dependOn(&consumer.step);
+            if (b.graph.host.result.os.tag == .windows and b.graph.host.result.cpu.arch == arch) {
+                const run_consumer = b.addRunArtifact(consumer);
+                checks.dependOn(&run_consumer.step);
+            }
+        }
+        const checker_tests = b.addTest(.{
+            .name = "machine_code_shim_archive",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+                .imports = &.{.{ .name = "shim_symbols", .module = roc_modules.shim_symbols }},
+            }),
+            .filters = test_filters,
+        });
+        machine_code_shim_archive_test_for_registry = checker_tests;
+        configureBackend(checker_tests, b.graph.host);
+        const run_checker_tests = b.addRunArtifact(checker_tests);
+        checks.dependOn(&run_checker_tests.step);
+        machine_code_shim_archive_check_for_registry = checks;
+    }
+
+    const install_machine_code_shim = b.addInstallLibFile(checked_machine_code_shim, machine_code_shim_filename);
     b.getInstallStep().dependOn(&install_machine_code_shim.step);
 
     const copy_machine_code_shim = b.addUpdateSourceFiles();
-    const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
-    copy_machine_code_shim.addCopyFileToSource(machine_code_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
+    copy_machine_code_shim.addCopyFileToSource(checked_machine_code_shim, b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
     exe.step.dependOn(&copy_machine_code_shim.step);
 
     // Copy builtins object for the host target for embedding into CLI
@@ -7859,6 +8079,8 @@ fn addMainExe(
         .exe = exe,
         .machine_code_shim_test = machine_code_shim_test_for_registry,
         .machine_code_shim_archive_check = machine_code_shim_archive_check_for_registry,
+        .boundary_link_tests = boundary_link_tests,
+        .machine_code_shim_archive_test = machine_code_shim_archive_test_for_registry,
     };
 }
 

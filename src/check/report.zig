@@ -933,13 +933,14 @@ pub const ReportBuilder = struct {
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
-                    .platform_requirement => |ctx| {
+                    .platform_requirement, .platform_requirement_return => |ctx| {
+                        const is_return = mismatch.context == .platform_requirement_return;
                         var report = try self.makeMismatchReport(
                             ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
-                            &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(" to have a specific type.") },
-                            &.{D.bytes("Here it has the type:")},
+                            &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(if (is_return) " to return a specific type." else " to have a specific type.") },
+                            &.{D.bytes(if (is_return) "This function currently returns:" else "Here it has the type:")},
                             mismatch.types.actual_snapshot,
-                            &.{D.bytes("But the platform requires:")},
+                            &.{D.bytes(if (is_return) "But the platform requires it to return:" else "But the platform requires:")},
                             mismatch.types.expected_snapshot,
                             &.{},
                         );

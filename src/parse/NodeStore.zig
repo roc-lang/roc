@@ -1466,12 +1466,8 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             node.tag = .where_mod_method;
             node.region = c.region;
             node.main_token = c.var_tok;
-            const ed_start = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, c.name_tok);
-            try store.extra_data.append(store.gpa, @intFromEnum(c.args));
-            try store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno));
-            node.data.lhs = @intCast(ed_start);
-            node.data.rhs = @intFromBool(c.effectful);
+            node.data.lhs = c.name_tok;
+            node.data.rhs = @intFromEnum(c.anno);
         },
         .mod_alias => |c| {
             node.tag = .where_mod_alias;
@@ -2767,17 +2763,11 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
         std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
     switch (tag) {
         .where_mod_method => {
-            const ed_start = @as(usize, @intCast(node.data.lhs));
-            const name_tok = store.extra_data.items[ed_start];
-            const args = store.extra_data.items[ed_start + 1];
-            const ret_anno = store.extra_data.items[ed_start + 2];
             return .{ .mod_method = .{
                 .region = node.region,
                 .var_tok = node.main_token,
-                .name_tok = name_tok,
-                .args = @enumFromInt(args),
-                .ret_anno = @enumFromInt(ret_anno),
-                .effectful = node.data.rhs != 0,
+                .name_tok = node.data.lhs,
+                .anno = @enumFromInt(node.data.rhs),
             } };
         },
         .where_mod_alias => {

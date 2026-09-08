@@ -19,37 +19,63 @@ VAR NAME MISSING `$` - var_polymorphic_annotation_rejected.md:5:9:5:11
 UNUSED VARIABLE - var_polymorphic_annotation_rejected.md:5:9:5:11
 POLYMORPHIC VAR - var_polymorphic_annotation_rejected.md:4:5:4:17
 # PROBLEMS
-── ● var name missing `$` ─────────── var_polymorphic_annotation_rejected.md:5:9
-
-The mutable binding xs is declared with var but its name does not start with $.
-
-var xs = []
-    ^^
-
-Rename this binding and all of its uses to $xs. The name is only a convention;
-mutability comes from the var declaration.
-
-── ● unused variable ──────────────── var_polymorphic_annotation_rejected.md:5:9
-
-Variable xs is defined here and then never used:
-
-var xs = []
-    ^^
-
-If you don't need this variable, prefix it with an underscore like _xs to
-suppress this warning.
-
-── ✗ polymorphic var ──────────────── var_polymorphic_annotation_rejected.md:4:5
-
-This var is declared with a polymorphic type annotation, but a mutable variable
-must have a single concrete type.
-
-xs : List(a)
-^^^^^^^^^^^^
-
-Give it a concrete type, or replace the type variable with _ to let the type be
-inferred from how the var is used.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 5 9) (end 5 11))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "xs")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$xs")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "var_polymorphic_annotation_rejected.md") (start 5 9) (end 5 11) (annotation warning) (line-text "    var xs = []"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 5 9) (end 5 11))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "xs")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_xs")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "var_polymorphic_annotation_rejected.md") (start 5 9) (end 5 11) (annotation error) (line-text "    var xs = []"))))
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Var")
+		(region (start 4 5) (end 4 17))
+		(headline
+			(reflow "This var is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type."))
+		(document
+			(source-region (file "var_polymorphic_annotation_rejected.md") (start 4 5) (end 4 17) (annotation error) (line-text "    xs : List(a)"))
+			(line-break)
+			(line-break)
+			(reflow "Give it a concrete type, or replace the type variable with")
+			(reflow " ")
+			(annotated code "_")
+			(reflow " ")
+			(reflow "to let the type be inferred from how the")
+			(reflow " ")
+			(annotated code "var")
+			(reflow " ")
+			(reflow "is used."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

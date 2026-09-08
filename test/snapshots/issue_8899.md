@@ -25,51 +25,84 @@ DEPRECATED NUMBER SUFFIX - issue_8899.md:11:20:11:25
 DEPRECATED NUMBER SUFFIX - issue_8899.md:11:27:11:32
 DEPRECATED NUMBER SUFFIX - issue_8899.md:11:34:11:39
 # PROBLEMS
-── ✗ deprecated number suffix ─────────────────────────────── issue_8899.md:3:22
-
-This number literal uses an old suffix syntax.
-
-var $total = 0i64
-             ^^^^
-
-The suffix i64 is deprecated. Write 0.I64 instead.
-
-── ✗ deprecated number suffix ─────────────────────────────── issue_8899.md:4:21
-
-This number literal uses an old suffix syntax.
-
-var $acc = [0i64]
-            ^^^^
-
-The suffix i64 is deprecated. Write 0.I64 instead.
-
-── ✗ deprecated number suffix ────────────────────────────── issue_8899.md:11:20
-
-This number literal uses an old suffix syntax.
-
-sum_with_last([10i64, 20i64, 30i64])
-               ^^^^^
-
-The suffix i64 is deprecated. Write 10.I64 instead.
-
-── ✗ deprecated number suffix ────────────────────────────── issue_8899.md:11:27
-
-This number literal uses an old suffix syntax.
-
-sum_with_last([10i64, 20i64, 30i64])
-                      ^^^^^
-
-The suffix i64 is deprecated. Write 20.I64 instead.
-
-── ✗ deprecated number suffix ────────────────────────────── issue_8899.md:11:34
-
-This number literal uses an old suffix syntax.
-
-sum_with_last([10i64, 20i64, 30i64])
-                             ^^^^^
-
-The suffix i64 is deprecated. Write 30.I64 instead.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Deprecated Number Suffix")
+		(region (start 3 22) (end 3 26))
+		(headline
+			(reflow "This number literal uses an old suffix syntax."))
+		(document
+			(text "The suffix ")
+			(annotated code "i64")
+			(text " is deprecated. Write ")
+			(annotated code "0.I64")
+			(text " instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "issue_8899.md") (start 3 22) (end 3 26) (annotation error) (line-text "        var $total = 0i64"))))
+	(report
+		(severity runtime_error)
+		(title "Deprecated Number Suffix")
+		(region (start 4 21) (end 4 25))
+		(headline
+			(reflow "This number literal uses an old suffix syntax."))
+		(document
+			(text "The suffix ")
+			(annotated code "i64")
+			(text " is deprecated. Write ")
+			(annotated code "0.I64")
+			(text " instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "issue_8899.md") (start 4 21) (end 4 25) (annotation error) (line-text "        var $acc = [0i64]"))))
+	(report
+		(severity runtime_error)
+		(title "Deprecated Number Suffix")
+		(region (start 11 20) (end 11 25))
+		(headline
+			(reflow "This number literal uses an old suffix syntax."))
+		(document
+			(text "The suffix ")
+			(annotated code "i64")
+			(text " is deprecated. Write ")
+			(annotated code "10.I64")
+			(text " instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "issue_8899.md") (start 11 20) (end 11 25) (annotation error) (line-text "    sum_with_last([10i64, 20i64, 30i64])"))))
+	(report
+		(severity runtime_error)
+		(title "Deprecated Number Suffix")
+		(region (start 11 27) (end 11 32))
+		(headline
+			(reflow "This number literal uses an old suffix syntax."))
+		(document
+			(text "The suffix ")
+			(annotated code "i64")
+			(text " is deprecated. Write ")
+			(annotated code "20.I64")
+			(text " instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "issue_8899.md") (start 11 27) (end 11 32) (annotation error) (line-text "    sum_with_last([10i64, 20i64, 30i64])"))))
+	(report
+		(severity runtime_error)
+		(title "Deprecated Number Suffix")
+		(region (start 11 34) (end 11 39))
+		(headline
+			(reflow "This number literal uses an old suffix syntax."))
+		(document
+			(text "The suffix ")
+			(annotated code "i64")
+			(text " is deprecated. Write ")
+			(annotated code "30.I64")
+			(text " instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "issue_8899.md") (start 11 34) (end 11 39) (annotation error) (line-text "    sum_with_last([10i64, 20i64, 30i64])")))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

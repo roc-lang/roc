@@ -15,28 +15,37 @@ f = |n| {
 DEFAULT NOT ALLOWED ON LOCAL TYPE DECLARATION - record_default_local_type_decl_rejected.md:2:14:2:25
 UNUSED VARIABLE - record_default_local_type_decl_rejected.md:1:6:1:7
 # PROBLEMS
-── ✗ default not allowed on local type declaration ─ record_default_local_type_decl_rejected.md:2:14
-
-Field defaults (??) are only allowed on nominal type declarations at the top
-level of a mod, not on type declarations inside a function or block.
-
-Cfg := { a : U8 ?? n }
-         ^^^^^^^^^^^
-
-Hint: A default is materialized at every construction site that omits the
-field, so it cannot depend on the locals of one function. Move the type
-declaration to the mod top level, or remove the default.
-
-── ● unused variable ──────────── record_default_local_type_decl_rejected.md:1:6
-
-Variable n is defined here and then never used:
-
-f = |n| {
-     ^
-
-If you don't need this variable, prefix it with an underscore like _n to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Default Not Allowed On Local Type Declaration")
+		(region (start 2 14) (end 2 25))
+		(headline
+			(reflow "Field defaults (")
+			(annotated code "??")
+			(reflow ") are only allowed on nominal type declarations at the top level of a mod, not on type declarations inside a function or block."))
+		(document
+			(source-region (file "record_default_local_type_decl_rejected.md") (start 2 14) (end 2 25) (annotation error) (line-text "    Cfg := { a : U8 ?? n }"))
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " A default is materialized at every construction site that omits the field, so it cannot depend on the locals of one function. Move the type declaration to the mod top level, or remove the default.")))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 6) (end 1 7))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "n")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_n")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "record_default_local_type_decl_rejected.md") (start 1 6) (end 1 7) (annotation error) (line-text "f = |n| {")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

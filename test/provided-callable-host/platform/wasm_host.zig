@@ -17,26 +17,26 @@ const U64Arg = extern struct {
 
 const wasm_allocator = std.heap.wasm_allocator;
 
-export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     allocation_counts[0] += 1;
     return host_alloc.alloc(wasm_allocator, length, alignment);
 }
 
-export fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     allocation_counts[1] += 1;
     host_alloc.dealloc(wasm_allocator, ptr, alignment);
 }
 
-export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     allocation_counts[0] += 1;
     allocation_counts[1] += 1;
     return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment);
 }
 
-export fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}
-export fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {}
+fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}
+fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {}
 
-export fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
+fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
     @trap();
 }
 
@@ -113,4 +113,15 @@ export fn wasm_alloc_count() usize {
 
 export fn wasm_dealloc_count() usize {
     return allocation_counts[1];
+}
+
+comptime {
+    host_alloc.exportRuntimeFns(.{
+        .alloc = &roc_alloc,
+        .dealloc = &roc_dealloc,
+        .realloc = &roc_realloc,
+        .dbg = &roc_dbg,
+        .expect_failed = &roc_expect_failed,
+        .crashed = &roc_crashed,
+    });
 }

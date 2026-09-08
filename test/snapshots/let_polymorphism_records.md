@@ -62,30 +62,58 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────── let_polymorphism_records.md:48:6
-
-I'm having trouble with this bool operation.
-
-1 + update_data
-    ^^^^^^^^^^^
-
-Both sides of and must be Bool values, but the right side is:
-
-    { data: a, ..b }, a -> { data: a, ..b }
-
-Note: Roc does not have "truthiness". You must convert values to bools yourself.
-
-── ✗ type mismatch ───────────────────────────── let_polymorphism_records.md:8:7
-
-This string literal is being used where a non-string type is needed.
-
-str = "hello"
-      ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 48 6) (end 48 17))
+		(headline
+			(reflow "I'm having trouble with this bool operation."))
+		(document
+			(source-region (file "let_polymorphism_records.md") (start 48 6) (end 48 17) (annotation error) (line-text "\t1 + update_data"))
+			(line-break)
+			(reflow "Both sides of")
+			(reflow " ")
+			(annotated code "and")
+			(reflow " ")
+			(reflow "must be")
+			(reflow " ")
+			(annotated code "Bool")
+			(reflow " ")
+			(reflow "values, but the")
+			(reflow " ")
+			(reflow "right")
+			(reflow " ")
+			(reflow "side is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ data: a, ..b }, a -> { data: a, ..b }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated underline "Note:")
+			(reflow " ")
+			(reflow "Roc does not have \"truthiness\". You must convert values to bools yourself.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 8 7) (end 8 14))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "let_polymorphism_records.md") (start 8 7) (end 8 14) (annotation error) (line-text "str = \"hello\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

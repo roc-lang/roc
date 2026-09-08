@@ -15,38 +15,75 @@ expect result == result
 # EXPECTED
 TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
 # PROBLEMS
-── ✗ type does not support equality ─────── tag_union_multiple_ineligible.md:6:8
-
-This expression is doing an equality check on a type that doesn't support
-equality.
-
-expect result == result
-       ^^^^^^^^^^^^^^^^
-
-The type is:
-
-    [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]
-      where [
-        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
-        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        d.is_gt : d, d -> Bool,
-      ]
-
-This tag union does not support equality because these tags have payload types
-that don't support is_eq:
-
-    Transform (a -> a)
-        Function equality is not supported.
-    Validate (a -> Bool
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    a.is_gt : a, a -> Bool,
-  ])
-        Function equality is not supported.
-Hint: Tag unions only have an is_eq method if all of their payload types have
-is_eq methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Does Not Support Equality")
+		(region (start 6 8) (end 6 24))
+		(headline
+			(reflow "This expression is doing an equality check on a type that doesn't support equality."))
+		(document
+			(source-region (file "tag_union_multiple_ineligible.md") (start 6 8) (end 6 24) (annotation error) (line-text "expect result == result"))
+			(line-break)
+			(reflow "The type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    d.is_gt : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "This tag union does not support equality because these tags have payload types that don't support ")
+			(annotated emphasis "is_eq")
+			(reflow ":")
+			(line-break)
+			(line-break)
+			(text "    ")
+			(annotated emphasis "Transform")
+			(text " (")
+			(annotated type "a -> a")
+			(text ")")
+			(line-break)
+			(text "        ")
+			(reflow "Function equality is not supported.")
+			(line-break)
+			(text "    ")
+			(annotated emphasis "Validate")
+			(text " (")
+			(annotated type "a -> Bool\n  where [\n    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),\n    a.is_gt : a, a -> Bool,\n  ]")
+			(text ")")
+			(line-break)
+			(text "        ")
+			(reflow "Function equality is not supported.")
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " Tag unions only have an ")
+			(annotated emphasis "is_eq")
+			(reflow " method if all of their payload types have ")
+			(annotated emphasis "is_eq")
+			(reflow " methods.")
+			(line-break))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,UpperIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,

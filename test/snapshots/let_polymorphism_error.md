@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
 # PROBLEMS
-── ✗ type mismatch ────────────────────────────── let_polymorphism_error.md:1:11
-
-This string literal is being used where a non-string type is needed.
-
-[42, 4.2, "hello"]
-          ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 11) (end 1 18))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "let_polymorphism_error.md") (start 1 11) (end 1 18) (annotation error) (line-text "[42, 4.2, \"hello\"]"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Float,Comma,StringStart,StringPart,StringEnd,CloseSquare,

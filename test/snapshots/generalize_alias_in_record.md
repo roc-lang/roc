@@ -14,17 +14,25 @@ main = ((r.f)(1), (r.f)("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 # PROBLEMS
-── ✗ type mismatch ────────────────────────── generalize_alias_in_record.md:5:25
-
-This string literal is being used where a non-string type is needed.
-
-main = ((r.f)(1), (r.f)("a"))
-                        ^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 5 25) (end 5 28))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "generalize_alias_in_record.md") (start 5 25) (end 5 28) (annotation error) (line-text "main = ((r.f)(1), (r.f)(\"a\"))"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,

@@ -3111,7 +3111,7 @@ pub const Interpreter = struct {
                         const payload_desc = payload_read.desc orelse {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: boxy tag payload {d} for tag {s} had no descriptor to bind",
-                                .{ assign.payload_index, self.store.getString(assign.tag_name) },
+                                .{ assign.payload_index, self.store.getBoxyName(assign.tag_name) },
                             );
                         };
                         try self.setLocalChecked(frame, current, target_desc, try self.evalBoxyDescRefValue(frame, payload_desc), false);
@@ -9580,8 +9580,8 @@ pub const Interpreter = struct {
     fn findLocalBoxyTagVariant(
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
-    ) ?*const LirProgram.BoxyTagVariant {
+        tag_name: LIR.BoxyNameId,
+    ) ?LirProgram.BoxyTagVariant {
         return self.boxy_runtime.findLocalBoxyTagVariant(desc, tag_name);
     }
 
@@ -9597,7 +9597,7 @@ pub const Interpreter = struct {
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
         discriminant: u16,
-    ) *const LirProgram.BoxyTagVariant {
+    ) LirProgram.BoxyTagVariant {
         return self.boxy_runtime.requireBoxyTagVariantByDiscriminant(desc, discriminant);
     }
 
@@ -9605,7 +9605,7 @@ pub const Interpreter = struct {
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
         discriminant: u16,
-    ) ?*const LirProgram.BoxyTagVariant {
+    ) ?LirProgram.BoxyTagVariant {
         return self.boxy_runtime.findBoxyTagVariantByDiscriminant(desc, discriminant);
     }
 
@@ -9633,7 +9633,7 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         frame: *const Frame,
         desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
+        tag_name: LIR.BoxyNameId,
         payload: ?Value,
         payload_layout: layout_mod.Idx,
         payload_desc: ?*const LirProgram.BoxyTypeDesc,
@@ -9660,7 +9660,7 @@ pub const Interpreter = struct {
         source_value: Value,
         source_layout: layout_mod.Idx,
         source_desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
+        tag_name: LIR.BoxyNameId,
         payload_index: u32,
         target_layout: layout_mod.Idx,
         source_mode: LIR.BoxyTransferMode,
@@ -9674,14 +9674,14 @@ pub const Interpreter = struct {
         source_value: Value,
         source_layout: layout_mod.Idx,
         source_desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
+        tag_name: LIR.BoxyNameId,
     ) Error!bool {
         return try self.boxy_runtime.boxyTagMatches(self.boxyFrameHooks(frame), source_value, source_layout, source_desc, tag_name);
     }
 
     fn findBoxyPayloadDesc(
         self: *const LirInterpreter,
-        variant: *const LirProgram.BoxyTagVariant,
+        variant: LirProgram.BoxyTagVariant,
         payload_index: u32,
     ) ?LIR.BoxyDescRef {
         return self.boxy_runtime.findBoxyPayloadDesc(variant, payload_index);

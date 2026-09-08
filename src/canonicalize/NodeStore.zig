@@ -132,7 +132,7 @@ const ExprNodeTag = enum {
     malformed,
 };
 
-const WhereNodeTag = enum { where_method, where_method_effectful, where_alias, where_malformed };
+const WhereNodeTag = enum { where_method, where_alias, where_malformed };
 
 const PatternNodeTag = enum {
     pattern_identifier,
@@ -321,7 +321,7 @@ pub const LiteralDispatchPlan = extern struct {
     target_var: u32,
     fn_var: u32,
     kind_and_resolution: u32,
-    pattern_failure_expr: u32,
+    pattern_failure_owner: u32,
 
     pub const Kind = enum(u32) {
         numeral,
@@ -350,8 +350,8 @@ pub const LiteralDispatchPlan = extern struct {
         return @enumFromInt(self.kind_and_resolution >> resolution_shift);
     }
 
-    pub fn patternFailureExpr(self: LiteralDispatchPlan) ?u32 {
-        return if (self.pattern_failure_expr == std.math.maxInt(u32)) null else self.pattern_failure_expr;
+    pub fn patternFailureOwner(self: LiteralDispatchPlan) ?u32 {
+        return if (self.pattern_failure_owner == std.math.maxInt(u32)) null else self.pattern_failure_owner;
     }
 
     fn setResolution(self: *LiteralDispatchPlan, resolution: Resolution) void {
@@ -962,17 +962,18 @@ pub fn recordLiteralDispatchPlan(
     kind: LiteralDispatchPlan.Kind,
     target_var: types.Var,
     fn_var: types.Var,
-    pattern_failure_expr: ?u32,
+    pattern_failure_owner: ?u32,
 ) Allocator.Error!void {
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
+    std.debug.assert(narrowNodeTag(PatternNodeTag, node.tag) == null or pattern_failure_owner != null);
 
     var plan = LiteralDispatchPlan{
         .node_idx = @intFromEnum(node_idx),
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
         .kind_and_resolution = LiteralDispatchPlan.packKindAndResolution(kind, .unresolved),
-        .pattern_failure_expr = pattern_failure_expr orelse std.math.maxInt(u32),
+        .pattern_failure_owner = pattern_failure_owner orelse std.math.maxInt(u32),
     };
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one != 0) {
@@ -2203,6 +2204,20 @@ pub fn replaceStatementWithRuntimeError(
     store.nodes.set(node_idx, node);
 }
 
+/// Replace a rejected literal leaf while retaining the surrounding definition
+/// pattern and its binder identities. Retire the leaf's evidence atomically.
+pub fn replacePatternWithRuntimeError(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    _ = store.retireLiteralDispatchPlan(node_idx);
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .pattern_malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx) } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Updates the body of an e_lambda expression.
 /// Used when the lambda was created with a placeholder body and needs to be updated
 /// after the actual body is canonicalized.
@@ -2286,20 +2301,12 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     const tag = narrowNodeTag(WhereNodeTag, node.tag) orelse
         std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
     switch (tag) {
-        .where_method, .where_method_effectful => {
+        .where_method => {
             const p = payload.where_clause;
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
-            const method_name = @as(Ident.Idx, @bitCast(p.name));
-
-            // Retrieve args span and ret from span_with_node_data
-            const args_ret = store.span_with_node_data.items.items[p.args_ret_idx];
-
             return CIR.WhereClause{ .w_method = .{
-                .var_ = var_,
-                .method_name = method_name,
-                .args = .{ .span = .{ .start = args_ret.start, .len = args_ret.len } },
-                .ret = @enumFromInt(args_ret.node),
-                .effectful = node.tag == .where_method_effectful,
+                .var_ = @enumFromInt(p.var_idx),
+                .method_name = @bitCast(p.name),
+                .anno = @enumFromInt(p.anno),
             } };
         },
         .where_alias => {
@@ -3609,18 +3616,11 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
 
     switch (whereClause) {
         .w_method => |where_method| {
-            node.tag = if (where_method.effectful) .where_method_effectful else .where_method;
-            const args_ret_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = where_method.args.span.start,
-                .len = where_method.args.span.len,
-                .node = @intFromEnum(where_method.ret),
-            });
+            node.tag = .where_method;
             node.setPayload(.{ .where_clause = .{
                 .var_idx = @intFromEnum(where_method.var_),
                 .name = @bitCast(where_method.method_name),
-                .args_ret_idx = args_ret_idx,
-                .effectful = @intFromBool(where_method.effectful),
+                .anno = @intFromEnum(where_method.anno),
             } });
         },
         .w_alias => |where_alias| {
@@ -4166,8 +4166,7 @@ fn annotationContainsUnderscore(store: *const NodeStore, anno_idx: CIR.TypeAnno.
             switch (store.getWhereClause(where_idx)) {
                 .w_method => |method| {
                     if (store.typeAnnoContainsUnderscore(method.var_)) return true;
-                    if (store.anyTypeAnnoContainsUnderscore(method.args)) return true;
-                    if (store.typeAnnoContainsUnderscore(method.ret)) return true;
+                    if (store.typeAnnoContainsUnderscore(method.anno)) return true;
                 },
                 .w_alias, .w_malformed => {},
             }
@@ -4661,10 +4660,7 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
         switch (store.getWhereClause(where_idx)) {
             .w_method => |method| {
                 try store.collectIntroducedRigidVars(method.var_, &locally_declared);
-                for (store.sliceTypeAnnos(method.args)) |arg| {
-                    try store.collectIntroducedRigidVars(arg, &locally_declared);
-                }
-                try store.collectIntroducedRigidVars(method.ret, &locally_declared);
+                try store.collectIntroducedRigidVars(method.anno, &locally_declared);
             },
             .w_alias => |alias| {
                 try store.collectIntroducedRigidVars(alias.var_, &locally_declared);
@@ -4700,10 +4696,7 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
         for (grouped.get(owner).?.items) |where_idx| {
             switch (store.getWhereClause(where_idx)) {
                 .w_method => |method| {
-                    for (store.sliceTypeAnnos(method.args)) |arg| {
-                        try store.collectReferencedRigidVars(arg, &dependencies);
-                    }
-                    try store.collectReferencedRigidVars(method.ret, &dependencies);
+                    try store.collectReferencedRigidVars(method.anno, &dependencies);
                 },
                 // A where alias reaches the type variables its arguments name.
                 .w_alias => |alias| try store.collectReferencedRigidVars(alias.alias, &dependencies),
@@ -6507,7 +6500,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
     try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
     try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
-    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureExpr());
+    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureOwner());
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
@@ -6558,7 +6551,7 @@ test "literal dispatch plans are retired with their owning nodes" {
 
     const numeral_plan = store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(numeral_expr))).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, numeral_plan.dispatchKind());
-    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureExpr());
+    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureOwner());
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
     try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
 

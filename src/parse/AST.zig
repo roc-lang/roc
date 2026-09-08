@@ -2732,9 +2732,7 @@ pub const WhereClause = union(enum) {
     mod_method: struct {
         var_tok: Token.Idx,
         name_tok: Token.Idx,
-        args: Collection.Idx,
-        ret_anno: TypeAnno.Idx,
-        effectful: bool,
+        anno: TypeAnno.Idx,
         region: TokenizedRegion,
     },
 
@@ -2779,19 +2777,8 @@ pub const WhereClause = union(enum) {
                 // remove preceding dot
                 const method_name = ast.resolve(m.name_tok)[1..];
                 try tree.pushStringPair("name", method_name);
-                if (m.effectful) try tree.pushBoolPair("effectful", true);
                 const attrs = tree.beginNode();
-
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
-                const attrs2 = tree.beginNode();
-                const args = ast.store.typeAnnoSlice(.{ .span = ast.store.getCollection(m.args).span });
-                for (args) |arg| {
-                    try ast.store.getTypeAnno(arg).pushToSExprTree(gpa, env, ast, tree);
-                }
-                try tree.endNode(args_begin, attrs2);
-
-                try ast.store.getTypeAnno(m.ret_anno).pushToSExprTree(gpa, env, ast, tree);
+                try ast.store.getTypeAnno(m.anno).pushToSExprTree(gpa, env, ast, tree);
 
                 try tree.endNode(begin, attrs);
             },

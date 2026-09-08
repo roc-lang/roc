@@ -327,8 +327,8 @@ const InlineAnalyzer = struct {
             .hosted => return null,
         };
 
-        if (!self.bodyReadsOnlyArgs(fn_id, body)) return null;
         if (!self.isInlineableWrapperBody(body)) return null;
+        if (!self.bodyReadsOnlyArgs(fn_id, body)) return null;
         return body;
     }
 
@@ -370,6 +370,7 @@ const InlineAnalyzer = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .crash,
             .bytes_lit,
             .def_ref,
             => true,
@@ -413,12 +414,24 @@ const InlineAnalyzer = struct {
             .tuple_access => |access| self.exprReadsOnlyArgs(access.tuple, args),
             .structural_eq => |eq| self.exprReadsOnlyArgs(eq.lhs, args) and self.exprReadsOnlyArgs(eq.rhs, args),
             .structural_hash => |h| self.exprReadsOnlyArgs(h.value, args) and self.exprReadsOnlyArgs(h.hasher, args),
-            .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and self.exprReadsOnlyArgs(block.final_expr, args),
+            .block => |block| self.isLiteralCrash(expr_id) or
+                (self.solved.lifted.stmtSpan(block.statements).len == 0 and self.exprReadsOnlyArgs(block.final_expr, args)),
+            .if_ => |if_| blk: {
+                // This admits guarded wrappers, not arbitrary conditional
+                // arguments inside otherwise call-through wrappers.
+                if (!self.isInlineableWrapperBody(expr_id)) break :blk false;
+                const branches = self.solved.lifted.ifBranchSpan(if_.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (!self.exprReadsOnlyArgs(branch.cond, args) or
+                        !self.exprReadsOnlyArgs(branch.body, args)) break :blk false;
+                }
+                break :blk self.exprReadsOnlyArgs(if_.final_else, args);
+            },
             .lambda,
             .fn_def,
             .let_,
             .match_,
-            .if_,
             .uninitialized,
             .uninitialized_payload,
             .if_initialized_payload,
@@ -429,7 +442,6 @@ const InlineAnalyzer = struct {
             .continue_,
             .join_point,
             .jump,
-            .crash,
             .comptime_exhaustiveness_failed,
             => false,
         };
@@ -464,9 +476,147 @@ const InlineAnalyzer = struct {
     fn isInlineableWrapperBody(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.getExpr(expr_id);
         if (expr.data == .call_proc or expr.data == .low_level) return true;
+        // A checked wrapper has one call-through path and one literal-crash
+        // path. Substitution preserves the guard and exposes constant arguments
+        // to LIR range analysis before backend instruction selection.
+        if (expr.data == .if_) {
+            const branches = self.solved.lifted.ifBranchSpan(expr.data.if_.branches);
+            if (branches.len != 1) return false;
+            const branch = GuardedList.at(branches, 0);
+            const other = expr.data.if_.final_else;
+            return (self.isLiteralCrash(branch.body) and self.isInlineableWrapperBody(other)) or
+                (self.isLiteralCrash(other) and self.isInlineableWrapperBody(branch.body));
+        }
         if (expr.data != .block) return false;
         return self.solved.lifted.stmtSpan(expr.data.block.statements).len == 0 and
             self.isInlineableWrapperBody(expr.data.block.final_expr);
+    }
+
+    fn isLiteralCrash(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
+        const expr = self.solved.lifted.getExpr(expr_id);
+        return switch (expr.data) {
+            .crash => true,
+            .low_level => |call| blk: {
+                if (call.op != .crash) break :blk false;
+                const args = self.solved.lifted.exprSpan(call.args);
+                break :blk args.len == 1 and
+                    self.isStringLiteral(GuardedList.at(args, 0));
+            },
+            .block => |block| blk: {
+                const stmts = self.solved.lifted.stmtSpan(block.statements);
+                if (stmts.len == 0) break :blk self.isLiteralCrash(block.final_expr);
+                // SpecConstr normalizes a terminal crash to a statement
+                // followed by unreachable. No preceding work is admitted.
+                if (stmts.len != 1 or self.solved.lifted.getExpr(block.final_expr).data != .@"unreachable") break :blk false;
+                break :blk switch (self.solved.lifted.getStmt(GuardedList.at(stmts, 0))) {
+                    .crash => true,
+                    .expr => |child| self.isLiteralCrash(child),
+                    .uninitialized, .let_, .expect, .dbg, .return_ => false,
+                };
+            },
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .static_data_candidate,
+            .typed_boundary,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .nominal,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            => false,
+        };
+    }
+
+    fn isStringLiteral(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
+        return switch (self.solved.lifted.getExpr(expr_id).data) {
+            .str_lit => true,
+            .nominal => |backing| self.isStringLiteral(backing),
+            .typed_boundary => |boundary| self.isStringLiteral(boundary.value),
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .bytes_lit,
+            .static_data_candidate,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .crash,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            => false,
+        };
     }
 
     /// Visit every proc called within an inline candidate so cycles consisting

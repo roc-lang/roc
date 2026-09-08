@@ -10,19 +10,32 @@ d=(0->X .a)
 # EXPECTED
 TYPE MISMATCH - fuzz_crash_092.md:1:4:1:8
 # PROBLEMS
-── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_092.md:1:4
-
-This is not a record, so it does not have any fields to access.
-
-d=(0->X .a)
-   ^^^^
-
-It is:
-
-    [X(b), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
-
-But I need a record with a a field.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 4) (end 1 8))
+		(headline
+			(reflow "This is not a record, so it does not have any fields to access."))
+		(document
+			(source-region (file "fuzz_crash_092.md") (start 1 4) (end 1 8) (annotation error) (line-text "d=(0->X .a)"))
+			(line-break)
+			(reflow "It is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[X(b), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need a record with a")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "field."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,OpArrow,UpperIdent,DotLowerIdent,CloseRound,

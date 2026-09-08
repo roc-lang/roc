@@ -607,3 +607,173 @@ test "where alias - parameterized alias substitutes its argument" {
     defer test_env.deinit();
     try test_env.assertLastDefType("a, Str -> Str where [a.encode : a, Str -> Str]");
 }
+
+test "where clause - whole method hole infers receiver arguments and return" {
+    const source =
+        \\helper : a, Str -> Str where [a.render : _]
+        \\helper = |value, suffix| value.render(suffix)
+    ;
+    var test_env = try TestEnv.init("WholeMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("helper", "a, Str -> Str where [a.render : a, Str -> Str]");
+}
+
+test "where clause - parenthesized method annotations retain their meaning" {
+    const source =
+        \\hole : a -> Str where [a.render : (_)]
+        \\hole = |value| value.render()
+        \\
+        \\function : a -> Str where [a.render : (_ -> _)]
+        \\function = |value| value.render()
+    ;
+    var test_env = try TestEnv.init("ParenthesizedMethod", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("hole", "a -> Str where [a.render : a -> Str]");
+    try test_env.assertDefType("function", "a -> Str where [a.render : a -> Str]");
+}
+
+test "where clause - function type aliases retain their meaning" {
+    const source =
+        \\Render(a) : a -> Str
+        \\helper : a -> Str where [a.render : Render(a)]
+        \\helper = |value| value.render()
+    ;
+    var test_env = try TestEnv.init("AliasedMethod", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("helper", "a -> Str where [a.render : Render(a)]");
+}
+
+test "where clause - whole method hole accepts a nullary effectful implementation" {
+    const source =
+        \\Nom := [Nom].{
+        \\    run! : () => {}
+        \\    run! = || {}
+        \\}
+        \\helper! : a => {} where [a.run! : _]
+        \\helper! = |_| {
+        \\    A : a
+        \\    A.run!()
+        \\}
+        \\main! = || helper!(Nom.Nom)
+    ;
+    var test_env = try TestEnv.init("EffectfulMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("main!", "({}) => {}");
+}
+
+test "where clause - explicit nullary method hole cannot accept a receiver" {
+    const source =
+        \\helper : a -> Str where [a.render : () -> _]
+        \\helper = |value| value.render()
+    ;
+    var test_env = try TestEnv.init("NullaryMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "where clause - whole method hole rejects conflicting body uses" {
+    const source =
+        \\helper : a -> Str where [a.render : _]
+        \\helper = |value| {
+        \\    _ = value.render({})
+        \\    value.render(Bool.True)
+        \\}
+    ;
+    var test_env = try TestEnv.init("ConflictingMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "where clause - whole method hole and explicit duplicate share a signature" {
+    const source =
+        \\helper : a -> Str where [a.render : _, a.render : a -> Str]
+        \\helper = |value| value.render()
+    ;
+    var test_env = try TestEnv.init("DuplicateMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("helper", "a -> Str where [a.render : a -> Str]");
+}
+
+test "where clause - whole method hole generalizes across imports and forward uses" {
+    const source_a =
+        \\A := [Val(Str)].{
+        \\    render : A -> Str
+        \\    render = |A.Val(s)| s
+        \\    helper : a -> Str where [a.render : _]
+        \\    helper = |value| value.render()
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A
+        \\B := [Val].{
+        \\    render : B -> Str
+        \\    render = |_| "B"
+        \\}
+        \\main : (Str, Str, Str)
+        \\main = (A.helper(A.Val("A")), A.helper(B.Val), local(B.Val))
+        \\local : a -> Str where [a.render : _]
+        \\local = |value| value.render()
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_a.assertDefType("A.helper", "a -> Str where [a.render : a -> Str]");
+    try test_env_b.assertDefType("main", "(Str, Str, Str)");
+}
+
+test "where clause - unused whole method hole still requires the method" {
+    const source =
+        \\Nom := [Nom]
+        \\helper : a -> Str where [a.render : _]
+        \\helper = |_| "unused"
+        \\main = helper(Nom.Nom)
+    ;
+    var test_env = try TestEnv.init("UnusedMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Missing Method");
+}
+
+test "where clause - whole method hole rejects an incompatible implementation" {
+    const source =
+        \\Nom := [Nom].{
+        \\    render : Nom -> U64
+        \\    render = |_| 42
+        \\}
+        \\helper : a -> Str where [a.render : _]
+        \\helper = |value| value.render()
+        \\main = helper(Nom.Nom)
+    ;
+    var test_env = try TestEnv.init("IncompatibleMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "where clause - a bare result type is not an implicit nullary function" {
+    const source =
+        \\helper : a -> Str where [a.render : Str]
+        \\helper = |_| {
+        \\    A : a
+        \\    A.render()
+        \\}
+    ;
+    var test_env = try TestEnv.init("BareResultMethod", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "where clause - partial method result hole preserves explicit purity" {
+    const source =
+        \\Nom := [Nom].{
+        \\    run! : Nom => {}
+        \\    run! = |_| {}
+        \\}
+        \\helper : a -> {} where [a.run! : a -> _]
+        \\helper = |value| value.run!()
+        \\main! = || helper(Nom.Nom)
+    ;
+    var test_env = try TestEnv.init("PureMethodHole", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}

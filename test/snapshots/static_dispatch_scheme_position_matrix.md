@@ -45,65 +45,100 @@ POLYMORPHIC VALUE - static_dispatch_scheme_position_matrix.md:22:1:22:13
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:28:9:28:19
 # PROBLEMS
-── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:32
-
-The type variable a is not introduced by this annotation's type or a connected
-method constraint, so this where clause cannot add the parse method to it.
-
-parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
-                               ^^^^^^^^^^^^^^^^^^
-
-A where clause receiver must be introduced by the annotation's type, or by the
-method type of a receiver that is already connected to the annotation. Connect
-a to the annotation, or remove this constraint.
-
-── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:52
-
-The type variable a is not introduced by this annotation's type or a connected
-method constraint, so this where clause cannot add the show method to it.
-
-parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
-                                                   ^^^^^^^^^^^^^^^^^
-
-A where clause receiver must be introduced by the annotation's type, or by the
-method type of a receiver that is already connected to the annotation. Connect
-a to the annotation, or remove this constraint.
-
-── ✗ polymorphic value ────────── static_dispatch_scheme_position_matrix.md:22:1
-
-This top-level value still has an unresolved polymorphic type.
-
-unpinned_ret = gen({})
-^^^^^^^^^^^^
-
-Its type is:
-a where [a.gen : {} -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
-── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:19:5
-
-This is trying to dispatch a method named gen on an unresolved type variable,
-but unresolved type variables have no methods.
-
-A.gen({})
-^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
-── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:28:9
-
-This is trying to dispatch a method named show on an unresolved type variable,
-but unresolved type variables have no methods.
-
-v = A.parse(s)
-    ^^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unbound Where Receiver")
+		(region (start 24 32) (end 24 50))
+		(headline
+			(reflow "The type variable")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "is not introduced by this annotation's type or a connected method constraint, so this where clause cannot add the")
+			(reflow " ")
+			(annotated symbol "parse")
+			(reflow " ")
+			(reflow "method to it."))
+		(document
+			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 24 32) (end 24 50) (annotation error) (line-text "parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]"))
+			(line-break)
+			(reflow "A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "to the annotation, or remove this constraint.")))
+	(report
+		(severity runtime_error)
+		(title "Unbound Where Receiver")
+		(region (start 24 52) (end 24 69))
+		(headline
+			(reflow "The type variable")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "is not introduced by this annotation's type or a connected method constraint, so this where clause cannot add the")
+			(reflow " ")
+			(annotated symbol "show")
+			(reflow " ")
+			(reflow "method to it."))
+		(document
+			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 24 52) (end 24 69) (annotation error) (line-text "parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]"))
+			(line-break)
+			(reflow "A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "to the annotation, or remove this constraint.")))
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 22 1) (end 22 13))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 22 1) (end 22 13) (annotation error) (line-text "unpinned_ret = gen({})"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "a where [a.gen : {} -> a]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 19 5) (end 19 14))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "gen")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 19 5) (end 19 14) (annotation error) (line-text "    A.gen({})"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 28 9) (end 28 19))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "show")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 28 9) (end 28 19) (annotation error) (line-text "    v = A.parse(s)"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,
@@ -144,9 +179,9 @@ EndOfFile,
 				(ty (name "I128")))
 			(where
 				(method (mod-of "a") (name "to_i128")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "I128")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "I128"))))))
 		(s-decl
 			(p-ident (raw "via_arg"))
 			(e-lambda
@@ -169,9 +204,9 @@ EndOfFile,
 				(ty (name "I128")))
 			(where
 				(method (mod-of "a") (name "to_i128")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "I128")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "I128"))))))
 		(s-decl
 			(p-ident (raw "via_data"))
 			(e-lambda
@@ -205,9 +240,9 @@ EndOfFile,
 				(ty-var (raw "a")))
 			(where
 				(method (mod-of "a") (name "gen")
-					(args
-						(ty-record))
-					(ty-var (raw "a")))))
+					(ty-fn
+						(ty-record)
+						(ty-var (raw "a"))))))
 		(s-decl
 			(p-ident (raw "gen"))
 			(e-lambda
@@ -233,13 +268,13 @@ EndOfFile,
 				(ty (name "Str")))
 			(where
 				(method (mod-of "a") (name "parse")
-					(args
-						(ty (name "Str")))
-					(ty-var (raw "a")))
+					(ty-fn
+						(ty (name "Str"))
+						(ty-var (raw "a"))))
 				(method (mod-of "a") (name "show")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "parse_show"))
 			(e-lambda
@@ -312,7 +347,7 @@ roundtrip = parse_show("hi")
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 339)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 340)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -323,12 +358,12 @@ roundtrip = parse_show("hi")
 				(ty-lookup (name "I128") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_i128")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "I128") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "I128") (builtin)))))))
 	(d-let
 		(p-assign (ident "ok_arg"))
-		(e-call (constraint-fn-var 352)
+		(e-call (constraint-fn-var 353)
 			(e-lookup-local
 				(p-assign (ident "via_arg")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -371,9 +406,9 @@ roundtrip = parse_show("hi")
 				(ty-lookup (name "I128") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_i128")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "I128") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "I128") (builtin)))))))
 	(d-let
 		(p-assign (ident "ok_data"))
 		(e-call (constraint-fn-var 399)
@@ -397,12 +432,12 @@ roundtrip = parse_show("hi")
 				(ty-rigid-var (name "a")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "gen")
-					(args
-						(ty-record))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+					(ty-fn (effectful false)
+						(ty-record)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 423)
+		(e-call (constraint-fn-var 422)
 			(e-lookup-local
 				(p-assign (ident "gen")))
 			(e-empty_record)))
@@ -417,7 +452,7 @@ roundtrip = parse_show("hi")
 				(s-let
 					(p-assign (ident "v"))
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-dispatch-call (method "show") (constraint-fn-var 432)
+				(e-dispatch-call (method "show") (constraint-fn-var 431)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "v"))))
@@ -428,13 +463,13 @@ roundtrip = parse_show("hi")
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var (name "a")) (name "parse")
-					(args
-						(ty-lookup (name "Str") (builtin)))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(ty-fn (effectful false)
+						(ty-lookup (name "Str") (builtin))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "show")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "roundtrip"))
 		(e-runtime-error (tag "erroneous_value_expr"))))

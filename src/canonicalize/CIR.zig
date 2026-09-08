@@ -520,9 +520,7 @@ pub const WhereClause = union(enum) {
     w_method: struct {
         var_: TypeAnno.Idx,
         method_name: base.Ident.Idx,
-        args: TypeAnno.Span,
-        ret: TypeAnno.Idx,
-        effectful: bool,
+        anno: TypeAnno.Idx,
     },
     /// Applies every constraint named by a where alias to `var_`.
     ///
@@ -553,21 +551,8 @@ pub const WhereClause = union(enum) {
 
                 const method_name_str = cir.getIdent(method.method_name);
                 try tree.pushStringPair("name", method_name_str);
-                if (method.effectful) try tree.pushBoolPair("effectful", true);
-
                 const attrs = tree.beginNode();
-
-                // Add actual argument types
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (cir.store.sliceTypeAnnos(method.args)) |arg_idx| {
-                    try cir.store.getTypeAnno(arg_idx).pushToSExprTree(cir, tree, arg_idx);
-                }
-                try tree.endNode(args_begin, args_attrs);
-
-                // Add actual return type
-                try cir.store.getTypeAnno(method.ret).pushToSExprTree(cir, tree, method.ret);
+                try cir.store.getTypeAnno(method.anno).pushToSExprTree(cir, tree, method.anno);
                 try tree.endNode(begin, attrs);
             },
             .w_alias => |alias| {

@@ -299,7 +299,7 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
 
 test "hoist roots are not selected for static dispatch requiring where evidence" {
     var test_env = try TestEnv.init("Test",
-        \\f : a -> _ where [a.f : {}]
+        \\f : a -> _ where [a.f : () -> {}]
         \\f = |_| {
         \\    A : a
         \\    A.f
@@ -760,7 +760,7 @@ test "refutable closed destructure selects validation root without live binders"
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
@@ -779,7 +779,7 @@ test "unused concrete binder retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -811,7 +811,7 @@ test "non-concrete extraction retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -1058,7 +1058,7 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ Tes
     try std.testing.expect(root.pattern != null);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
-        .expr, .pattern_validation => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation, .pattern_error => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(root.expr, extraction.base_expr);
     try std.testing.expectEqual(root.pattern.?, extraction.result_pattern);
@@ -1087,7 +1087,7 @@ fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) u
     for (roots) |root| {
         switch (root.body) {
             .pattern_extraction => count += 1,
-            .expr, .pattern_validation => {},
+            .expr, .pattern_validation, .pattern_error => {},
         }
     }
     return count;

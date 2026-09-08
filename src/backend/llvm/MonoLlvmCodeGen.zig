@@ -2379,28 +2379,16 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
 
-        var resume_cursor = wip.cursor;
         const resume_debug_location = wip.debug_location;
-        defer {
-            wip.cursor = resume_cursor;
-            wip.debug_location = resume_debug_location;
-        }
-
-        const entry_block: LlvmBuilder.Function.Block.Index = .entry;
-        wip.cursor = .{ .block = entry_block };
+        defer wip.debug_location = resume_debug_location;
         wip.debug_location = .no_location;
-        const allocated = wip.alloca(
-            .normal,
+        return wip.allocaInEntry(
             ty,
             builder.intValue(.i32, element_count) catch return error.OutOfMemory,
             alignment,
             .default,
             name,
         ) catch return error.OutOfMemory;
-
-        // Inserting at instruction zero shifts an active entry-block cursor.
-        if (resume_cursor.block == entry_block) resume_cursor.instruction += 1;
-        return allocated;
     }
 
     fn unpackProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
@@ -3038,7 +3026,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable, assign.simd_concat_count);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -4224,7 +4212,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64, interchangeable: layout.WidthValues(bool)) Error!void {
+    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64, interchangeable: layout.WidthValues(bool), simd_concat_count: ?u5) Error!void {
         try self.prepareLocalWrite(target);
         const arg_locals = self.store.getLocalSpan(args);
         if (!op.acceptsStrViewArgs()) {
@@ -4333,7 +4321,7 @@ pub const MonoLlvmCodeGen = struct {
             .simd_sum_lanes_wrap,
             .simd_clmul_lo,
             .simd_clmul_hi,
-            => try self.emitSimdLowLevel(target, op, arg_locals),
+            => try self.emitSimdLowLevel(target, op, arg_locals, simd_concat_count),
             .num_negate, .num_negate_checked => try self.emitNumericNegate(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs, .num_abs_checked => try self.emitNumericAbs(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
@@ -5648,7 +5636,7 @@ pub const MonoLlvmCodeGen = struct {
         return wip.select(.normal, above, high, at_least_low, "") catch return error.OutOfMemory;
     }
 
-    fn emitSimdLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
+    fn emitSimdLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype, concat_count: ?u5) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
@@ -5824,7 +5812,7 @@ pub const MonoLlvmCodeGen = struct {
             .simd_sum_lanes_wrap,
             .simd_clmul_lo,
             .simd_clmul_hi,
-            => try self.emitSimdComplex(target, op, args, vector, destination_vector),
+            => try self.emitSimdComplex(target, op, args, vector, destination_vector, concat_count),
         }
     }
 
@@ -5854,6 +5842,7 @@ pub const MonoLlvmCodeGen = struct {
         args: anytype,
         vector: layout.Vector,
         destination_vector: ?layout.Vector,
+        concat_count: ?u5,
     ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -6002,7 +5991,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeSimdLocal(target, wip.shuffleVector(lhs, rhs, try self.simdShuffleMask(indices[0..count]), "") catch return error.OutOfMemory);
             },
             .simd_table_lookup => try self.emitSimdTableLookup(target, args),
-            .simd_concat_shift_bytes => try self.emitSimdConcatShift(target, args),
+            .simd_concat_shift_bytes => try self.emitSimdConcatShift(target, args, concat_count),
             .simd_widen_lo, .simd_widen_hi => {
                 const destination = destination_vector orelse return error.CompilationFailed;
                 const half = try self.simdShuffleHalf(try self.loadSimdLocal(GuardedList.at(args, 0)), vector, op == .simd_widen_hi);
@@ -6079,17 +6068,12 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const value = try self.loadSimdLocal(GuardedList.at(args, 0));
         const result_ty = self.scalarType(self.localLayout(target));
-        var result = builder.intValue(result_ty, 0) catch return error.OutOfMemory;
-        for (0..vector.laneCount()) |i| {
-            const lane = wip.extractElement(value, builder.intValue(.i32, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            const sign = wip.bin(.lshr, lane, builder.intValue(lane.typeOfWip(wip), vector.laneBits() - 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            const bit = try self.coerceScalar(sign, result_ty, false);
-            const positioned = if (i == 0)
-                bit
-            else
-                wip.bin(.shl, bit, builder.intValue(result_ty, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            result = wip.bin(.@"or", result, positioned, "") catch return error.OutOfMemory;
-        }
+        // A packed predicate preserves exactly one MSB per lane, including
+        // arbitrary non-comparison inputs, without scalarizing the vector.
+        const signs = wip.icmp(.slt, value, builder.zeroInitValue(try self.simdType(vector)) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const mask_ty = builder.intType(vector.laneCount()) catch return error.OutOfMemory;
+        const mask = wip.cast(.bitcast, signs, mask_ty, "") catch return error.OutOfMemory;
+        const result = try self.coerceScalar(mask, result_ty, false);
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
     }
 
@@ -6155,11 +6139,19 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeSimdLocal(target, result);
     }
 
-    fn emitSimdConcatShift(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    fn emitSimdConcatShift(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, known_count: ?u5) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const lhs_vector = try self.loadSimdLocal(GuardedList.at(args, 0));
         const rhs_vector = try self.loadSimdLocal(GuardedList.at(args, 1));
+        if (known_count) |count| {
+            std.debug.assert(count <= 16);
+            var indices: [16]u32 = undefined;
+            for (&indices, 0..) |*index, i| index.* = @as(u32, count) + @as(u32, @intCast(i));
+            const result = wip.shuffleVector(lhs_vector, rhs_vector, try self.simdShuffleMask(&indices), "") catch return error.OutOfMemory;
+            try self.storeSimdLocal(target, result);
+            return;
+        }
         const count_arg = GuardedList.at(args, 2);
         const count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), .i128, false);
         const zero = builder.intValue(.i128, 0) catch return error.OutOfMemory;
@@ -8047,7 +8039,7 @@ pub const MonoLlvmCodeGen = struct {
             // Symbol ABI: call the host's runtime symbol directly:
             // roc_dbg(bytes: [*]const u8, len: usize).
             const fn_ty = builder.fnType(.void, &.{ ptr_ty, self.ptrSizedIntType() }, .normal) catch return error.OutOfMemory;
-            const func = try self.declareExternSymbol("roc_dbg", fn_ty);
+            const func = try self.declareExternSymbol(shim_symbols.roc_dbg, fn_ty);
             _ = wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), &.{
                 try self.staticBytes(msg),
                 builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
@@ -8078,6 +8070,22 @@ pub const MonoLlvmCodeGen = struct {
     fn emitStrLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: StrLiteral) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const bytes = self.store.getStringLiteral(literal);
+        const RocStr = builtins.str.RocStr;
+        if (bytes.len < RocStr.word_count * self.targetWordSize()) {
+            // Construct the complete value here. Inlining the runtime constructor
+            // makes LLVM rediscover these constants through partial-byte stores
+            // and expensive scalar promotion in large callers.
+            const words = smallStrLiteralWords(bytes, self.targetWordSize(), self.target.cpu.arch.endian());
+            var constants: [RocStr.word_count]LlvmBuilder.Constant = undefined;
+            for (words, &constants) |word, *constant| {
+                constant.* = builder.intConst(self.ptrSizedIntType(), word) catch return error.OutOfMemory;
+            }
+            const ty = builder.arrayType(RocStr.word_count, self.ptrSizedIntType()) catch return error.OutOfMemory;
+            const value = builder.arrayConst(ty, &constants) catch return error.OutOfMemory;
+            const wip = self.wip orelse return error.CompilationFailed;
+            _ = wip.store(.normal, value.toValue(), out, self.targetPointerAlignment()) catch return error.OutOfMemory;
+            return;
+        }
         try self.callBuiltinVoid(
             builtinSymbol(.str_from_literal),
             &.{ try self.ptrType(), try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() },
@@ -11365,9 +11373,9 @@ pub const MonoLlvmCodeGen = struct {
             };
         }
         return switch (callback) {
-            .dbg => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_dbg")),
-            .expect_failed => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_expect_failed")),
-            .crashed => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_crashed")),
+            .dbg => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_dbg)),
+            .expect_failed => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_expect_failed)),
+            .crashed => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_crashed)),
         };
     }
 
@@ -12946,10 +12954,106 @@ fn repeatedByte(byte: u8, width: u8) u128 {
     return result;
 }
 
+/// Encode the runtime's inline RocStr layout as target-width integer constants.
+/// The final byte is the length/flag byte regardless of target endianness.
+fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.Endian) [builtins.str.RocStr.word_count]u64 {
+    const RocStr = builtins.str.RocStr;
+    std.debug.assert(word_size == 2 or word_size == 4 or word_size == 8);
+    const str_size = RocStr.word_count * word_size;
+    std.debug.assert(bytes.len < str_size);
+    var encoded: [RocStr.word_count * @sizeOf(u64)]u8 = @splat(0);
+    @memcpy(encoded[0..bytes.len], bytes);
+    encoded[str_size - 1] = RocStr.smallStrFlagByte(bytes.len);
+    var words: [RocStr.word_count]u64 = undefined;
+    for (&words, 0..) |*word, word_index| {
+        const offset = word_index * word_size;
+        word.* = switch (word_size) {
+            2 => std.mem.readInt(u16, encoded[offset..][0..2], endian),
+            4 => std.mem.readInt(u32, encoded[offset..][0..4], endian),
+            8 => std.mem.readInt(u64, encoded[offset..][0..8], endian),
+            else => unreachable,
+        };
+    }
+    return words;
+}
+
+test "LLVM small string constants match the runtime constructor" {
+    const RocStr = builtins.str.RocStr;
+    // Include embedded NUL and UTF-8 in partial and full words.
+    const contents = "a\x00é🙂bc\x00é🙂defghijkl";
+    for (0..@sizeOf(RocStr)) |len| {
+        var runtime_value = RocStr.fromSliceSmall(contents[0..len]);
+        const encoded = smallStrLiteralWords(contents[0..len], @sizeOf(usize), builtin.cpu.arch.endian());
+        var native_words: [RocStr.word_count]usize = undefined;
+        for (encoded, &native_words) |word, *native_word| native_word.* = @intCast(word);
+        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&runtime_value), std.mem.asBytes(&native_words));
+    }
+}
+
+test "LLVM small string constants preserve target layout at every length" {
+    const contents = "a\x00é🙂bc\x00é🙂defghijkl";
+    inline for (.{ u16, u32, u64 }) |Word| {
+        const size = builtins.str.RocStr.word_count * @sizeOf(Word);
+        inline for (.{ std.builtin.Endian.little, std.builtin.Endian.big }) |endian| {
+            for (0..size) |len| {
+                const words = smallStrLiteralWords(contents[0..len], @sizeOf(Word), endian);
+                var memory: [size]u8 = undefined;
+                for (words, 0..) |word, index| {
+                    std.mem.writeInt(Word, memory[index * @sizeOf(Word) ..][0..@sizeOf(Word)], @intCast(word), endian);
+                }
+                try std.testing.expectEqualSlices(u8, contents[0..len], memory[0..len]);
+                for (memory[len .. size - 1]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
+                try std.testing.expectEqual(@as(u8, 0x80) | @as(u8, @intCast(len)), memory[size - 1]);
+            }
+        }
+    }
+}
+
 test "LLVM erased callable explicit arguments exclude capture and reuse" {
     try std.testing.expectEqual(@as(usize, 3), try MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 5));
     try std.testing.expectEqual(@as(usize, 5), try MonoLlvmCodeGen.explicitProcParamCount(.roc, 5));
     try std.testing.expectError(error.CompilationFailed, MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 1));
+}
+
+test "LLVM fixed stack slots dominate entry and loop uses" {
+    const allocator = std.testing.allocator;
+    const byte_alignment = LlvmBuilder.Alignment.fromByteUnits(@alignOf(u8));
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var codegen = MonoLlvmCodeGen.init(allocator, &store, &.{}, &.{}, &.{});
+    defer codegen.deinit();
+    var builder = try codegen.createBuilder("stack_slots");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    const function = try builder.addFunction(try builder.fnType(.void, &.{}, .normal), try builder.strtabString("slots"), .default);
+    var wip = try LlvmBuilder.WipFunction.init(&builder, .{ .function = function, .strip = true });
+    defer wip.deinit();
+    codegen.wip = &wip;
+    const entry = try wip.block(0, "entry");
+    const loop = try wip.block(1, "loop");
+    wip.cursor = .{ .block = entry };
+    const first = try codegen.allocEntryBlockSlot(.i8, 1, byte_alignment, "first");
+    _ = try wip.store(.normal, try builder.intValue(.i8, 1), first, byte_alignment);
+    const second = try codegen.allocEntryBlockSlot(.i8, 1, byte_alignment, "second");
+    _ = try wip.store(.normal, try builder.intValue(.i8, 2), second, byte_alignment);
+    const branch = try wip.br(loop);
+    wip.cursor = .{ .block = loop };
+    const loop_slot = try codegen.allocEntryBlockSlot(.i8, 1, byte_alignment, "loop_slot");
+    try std.testing.expectEqual(loop, wip.cursor.block);
+    try std.testing.expectEqual(@as(u32, 0), wip.cursor.instruction);
+    _ = try wip.store(.normal, try builder.intValue(.i8, 3), loop_slot, byte_alignment);
+    _ = try wip.br(loop);
+    try wip.flushEntryAllocas();
+    const instructions = entry.ptrConst(&wip).instructions.items;
+    try std.testing.expectEqual(loop_slot, instructions[0].toValue());
+    try std.testing.expectEqual(second, instructions[1].toValue());
+    try std.testing.expectEqual(first, instructions[2].toValue());
+    try std.testing.expectEqual(branch, instructions[instructions.len - 1]);
+    const expected = [_]LlvmBuilder.Function.Instruction.Tag{ .alloca, .alloca, .alloca, .store, .store, .br };
+    for (instructions, expected) |instruction, tag| {
+        try std.testing.expectEqual(tag, wip.instructions.get(@intFromEnum(instruction)).tag);
+    }
+    try codegen.finishCurrentWipFunction();
 }
 
 test "issue 11132: scratch clearing follows proc inventories and survives module reuse" {

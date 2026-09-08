@@ -10784,7 +10784,12 @@ fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx)
                 self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @truncate(value)) catch return error.OutOfMemory;
             },
-            .f32, .f64, .v128 => unreachable,
+            .v128 => {
+                var bytes: [16]u8 = undefined;
+                std.mem.writeInt(i128, &bytes, value, .little);
+                try self.emitV128Const(bytes);
+            },
+            .f32, .f64 => unreachable,
         },
         .stack_memory => try self.generateI128Literal(value),
     }

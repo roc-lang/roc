@@ -3409,6 +3409,43 @@ pub const InstGraph = struct {
         return .{ .function = try self.functionNodes(node) };
     }
 
+    /// Distinct current equivalence classes in a function's explicit
+    /// interface. The caller must not merge classes during iteration; adding
+    /// independent nodes and compressing find paths does not change the set.
+    /// Each iterator owns its scratch until deinit, so overlapping
+    /// queries on the same graph cannot clear one another's visited classes.
+    pub const FunctionInterfaceClassIterator = struct {
+        graph: *InstGraph,
+        interface: FunctionInterfaceIterator,
+        seen: collections.DenseMap(NodeId, void),
+
+        pub fn deinit(self: *FunctionInterfaceClassIterator) void {
+            self.graph.node_set_pool.release(&self.seen);
+            self.* = undefined;
+        }
+
+        pub fn next(self: *FunctionInterfaceClassIterator) Allocator.Error!?NodeId {
+            while (self.interface.next()) |node| {
+                const root = self.graph.find(node);
+                if ((try self.seen.getOrPut(root)).found_existing) continue;
+                return root;
+            }
+            return null;
+        }
+    };
+
+    /// Lookup may probe each class once, but persistent indexes must retain
+    /// permanent node IDs through functionInterfaceIterator: later unions can
+    /// change which class owns an indexed node.
+    pub fn functionInterfaceClassIterator(self: *InstGraph, node: NodeId) Allocator.Error!FunctionInterfaceClassIterator {
+        const interface = try self.functionInterfaceIterator(node);
+        return .{
+            .graph = self,
+            .interface = interface,
+            .seen = self.node_set_pool.acquire(),
+        };
+    }
+
     /// Project tuple item cells without materializing a Monotype.
     pub fn tupleItemNodes(self: *InstGraph, node: NodeId) Allocator.Error![]const NodeId {
         const node_content = self.content(try self.shapeRoot(node, "tuple", .inspectable));
@@ -6949,6 +6986,65 @@ test "open draft function interfaces use related graph classes directly" {
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
+}
+
+test "function interface classes deduplicate aliases and refresh after unions" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const alias = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    // The same unresolved shape is a distinct class until explicitly related.
+    const other = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const function = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ arg, arg, alias, other }),
+        .ret = alias,
+    } });
+    try graph.unify(arg, alias);
+
+    {
+        var classes = try graph.functionInterfaceClassIterator(function);
+        defer classes.deinit();
+        var members = collections.DenseMap(NodeId, void).init(gpa);
+        defer members.deinit();
+        var count: usize = 0;
+        while (try classes.next()) |class| {
+            count += 1;
+            var aliases = graph.classMemberIterator(class);
+            while (aliases.next()) |member| {
+                try std.testing.expect(!(try members.getOrPut(member)).found_existing);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 2), count);
+        try std.testing.expectEqual(@as(usize, 3), members.count());
+        try std.testing.expect(members.contains(arg));
+        try std.testing.expect(members.contains(alias));
+        try std.testing.expect(members.contains(other));
+    }
+
+    try graph.unify(alias, other);
+    // A new lookup must observe the union, with no visited state retained
+    // from the previous query. Overlapping iterators own separate scratch.
+    var classes = try graph.functionInterfaceClassIterator(function);
+    defer classes.deinit();
+    var concurrent = try graph.functionInterfaceClassIterator(function);
+    defer concurrent.deinit();
+    const root = graph.find(arg);
+    try std.testing.expectEqual(root, (try classes.next()).?);
+    try std.testing.expectEqual(root, (try concurrent.next()).?);
+    try std.testing.expectEqual(null, try classes.next());
+    try std.testing.expectEqual(null, try concurrent.next());
+
+    const nullary = try graph.newNode(.{ .func = .{ .args = &.{}, .ret = arg } });
+    var return_only = try graph.functionInterfaceClassIterator(nullary);
+    defer return_only.deinit();
+    try std.testing.expectEqual(root, (try return_only.next()).?);
+    try std.testing.expectEqual(null, try return_only.next());
 }
 
 test "open function interface shape snapshot alpha-normalizes variables and survives refinement" {

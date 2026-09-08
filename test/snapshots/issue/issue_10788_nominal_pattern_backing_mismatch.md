@@ -17,25 +17,47 @@ Pt := { depth : U8, n : U64 }.{
 # EXPECTED
 TYPE MISMATCH - issue_10788_nominal_pattern_backing_mismatch.md:4:10:4:10
 # PROBLEMS
-── ✗ type mismatch ───────── issue_10788_nominal_pattern_backing_mismatch.md:4:3
-
-The first pattern in this match is incompatible.
-
-f = |s| match s {
-    Pt([a]) => a
-    _ => 0
-}
-
-The first pattern is trying to match:
-
-    [Pt(List(_b)), ..]
-
-But the expression between the match parenthesis has the type:
-
-    Pt
-
-These can never match! Either the pattern or expression has a problem.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 10) (end 7 3))
+		(headline
+			(reflow "The first pattern in this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "is incompatible."))
+		(document
+			(source-underlines
+				(display (file "issue_10788_nominal_pattern_backing_mismatch.md") (start 4 10) (end 7 3) (annotation dim) (line-text "\tf = |s| match s {\n\t\tPt([a]) => a\n\t\t_ => 0\n\t}"))
+				(underline (start 5 3) (end 5 10) (annotation error)))
+			(line-break)
+			(reflow "The first pattern is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Pt(List(_b)), ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Pt")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Dot,OpenCurly,

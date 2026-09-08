@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_two_elements.md:1:5:1:12
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────────── can_list_two_elements.md:1:5
-
-This string literal is being used where a non-string type is needed.
-
-[1, "hello"]
-    ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 5) (end 1 12))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "can_list_two_elements.md") (start 1 5) (end 1 12) (annotation error) (line-text "[1, \"hello\"]"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,

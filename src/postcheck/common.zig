@@ -163,29 +163,35 @@ pub fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
     };
 }
 
-/// The low-level op that renders a primitive scalar as a `Str`. This is the
-/// single source of truth shared by every post-check inspect lowering; call it
-/// rather than writing a second switch over `CheckedPrimitive`. Bool renders
-/// through ordinary tag-union inspect and the SIMD vectors render through their
-/// explicit `Builtin` bodies, so neither reaches this table.
-pub fn primitiveInspectLowLevelOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
+/// The inspection operation shared by Monotype and Boxy for a primitive type.
+pub const PrimitiveInspectLowering = union(enum) {
+    low_level: LIR.LowLevel,
+    builtin_method,
+    bool_tag_union,
+};
+
+/// Inspection behavior is independent of primitive storage representation.
+/// Both lowering strategies, including pre-freeze method preparation, consume
+/// this exhaustive classification. SIMD uses its checked `to_inspect` body;
+/// scalar inspection needs no method lookup.
+pub fn primitiveInspectLowering(primitive: checked.CheckedPrimitive) PrimitiveInspectLowering {
     return switch (primitive) {
-        .str => .str_inspect,
-        .u8 => .u8_to_str,
-        .i8 => .i8_to_str,
-        .u16 => .u16_to_str,
-        .i16 => .i16_to_str,
-        .u32 => .u32_to_str,
-        .i32 => .i32_to_str,
-        .u64 => .u64_to_str,
-        .i64 => .i64_to_str,
-        .u128 => .u128_to_str,
-        .i128 => .i128_to_str,
-        .f32 => .f32_to_str,
-        .f64 => .f64_to_str,
-        .dec => .dec_to_str,
-        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => invariant("SIMD inspect must lower through its explicit Builtin body"),
-        .bool => invariant("Bool must lower as an ordinary tag union before Str.inspect"),
+        .str => .{ .low_level = .str_inspect },
+        .u8 => .{ .low_level = .u8_to_str },
+        .i8 => .{ .low_level = .i8_to_str },
+        .u16 => .{ .low_level = .u16_to_str },
+        .i16 => .{ .low_level = .i16_to_str },
+        .u32 => .{ .low_level = .u32_to_str },
+        .i32 => .{ .low_level = .i32_to_str },
+        .u64 => .{ .low_level = .u64_to_str },
+        .i64 => .{ .low_level = .i64_to_str },
+        .u128 => .{ .low_level = .u128_to_str },
+        .i128 => .{ .low_level = .i128_to_str },
+        .f32 => .{ .low_level = .f32_to_str },
+        .f64 => .{ .low_level = .f64_to_str },
+        .dec => .{ .low_level = .dec_to_str },
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .builtin_method,
+        .bool => .bool_tag_union,
     };
 }
 

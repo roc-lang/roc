@@ -28,81 +28,252 @@ TRAILING `?` - try_suffix_trailing_warning.md:8:11:8:12
 TRAILING `?` - try_suffix_trailing_warning.md:14:19:14:20
 TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 # PROBLEMS
-── ● trailing `?` ────────────────────────── try_suffix_trailing_warning.md:8:11
-
-It's usually a mistake to use a postfix ? on values being returned implicitly
-at the end of a function like this:
-
-nested(s)?
-         ^
-
-This is because ? is syntax sugar for doing a match on a Try value like this:
-
-    match value_before_question_mark {
-        Ok(ok_payload) => ok_payload
-        Err(err_payload) => return Err(err_payload)
-    }
-
-When you use ? on the value at the end of a function, it changes "implicitly
-return this Try value" to "return this Try value if it's an Err, but if it's
-Ok, unwrap its Ok payload and return that instead" - which can only possibly
-type-check when returning Try(Try(..., ...), ...), which is so unusual that
-using ? here is almost always a mistake in practice.
-
-Usually removing the ? here is what makes the most sense, but if you really
-want this behavior, make it clear by using an explicit match instead of the ?
-syntax sugar.
-
-── ● trailing `?` ───────────────────────── try_suffix_trailing_warning.md:14:19
-
-It's usually a mistake to use a postfix ? on values being returned implicitly
-at the end of a function like this:
-
-return nested(s)?
-                ^
-
-This is because ? is syntax sugar for doing a match on a Try value like this:
-
-    match value_before_question_mark {
-        Ok(ok_payload) => ok_payload
-        Err(err_payload) => return Err(err_payload)
-    }
-
-When you use ? on the value at the end of a function, it changes "implicitly
-return this Try value" to "return this Try value if it's an Err, but if it's
-Ok, unwrap its Ok payload and return that instead" - which can only possibly
-type-check when returning Try(Try(..., ...), ...), which is so unusual that
-using ? here is almost always a mistake in practice.
-
-Usually removing the ? here is what makes the most sense, but if you really
-want this behavior, make it clear by using an explicit match instead of the ?
-syntax sugar.
-
-── ● trailing `?` ───────────────────────── try_suffix_trailing_warning.md:16:23
-
-It's usually a mistake to use a postfix ? on values being returned implicitly
-at the end of a function like this:
-
-if s == "y" nested(s)? else Ok(s)
-                     ^
-
-This is because ? is syntax sugar for doing a match on a Try value like this:
-
-    match value_before_question_mark {
-        Ok(ok_payload) => ok_payload
-        Err(err_payload) => return Err(err_payload)
-    }
-
-When you use ? on the value at the end of a function, it changes "implicitly
-return this Try value" to "return this Try value if it's an Err, but if it's
-Ok, unwrap its Ok payload and return that instead" - which can only possibly
-type-check when returning Try(Try(..., ...), ...), which is so unusual that
-using ? here is almost always a mistake in practice.
-
-Usually removing the ? here is what makes the most sense, but if you really
-want this behavior, make it clear by using an explicit match instead of the ?
-syntax sugar.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Trailing `?`")
+		(region (start 8 11) (end 8 12))
+		(headline
+			(reflow "It's usually a mistake to use a postfix ")
+			(annotated code "?")
+			(reflow " on values being returned implicitly at the end of a function like this:"))
+		(document
+			(source-region (file "try_suffix_trailing_warning.md") (start 8 11) (end 8 12) (annotation warning) (line-text "\tnested(s)?"))
+			(line-break)
+			(reflow "This is because ")
+			(annotated code "?")
+			(reflow " is syntax sugar for doing a ")
+			(annotated code "match")
+			(reflow " on a ")
+			(annotated code "Try")
+			(reflow " value like this:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(annotated keyword "match")
+			(text " ")
+			(annotated symbol-unqualified "value_before_question_mark")
+			(text " {")
+			(line-break)
+			(indent 2)
+			(annotated tag "Ok")
+			(text "(")
+			(annotated symbol-unqualified "ok_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated symbol-unqualified "ok_payload")
+			(line-break)
+			(indent 2)
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated keyword "return")
+			(text " ")
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ")")
+			(line-break)
+			(indent 1)
+			(text "}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "When you use ")
+			(annotated code "?")
+			(reflow " on the value at the end of a function, it changes \"implicitly return this ")
+			(annotated code "Try")
+			(reflow " value\" to \"return this ")
+			(annotated code "Try")
+			(reflow " value if it's an ")
+			(annotated code "Err")
+			(reflow ", but if it's ")
+			(annotated code "Ok")
+			(reflow ", unwrap its ")
+			(annotated code "Ok")
+			(reflow " payload and return that instead\" - which can only possibly type-check when returning ")
+			(annotated code "Try(Try(..., ...), ...)")
+			(reflow ", which is so unusual that using ")
+			(annotated code "?")
+			(reflow " here is almost always a mistake in practice.")
+			(line-break)
+			(line-break)
+			(reflow "Usually removing the ")
+			(annotated code "?")
+			(reflow " here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ")
+			(annotated code "match")
+			(reflow " instead of the ")
+			(annotated code "?")
+			(reflow " syntax sugar.")))
+	(report
+		(severity warning)
+		(title "Trailing `?`")
+		(region (start 14 19) (end 14 20))
+		(headline
+			(reflow "It's usually a mistake to use a postfix ")
+			(annotated code "?")
+			(reflow " on values being returned implicitly at the end of a function like this:"))
+		(document
+			(source-region (file "try_suffix_trailing_warning.md") (start 14 19) (end 14 20) (annotation warning) (line-text "\t\treturn nested(s)?"))
+			(line-break)
+			(reflow "This is because ")
+			(annotated code "?")
+			(reflow " is syntax sugar for doing a ")
+			(annotated code "match")
+			(reflow " on a ")
+			(annotated code "Try")
+			(reflow " value like this:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(annotated keyword "match")
+			(text " ")
+			(annotated symbol-unqualified "value_before_question_mark")
+			(text " {")
+			(line-break)
+			(indent 2)
+			(annotated tag "Ok")
+			(text "(")
+			(annotated symbol-unqualified "ok_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated symbol-unqualified "ok_payload")
+			(line-break)
+			(indent 2)
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated keyword "return")
+			(text " ")
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ")")
+			(line-break)
+			(indent 1)
+			(text "}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "When you use ")
+			(annotated code "?")
+			(reflow " on the value at the end of a function, it changes \"implicitly return this ")
+			(annotated code "Try")
+			(reflow " value\" to \"return this ")
+			(annotated code "Try")
+			(reflow " value if it's an ")
+			(annotated code "Err")
+			(reflow ", but if it's ")
+			(annotated code "Ok")
+			(reflow ", unwrap its ")
+			(annotated code "Ok")
+			(reflow " payload and return that instead\" - which can only possibly type-check when returning ")
+			(annotated code "Try(Try(..., ...), ...)")
+			(reflow ", which is so unusual that using ")
+			(annotated code "?")
+			(reflow " here is almost always a mistake in practice.")
+			(line-break)
+			(line-break)
+			(reflow "Usually removing the ")
+			(annotated code "?")
+			(reflow " here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ")
+			(annotated code "match")
+			(reflow " instead of the ")
+			(annotated code "?")
+			(reflow " syntax sugar.")))
+	(report
+		(severity warning)
+		(title "Trailing `?`")
+		(region (start 16 23) (end 16 24))
+		(headline
+			(reflow "It's usually a mistake to use a postfix ")
+			(annotated code "?")
+			(reflow " on values being returned implicitly at the end of a function like this:"))
+		(document
+			(source-region (file "try_suffix_trailing_warning.md") (start 16 23) (end 16 24) (annotation warning) (line-text "\tif s == \"y\" nested(s)? else Ok(s)"))
+			(line-break)
+			(reflow "This is because ")
+			(annotated code "?")
+			(reflow " is syntax sugar for doing a ")
+			(annotated code "match")
+			(reflow " on a ")
+			(annotated code "Try")
+			(reflow " value like this:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(annotated keyword "match")
+			(text " ")
+			(annotated symbol-unqualified "value_before_question_mark")
+			(text " {")
+			(line-break)
+			(indent 2)
+			(annotated tag "Ok")
+			(text "(")
+			(annotated symbol-unqualified "ok_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated symbol-unqualified "ok_payload")
+			(line-break)
+			(indent 2)
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated keyword "return")
+			(text " ")
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ")")
+			(line-break)
+			(indent 1)
+			(text "}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "When you use ")
+			(annotated code "?")
+			(reflow " on the value at the end of a function, it changes \"implicitly return this ")
+			(annotated code "Try")
+			(reflow " value\" to \"return this ")
+			(annotated code "Try")
+			(reflow " value if it's an ")
+			(annotated code "Err")
+			(reflow ", but if it's ")
+			(annotated code "Ok")
+			(reflow ", unwrap its ")
+			(annotated code "Ok")
+			(reflow " payload and return that instead\" - which can only possibly type-check when returning ")
+			(annotated code "Try(Try(..., ...), ...)")
+			(reflow ", which is so unusual that using ")
+			(annotated code "?")
+			(reflow " here is almost always a mistake in practice.")
+			(line-break)
+			(line-break)
+			(reflow "Usually removing the ")
+			(annotated code "?")
+			(reflow " here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ")
+			(annotated code "match")
+			(reflow " instead of the ")
+			(annotated code "?")
+			(reflow " syntax sugar."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

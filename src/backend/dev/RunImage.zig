@@ -15,7 +15,7 @@ const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocatio
 const Allocator = std.mem.Allocator;
 
 /// Boxy runtime sidecar embedded in a dev run image: descriptor tables, the
-/// committed layout store, and the string store the descriptors index. Its
+/// committed layout store, and the name store the descriptors index. Its
 /// offsets are relative to the run image's boxy blob region.
 pub const BoxySidecar = lir.LirImage.BoxySidecar;
 
@@ -23,7 +23,8 @@ pub const BoxySidecar = lir.LirImage.BoxySidecar;
 pub const MAGIC: u32 = 0x56454452;
 
 /// Version of the shared-memory dev run image format.
-pub const FORMAT_VERSION: u32 = 4;
+/// v5: embedded Boxy sidecars carry dense name identities and byte/range columns.
+pub const FORMAT_VERSION: u32 = 5;
 
 /// Maximum bytes reserved per host jump stub on the supported dev-shim hosts.
 /// The machine-code shim owns the per-arch emitted sizes and asserts at compile
@@ -686,7 +687,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     };
     var symbols: @import("SymbolTable.zig").Table = .{};
     defer symbols.deinit(scratch);
-    const alloc_symbol = try symbols.intern(scratch, "roc_alloc");
+    const alloc_symbol = try symbols.intern(scratch, @import("builtins").shim_symbols.roc_alloc);
     const answer_symbol = try symbols.intern(scratch, "roc__answer");
     const relocations = [_]Relocation{
         .{ .linked_function = .{ .offset = 1, .symbol = alloc_symbol } },
@@ -767,7 +768,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(@as(usize, relocations.len), view.relocations.len);
     try std.testing.expectEqual(RelocationKind.linked_function, try view.relocations[0].relocationKind());
     try std.testing.expectEqual(@as(u64, 1), view.relocations[0].code_offset);
-    try std.testing.expectEqualStrings("roc_alloc", try view.symbolName(view.relocations[0].symbol));
+    try std.testing.expectEqualStrings(@import("builtins").shim_symbols.roc_alloc, try view.symbolName(view.relocations[0].symbol));
     try std.testing.expectEqual(RelocationKind.linked_data_rel32, try view.relocations[1].relocationKind());
     try std.testing.expectEqual(@as(u64, 2), view.relocations[1].code_offset);
     try std.testing.expectEqualStrings("roc__answer", try view.symbolName(view.relocations[1].symbol));
