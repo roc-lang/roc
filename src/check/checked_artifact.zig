@@ -841,6 +841,9 @@ pub const ProvidedExport = union(enum) {
     data: ProvidedDataExport,
 };
 
+/// Dense declaration identity in one checked module's provided export table.
+pub const ProvidedExportId = enum(u32) { _ };
+
 /// Public `ProvidedExportTable` declaration.
 pub const ProvidedExportTable = struct {
     exports: []ProvidedExport = &.{},
@@ -962,6 +965,8 @@ pub const RootRequest = struct {
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
+    /// Exact `provides` declaration for a published procedure root.
+    provided_export: OptionalId(ProvidedExportId) = .none,
     /// Exact checked root selected for this request. Compile-time roots can
     /// share a source expression, so source and broad request kind are not an
     /// identity.
@@ -2307,7 +2312,7 @@ fn appendPublishedEntrypointRoots(
         platform_required_declarations.declarations.len == 0 or
         platform_app_relation != null;
     if (provided_runtime_roots_ready) {
-        for (provided_exports.exports) |provided| {
+        for (provided_exports.exports, 0..) |provided, export_index| {
             switch (provided) {
                 .procedure => |procedure| {
                     const checked_type = try relation_substitutions.specializeRoot(
@@ -2319,6 +2324,7 @@ fn appendPublishedEntrypointRoots(
                     try appendRoot(requests, allocator, .{
                         .module_idx = module.moduleIndex(),
                         .kind = .provided_export,
+                        .provided_export = @enumFromInt(export_index),
                         .source = .{ .def = procedure.def },
                         .checked_type = checked_type,
                         .abi = .platform,
@@ -2501,6 +2507,8 @@ const RootRequestWithoutOrder = struct {
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
+    /// Exact `provides` declaration for a published procedure root.
+    provided_export: ?ProvidedExportId = null,
     compile_time_root: ?ComptimeRootId = null,
     checked_type: CheckedTypeId,
     abi: RootAbi,
@@ -2521,6 +2529,7 @@ fn appendRoot(
         .module_idx = request.module_idx,
         .kind = request.kind,
         .source = request.source,
+        .provided_export = if (request.provided_export) |id| .some(id) else .none,
         .compile_time_root = request.compile_time_root,
         .checked_type = request.checked_type,
         .abi = request.abi,
@@ -30485,57 +30494,25 @@ pub const CheckedModuleArtifact = struct {
             self.checking_context_identity.platform_app_relation == null;
     }
 
-    /// Look up the root request with the given metadata order.
-    /// Returns null if not found (callers that rely on an invariant can assert).
+    /// Root orders are dense indices in the complete checked request table.
     pub fn lookupRootRequestByOrder(self: *const CheckedModuleArtifact, order: u32) ?RootRequest {
-        for (self.root_requests.requests) |request| {
-            if (request.order == order) return request;
-        }
-        return null;
+        if (order >= self.root_requests.requests.len) return null;
+        const root = self.root_requests.requests[order];
+        std.debug.assert(root.order == order);
+        return root;
     }
 
-    /// Name of a `provided_export` root's published FFI symbol, or null if absent.
+    /// Borrow a provided procedure root's exact published FFI symbol.
     pub fn providedEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
-        const def_idx = switch (root.source) {
-            .def => |def| def,
-            .expr,
-            .statement,
-            .required_binding,
-            .hoisted,
-            => return null,
+        if (root.kind != .provided_export) return null;
+        const export_id = root.provided_export.get() orelse
+            checkedArtifactInvariant("provided root has no export declaration identity", .{});
+        const provided = self.provided_exports.exports[@intFromEnum(export_id)];
+        const procedure = switch (provided) {
+            .procedure => |procedure| procedure,
+            .data => checkedArtifactInvariant("provided procedure root names a data export", .{}),
         };
-        const top_level = self.top_level_values.lookupByDef(def_idx) orelse return null;
-        for (self.provides_requires.provides) |entry| {
-            if (entry.source_name == top_level.source_name) {
-                return self.canonical_names.externalSymbolNameText(entry.ffi_symbol);
-            }
-        }
-        return null;
-    }
-
-    /// Name of a `platform_required_binding` root's exported symbol, or null if absent.
-    pub fn requiredEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
-        const binding_id = switch (root.source) {
-            .required_binding => |id| id,
-            .def,
-            .expr,
-            .statement,
-            .hoisted,
-            => return null,
-        };
-        const binding = self.platform_required_bindings.lookupByBindingId(binding_id) orelse return null;
-        const declaration = self.platform_required_declarations.lookupByDeclarationId(binding.declaration) orelse return null;
-        return self.canonical_names.exportNameText(declaration.platform_name);
-    }
-
-    /// Dispatch to the right name lookup based on the root kind. Returns null
-    /// if the root kind isn't an entrypoint kind or the lookup fails.
-    pub fn entrypointNameForRoot(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
-        return switch (root.kind) {
-            .provided_export => self.providedEntrypointName(root),
-            .platform_required_binding => self.requiredEntrypointName(root),
-            .runtime_entrypoint, .hosted_export, .test_expect, .repl_expr, .dev_expr, .compile_time_constant, .compile_time_callable => null,
-        };
+        return self.canonical_names.externalSymbolNameText(procedure.ffi_symbol);
     }
 
     /// Extern-compatible inline mirror of `ModuleIdentity`. `ModuleIdentity`
@@ -30879,9 +30856,10 @@ pub const CheckedModuleArtifact = struct {
     // Version 87 persists the checked scheme's key-to-ID probing index.
     // Version 88 records nested procedures' lexical type bindings.
     // Version 89 records checked error constants for rejected pattern binders.
-    // Version 90 distinguishes generalized callable aliases from runtime
+    // Version 90 records each provided root's exact export declaration ID.
+    // Version 91 distinguishes generalized callable aliases from runtime
     // value bindings and function-body declarations.
-    const serialized_layout_version: u32 = 90;
+    const serialized_layout_version: u32 = 91;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -31059,6 +31037,17 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
+            if (request.kind == .provided_export) {
+                const export_id = request.provided_export.get() orelse
+                    checkedArtifactInvariant("provided root has no export declaration identity", .{});
+                const provided = self.provided_exports.exports[@intFromEnum(export_id)];
+                std.debug.assert(provided == .procedure);
+                std.debug.assert(request.source == .def);
+                std.debug.assert(request.source.def == provided.procedure.def);
+                std.debug.assert(request.abi == .platform and request.exposure == .exported);
+            } else {
+                std.debug.assert(request.provided_export == .none);
+            }
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.items.len);
             if (request.abi == .compile_time) {
@@ -37377,8 +37366,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE6, 0x98, 0xB8, 0x9D, 0xDF, 0xC0, 0xA0, 0x6C, 0x4D, 0xC7, 0xE3, 0x3A, 0xF8, 0xBB, 0x6F, 0xF2,
-        0x52, 0xC4, 0x72, 0xF2, 0x54, 0x7B, 0x0B, 0x3E, 0xCB, 0x83, 0x41, 0x40, 0x44, 0x61, 0x63, 0x4F,
+        0xDF, 0x84, 0x73, 0xED, 0xCE, 0x8A, 0x30, 0x13, 0xE5, 0xD3, 0xA1, 0xA2, 0xFE, 0x82, 0xE1, 0x26,
+        0xC9, 0x1D, 0x4A, 0x63, 0xE1, 0x9D, 0xCA, 0xBA, 0xF2, 0xE4, 0x57, 0x77, 0x84, 0xB9, 0x85, 0xAB,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

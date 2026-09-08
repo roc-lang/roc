@@ -1231,53 +1231,15 @@ fn selectGlueSpecRootProc(
     expected_ffi_symbol: []const u8,
 ) ?lir.LirProcSpecId {
     for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
-        if (metadata.kind != .provided_export) continue;
-        const root = rootRequestByOrder(root_artifact, metadata.order);
-        const ffi_symbol = providedRootFfiSymbol(root_artifact, root);
+        std.debug.assert(metadata.kind == .provided_export);
+        std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
+        const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse
+            glueInvariant("missing root request order {d}", .{metadata.order});
+        const ffi_symbol = root_artifact.providedEntrypointName(root) orelse
+            glueInvariant("provided export root has no published FFI symbol", .{});
         if (std.mem.eql(u8, ffi_symbol, expected_ffi_symbol)) return root_proc;
     }
     return null;
-}
-
-fn rootRequestByOrder(
-    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    order: u32,
-) CheckedArtifact.RootRequest {
-    for (root_artifact.root_requests.requests) |request| {
-        if (request.order == order) return request;
-    }
-    if (builtin.mode == .Debug) {
-        std.debug.panic("glue invariant violated: missing root request order {d}", .{order});
-    }
-    unreachable;
-}
-
-fn providedRootFfiSymbol(
-    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    root: CheckedArtifact.RootRequest,
-) []const u8 {
-    if (root.source != .def) {
-        if (builtin.mode == .Debug) std.debug.panic("glue invariant violated: provided export root is not a definition", .{});
-        unreachable;
-    }
-    const def_idx = root.source.def;
-    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("glue invariant violated: provided export root has no published top-level value", .{});
-        }
-        unreachable;
-    };
-
-    for (root_artifact.provides_requires.provides) |entry| {
-        if (entry.source_name == top_level.source_name) {
-            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
-        }
-    }
-
-    if (builtin.mode == .Debug) {
-        std.debug.panic("glue invariant violated: provided export root has no published FFI symbol", .{});
-    }
-    unreachable;
 }
 
 fn platformRequiredEntrypointCheckedType(

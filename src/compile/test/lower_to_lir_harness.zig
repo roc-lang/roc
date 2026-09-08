@@ -627,7 +627,12 @@ fn lowerAppPathToLir(
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    // These scheduler fixtures explicitly exercise checked procedure-use roots;
+    // ordinary host compilation selects only provided exports.
+    const lir_roots = if (opts.parallel_procedure_root_fixture or opts.prepared_direct_call_root_fixture)
+        try gpa.dupe(check.CheckedArtifact.RootRequest, root.root_requests.runtime_requests)
+    else
+        try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
     if (opts.parallel_procedure_root_fixture) {
         var procedure_use_roots: usize = 0;

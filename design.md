@@ -4574,27 +4574,40 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
 - supply each reachable `continue` edge with the scalar leaves required by the
   loop fixed point.
 
-When the continuation observes only part of a compiler-generated tuple loop
-result, SpecConstr may narrow the loop's exit ABI without narrowing its
-back-edge state. Exit selection is a distinct final clone phase after the
-specialization graph is complete. Ordinary specialization and body-rewrite
-clones never initiate it. The exit-selection clone keeps calls opaque, does not
-rewrite call patterns, and cannot emit callable workers, so it cannot reopen
-the specialization graph through recursive call edges. Its recursive input is
-limited to the selected function's finite, acyclic expression ownership.
+When the continuation observes only part of a tuple loop result, SpecConstr
+may narrow the loop's exit ABI without narrowing its back-edge state. This
+applies equally to source tuples and compiler-generated state tuples; tuple
+type does not imply a statically visible tuple constructor.
 
-That rewrite is lexical: the dedicated full expression clone carries the
-selected exit ABI while cloning the owning loop body, rewrites every `break`
-owned by that loop wherever it occurs (including inside mixed value-producing
-branch arms and statement values), and pushes an explicit null selection while
-cloning a nested loop body. Initial values remain in the enclosing lexical loop
-context. Re-cloned output breaks carry an explicit SpecConstr-owned selected-ABI
-stamp, so the exit-selection clone's internal normalization propagates the
-already completed transfer instead of trying to recognize it from its scalar
-shape.
-It is invalid to change the loop result type after rewriting only a terminating
-spine or a subset of exits; every selected exit must transfer exactly the
-explicitly selected tuple items.
+Exit selection is a distinct final phase after the specialization graph is
+complete. One source-order traversal of each finalized function records loop
+result bindings and all uses of their local identities. The resulting immutable
+demand plan carries source tuple types, component types, and live components.
+A whole-tuple use, including a capture or retained ownership operand, demands
+every component. The analysis visits a continuation once, not once per field.
+Ordinary specialization and body-rewrite clones never initiate exit selection.
+
+The exit rewrite consumes that plan while preserving the established loop
+parameter representation. It neither retries loop scalarization nor feeds its
+completed loops or continuations back through general normalization. Calls stay
+opaque; it cannot discover call patterns, emit workers, or reopen the
+specialization graph. Existing branch structure and shared continuations remain
+shared rather than being distributed into branch arms. Statement suffixes are
+borrowed source spans, not repeatedly copied sequences.
+
+The rewrite is lexical: it carries the selected exit ABI while traversing the
+owning loop body and rewrites every owned `break`, including those in branch
+arms and statement values. A nested loop body pushes an explicit null selection;
+its initial values remain in the enclosing lexical loop context. Completed
+transfers are output once and are never reinterpreted as source tuple exits.
+
+Each exit preserves its complete strict binding chain, including computations
+in discarded tuple components. Known, reusable tuple components transfer
+directly. An opaque tuple producer is evaluated once and supplies exact typed
+reads for only the selected components. Typed representation boundaries remain
+explicit. No tuple shape is guessed, no dead symbolic tuple is reconstructed at
+an exit, and no backend participates in this decision. Every selected exit must
+transfer exactly the components declared by its demand plan.
 
 Iterator classification in this pass consumes the explicit iterator
 representation field (or the checked public `Builtin.Iter` identity). It does
@@ -7317,8 +7330,8 @@ per-specialization residue of generalized literals.
 A generalized local callable alias (`alias = callable`) owns a checked
 instantiation scope, not a runtime monomorphic value cell or a new function
 body. Checking's binding-scheme classification and the declaration's explicit
-lookup edge authorize this plan; publication records it on the binder and its
-resolved procedure uses. Calls and other value-producing computations are not
+lookup edge authorize this plan; CheckedModule construction records it on the
+binder and its resolved procedure uses. Calls and other value-producing computations are not
 alias declarations and retain their original evaluation site.
 
 Every alias use carries its own checked substitution and evidence. Interface
@@ -7327,8 +7340,8 @@ binding type. Body lowering installs that substitution in a fresh type-only
 scope and forwards the referenced callable, preserving its identity and
 captures. It does not clone runtime binder tables or create an alias closure,
 wrapper procedure, or specialization family. Monomorphic variables present in
-the substitution retain their existing cells. Publication compresses alias
-identity edges to their final callable lookup in linear work without composing
+the substitution retain their existing cells. CheckedModule construction
+compresses alias identity edges to their final callable lookup in linear work without composing
 type graphs. Boxy consumes that target when planning each typed callable use;
 it never materializes an alias at an uninstantiated descriptor.
 
@@ -13348,6 +13361,17 @@ symbols stay distinct because the platform header that assigns those symbols
 is the data that separates them. `provides` follows the same rule: the
 exported symbol set is part of the platform relation, and two exports remain
 two exports even when they name the same Roc function.
+
+Host compilation selects only `provided_export` procedure roots before lowering.
+Platform requirements remain checked internal bindings reached through ordinary
+procedure references; their ABI category does not grant host visibility. Each
+provided root records its exact dense declaration ID in the checked export table.
+The existing LIR root order retains the checked root identity, and its position
+in the selected root sequence determines the host dispatch ordinal. Native output,
+shims, and images consume that same sequence without independently filtering it.
+Symbol lookup follows the declaration ID directly, never a source-name search.
+Run images copy names because they outlive checked modules; linked output borrows
+them while those modules remain alive.
 
 ### Sealed Roc Object Boundary
 

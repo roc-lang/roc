@@ -1294,6 +1294,9 @@ const Formatter = struct {
     const ExprFormatContext = struct {
         behavior: ExprFormatBehavior = .normal,
         question_suffix_follows: bool = false,
+        // Follow only the leading callee/receiver until emitted parentheses
+        // establish an ordinary expression context. Arguments start fresh.
+        starts_pipe_target: bool = false,
     };
 
     fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) FormatAstError!void {
@@ -1385,8 +1388,8 @@ const Formatter = struct {
         Formatter.discardRegion(formatted.region);
     }
 
-    fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!void {
-        const formatted = try fmt.formatExprInner(ei, .{ .behavior = format_behavior });
+    fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_context: ExprFormatContext) FormatAstError!void {
+        const formatted = try fmt.formatExprInner(ei, format_context);
         Formatter.discardRegion(formatted.region);
     }
 
@@ -1493,7 +1496,7 @@ const Formatter = struct {
         }
         switch (expr) {
             .apply => |a| {
-                try fmt.formatExprDiscard(a.@"fn");
+                try fmt.formatExprInnerDiscard(a.@"fn", .{ .starts_pipe_target = format_context.starts_pipe_target });
                 const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
                 try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ei), fmt.ast.store.exprSlice(a.args));
@@ -1596,6 +1599,9 @@ const Formatter = struct {
             },
             .ident => |i| {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
+                const needs_parens = format_context.starts_pipe_target and qualifier_tokens.len == 0 and
+                    fmt.ast.tokens.tokens.items(.tag)[i.token] == .NamedUnderscore;
+                if (needs_parens) try fmt.push('(');
 
                 for (qualifier_tokens) |tok_idx| {
                     const tok = @as(Token.Idx, @intCast(tok_idx));
@@ -1604,6 +1610,7 @@ const Formatter = struct {
                 }
 
                 try fmt.pushTokenText(i.token);
+                if (needs_parens) try fmt.push(')');
             },
             .field_access => |fa| {
                 const receiver_expr = fmt.ast.store.getExpr(fa.receiver);
@@ -1614,7 +1621,7 @@ const Formatter = struct {
                 const receiver = if (parenthesize_receiver)
                     try fmt.formatParenthesizedExpr(null, fa.receiver, expand_parenthesized_receiver)
                 else
-                    try fmt.formatExprWithInfo(fa.receiver);
+                    try fmt.formatExprInner(fa.receiver, .{ .starts_pipe_target = format_context.starts_pipe_target });
 
                 const access_indent = fmt.curr_indent;
                 const segments = fmt.ast.store.fieldAccessSegmentSlice(fa.segments);
@@ -1658,7 +1665,7 @@ const Formatter = struct {
                 const receiver = if (parenthesize_receiver)
                     try fmt.formatParenthesizedExpr(null, mc.receiver, expand_parenthesized_receiver)
                 else
-                    try fmt.formatExprWithInfo(mc.receiver);
+                    try fmt.formatExprInner(mc.receiver, .{ .starts_pipe_target = format_context.starts_pipe_target });
                 if (flatten_pipe_receiver) {
                     try fmt.continuePipeReceiverPostfix(mc.method_token, format_behavior);
                 } else if (!parenthesize_receiver) {
@@ -1700,9 +1707,10 @@ const Formatter = struct {
                 }
 
                 const right_expr = fmt.ast.store.getExpr(ld.right);
+                const target_context: ExprFormatContext = .{ .behavior = .no_indent_on_access, .starts_pipe_target = true };
                 switch (right_expr) {
                     .ident, .tag => {
-                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                        try fmt.formatExprInnerDiscard(ld.right, target_context);
                     },
                     .apply => |apply| {
                         const apply_fn_idx = apply.@"fn";
@@ -1724,16 +1732,16 @@ const Formatter = struct {
                             if (fmt.hasCommentBefore(closing_token) and try fmt.flushCommentsBefore(closing_token)) {
                                 try fmt.pushIndent();
                             }
-                            const target_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
+                            const target_needs_parens = fmt.pipeTargetNeedsParens(apply_fn_idx);
                             if (target_needs_parens) {
                                 try fmt.formatPipeTargetParens(apply_fn_idx, apply_fn == .multiline_string or apply_fn == .typed_multiline_string);
                             } else {
-                                try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
+                                try fmt.formatExprInnerDiscard(apply_fn_idx, target_context);
                             }
                         } else {
                             // Parenthesize a non-atomic callee before printing its
                             // argument list, preserving chains such as `fn()()`.
-                            const fn_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
+                            const fn_needs_parens = fmt.pipeTargetNeedsParens(apply_fn_idx);
                             if (fn_needs_parens) {
                                 try fmt.formatPipeTargetParens(apply_fn_idx, apply_fn == .multiline_string or apply_fn == .typed_multiline_string);
                                 const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
@@ -1741,7 +1749,7 @@ const Formatter = struct {
                                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
                                 try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ld.right), args);
                             } else {
-                                try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                                try fmt.formatExprInnerDiscard(ld.right, target_context);
                             }
                         }
                     },
@@ -1788,12 +1796,12 @@ const Formatter = struct {
                         // follow the general pipe-target grammar.
                         const needs_parens = switch (ld.target_kind) {
                             .method_call => false,
-                            .ordinary => right_expr == .method_call or !fmt.exprCanStartPipeTargetUnparenthesized(ld.right),
+                            .ordinary => right_expr == .method_call or fmt.pipeTargetNeedsParens(ld.right),
                         };
                         if (needs_parens) {
                             try fmt.formatPipeTargetParens(ld.right, right_expr == .multiline_string or right_expr == .typed_multiline_string);
                         } else {
-                            try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                            try fmt.formatExprInnerDiscard(ld.right, target_context);
                         }
                     },
                 }
@@ -1832,7 +1840,9 @@ const Formatter = struct {
                 const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
                 const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.postfixReceiverNeedsParens(ta.expr);
                 if (parenthesize_receiver) try fmt.push('(');
-                const target = try fmt.formatExprWithInfo(ta.expr);
+                const target = try fmt.formatExprInner(ta.expr, .{
+                    .starts_pipe_target = !parenthesize_receiver and format_context.starts_pipe_target,
+                });
                 _ = try fmt.continueAfterMultilineStringLine(target);
                 if (parenthesize_receiver) try fmt.push(')');
                 if (flatten_pipe_receiver) {
@@ -2010,6 +2020,7 @@ const Formatter = struct {
                     try fmt.formatExprInner(s.expr, .{
                         .behavior = child_behavior,
                         .question_suffix_follows = child_expr == .arrow_call,
+                        .starts_pipe_target = format_context.starts_pipe_target,
                     });
                 _ = try fmt.continueAfterMultilineStringLine(body);
                 try fmt.push('?');
@@ -3925,15 +3936,17 @@ const Formatter = struct {
         };
     }
 
-    fn exprCanStartPipeTargetUnparenthesized(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
+    // Whether the complete target/callee needs grouping. Named-underscore
+    // heads are grouped during emission, leaving their postfix chain outside.
+    fn pipeTargetNeedsParens(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
         return switch (fmt.ast.store.getExpr(expr_idx)) {
-            .ident, .tag => true,
-            .apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.@"fn"),
-            .field_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.receiver),
-            .method_call => |call| fmt.exprCanStartPipeTargetUnparenthesized(call.receiver),
-            .tuple_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.expr),
-            .nominal_apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.mapper),
-            .suffix_single_question => |suffix| fmt.exprCanStartPipeTargetUnparenthesized(suffix.expr),
+            .ident, .tag => false,
+            .apply => |apply| fmt.pipeTargetNeedsParens(apply.@"fn"),
+            .field_access => |access| fmt.pipeTargetNeedsParens(access.receiver),
+            .method_call => |call| fmt.pipeTargetNeedsParens(call.receiver),
+            .tuple_access => |access| fmt.pipeTargetNeedsParens(access.expr),
+            .nominal_apply => |apply| fmt.pipeTargetNeedsParens(apply.mapper),
+            .suffix_single_question => |suffix| fmt.pipeTargetNeedsParens(suffix.expr),
             .int,
             .frac,
             .typed_int,
@@ -3965,7 +3978,7 @@ const Formatter = struct {
             .@"break",
             .@"return",
             .malformed,
-            => false,
+            => true,
         };
     }
 
@@ -5079,6 +5092,83 @@ test "issue 11160: pipe method receivers preserve expression grouping" {
         const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
         defer std.testing.allocator.free(result);
         try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 11208: named underscore pipe target keeps its grouping parens" {
+    // https://github.com/roc-lang/roc/issues/11208
+    // A named underscore is not a valid bare pipe target, so the parens around
+    // it have to survive formatting for the output to reparse.
+    const result = try moduleFmtsStable(std.testing.allocator, "t=0|>(_0).0", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("t = 0 |> (_0).0\n", result);
+}
+
+test "issue 11208: pipe start grouping follows callees and receivers only" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "t=x|>(_0)", .expected = "t = x |> (_0)\n" },
+        .{ .input = "t=x|>(_name)", .expected = "t = x |> (_name)\n" },
+        .{ .input = "t=x|>(_0)()", .expected = "t = x |> (_0)\n" },
+        .{ .input = "t=x|>(_0)(1)", .expected = "t = x |> (_0)(1)\n" },
+        .{ .input = "t=x|>(_0)(1)()", .expected = "t = x |> (_0)(1)()\n" },
+        .{ .input = "t=x|>(_0)(1).0", .expected = "t = x |> (_0)(1).0\n" },
+        .{ .input = "t=x|>(_0).field", .expected = "t = x |> (_0).field\n" },
+        .{ .input = "t=x|>(_0).?field", .expected = "t = x |> (_0).?field\n" },
+        .{ .input = "t=x|>(_0).field.0.field", .expected = "t = x |> (_0).field.0.field\n" },
+        .{ .input = "t=x|>(_0.0)", .expected = "t = x |> (_0).0\n" },
+        .{ .input = "t=x|>(_0)?", .expected = "t = x |> (_0)?\n" },
+        .{ .input = "t=x|>(_0)()?", .expected = "t = x |> (_0)()?\n" },
+        .{ .input = "t=x|>(_0)|>(_1)", .expected = "t = x |> (_0) |> (_1)\n" },
+        .{ .input = "t=x|>(_0)(_1)", .expected = "t = x |> (_0)(_1)\n" },
+        .{ .input = "t=x|>(_0).method(_1)", .expected = "t = x |> (_0).method(_1)\n" },
+        .{ .input = "t=x|>(_0+_1).method()", .expected = "t = x |> (_0 + _1).method()\n" },
+        .{ .input = "t=x|>(f).0", .expected = "t = x |> f.0\n" },
+        .{ .input = "t=x|>Mod.f(_0)", .expected = "t = x |> Mod.f(_0)\n" },
+        .{ .input = "t=x|>Box.(_0)", .expected = "t = x |> Box.(_0)\n" },
+        .{ .input = "t=_0.field.0.method(_1)", .expected = "t = _0.field.0.method(_1)\n" },
+        .{ .input = "t=x|>(\n_0\n).0", .expected = "t = x\n\t|> (_0).0\n" },
+        .{ .input = "t=x|> # target\n(_0).0", .expected = "t = x\n\t|> # target\n\t(_0).0\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 11208: pipe grouping preserves method insertion and result calls" {
+    const cases = [_]struct {
+        input: []const u8,
+        expected: []const u8,
+        target_kind: AST.PipeTargetKind,
+        target_tag: std.meta.Tag(AST.Expr),
+    }{
+        .{ .input = "t=x|>(_0).method()", .expected = "t = x |> (_0).method()\n", .target_kind = .method_call, .target_tag = .method_call },
+        .{ .input = "t=x|>(_0.method())", .expected = "t = x |> (_0.method())\n", .target_kind = .ordinary, .target_tag = .method_call },
+        .{ .input = "t=x|>(_0).0.method()", .expected = "t = x |> (_0).0.method()\n", .target_kind = .method_call, .target_tag = .method_call },
+        .{ .input = "t=x|>(_0).method()()", .expected = "t = x |> (_0).method()()\n", .target_kind = .ordinary, .target_tag = .apply },
+        .{ .input = "t=x|>(_0).method().0", .expected = "t = x |> (_0).method().0\n", .target_kind = .ordinary, .target_tag = .tuple_access },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+
+        // Valid, stable output could still change which call receives the
+        // piped argument. Pin the parser's interpretation on both sides.
+        for ([_][]const u8{ case.input, result }) |source| {
+            var env = try ModuleEnv.init(std.testing.allocator, source);
+            defer env.deinit();
+            const ast = try parse.file(std.testing.allocator, &env.common);
+            defer ast.deinit();
+            try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+            const statements = ast.store.statementSlice(ast.store.getFile().statements);
+            try std.testing.expectEqual(@as(usize, 1), statements.len);
+            const stmt = ast.store.getStatement(statements[0]);
+            const pipe = ast.store.getExpr(stmt.decl.body).arrow_call;
+            try std.testing.expectEqual(case.target_kind, pipe.target_kind);
+            try std.testing.expectEqual(case.target_tag, std.meta.activeTag(ast.store.getExpr(pipe.right)));
+        }
     }
 }
 

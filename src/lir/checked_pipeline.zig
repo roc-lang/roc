@@ -578,53 +578,50 @@ pub const LoweredProgram = struct {
         self.lir_result.deinit();
     }
 
+    /// Host compilation selects only provided roots before lowering. Their
+    /// emitted order is the common symbol/procedure/dispatch-ordinal mapping.
     pub fn platformEntrypoints(
         self: *const LoweredProgram,
         allocator: Allocator,
     ) Allocator.Error![]LirImage.PlatformEntrypoint {
         const root_procs = self.lir_result.root_procs.items;
         const root_metadata = self.lir_result.root_metadata.items;
-        if (root_procs.len != root_metadata.len) {
-            checkedPipelineInvariant("root metadata count differs from root proc count");
+        std.debug.assert(root_procs.len == root_metadata.len);
+
+        const entrypoints = try allocator.alloc(LirImage.PlatformEntrypoint, root_procs.len);
+        for (root_procs, root_metadata, entrypoints, 0..) |root_proc, metadata, *entrypoint, ordinal| {
+            std.debug.assert(metadata.kind == .provided_export);
+            std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
+            entrypoint.* = .{ .ordinal = @intCast(ordinal), .root_proc = root_proc };
         }
-
-        var entrypoints = std.ArrayList(LirImage.PlatformEntrypoint).empty;
-        errdefer entrypoints.deinit(allocator);
-
-        for (root_procs, root_metadata) |root_proc, metadata| {
-            if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
-            try entrypoints.append(allocator, .{
-                .ordinal = @intCast(entrypoints.items.len),
-                .root_proc = root_proc,
-            });
-        }
-
-        return try entrypoints.toOwnedSlice(allocator);
+        return entrypoints;
     }
 
+    /// Own the symbol strings: run images outlive their checked modules.
     pub fn platformEntrypointNames(
         self: *const LoweredProgram,
         allocator: Allocator,
         root_module: *const checked.Module,
     ) Allocator.Error![]const []const u8 {
         const root_metadata = self.lir_result.root_metadata.items;
-
-        var names = std.ArrayList([]const u8).empty;
+        const names = try allocator.alloc([]const u8, root_metadata.len);
+        var initialized: usize = 0;
         errdefer {
-            for (names.items) |name| allocator.free(name);
-            names.deinit(allocator);
+            for (names[0..initialized]) |name| allocator.free(name);
+            allocator.free(names);
         }
 
-        for (root_metadata) |metadata| {
-            if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
+        for (root_metadata, names) |metadata, *name| {
+            std.debug.assert(metadata.kind == .provided_export);
+            std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
             const root = root_module.lookupRootRequestByOrder(metadata.order) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked root request");
-            const name = root_module.entrypointNameForRoot(root) orelse
-                checkedPipelineInvariant("platform entrypoint root metadata has no checked entrypoint name");
-            try names.append(allocator, try allocator.dupe(u8, name));
+            const symbol = root_module.providedEntrypointName(root) orelse
+                checkedPipelineInvariant("platform entrypoint root metadata has no checked export declaration");
+            name.* = try allocator.dupe(u8, symbol);
+            initialized += 1;
         }
-
-        return try names.toOwnedSlice(allocator);
+        return names;
     }
 };
 
@@ -1039,22 +1036,8 @@ pub fn selectPlatformExportRoots(
     return try selected.toOwnedSlice(allocator);
 }
 
-/// Select platform roots for LIR images consumed by host shims/interpreters.
-pub fn selectPlatformEntrypointRoots(
-    allocator: Allocator,
-    requests: []const checked.RootRequest,
-) Allocator.Error![]checked.RootRequest {
-    var selected = std.ArrayList(checked.RootRequest).empty;
-    errdefer selected.deinit(allocator);
-
-    for (requests) |request| {
-        if (request.kind == .provided_export or request.kind == .platform_required_binding) {
-            try selected.append(allocator, request);
-        }
-    }
-
-    return try selected.toOwnedSlice(allocator);
-}
+/// Host shims and linked outputs have the same checked export roots.
+pub const selectPlatformEntrypointRoots = selectPlatformExportRoots;
 
 fn collectStaticDataRequests(
     allocator: Allocator,
