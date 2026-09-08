@@ -9544,7 +9544,7 @@ fn hoistedCallableDefForExpr(
             break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
         },
         .e_lookup_associated_resolved => |resolved| blk: {
-            const target_module = self.moduleEnvForIdentity(resolved.module_identity) orelse break :blk null;
+            const target_module = self.moduleEnvForIdentity(module, resolved.module_identity);
             break :blk HoistedCallableDef{ .module = target_module.env, .def = resolved.target_def_idx };
         },
         .e_lookup_associated_local, .e_lookup_associated => null,
@@ -24568,9 +24568,7 @@ fn checkResolvedAssociatedLookup(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    const target = self.moduleEnvForIdentity(lookup.module_identity) orelse {
-        std.debug.panic("type checker invariant violated: resolved associated lookup target is unavailable", .{});
-    };
+    const target = self.moduleEnvForIdentity(self.cir, lookup.module_identity);
     try self.checkResolvedAssociatedTarget(
         expr_var,
         target.env,
@@ -24647,12 +24645,65 @@ fn internCheckedTargetModuleIdentity(
     return try self.cir.internModuleIdentity(target_hash, display_ident);
 }
 
+/// Resolve an identity in the module that owns the lookup expression. Imported
+/// bodies retain their own identity indices even when this checker visits them.
 fn moduleEnvForIdentity(
     self: *const Self,
+    source_module: *const ModuleEnv,
     module_identity: base.ModuleIdentity.Idx,
-) ?OwnerEnvCandidate {
-    const target_hash = self.cir.moduleIdentityHash(module_identity);
-    return self.owner_envs_by_identity.get(target_hash.*);
+) OwnerEnvCandidate {
+    const target_hash = source_module.moduleIdentityHash(module_identity);
+    return self.owner_envs_by_identity.get(target_hash.*) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "type checker invariant violated: resolved associated lookup target is unavailable in module '{s}', identity={d}",
+                .{ source_module.module_name, @intFromEnum(module_identity) },
+            );
+        }
+        unreachable;
+    };
+}
+
+test "issue 11214 - hoisted associated lookup preserves ownership when both indices are in bounds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\Owner := [].{
+        \\    target = |b| b
+        \\}
+        \\Alias : Owner
+        \\main = |b| Alias.target(b)
+    ;
+    var imported = try TestEnv.init("Imported", source);
+    defer imported.deinit();
+    try imported.assertNoErrors();
+    var root = try TestEnv.init("Root", source);
+    defer root.deinit();
+    try root.assertNoErrors();
+    try appendOwnerEnvByIdentity(std.testing.allocator, &root.checker.owner_envs_by_identity, imported.module_env, false);
+
+    const module = imported.module_env;
+    const defs = module.store.sliceDefs(module.global_value_defs);
+    const main_def = module.store.getDef(defs[defs.len - 1]);
+    const body = module.store.getExpr(main_def.expr).e_lambda.body;
+    const callee = module.store.getExpr(body).e_call.func;
+    const lookup = module.store.getExpr(callee).e_lookup_associated_resolved;
+
+    // Both stores have the same structure, but their self identities name
+    // different modules. The buggy lookup can read a real def in Root without
+    // any bounds failure, so assert the target owner as well as the def index.
+    try std.testing.expectEqual(module.selfModuleIdentity(), lookup.module_identity);
+    try std.testing.expectEqual(root.module_env.selfModuleIdentity(), lookup.module_identity);
+    try std.testing.expect(!base.ModuleIdentity.eql(
+        module.moduleIdentityHash(lookup.module_identity),
+        root.module_env.moduleIdentityHash(lookup.module_identity),
+    ));
+    const imported_def = module.store.getDef(lookup.target_def_idx);
+    const root_def = root.module_env.store.getDef(lookup.target_def_idx);
+    try std.testing.expectEqual(imported_def.expr, root_def.expr);
+
+    const target = root.checker.hoistedCallableDefForExpr(module, callee).?;
+    try std.testing.expectEqual(@as(*const ModuleEnv, module), target.module);
+    try std.testing.expectEqual(lookup.target_def_idx, target.def);
 }
 
 /// Copy a variable from another module into this module
