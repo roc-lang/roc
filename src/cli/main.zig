@@ -16057,7 +16057,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]
         .{ .name = "Unification requests", .count = graph.unify_requests },
         .{ .name = "Union classes joined", .count = graph.class_unions },
         .{ .name = "Active type requests", .count = graph.active_type_requests },
-        .{ .name = "Imported active type hits", .count = graph.active_type_imported_hits },
+        .{ .name = "Imported type view hits", .count = graph.imported_type_view_hits },
         .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },
         .{ .name = "Active snapshot misses", .count = graph.active_snapshot_cache_misses },
         .{ .name = "Snapshot nodes materialized", .count = graph.active_snapshot_nodes_materialized },
