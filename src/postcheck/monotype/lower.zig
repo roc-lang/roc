@@ -4341,7 +4341,7 @@ const Builder = struct {
                     .data = .{ .fn_def = .{ .fn_id = fn_id } },
                 });
             },
-            .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
         };
     }
@@ -4378,7 +4378,7 @@ const Builder = struct {
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
                 break :blk switch (binding.body) {
                     .direct_template => null,
-                    .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => |template| .{ .view = view, .template = template },
                 };
             },
@@ -4388,7 +4388,7 @@ const Builder = struct {
                     if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
                     break :blk switch (binding.body) {
                         .direct_template => null,
-                        .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+                        .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                         .callable_eval_template => |template| .{ .view = view, .template = template },
                     };
                 }
@@ -4400,7 +4400,7 @@ const Builder = struct {
                 const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
                 break :blk switch (binding.body) {
                     .direct_template => null,
-                    .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => |template| .{ .view = view, .template = template },
                 };
             },
@@ -6503,7 +6503,7 @@ const Builder = struct {
     ) Ast.FnTemplate {
         return switch (body) {
             .direct_template => |direct| self.fnDefForCallableTemplate(view, direct.template, source_fn_ty, source_fn_key, mono_fn_ty),
-            .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
             .callable_eval_template => Common.invariant("callable eval template must be restored through ConstStore before Monotype lowering"),
         };
     }
@@ -7647,7 +7647,7 @@ const Builder = struct {
                         .lifted => Common.invariant("lifted direct target reached Monotype procedure use"),
                         .synthetic => Common.invariant("synthetic direct target reached Monotype procedure use"),
                     },
-                    .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => Common.invariant("callable-eval template reached Monotype procedure use"),
                 };
             },
@@ -7661,7 +7661,7 @@ const Builder = struct {
                                 .lifted => Common.invariant("imported lifted target reached Monotype procedure use"),
                                 .synthetic => Common.invariant("imported synthetic target reached Monotype procedure use"),
                             },
-                            .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+                            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                             .callable_eval_template => Common.invariant("imported callable-eval template reached Monotype procedure use"),
                         };
                     }
@@ -7678,7 +7678,7 @@ const Builder = struct {
                         .lifted => Common.invariant("platform lifted target reached Monotype procedure use"),
                         .synthetic => Common.invariant("platform synthetic target reached Monotype procedure use"),
                     },
-                    .checked_error => Common.invariant("rejected binding reached executable callable consumption"),
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => Common.invariant("platform callable-eval template reached Monotype procedure use"),
                 };
             },

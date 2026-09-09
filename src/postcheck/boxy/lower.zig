@@ -17161,7 +17161,7 @@ const ProcBodyBuilder = struct {
         const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
         const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
         switch (binding.body) {
-            .checked_error => boxyLowerInvariant("rejected binding reached executable callable consumption"),
+            .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
             .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(module, template)) |source| {
                 return source;
             },
@@ -22078,7 +22078,26 @@ const ProcBodyBuilder = struct {
                 .decl => |decl| decl.expr,
                 .var_ => |decl| decl.expr,
                 .reassign => |reassign| reassign.expr,
-                else => null,
+                .pending,
+                .var_uninitialized,
+                .crash,
+                .dbg,
+                .expr,
+                .expect,
+                .for_,
+                .while_,
+                .infinite_loop,
+                .breakable_loop,
+                .break_,
+                .return_,
+                .import_,
+                .alias_decl,
+                .where_alias_decl,
+                .nominal_decl,
+                .type_anno,
+                .type_var_alias,
+                .runtime_error,
+                => null,
             };
             if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
@@ -23978,7 +23997,25 @@ const ProcBodyBuilder = struct {
             .var_ => |decl| decl.expr,
             .reassign => |reassign| reassign.expr,
             .expr => |expr| expr,
-            else => null,
+            .pending,
+            .var_uninitialized,
+            .crash,
+            .dbg,
+            .expect,
+            .for_,
+            .while_,
+            .infinite_loop,
+            .breakable_loop,
+            .break_,
+            .return_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => null,
         };
         if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
             return try self.parent.result.store.addCFStmt(.runtime_error);

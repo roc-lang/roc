@@ -12229,11 +12229,25 @@ pub const CheckedBodyStore = struct {
         for (refs.records) |record| {
             const procedure = switch (record.ref) {
                 .top_level_proc, .promoted_top_level_proc => |proc| proc,
-                else => continue,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .imported_proc,
+                .hosted_proc,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                .platform_required_proc,
+                => continue,
             };
             const target = switch (procedure.binding) {
                 .top_level => |target| target,
-                else => continue,
+                .imported, .hosted, .platform_required => continue,
             };
             if (!checkedArtifactKeyEql(target.artifact, local_module)) continue;
             const binding = bindings.get(target.binding);
@@ -12869,7 +12883,19 @@ pub const CheckedBodyStore = struct {
             const procedure: ?ProcedureUseTemplate = switch (record.ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |proc| proc,
                 .platform_required_proc => |required| required.procedure,
-                else => null,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .hosted_proc,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                => null,
             };
             if (procedure) |proc| {
                 if (procedureUseKind(proc, local_module, local_procedure_bindings, imports, available_modules, relation_modules) == .checked_error) {

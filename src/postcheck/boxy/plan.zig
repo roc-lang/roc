@@ -11588,7 +11588,7 @@ const Builder = struct {
                 const view = self.moduleForId(binding_ref.artifact);
                 const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
                 break :blk switch (binding.body) {
-                    .checked_error => boxyPlanInvariant("rejected binding reached executable callable consumption"),
+                    .checked_error => boxyPlanInvariant("rejected binding reached Boxy planning callable consumption"),
                     .callable_eval_template => |template| self.workerSourceForCallableEvalTemplate(view, template) orelse source,
                     .direct_template => source,
                 };
