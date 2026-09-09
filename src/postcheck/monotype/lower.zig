@@ -39,9 +39,12 @@ const GuardedList = collections.GuardedList;
 const TypeFieldSpanBorrow = Type.StoreSpanBorrow(Type.Field, "fields");
 const PatternRefutability = can.PatternRefutability;
 
+/// Whether a dispatch instantiation replays a template's checked relations
+/// or serves an expression. Result-type queries serve expressions: they
+/// lower argument evidence and complete iterator results exactly as the
+/// expression's own lowering does, so the two agree on every result cell.
 const DispatchInstantiationPhase = enum {
     template_relation_replay,
-    type_query,
     expression_lowering,
 };
 
