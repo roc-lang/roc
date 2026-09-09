@@ -6156,7 +6156,11 @@ const Builder = struct {
                 });
             }
             if (resolved_lookup_address) |address| {
-                const active_spec_fn_ty = try source_ctx.activeTypeFromNode(draftTemplateSpecLookupRequestNode(spec));
+                const spec_lookup_node = draftTemplateSpecLookupRequestNode(spec);
+                const active_spec_fn_ty = if (try source_ctx.graph.typeIsResolved(spec_lookup_node))
+                    try source_ctx.activeTypeFromNode(spec_lookup_node)
+                else
+                    try source_ctx.graph.specializationTypeViewForNode(spec_lookup_node);
                 if (try source_ctx.typeStore().typeEql(
                     source_ctx.nameStore(),
                     active_spec_fn_ty,
@@ -31312,18 +31316,7 @@ const BodyContext = struct {
                     );
                     const fn_nodes = try self.graph.functionNodes(fn_node);
                     if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) return fn_nodes.ret;
-                    if (try self.graph.containsIteratorInterface(fn_nodes.ret)) {
-                        try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
-                        const callee = try self.fnTemplateForDirectCallAtNode(
-                            target,
-                            source_fn_ty,
-                            self.view.types.rootKey(source_fn_ty),
-                            fn_node,
-                        );
-                        const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-                        return (try self.graph.functionNodes(completed_fn_node)).ret;
-                    }
-                    return fn_nodes.ret;
+                    return try self.directCallCompletedResultNode(target, call, source_fn_ty, fn_node);
                 }
                 return try self.callResultTypeNode(expr.ty, call, expected_ty);
             },
@@ -31891,17 +31884,51 @@ const BodyContext = struct {
             };
         }
 
-        const source_fn_ty = self.directCallInstantiationSourceFnType(call.direct_target.?, call.source_fn_ty_payload);
+        const target = call.direct_target.?;
+        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
         const fn_node = try self.directCallTypeNode(
             checked_ret_ty,
             call,
             source_fn_ty,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
         );
-        return switch (self.graph.content(fn_node)) {
-            .func => |function| function.ret,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call instantiated a non-function graph node"),
-        };
+        return try self.directCallCompletedResultNode(target, call, source_fn_ty, fn_node);
+    }
+
+    /// The result cell of a direct call is the selected specialization's
+    /// result. The caller's checked result type only describes what the
+    /// call site observed while the callee's own result was still open: a
+    /// bare tag compared against the call, for instance, is recorded as an
+    /// anonymous tag union that the callee's body completes to a nominal.
+    /// Relating the callee's interface before answering makes the result
+    /// class carry that completion, so a consumer that seals the type from
+    /// this cell agrees with the type the lowered call produces. Calls that
+    /// lowering never routes through a callee template (a generated
+    /// iterator `next`, `Str.inspect`, or an argument proven uninhabited)
+    /// answer with the request cell, exactly as their lowering does.
+    fn directCallCompletedResultNode(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+        call: anytype,
+        source_fn_ty: checked.CheckedTypeId,
+        fn_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const fn_nodes = try self.graph.functionNodes(fn_node);
+        if (self.iteratorProcedureForResolvedTarget(target) != null or self.resolvedTargetIsStrInspect(target)) {
+            return fn_nodes.ret;
+        }
+        for (fn_nodes.args) |arg_node| {
+            if (try self.nodeIsProvenUninhabited(arg_node)) return fn_nodes.ret;
+        }
+        try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
+        const callee = try self.fnTemplateForDirectCallAtNode(
+            target,
+            source_fn_ty,
+            self.view.types.rootKey(source_fn_ty),
+            fn_node,
+        );
+        const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
+        return (try self.graph.functionNodes(completed_fn_node)).ret;
     }
 
     fn directCallTypeNode(

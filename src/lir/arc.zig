@@ -224,17 +224,45 @@ const ProcArcDomain = struct {
         return self.resource_locals[bit_index];
     }
 
+    /// Commit the field domains of the containers every emission of this
+    /// procedure dismantles. Owned-only containers are committed separately
+    /// once the emission's owned bindings are known, since their takes exist
+    /// only in emissions that bind the parameter owned.
     fn installResidualDomains(self: *ProcArcDomain, solution: *const arc_solve.Solution, dismantles: *const arc_dismantle.Dismantles) void {
         var normal = dismantles.containers.iterator();
         while (normal.next()) |entry| self.installResidualDomain(solution, entry.key_ptr.*, entry.value_ptr.full_mask);
+    }
+
+    /// Commit the field domains of the owned-only containers this emission
+    /// actually dismantles. A parameter this emission binds borrowed keeps
+    /// no residual field domain: its takes are skipped, so the whole value
+    /// is released together and no field-by-field release may name it.
+    fn installOwnedOnlyResidualDomains(
+        self: *ProcArcDomain,
+        solution: *const arc_solve.Solution,
+        dismantles: *const arc_dismantle.Dismantles,
+        owned_binding_override: *const OwnedSet,
+    ) void {
         var owned_only = dismantles.owned_only_containers.iterator();
-        while (owned_only.next()) |entry| self.installResidualDomain(solution, entry.key_ptr.*, entry.value_ptr.full_mask);
+        while (owned_only.next()) |entry| {
+            const local = entry.key_ptr.*;
+            if (!self.ownsFrameLocal(local)) continue;
+            if (!owned_binding_override.contains(local)) continue;
+            self.installResidualDomain(solution, local, entry.value_ptr.full_mask);
+        }
+    }
+
+    /// Whether `local` belongs to the frame this domain describes. The
+    /// dismantle tables span every procedure, so each frame installs only
+    /// its own containers.
+    fn ownsFrameLocal(self: *const ProcArcDomain, local: LIR.LocalId) bool {
+        const local_index = @intFromEnum(local);
+        if (local_index >= self.global_local_index.len) return false;
+        return self.global_local_index[local_index] != no_proc_local_index;
     }
 
     fn installResidualDomain(self: *ProcArcDomain, solution: *const arc_solve.Solution, local: LIR.LocalId, full_mask: u64) void {
-        const local_index = @intFromEnum(local);
-        if (local_index >= self.global_local_index.len) return;
-        if (self.global_local_index[local_index] == no_proc_local_index) return;
+        if (!self.ownsFrameLocal(local)) return;
         const unit = solution.unitLocalOf(local);
         const bit = self.resourceBitOf(unit) orelse arcInvariant("ARC residual aggregate has no ownership resource");
         const prior = self.resource_full_masks[bit];
@@ -565,6 +593,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 }
             }
         }
+        domain.installOwnedOnlyResidualDomains(&solution, &dismantles, &owned_binding_override);
 
         const join_bodies = solution.joinBodiesOf(source_proc);
         inserter.join_bodies = join_bodies;
