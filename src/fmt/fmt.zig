@@ -1364,11 +1364,24 @@ const Formatter = struct {
         }
     }
 
-    fn continuePipeReceiverPostfix(fmt: *Formatter, token: Token.Idx, format_behavior: ExprFormatBehavior) error{WriteFailed}!void {
-        const already_broke = try fmt.flushCommentsBefore(token);
-        fmt.adjustMultilineAccessIndent(format_behavior);
-        if (!already_broke) try fmt.ensureNewline();
-        try fmt.pushIndent();
+    const PostfixLayout = enum {
+        compact,
+        source,
+        continuation,
+    };
+
+    /// Owns the trivia before a postfix, including when its receiver gained
+    /// parentheses. Compact boundaries discard bare newlines, never comments.
+    fn formatPostfixBoundary(fmt: *Formatter, token: Token.Idx, layout: PostfixLayout, format_behavior: ExprFormatBehavior) error{WriteFailed}!void {
+        const already_broke = if (layout != .compact or fmt.hasCommentBefore(token))
+            try fmt.flushCommentsBefore(token)
+        else
+            false;
+        if (already_broke or layout == .continuation) {
+            fmt.adjustMultilineAccessIndent(format_behavior);
+            if (!already_broke) try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
     }
 
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!AST.TokenizedRegion {
@@ -1632,22 +1645,20 @@ const Formatter = struct {
                     // every segment. Keep that behavior now that a path is flat.
                     fmt.curr_indent = access_indent;
 
-                    if (i == 0 and flatten_pipe_receiver) {
-                        // A multiline pipe receiver keeps its postfix chain on
-                        // continuation lines rather than parenthesizing the
-                        // pipe (issue 10517).
-                        try fmt.continuePipeReceiverPostfix(segment.field_token, format_behavior);
-                    } else if (!parenthesize_receiver or i > 0) {
-                        const continued = i == 0 and try fmt.continueAfterMultilineStringLine(receiver);
-                        if (!continued and multiline and try fmt.flushCommentsBefore(segment.field_token)) {
-                            // Only the chain's final segment sits in the caller's
-                            // context; interior segments always indent as .normal
-                            // (they were nested nodes formatted as .normal when
-                            // access paths were binary trees).
-                            fmt.adjustMultilineAccessIndent(if (i == segments.len - 1) format_behavior else .normal);
-                            try fmt.pushIndent();
-                        }
-                    }
+                    const follows_string_line = i == 0 and !parenthesize_receiver and receiver.ends_with_multiline_string_line;
+                    const layout: PostfixLayout = if ((i == 0 and flatten_pipe_receiver) or follows_string_line)
+                        .continuation
+                    else if (multiline and (!parenthesize_receiver or i > 0))
+                        .source
+                    else
+                        .compact;
+                    // Only the chain's final segment sits in the caller's
+                    // context; interior segments retain their own indentation.
+                    const access_behavior = if (follows_string_line or (i < segments.len - 1 and !(i == 0 and flatten_pipe_receiver)))
+                        .normal
+                    else
+                        format_behavior;
+                    if (multiline) try fmt.formatPostfixBoundary(segment.field_token, layout, access_behavior);
 
                     switch (segment.mode) {
                         .required => try fmt.push('.'),
@@ -1666,15 +1677,14 @@ const Formatter = struct {
                     try fmt.formatParenthesizedExpr(null, mc.receiver, expand_parenthesized_receiver)
                 else
                     try fmt.formatExprInner(mc.receiver, .{ .starts_pipe_target = format_context.starts_pipe_target });
-                if (flatten_pipe_receiver) {
-                    try fmt.continuePipeReceiverPostfix(mc.method_token, format_behavior);
-                } else if (!parenthesize_receiver) {
-                    const continued = try fmt.continueAfterMultilineStringLine(receiver);
-                    if (!continued and multiline and try fmt.flushCommentsBefore(mc.method_token)) {
-                        fmt.adjustMultilineAccessIndent(format_behavior);
-                        try fmt.pushIndent();
-                    }
-                }
+                const follows_string_line = !parenthesize_receiver and receiver.ends_with_multiline_string_line;
+                const layout: PostfixLayout = if (flatten_pipe_receiver or follows_string_line)
+                    .continuation
+                else if (multiline and !parenthesize_receiver)
+                    .source
+                else
+                    .compact;
+                if (multiline) try fmt.formatPostfixBoundary(mc.method_token, layout, if (follows_string_line) .normal else format_behavior);
                 try fmt.push('.');
                 try fmt.pushTokenText(mc.method_token);
                 // Only the argument list (from the method token onwards) should
@@ -1843,11 +1853,9 @@ const Formatter = struct {
                 const target = try fmt.formatExprInner(ta.expr, .{
                     .starts_pipe_target = !parenthesize_receiver and format_context.starts_pipe_target,
                 });
-                _ = try fmt.continueAfterMultilineStringLine(target);
                 if (parenthesize_receiver) try fmt.push(')');
-                if (flatten_pipe_receiver) {
-                    try fmt.continuePipeReceiverPostfix(ta.elem_token, format_behavior);
-                }
+                const layout: PostfixLayout = if (flatten_pipe_receiver or target.ends_with_multiline_string_line) .continuation else .compact;
+                if (multiline) try fmt.formatPostfixBoundary(ta.elem_token, layout, if (target.ends_with_multiline_string_line) .normal else format_behavior);
                 // Get the element index from the token
                 const token_text = fmt.ast.resolve(ta.elem_token);
                 // Token includes leading dot (e.g., ".0")
@@ -3646,6 +3654,8 @@ const Formatter = struct {
                 try fmt.pushAll(comment_text);
                 newline_count_to_apply = 1; // reset count to allow an additional newline after a comment
                 i = comment_end + 1;
+                // The comment's line ending was already counted, including both bytes of CRLF.
+                if (i < between_text.len and between_text[comment_end] == '\r' and between_text[i] == '\n') i += 1;
             } else if (between_text[i] == '\n') {
                 newline_count_to_apply += 1;
                 i += 1;
@@ -3724,6 +3734,8 @@ const Formatter = struct {
                 newline_count = 1; // reset count to allow an additional newline after a comment
                 prev_was_comment = true;
                 i = comment_end + 1;
+                // The comment's line ending was already emitted, including both bytes of CRLF.
+                if (i < between_text.len and between_text[comment_end] == '\r' and between_text[i] == '\n') i += 1;
             } else if (between_text[i] == '\n') {
                 if (newline_count < 2) {
                     try fmt.newline();
@@ -3999,7 +4011,11 @@ const Formatter = struct {
         if (expr == .method_call) {
             const method = expr.method_call;
             const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
-            if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 })) {
+            // Inserted receiver parentheses normalize bare boundary newlines.
+            // Interior comments still require expansion below.
+            if (!fmt.postfixReceiverNeedsParens(method.receiver) and
+                fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 }))
+            {
                 return true;
             }
         }
@@ -4078,7 +4094,9 @@ const Formatter = struct {
             if (expr == .method_call) {
                 const method = expr.method_call;
                 const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
-                if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 })) {
+                if (!fmt.postfixReceiverNeedsParens(method.receiver) and
+                    fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 }))
+                {
                     return true;
                 }
             }
@@ -4986,6 +5004,101 @@ test "integer field receiver separated by carriage return is idempotent" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=(0\r.e)\n", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = ((0).e)\n", result);
+}
+
+test "issue 11244: comment between a tuple receiver and its field access is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/11244
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=((0#
+        \\.0))
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = (\n\t(\n\t\t(0) #\n\t\t\t.0\n\t)\n)\n",
+        result,
+    );
+}
+
+test "postfix boundaries preserve comments with inserted and existing receiver parentheses" {
+    const gpa = std.testing.allocator;
+    const receivers = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "0", .expected = "(0)" },
+        .{ .source = "1.2", .expected = "(1.2)" },
+        .{ .source = "0.U8", .expected = "(0.U8)" },
+        .{ .source = "x", .expected = "x" },
+        .{ .source = "(x)", .expected = "(x)" },
+    };
+    for (receivers) |receiver| {
+        for ([_][]const u8{ ".0", ".field", ".?field", ".method()" }) |postfix| {
+            for ([_][]const u8{ "\n", "\r\n", "\r" }) |line_ending| {
+                const source = try std.fmt.allocPrint(gpa, "a=(({s}# keep{s}{s}))", .{ receiver.source, line_ending, postfix });
+                defer gpa.free(source);
+                const expected = try std.fmt.allocPrint(gpa, "a = (\n\t(\n\t\t{s} # keep\n\t\t\t{s}\n\t)\n)\n", .{ receiver.expected, postfix });
+                defer gpa.free(expected);
+
+                const result = try moduleFmtsStable(gpa, source, false);
+                defer gpa.free(result);
+                try std.testing.expectEqualStrings(expected, result);
+            }
+        }
+    }
+}
+
+test "mixed postfix chain preserves each boundary comment once" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a = (0 # tuple
+        \\.0 # field
+        \\.field # optional
+        \\.?field # method
+        \\.method() # tuple again
+        \\.1)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = (\n" ++
+            "\t(0) # tuple\n" ++
+            "\t\t.0 # field\n" ++
+            "\t\t.field # optional\n" ++
+            "\t\t.?field # method\n" ++
+            "\t\t.method() # tuple again\n" ++
+            "\t\t.1\n" ++
+            ")\n",
+        result,
+    );
+}
+
+test "inserted postfix receiver parentheses normalize whitespace-only boundaries" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ ".0", ".field", ".?field", ".method()" }) |postfix| {
+        for ([_][]const u8{ " ", "\n", "\r\n", "\r" }) |gap| {
+            const source = try std.fmt.allocPrint(gpa, "a=((0{s}{s}))", .{ gap, postfix });
+            defer gpa.free(source);
+            const expected = try std.fmt.allocPrint(gpa, "a = (((0){s}))\n", .{postfix});
+            defer gpa.free(expected);
+            const result = try moduleFmtsStable(gpa, source, false);
+            defer gpa.free(result);
+            try std.testing.expectEqualStrings(expected, result);
+        }
+    }
+}
+
+test "postfix after multiline string preserves standalone comments" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ ".0", ".field", ".method()" }) |postfix| {
+        const source = try std.fmt.allocPrint(gpa, "a = \\\\text\n# keep\n{s}\n", .{postfix});
+        defer gpa.free(source);
+        const expected = try std.fmt.allocPrint(gpa, "a = \\\\text\n# keep\n\t{s}\n", .{postfix});
+        defer gpa.free(expected);
+        const result = try moduleFmtsStable(gpa, source, false);
+        defer gpa.free(result);
+        try std.testing.expectEqualStrings(expected, result);
+    }
+}
+
+test "trailing comments count CRLF as one line ending" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0 # first\r\n# second\r\n", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0 # first\n# second\n", result);
 }
 
 test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
