@@ -203,6 +203,49 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11217: stored closures retain enclosing callable alias contexts",
+        .source_kind = .module,
+        .source =
+        \\make = |captured| {
+        \\    pair = |x| (captured, x)
+        \\    alias = pair
+        \\    |{}| (alias(1), alias("a"))
+        \\}
+        \\first = make("capture")
+        \\second = make(42)
+        \\main = (first({}), second({}))
+        ,
+        .expected = .{ .inspect_str = "(((\"capture\", 1.0), (\"capture\", \"a\")), ((42.0, 1.0), (42.0, \"a\")))" },
+    },
+    .{
+        .name = "issue 11217: callable alias specializations preserve values and dispatch",
+        .source_kind = .module,
+        .source =
+        \\id = |x| x
+        \\equal = |x, y| x == y
+        \\main = {
+        \\    first = id
+        \\    alias = first
+        \\    eq = equal
+        \\    (alias(1), alias("a"), eq(1, 2), eq("a", "a"))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1.0, \"a\", False, True)" },
+    },
+    .{
+        .name = "issue 11217: callable aliases preserve shared captured values",
+        .source_kind = .module,
+        .source =
+        \\make = |captured| {
+        \\    pair = |x| (captured, x)
+        \\    alias = pair
+        \\    (alias(1), alias("a"))
+        \\}
+        \\main = (make("capture"), make(42))
+        ,
+        .expected = .{ .inspect_str = "(((\"capture\", 1.0), (\"capture\", \"a\")), ((42.0, 1.0), (42.0, \"a\")))" },
+    },
+    .{
         .name = "issue 10703: loop var aliasing an argument leaves argument reads loop-invariant",
         .source = issue10703LineLayoutSource,
         .expected = .{ .allocations_at_most = .{ .output = "820", .max_allocations = 32, .optimized = true } },
