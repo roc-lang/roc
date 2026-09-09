@@ -4180,7 +4180,7 @@ const Builder = struct {
                 var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
                 defer dispatch_timing_scope.end();
                 const edge = if (request.root_evidence) |root_evidence|
-                    try ctx.checkedProcedureEdgeAtRequest(self.templateRefForProcedureUse(procedure), root_evidence, root_node, .body_lowering)
+                    try ctx.checkedProcedureEdgeAtRequest(template_ref, root_evidence, root_node, .body_lowering)
                 else
                     EdgeEvidence{ .subst = &.{}, .vector = &.{} };
                 const selected = try ctx.draftFnSlotForProcedureUseAtNode(

@@ -42,6 +42,20 @@ test "issue 11249: a helper's decoded Err payload propagated through main! lower
     );
 }
 
+test "issue 11249: parallel procedure roots retain app codec evidence" {
+    try harness.expectLowersToLirWithOptions(
+        \\main! : List(Str) => Try({}, _)
+        \\main! = |_args| {
+        \\    parsed : Str
+        \\    parsed = Json.parse("\"1\"")?
+        \\    Err(InvalidSpend(parsed))
+        \\}
+    , .{
+        .parallel_procedure_root_fixture = true,
+        .specialization_workers = 2,
+    });
+}
+
 test "issue 11249: defaulted decoding retains platform root evidence" {
     try harness.expectLowersToLir(
         \\main! : List(Str) => Try({}, _)
