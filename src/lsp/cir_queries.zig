@@ -1174,28 +1174,33 @@ pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern
 /// A binding whose type is inferred rather than written down.
 pub const UnannotatedBinding = struct {
     pattern: CIR.Pattern.Idx,
-    /// Where the inferred type belongs: immediately after the bound name.
-    after: LspPosition,
+    /// Where the bound name is written. An inlay hint is drawn just past its
+    /// end; a generated annotation goes above the line its start names.
+    range: LspRange,
+    /// The same span in bytes, so a caller can read the source around it.
+    region: Region,
+    /// Whether a definition or a statement declares this binding, rather than
+    /// a lambda parameter or a destructured field binding it.
+    ///
+    /// A type annotation is a line of its own written above the binding it
+    /// names, so only a declaration can take one. Parameters and destructured
+    /// fields are `assign` patterns like any other, and a Roc lambda may
+    /// spread its parameters over several lines, so a parameter can open a
+    /// line of its own - which is why the two are told apart by what declares
+    /// them rather than by the source around them.
+    is_declaration: bool = false,
 };
 
-/// Context for collecting the patterns that carry a written type annotation.
-const CollectAnnotatedContext = struct {
-    allocator: std.mem.Allocator,
-    results: *std.ArrayList(CIR.Pattern.Idx),
-    oom: ?std.mem.Allocator.Error = null,
+/// A set of patterns, for the membership questions asked about every binding.
+const PatternSet = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void);
 
-    fn visitStmtPre(ctx: *CollectAnnotatedContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
-        if (statementAnnotation(stmt) == null) return .continue_traversal;
-        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
-        ctx.results.append(ctx.allocator, pattern_idx) catch |err| {
-            ctx.oom = err;
-            return .stop;
-        };
-        return .continue_traversal;
-    }
-};
-
-/// Context for collecting `assign` patterns inside a byte range.
+/// Context for collecting `assign` patterns inside a byte range, along with
+/// what the module says about the bindings it declares.
+///
+/// The three questions - which patterns a range holds, which of them already
+/// carry an annotation, and which a definition or a statement declares - are
+/// answered on one traversal. Each of them covers the whole module, and
+/// `textDocument/inlayHint` asks all three on every viewport change.
 const CollectBindingsContext = struct {
     store: *const NodeStore,
     module_env: *const ModuleEnv,
@@ -1203,7 +1208,25 @@ const CollectBindingsContext = struct {
     end_offset: u32,
     allocator: std.mem.Allocator,
     results: *std.ArrayList(UnannotatedBinding),
+    /// The patterns that carry a written type annotation.
+    annotated: *PatternSet,
+    /// The patterns a definition or a statement declares.
+    declared: *PatternSet,
     oom: ?std.mem.Allocator.Error = null,
+
+    fn visitStmtPre(ctx: *CollectBindingsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        ctx.declared.put(ctx.allocator, pattern_idx, {}) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        if (statementAnnotation(stmt) == null) return .continue_traversal;
+        ctx.annotated.put(ctx.allocator, pattern_idx, {}) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        return .continue_traversal;
+    }
 
     fn visitPatternPre(ctx: *CollectBindingsContext, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
         const ident = if (pattern == .assign)
@@ -1239,7 +1262,8 @@ const CollectBindingsContext = struct {
         const range = regionToRange(ctx.module_env, region) orelse return .continue_traversal;
         ctx.results.append(ctx.allocator, .{
             .pattern = pattern_idx,
-            .after = .{ .line = range.end_line, .character = range.end_col },
+            .range = range,
+            .region = region,
         }) catch |err| {
             ctx.oom = err;
             return .stop;
@@ -1252,7 +1276,9 @@ const CollectBindingsContext = struct {
 ///
 /// Only plain `assign` patterns qualify: they bind exactly one name, so an
 /// inferred type can be shown against that name. Bindings that already carry a
-/// written annotation are skipped—their type is on screen already.
+/// written annotation are skipped—their type is on screen already. Each of the
+/// rest says whether a definition or a statement declares it, which is what
+/// decides whether an annotation can be written for it.
 ///
 /// Caller owns the returned list.
 pub fn collectUnannotatedBindings(
@@ -1261,32 +1287,13 @@ pub fn collectUnannotatedBindings(
     end_offset: u32,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!std.ArrayList(UnannotatedBinding) {
-    // Which patterns already say their type. Annotations are few even in large
-    // files, so this stays a list that is scanned rather than a keyed map.
-    var annotated: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    // Which patterns already say their type, and which ones a definition or a
+    // statement declares. Both are asked once per binding in the range, so
+    // they are keyed rather than scanned.
+    var annotated: PatternSet = .empty;
     defer annotated.deinit(allocator);
-
-    var annotated_ctx = CollectAnnotatedContext{
-        .allocator = allocator,
-        .results = &annotated,
-    };
-    var annotated_visitor = CirVisitor(CollectAnnotatedContext).init(&annotated_ctx, .{
-        .visit_stmt_pre = CollectAnnotatedContext.visitStmtPre,
-    });
-
-    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        if (def.annotation != null) {
-            try annotated.append(allocator, def.pattern);
-        }
-        annotated_visitor.walkExpr(&module_env.store, def.expr);
-        if (annotated_visitor.stopped) break;
-    }
-    if (!annotated_visitor.stopped) {
-        annotated_visitor.walkModule(&module_env.store, module_env.all_statements);
-    }
-    if (annotated_ctx.oom) |err| return err;
+    var declared: PatternSet = .empty;
+    defer declared.deinit(allocator);
 
     var results: std.ArrayList(UnannotatedBinding) = .empty;
     errdefer results.deinit(allocator);
@@ -1298,13 +1305,22 @@ pub fn collectUnannotatedBindings(
         .end_offset = end_offset,
         .allocator = allocator,
         .results = &results,
+        .annotated = &annotated,
+        .declared = &declared,
     };
     var visitor = CirVisitor(CollectBindingsContext).init(&ctx, .{
+        .visit_stmt_pre = CollectBindingsContext.visitStmtPre,
         .visit_pattern_pre = CollectBindingsContext.visitPatternPre,
     });
 
+    // A top-level definition is not a statement, so what it declares and
+    // whether it is annotated are read off the definition itself; the ones
+    // inside blocks are reached by the walk.
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
+        try declared.put(allocator, def.pattern, {});
+        if (def.annotation != null) try annotated.put(allocator, def.pattern, {});
         visitor.walkPattern(&module_env.store, def.pattern);
         if (visitor.stopped) break;
         visitor.walkExpr(&module_env.store, def.expr);
@@ -1315,22 +1331,95 @@ pub fn collectUnannotatedBindings(
     }
     if (ctx.oom) |err| return err;
 
-    // Drop the annotated ones now that both walks are done.
+    // Both answers are complete only once the walk is, so the annotated
+    // bindings are dropped and the rest marked here rather than as they were
+    // found.
     var kept: usize = 0;
     for (results.items) |binding| {
-        var is_annotated = false;
-        for (annotated.items) |annotated_pattern| {
-            if (@intFromEnum(annotated_pattern) == @intFromEnum(binding.pattern)) {
-                is_annotated = true;
-                break;
-            }
-        }
-        if (is_annotated) continue;
+        if (annotated.contains(binding.pattern)) continue;
         results.items[kept] = binding;
+        results.items[kept].is_declaration = declared.contains(binding.pattern);
         kept += 1;
     }
     results.shrinkRetainingCapacity(kept);
 
+    return results;
+}
+
+/// Where the line holding `offset` ends, before its line break.
+///
+/// Generated source is inserted here so that whatever the author wrote after a
+/// value on the same line -- in practice a comment -- keeps the line it was
+/// written on.
+///
+/// Only `\n` is looked for. The compiler rewrites CRLF as it loads a file, so
+/// a module's source holds no `\r` to stop in front of; what the document the
+/// client holds is written with is a separate question, answered where the
+/// generated text is built.
+fn lineEndAfter(source: []const u8, offset: u32) u32 {
+    if (offset >= source.len) return @intCast(source.len);
+    return @intCast(std.mem.findScalarPos(u8, source, offset, '\n') orelse source.len);
+}
+
+/// A top-level definition the requested range falls inside.
+pub const TopLevelDefinition = struct {
+    pattern: CIR.Pattern.Idx,
+    /// The bound name, borrowed from the module's ident store.
+    name: []const u8,
+    /// Where the definition's value ends, so generated source can follow it.
+    end: LspPosition,
+};
+
+/// Find every top-level definition whose source covers part of a byte range,
+/// in source order.
+///
+/// Only plain `assign` bindings whose source spells exactly the bound name
+/// qualify. The name is what generated code calls the definition by, so a
+/// pattern spelling anything else would produce a call to something that is
+/// not there.
+///
+/// Definitions nested inside a block are not searched. A generated `expect`
+/// sits at the top level of the module, where a name bound inside a block
+/// cannot be reached.
+pub fn collectTopLevelDefinitionsInRange(
+    module_env: *ModuleEnv,
+    start_offset: u32,
+    end_offset: u32,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!std.ArrayList(TopLevelDefinition) {
+    var results: std.ArrayList(TopLevelDefinition) = .empty;
+    errdefer results.deinit(allocator);
+
+    const source = module_env.common.source;
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (std.meta.activeTag(pattern) != .assign) continue;
+
+        const name = module_env.common.idents.getText(pattern.assign.ident);
+        const name_region = module_env.store.getPatternRegion(def.pattern);
+        if (name_region.end.offset > source.len or name_region.start.offset > name_region.end.offset) continue;
+        if (!std.mem.eql(u8, source[name_region.start.offset..name_region.end.offset], name)) continue;
+
+        // The whole definition counts, name and value alike, so the cursor can
+        // sit anywhere inside the function it asks about.
+        const body_region = module_env.store.getExprRegion(def.expr);
+        const extent_end = @max(name_region.end.offset, body_region.end.offset);
+        if (extent_end < start_offset or name_region.start.offset > end_offset) continue;
+
+        // Past anything else written on that line, not at the value's own end.
+        // A comment after the value would otherwise be pushed down onto the
+        // generated `expect` and read as a remark about it.
+        var insertion_region = body_region;
+        insertion_region.end.offset = lineEndAfter(source, body_region.end.offset);
+        const body_range = regionToRange(module_env, insertion_region) orelse continue;
+        try results.append(allocator, .{
+            .pattern = def.pattern,
+            .name = name,
+            .end = .{ .line = body_range.end_line, .character = body_range.end_col },
+        });
+    }
     return results;
 }
 
