@@ -13439,6 +13439,12 @@ generated objects. This lets a platform provide a cgo host and its matching
 MinGW runtime without either the compiler or linker reconstructing the host's
 ABI from the archive.
 
+The synthetic default platform declares MinGW startup and library inputs from
+the same inventory used to embed the vendored runtime in the compiler. Default
+app staging writes those files into the selected target's platform directory;
+the linker consumes them as ordinary explicit platform inputs. Baseline CPU
+targets use the same runtime bytes as their matching architecture and ABI.
+
 ```text
 targets: {
     inputs_dir: "targets/",
