@@ -26794,7 +26794,40 @@ const BodyContext = struct {
                 .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
         });
+        if (self.nominalConstructionLayer(shape_ty) != null) {
+            const source_info = self.tryInfo(callable_fn.ret);
+            const value_name = try self.nameStoreMut().internRecordFieldLabel("value");
+            const rest_name = try self.nameStoreMut().internRecordFieldLabel("rest");
+            const source_value_ty = self.recordFieldType(source_info.ok_ty, value_name);
+            if (!self.sameType(self.recordFieldType(source_info.ok_ty, rest_name), state_ty)) {
+                Common.invariant("tag-union parser result changed the state type");
+            }
+            const value_local = try self.addLocal(self.builder.symbols.fresh(), source_value_ty);
+            const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+            const value = try self.wrapParsedTagUnionValue(
+                try self.localExpr(value_local, source_value_ty),
+                source_value_ty,
+                shape_ty,
+            );
+            const ok_body = try self.parseResultOk(ret_ty, value, try self.localExpr(rest_local, state_ty), state_ty);
+            return try self.sequenceTryRecord(result, callable_fn.ret, value_local, value_name, rest_local, rest_name, ok_body, ret_ty);
+        }
         return try self.injectTryErrorRow(result, callable_fn.ret, ret_ty);
+    }
+
+    /// A format method may return the structural tag union backing the
+    /// checked nominal shape. Construct each declared nominal layer explicitly.
+    fn wrapParsedTagUnionValue(
+        self: *BodyContext,
+        value: DraftExprId,
+        source_ty: Type.TypeId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (self.sameType(source_ty, target_ty)) return value;
+        const layer = self.nominalConstructionLayer(target_ty) orelse
+            Common.invariant("tag-union parser value differed from its checked nominal backing");
+        const backing = try self.wrapParsedTagUnionValue(value, source_ty, layer.backing);
+        return try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing } });
     }
 
     fn lowerParseNominalScalarFromState(

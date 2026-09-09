@@ -5269,6 +5269,11 @@ merges sorted tag rows linearly and retains each sealed source-to-target tag
 correspondence once per emission context; propagation reuses that mapping.
 Differing rows use the ordinary Try sequence's cold error edge with an explicit
 conversion continuation, preserving direct success-record field binding.
+A tag-union format method can return the checked structural backing of the
+derived nominal shape. Its generated success edge binds the parsed value and
+rest directly, constructs each declared nominal layer around the value, and
+builds the parent result. This construction uses the checked nominal backing
+chain; error-row injection itself still requires identical success types.
 
 Issue #11246 is pinned by
 `test/snapshots/parser_for_derived_list_error_union_issue_11246.md`,
