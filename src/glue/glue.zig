@@ -4870,7 +4870,8 @@ const GlueProtocolLock = struct {
             }),
             .abi_union => try self.record(idx, "AbiTagUnionLayout", &.{
                 .{ .name = "discriminant_offset32", .type = .u64_ }, .{ .name = "discriminant_offset64", .type = .u64_ },
-                .{ .name = "discriminant_size", .type = .u64_ },     .{ .name = "tags", .type = .list_abi_tag },
+                .{ .name = "discriminant_size", .type = .u64_ },     .{ .name = "has_payload", .type = .bool_ },
+                .{ .name = "tags", .type = .list_abi_tag },
             }),
             .abi_tag => try self.record(idx, "AbiTagLayout", &.{
                 .{ .name = "discriminant", .type = .u64_ },             .{ .name = "name", .type = .str_ },                .{ .name = "payload", .type = .list_u64 },
