@@ -98,3 +98,77 @@ test "issue 11245 - minimal: unresolved callback effect absorbed by a pure callb
 
     try test_env.assertHasTypeError("Type Mismatch");
 }
+
+test "issue 11245 - captured function keeps its identity through a let-bound scheme" {
+    // `g` is a binding scheme because its parameter is generalized, but the
+    // `f` it captures is not: every use of `g` calls the same `f`, so the
+    // effect of `apply` depends on the real `f`, and an effectful argument
+    // makes the expect effectful.
+    const src =
+        \\go! : Str => Str
+        \\go! = |s| s
+        \\
+        \\apply = |x, f| {
+        \\    g = |_| f(x)
+        \\    g("")
+        \\}
+        \\
+        \\expect apply("a", go!) == "a"
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertHasTypeError("Effectful Expect");
+}
+
+test "issue 11245 - pure annotation rejects an effectful argument reached through a let-bound scheme" {
+    const src =
+        \\go! : Str => Str
+        \\go! = |s| s
+        \\
+        \\apply = |x, f| {
+        \\    g = |_| f(x)
+        \\    g("")
+        \\}
+        \\
+        \\runner : Str -> Str
+        \\runner = |x| apply(x, go!)
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertHasTypeError("Type Mismatch");
+}
+
+test "issue 11245 - a let-bound scheme's own function parameter stays effect-polymorphic per use" {
+    // `cb`'s parameter is quantified, so each use gets its own `f`: a pure
+    // use and an effectful use of the same binding are both fine, and only
+    // the effectful use makes its enclosing function effectful.
+    const src =
+        \\go! : Str => Str
+        \\go! = |s| s
+        \\
+        \\pure_id : Str -> Str
+        \\pure_id = |s| s
+        \\
+        \\run = |line| {
+        \\    cb = |f| f(line)
+        \\    a = cb(pure_id)
+        \\    b = cb(go!)
+        \\    Str.concat(a, b)
+        \\}
+        \\
+        \\pure_run : Str -> Str
+        \\pure_run = |line| {
+        \\    cb = |f| f(line)
+        \\    cb(pure_id)
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeWarning("Effectful Function Name");
+}

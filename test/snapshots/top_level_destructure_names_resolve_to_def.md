@@ -107,7 +107,7 @@ greeting = f("hello ")
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-call (constraint-fn-var 270)
+			(e-call (constraint-fn-var 268)
 				(e-lookup-external
 					(builtin))
 				(e-lookup-local
@@ -120,7 +120,7 @@ greeting = f("hello ")
 			(e-literal (string "s"))))
 	(d-let
 		(p-assign (ident "greeting"))
-		(e-call (constraint-fn-var 281)
+		(e-call (constraint-fn-var 279)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-string
