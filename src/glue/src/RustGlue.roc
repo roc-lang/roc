@@ -140,7 +140,9 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 				name_to_struct_name(rec.name)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
-		RocFunction(_) => "*mut c_void"
+		# A function stored inside a value is one erased-callable allocation,
+		# exactly like `Box(fn)`.
+		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "*mut c_void"
 	}
 }
@@ -1737,6 +1739,7 @@ generate_rust_release_support =
 	\\    }
 	\\}
 	\\
+
 ## Generate self-contained RocList<T> type (simplified, raw pointer approach)
 generate_rust_roc_list : Str
 generate_rust_roc_list =
@@ -2361,7 +2364,8 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 					} else {
 						"${tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)}Release"
 					}
-			}
+				}
+		RocFunction(_) => "RocErasedCallableRelease"
 		_ => ""
 	}
 }
@@ -2386,10 +2390,10 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 				to_lower_snake_case(name_to_struct_name(rec.name))
 			}
 		RocTagUnion(tu) =>
-			# Mirrors `resolve_tag_union_type_rust`, except a single-variant
-			# union resolves through its payload's fragment: that function can
-			# return a rendered type such as `RocList<RocStr>`, which is not an
-			# identifier.
+		# Mirrors `resolve_tag_union_type_rust`, except a single-variant
+		# union resolves through its payload's fragment: that function can
+		# return a rendered type such as `RocList<RocStr>`, which is not an
+		# identifier.
 			match TypeTable.single_variant_payload(tu) {
 				SinglePayload(payload_id) => type_ident_rust(type_table, duplicate_names, preferred_names, payload_id)
 				SingleNoPayload => "type${U64.to_str(type_id)}"
@@ -2400,6 +2404,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 						"type${U64.to_str(type_id)}"
 					}
 				}
+		RocFunction(_) => "erased_callable"
 		_ => "type${U64.to_str(type_id)}"
 	}
 
@@ -2462,6 +2467,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
+		RocFunction(_) => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 		_ => ""
 	}
 }
@@ -2499,6 +2505,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
+		RocFunction(_) => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 		_ => ""
 	}
 }
@@ -2785,7 +2792,11 @@ direct_arg_name_list_rust = |type_table, arg_type_ids| {
 	arg_shape = ArgShape.from_table(type_table)
 
 	for _arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
-		sep = if $args == "" { "" } else { ", " }
+		sep = if $args == "" {
+			""
+		} else {
+			", "
+		}
 		$args = "${$args}${sep}arg${U64.to_str($idx)}"
 		$idx = $idx + 1
 	}

@@ -444,7 +444,9 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 				name_to_struct_name(rec.name)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type(type_table, duplicate_tag_names, preferred_names, type_id, tu)
-		RocFunction(_) => "*anyopaque"
+		# A function stored inside a value is one erased-callable allocation,
+		# exactly like `Box(fn)`.
+		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "*anyopaque"
 	}
 }
@@ -1170,6 +1172,7 @@ release_policy_for_type_id = |type_table, duplicate_tag_names, preferred_names, 
 						"${tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)}Release"
 					}
 				}
+		RocFunction(_) => "RocErasedCallableRelease"
 		_ => ""
 	}
 }
@@ -1208,6 +1211,7 @@ type_ident_zig = |type_table, duplicate_tag_names, preferred_names, type_id|
 						"Type${U64.to_str(type_id)}"
 					}
 				}
+		RocFunction(_) => "ErasedCallable"
 		_ => "Type${U64.to_str(type_id)}"
 	}
 
@@ -1272,6 +1276,7 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 					}
 				}
 			}
+		RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
 		_ => ""
 	}
 }
@@ -1310,6 +1315,7 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 						""
 					}
 				}
+		RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
 		_ => ""
 	}
 }
