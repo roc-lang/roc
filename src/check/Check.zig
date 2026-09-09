@@ -180,6 +180,10 @@ generalizer: Generalizer,
 constraints: Constraint.SafeList,
 /// Return-flow constraints (`return` and `?`) owned by the lambda that produced them.
 return_constraints: std.ArrayListUnmanaged(ReturnConstraint),
+/// Operands of every early return, owned by the lambda that produced them. A
+/// lambda's result is its body tail *or* one of these, so the constructed-tag
+/// facts a payload closing rests on must see them too.
+return_value_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Stack of active lambda-owned return constraint ranges.
 return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 /// A map from one var to another. Used in instantiation and var copying
@@ -2280,6 +2284,8 @@ const ReturnConstraintFrame = struct {
     lambda: CIR.Expr.Idx,
     /// Start of this lambda's deferred constraints in the shared scratch list.
     start: usize,
+    /// Start of this lambda's early-return operands in the shared scratch list.
+    returns_start: usize,
     /// The inferred body result that unannotated returns constrain after body checking.
     body_result: Var,
     /// The result supplied by an annotation or another explicit function expectation.
@@ -2571,6 +2577,7 @@ fn initAssumePrepared(
         .var_map = collections.DenseMap(Var, Var).init(gpa),
         .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .return_constraints = .empty,
+        .return_value_exprs = .empty,
         .return_constraint_frames = .empty,
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
@@ -2777,6 +2784,7 @@ pub fn deinit(self: *Self) void {
     self.var_map.deinit();
     self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
+    self.return_value_exprs.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.var_set.deinit();
     self.inspect_type_visits.deinit();
@@ -19504,7 +19512,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
 
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, lambda_body_expected.withBranchResult(expected_func.ret));
-                try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
+                try self.closeAbsentConstructedPayloadVarsForLambda(expr_idx, lambda.body, body_var);
                 const body_result = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
                 if (body_result.isProblem()) {
                     // Preserve platform unification's exact relation, and refine
@@ -19520,7 +19528,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 break :blk lambda_body_does_fx;
             } else blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, lambda_body_expected);
-                try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
+                try self.closeAbsentConstructedPayloadVarsForLambda(expr_idx, lambda.body, body_var);
                 break :blk lambda_body_does_fx;
             };
 
@@ -20392,6 +20400,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 .return_expr => .return_expr,
                 .try_suffix => .try_suffix,
             };
+            try self.recordReturnValueExpr(ret.lambda, ret.expr);
 
             if (expected_return) |annotated_return| {
                 if (return_kind == .try_suffix) {
@@ -21299,6 +21308,39 @@ fn collectKnownEmptyPayloadVarsForExpr(
     return true;
 }
 
+/// Close the payload of every tag this lambda's result can never carry. A
+/// lambda returns its body's tail *or* one of its early-return operands, so
+/// both supply the constructed-tag facts. `?` desugars to an early return, and
+/// without its operand the `Err` it returns would look impossible here.
+fn closeAbsentConstructedPayloadVarsForLambda(
+    self: *Self,
+    lambda_idx: CIR.Expr.Idx,
+    body_expr: CIR.Expr.Idx,
+    target_var: Var,
+) Allocator.Error!void {
+    std.debug.assert(self.return_constraint_frames.items.len > 0);
+    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
+    std.debug.assert(frame.lambda == lambda_idx);
+
+    self.collected_constructed_tags.clearRetainingCapacity();
+    if (!try self.collectConstructedTagsForExpr(body_expr, &self.collected_constructed_tags)) return;
+    for (self.return_value_exprs.items[frame.returns_start..]) |return_expr| {
+        if (!try self.collectConstructedTagsForExpr(return_expr, &self.collected_constructed_tags)) return;
+    }
+    if (self.collected_constructed_tags.items.len == 0) return;
+
+    self.payload_vars_to_close.clearRetainingCapacity();
+    try self.collectAbsentCtorPayloadBlockers(
+        target_var,
+        self.collected_constructed_tags.items,
+        &self.payload_vars_to_close,
+    );
+
+    for (self.payload_vars_to_close.items) |payload_var| {
+        try self.closePayloadVarToEmpty(payload_var);
+    }
+}
+
 fn closeAbsentConstructedPayloadVars(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -21891,6 +21933,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const expected_return = self.expectedReturnResultFor(ret.lambda);
                 const return_expected = expected.forReturnValue(expected_return);
                 does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
+                try self.recordReturnValueExpr(ret.lambda, ret.expr);
 
                 if (expected_return) |annotated_return| {
                     try self.checkReturnRelation(annotated_return, ret.expr, .early_return, env);
@@ -29580,6 +29623,7 @@ fn pushReturnConstraintFrame(
     try self.return_constraint_frames.append(self.gpa, .{
         .lambda = lambda_idx,
         .start = self.return_constraints.items.len,
+        .returns_start = self.return_value_exprs.items.len,
         .body_result = body_result,
         .expected_result = expected_result,
     });
@@ -29603,7 +29647,21 @@ fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
     const frame = self.return_constraint_frames.items[frame_idx];
     std.debug.assert(frame.lambda == lambda_idx);
     self.return_constraints.shrinkRetainingCapacity(frame.start);
+    self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
     self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
+}
+
+/// Record one early-return operand for the lambda that owns it. Every return
+/// is recorded, including the ones whose relation is checked immediately, so
+/// that the lambda's constructed-tag facts stay complete.
+fn recordReturnValueExpr(
+    self: *Self,
+    lambda_idx: CIR.Expr.Idx,
+    actual_expr: CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    std.debug.assert(self.return_constraint_frames.items.len > 0);
+    std.debug.assert(self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].lambda == lambda_idx);
+    try self.return_value_exprs.append(self.gpa, actual_expr);
 }
 
 fn appendReturnConstraint(
@@ -29968,6 +30026,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     }
 
     self.return_constraints.shrinkRetainingCapacity(frame.start);
+    self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
     self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
 }
 
