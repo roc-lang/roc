@@ -124,6 +124,9 @@ pub const LirLoweringOptions = struct {
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
     consume_dead_boxes: bool = false,
+    /// Restore eligible stored constants as internal readonly static values,
+    /// the way a linked output does.
+    include_internal_static_data: bool = false,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
     prove_ranges: bool = false,
@@ -700,7 +703,10 @@ fn lowerAppPathToLir(
             .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
-        .{ .requests = lir_roots },
+        .{
+            .requests = lir_roots,
+            .include_internal_static_data = opts.include_internal_static_data,
+        },
         .{
             .specialization_strategy = opts.specialization_strategy,
             .target_usize = opts.target_usize,
