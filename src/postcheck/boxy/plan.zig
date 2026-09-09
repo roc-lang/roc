@@ -5953,6 +5953,7 @@ const Builder = struct {
                 .checked => |template| self.templateEvidenceParams(template),
                 .lifted, .synthetic => null,
             },
+            .checked_error => null,
             .callable_eval_template => null,
         };
     }
@@ -9497,6 +9498,7 @@ const Builder = struct {
         const binding = view.top_level_procedure_bindings.get(binding_ref);
         return switch (binding.body) {
             .direct_template => false,
+            .checked_error => false,
             .callable_eval_template => |template_id| blk: {
                 const template = self.callableEvalTemplate(view, template_id);
                 const root = view.compile_time_roots.root(template.root);
@@ -9551,6 +9553,7 @@ const Builder = struct {
     ) ?CheckedExprIdentity {
         const template_id = switch (body) {
             .direct_template => return null,
+            .checked_error => return null,
             .callable_eval_template => |template| template,
         };
         const template = self.callableEvalTemplate(view, template_id);
@@ -9570,6 +9573,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked procedure template reached boxy body type planning"),
             },
+            .checked_error => |expr| .{ .checked_expr = .{ .view = view, .root_expr = expr } },
             .callable_eval_template => |template| self.callableEvalTemplateBody(view, template),
         };
     }
@@ -9584,6 +9588,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked imported procedure template reached boxy body type planning"),
             },
+            .checked_error => |expr| .{ .checked_expr = .{ .view = view, .root_expr = expr } },
             .callable_eval_template => |template| self.callableEvalTemplateBody(view, template),
         };
     }
@@ -10018,6 +10023,7 @@ const Builder = struct {
 
         const bodies = view.checked_bodies;
         const expr = bodies.expr(expr_id);
+        if (expr.data == .runtime_error) return;
         _ = try self.analyzeType(view, expr.ty);
 
         switch (expr.data) {
@@ -10088,7 +10094,10 @@ const Builder = struct {
                 try self.analyzeOmittedFieldDefaults(view, expr_id);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.analyzeStatementTypes(view, statement);
+                for (block.statements) |statement| {
+                    try self.analyzeStatementTypes(view, statement);
+                    if (bodies.statementDiverges(statement, .run)) return;
+                }
                 try self.analyzeExprTypes(view, block.final_expr);
             },
             .tag => |tag| try self.analyzeExprSliceTypes(view, tag.args),
@@ -11072,15 +11081,18 @@ const Builder = struct {
         switch (statement.data) {
             .pending => boxyPlanInvariant("pending checked statement reached boxy body type planning"),
             .decl => |decl| {
+                if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
                 try self.analyzePatternTypes(view, decl.pattern);
                 try self.analyzeExprTypes(view, decl.expr);
             },
             .var_ => |decl| {
+                if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
                 try self.analyzePatternTypes(view, decl.pattern);
                 try self.analyzeExprTypes(view, decl.expr);
             },
             .var_uninitialized => |decl| try self.analyzePatternTypes(view, decl.pattern),
             .reassign => |reassign| {
+                if (view.checked_bodies.expr(reassign.expr).data == .runtime_error) return;
                 try self.analyzePatternTypes(view, reassign.pattern);
                 try self.analyzeExprTypes(view, reassign.expr);
             },
@@ -11339,6 +11351,7 @@ const Builder = struct {
                 const view = self.moduleForId(imported.artifact);
                 const binding = self.importedProcedureBinding(view, imported);
                 break :blk switch (binding.body) {
+                    .checked_error => null,
                     .callable_eval_template => |template| self.storedFnSourceForCallableEvalTemplate(view, template),
                     .direct_template => null,
                 };
@@ -11354,6 +11367,7 @@ const Builder = struct {
         const view = self.moduleForId(binding_ref.artifact);
         const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
         return switch (binding.body) {
+            .checked_error => null,
             .callable_eval_template => |template| self.storedFnSourceForCallableEvalTemplate(view, template),
             .direct_template => null,
         };
@@ -11429,7 +11443,7 @@ const Builder = struct {
                     .synthetic,
                     => continue,
                 },
-                .callable_eval_template => continue,
+                .checked_error, .callable_eval_template => continue,
             };
             const template = view.checked_procedure_templates.get(template_ref.template);
             const body_id = switch (template.body) {
@@ -11487,6 +11501,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked procedure template reached boxy worker type planning"),
             },
+            .checked_error => |expr| typeRef(view, view.checked_bodies.expr(expr).ty),
             .callable_eval_template => |template| typeRef(view, self.callableEvalTemplate(view, template).checked_fn_root),
         };
     }
@@ -11504,6 +11519,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked imported procedure template reached boxy worker type planning"),
             },
+            .checked_error => |expr| typeRef(view, view.checked_bodies.expr(expr).ty),
             .callable_eval_template => |template| typeRef(view, self.callableEvalTemplate(view, template).checked_fn_root),
         };
     }
@@ -11520,6 +11536,7 @@ const Builder = struct {
                 const view = self.moduleForId(top_level.artifact);
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
                 switch (binding.body) {
+                    .checked_error => {},
                     .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(view, template)) |source| {
                         break :blk source;
                     },
@@ -11538,6 +11555,7 @@ const Builder = struct {
                 };
                 const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
                 switch (binding.body) {
+                    .checked_error => {},
                     .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(view, template)) |source| {
                         break :blk source;
                     },
@@ -11552,6 +11570,7 @@ const Builder = struct {
                 const view = self.moduleForId(imported.artifact);
                 const binding = self.importedProcedureBinding(view, imported);
                 switch (binding.body) {
+                    .checked_error => {},
                     .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(view, template)) |source| {
                         break :blk source;
                     },
@@ -11569,6 +11588,7 @@ const Builder = struct {
                 const view = self.moduleForId(binding_ref.artifact);
                 const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
                 break :blk switch (binding.body) {
+                    .checked_error => boxyPlanInvariant("rejected binding reached executable callable consumption"),
                     .callable_eval_template => |template| self.workerSourceForCallableEvalTemplate(view, template) orelse source,
                     .direct_template => source,
                 };

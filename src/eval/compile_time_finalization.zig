@@ -604,6 +604,7 @@ const RootCompletionState = struct {
     ) bool {
         return switch (body) {
             .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
+            .checked_error => true,
             .callable_eval_template => |template_id| blk: {
                 const template = self.module.callable_eval_templates.get(template_id);
                 break :blk self.rootDependencyComplete(template.root);

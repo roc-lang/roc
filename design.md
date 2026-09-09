@@ -8625,6 +8625,29 @@ instantiated only after this callable-or-crash gate. The crash branch uses the
 contextual result cell solely to represent the non-returning expression; it
 never instantiates the rejected callable's type or contributes a type relation.
 
+An ordinary function-valued binding whose bound expression is already a checked
+`runtime_error` likewise has no callable target. Initial binding publication
+records `ProcedureBindingBody.checked_error` with that expression's identity, retaining
+the source scheme for diagnostic recovery. It produces no callable-evaluation
+root, entry wrapper, or callable-evaluation template for the rejected value.
+Exported binding metadata retains the same outcome through serialization.
+
+Resolved-value publication consumes this outcome at each binding use and emits
+a checked `runtime_error` there. A call whose callee is an immediate checked
+error becomes the same error: the callee evaluates before its arguments.
+An error-path worklist propagates this outcome along explicit callee and
+callable-binding alias edges, visiting each edge once. Aliases discovered here
+also publish `checked_error`; their already-assigned evaluation roots become
+ineligible, and executable uses never consume their wrappers. Publication
+refreshes diagnostic, divergence, and inspection-elision facts before collecting
+specialization relations. Recovery scratch is allocated only when publication
+consumes a rejected binding or an immediately failing callee; successful
+modules gain no additional body traversal or per-expression metadata. The error
+happens when the value is evaluated, including passing it without calling it.
+Independent definitions retain their ordinary roots and runtime behavior.
+Neither lowering strategy instantiates the rejected binding's signature,
+substitutions, or evidence. Closed-row and unique-tag invariants remain intact.
+
 Stored generated parser and encoder runtime functions are the one distinct
 producer proof: ConstStore emits their explicit generated-runtime function kind
 only after compile-time evaluation successfully consumed the constructor
