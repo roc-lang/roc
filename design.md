@@ -4923,8 +4923,11 @@ and only the code-growth fuel ends the cycle. Case-of-case distribution
 therefore consumes the symbolic arm values recorded when each `match` or `if`
 was emitted: it selects outer arms and recurses through branch-built arms from
 those values, keeps an emitted arm's statements as they stand, and leaves an
-arm whose value is opaque as a residual match. A Debug validator rejects any
-clone-source read of an expression the clone emitted.
+arm whose value is opaque as a residual match. Strict bindings introduced by
+distribution join the retained arm statements in the same block, so another
+distribution keeps every binding referenced by the recorded result value.
+A Debug validator rejects any clone-source read of an expression the clone
+emitted.
 
 #### Constant Storage
 

@@ -9670,21 +9670,32 @@ const Cloner = struct {
             break :blk try self.cloneExprValueInto(arm_body, &branch_bindings);
         };
         const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
-        const tail = try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
-
         if (recorded_value != null) {
             const arm_data = self.pass.program.getExpr(arm_body).data;
             if (arm_data == .block) {
+                var statements = std.ArrayList(Ast.StmtId).empty;
+                defer statements.deinit(self.pass.allocator);
+                const existing = self.pass.program.stmtSpan(arm_data.block.statements);
+                for (0..existing.len) |index| {
+                    try statements.append(self.pass.allocator, GuardedList.at(existing, index));
+                }
+                // A later distribution keeps these statements and replaces
+                // the tail again. Keep the new value's strict bindings here
+                // too, so its recorded leaves remain in that retained scope.
                 return .{
-                    .body = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
-                        .statements = arm_data.block.statements,
-                        .final_expr = tail,
-                    } } }),
+                    .body = try self.emitBlockWithTail(ty, &statements, .{
+                        .reused = null,
+                        .bindings = branch_bindings,
+                        .value = outer_value,
+                    }),
                     .value = outer_value,
                 };
             }
         }
-        return .{ .body = tail, .value = outer_value };
+        return .{
+            .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
+            .value = outer_value,
+        };
     }
 
     /// Collapse an outer match against one inner-branch result: a known
