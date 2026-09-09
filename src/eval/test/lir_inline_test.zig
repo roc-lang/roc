@@ -2238,22 +2238,25 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
         // The eight scalar `plus` method calls are producer-authored low-level
         // operations, so direct publication emits them without procedure
-        // specialization requests.
-        .template_requests = 19,
-        .template_hits = 15,
+        // specialization requests. Direct-call result queries select the
+        // callee and prepare its argument evidence before expression lowering.
+        // These requests reuse the same four procedure and eight nested
+        // specializations; candidate scans and digest-node bounds stay fixed.
+        .template_requests = 61,
+        .template_hits = 57,
         .template_misses = 4,
-        .nested_requests = 16,
-        .nested_hits = 8,
+        .nested_requests = 32,
+        .nested_hits = 24,
         .nested_misses = 8,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 74,
-        .max_specialization_type_digest_cache_hits = 160,
+        .specialization_type_digest_requests = 132,
+        .max_specialization_type_digest_cache_hits = 320,
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 79,
+        .nominal_backing_instantiations = 95,
     });
 }
 
@@ -2544,21 +2547,24 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
     ;
 
     try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
-        .template_requests = 15,
-        .template_hits = 5,
+        // Result queries add cache hits while completing the callee interface
+        // and argument evidence. The growing record chain still needs exactly
+        // ten procedure and six nested specializations, with no candidate scans.
+        .template_requests = 48,
+        .template_hits = 38,
         .template_misses = 10,
-        .nested_requests = 12,
-        .nested_hits = 6,
+        .nested_requests = 24,
+        .nested_hits = 18,
         .nested_misses = 6,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 70,
+        .specialization_type_digest_requests = 115,
         .max_specialization_type_digest_cache_hits = 320,
         .max_specialization_type_digest_cache_misses = 360,
         .max_specialization_type_digest_nodes_visited = 360,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 30,
-        .nominal_backing_instantiations = 127,
+        .nominal_backing_instantiations = 139,
     });
 }
 
