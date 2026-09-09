@@ -10092,6 +10092,9 @@ pub const CheckedPatternBinder = struct {
     id: PatternBinderId,
     pattern: CheckedPatternId,
     reassignable: bool,
+    /// A generalized callable lookup binding. Its uses instantiate the
+    /// referenced callable; the binding does not own a runtime value cell.
+    is_scheme_alias: bool = false,
 };
 
 /// Public `CheckedStringLiteralId` declaration.
@@ -13837,7 +13840,8 @@ fn resolvedValueCanBeCalledDirectly(
     relation_modules: []const ImportedModuleView,
 ) bool {
     return switch (ref) {
-        .local_proc, .hosted_proc => true,
+        .local_proc => |local| !local.is_alias,
+        .hosted_proc => true,
         .top_level_proc, .promoted_top_level_proc => |proc| procedureUseCanBeCalledDirectly(
             proc,
             local_module,
@@ -14451,7 +14455,22 @@ const CheckedBodyPayloadCopier = struct {
     fn copyStatementData(self: *@This(), statement_idx: CIR.Statement.Idx) Allocator.Error!CheckedStatementData {
         const statement = self.module.getStatement(statement_idx);
         return switch (statement) {
-            .s_decl => |decl| .{ .decl = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } },
+            .s_decl => |decl| blk: {
+                // Generalization is checker-owned binding metadata. The RHS
+                // lookup supplies the explicit forwarding edge; calls and
+                // other computations retain their ordinary evaluation site.
+                const rhs = self.module.expr(decl.expr).data;
+                const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
+                    rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
+                if (is_lookup and self.module.pattern(decl.pattern).data == .assign and
+                    self.module.moduleEnvConst().nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(decl.pattern)) and
+                    sourceTypeIsFunction(self.module, self.module.patternType(decl.pattern)))
+                {
+                    const binder = try self.patternBinder(decl.pattern);
+                    self.pattern_binders.items[@intFromEnum(binder)].is_scheme_alias = true;
+                }
+                break :blk .{ .decl = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } };
+            },
             .s_var => |var_| .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } },
             .s_var_uninitialized => |var_| .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } },
             .s_reassign => |reassign| .{ .reassign = .{
@@ -15655,6 +15674,13 @@ pub const CheckedEvidenceSpan = struct {
 
 /// Public `LocalProcedureBinding` declaration.
 pub const LocalProcedureBinding = struct {
+    /// An alias owns an instantiation scope, but forwards an existing callable
+    /// instead of introducing a checked function body.
+    is_alias: bool = false,
+    /// Final callable lookup reached through the alias's explicit RHS edges.
+    /// Publication compresses these identity edges once; type substitutions
+    /// remain owned by the individual checked scheme scopes.
+    alias_target: ?ResolvedValueRefId = null,
     binder: PatternBinderId,
     expr: CheckedExprId,
     /// Exact generalized-local dispatch scope owned by this procedure, if it
@@ -15775,6 +15801,8 @@ pub const ResolvedValueRefTable = struct {
         const module = modules.module(module_idx);
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
+        var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
+        defer callable_aliases.deinit(allocator);
 
         var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module, checked_bodies);
         defer local_pattern_roles.deinit(allocator);
@@ -15793,9 +15821,9 @@ pub const ResolvedValueRefTable = struct {
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@enumFromInt(node_idx));
-            if (tag == .expr_associated_lookup_local or tag == .expr_associated_lookup) {
-                checkedArtifactInvariant("unresolved associated lookup reached resolved value publication", .{});
-            }
+            // Checked source traversal and body copying already reject unresolved
+            // associated lookups in published expressions. Abandoned source nodes
+            // can still contain unresolved lookups and need no value reference.
             if (tag != .expr_var and
                 tag != .expr_external_lookup and
                 tag != .expr_associated_lookup_resolved and
@@ -15843,6 +15871,9 @@ pub const ResolvedValueRefTable = struct {
                 .recursive_reference = recursive_reference_nodes.contains(node_idx),
             });
             by_checked_expr[@intFromEnum(checked_expr)] = id;
+            if (resolved_ref == .local_proc and resolved_ref.local_proc.is_alias) {
+                try callable_aliases.append(allocator, id);
+            }
         }
 
         try appendSyntheticLocalLookupRefs(
@@ -15854,6 +15885,7 @@ pub const ResolvedValueRefTable = struct {
             hoisted_constants,
             synthetic_expr_origins,
         );
+        try publishCallableAliasTargets(allocator, records.items, by_checked_expr, callable_aliases.items);
         validateAllLookupRefsResolved(checked_bodies, by_checked_expr);
 
         return .{
@@ -15868,6 +15900,18 @@ pub const ResolvedValueRefTable = struct {
         return self.by_checked_expr[raw];
     }
 
+    /// The original callable identity of a procedure reference. Alias use
+    /// types and substitutions still belong to the requesting record.
+    pub fn callableTarget(self: *const ResolvedValueRefTable, id: ResolvedValueRefId) ResolvedValueRefRecord {
+        const record = self.records[@intFromEnum(id)];
+        if (record.ref == .local_proc and record.ref.local_proc.is_alias) {
+            const target = record.ref.local_proc.alias_target orelse
+                checkedArtifactInvariant("callable alias has no published target", .{});
+            return self.records[@intFromEnum(target)];
+        }
+        return record;
+    }
+
     pub fn deinit(self: *ResolvedValueRefTable, allocator: Allocator) void {
         allocator.free(self.template_refs);
         allocator.free(self.by_checked_expr);
@@ -15877,6 +15921,34 @@ pub const ResolvedValueRefTable = struct {
 };
 /// Short name for the resolved checked value table.
 pub const ResolvedValueTable = ResolvedValueRefTable;
+
+fn publishCallableAliasTargets(
+    allocator: Allocator,
+    records: []ResolvedValueRefRecord,
+    by_checked_expr: []const ?ResolvedValueRefId,
+    aliases: []const ResolvedValueRefId,
+) Allocator.Error!void {
+    var path = std.ArrayList(ResolvedValueRefId).empty;
+    defer path.deinit(allocator);
+    for (aliases) |alias| {
+        if (records[@intFromEnum(alias)].ref.local_proc.alias_target != null) continue;
+        path.clearRetainingCapacity();
+        var target = alias;
+        while (true) {
+            const ref = records[@intFromEnum(target)].ref;
+            if (ref != .local_proc or !ref.local_proc.is_alias) break;
+            if (ref.local_proc.alias_target) |completed| {
+                target = completed;
+                break;
+            }
+            if (path.items.len == aliases.len) checkedArtifactInvariant("cyclic callable alias declarations", .{});
+            try path.append(allocator, target);
+            target = by_checked_expr[@intFromEnum(ref.local_proc.expr)] orelse
+                checkedArtifactInvariant("callable alias RHS has no resolved lookup", .{});
+        }
+        for (path.items) |id| records[@intFromEnum(id)].ref.local_proc.alias_target = target;
+    }
+}
 
 const CheckedExprDataCategory = enum {
     local_lookup,
@@ -16258,7 +16330,7 @@ fn categorizeLocalValueRef(
     if (local_pattern_roles.statementRole(pattern)) |role| {
         switch (role) {
             .mutable_version => return .{ .local_mutable_version = .{ .binder = binder } },
-            .local_proc => |expr| return .{ .local_proc = .{ .binder = binder, .expr = expr } },
+            .local_proc => |proc| return .{ .local_proc = .{ .binder = binder, .expr = proc.expr, .is_alias = proc.is_alias } },
             .local_value => return .{ .local_value = .{ .binder = binder } },
         }
     }
@@ -16635,7 +16707,7 @@ fn platformBindingForRequiredIndex(table: *const PlatformRequiredBindingTable, r
 
 const LocalPatternStatementRole = union(enum) {
     mutable_version,
-    local_proc: CheckedExprId,
+    local_proc: struct { expr: CheckedExprId, is_alias: bool },
     local_value,
 };
 
@@ -16666,9 +16738,16 @@ const LocalPatternRoleIndex = struct {
                 const statement_data = module.getStatement(statement);
                 if (statement_data != .s_decl) unreachable;
                 const decl = statement_data.s_decl;
-                const role: LocalPatternStatementRole = if (isLocalProcExpr(module, decl.expr))
-                    .{ .local_proc = checked_bodies.exprIdForSource(decl.expr) orelse
-                        checkedArtifactInvariant("checked local procedure declaration has no checked expression", .{}) }
+                const is_alias = if (checked_bodies.patternBinderForSource(decl.pattern)) |binder|
+                    checked_bodies.patternBinder(binder).is_scheme_alias
+                else
+                    false;
+                const role: LocalPatternStatementRole = if (is_alias or isLocalProcExpr(module, decl.expr))
+                    .{ .local_proc = .{
+                        .expr = checked_bodies.exprIdForSource(decl.expr) orelse
+                            checkedArtifactInvariant("checked local procedure declaration has no checked expression", .{}),
+                        .is_alias = is_alias,
+                    } }
                 else
                     .local_value;
                 putStatementRole(statement_roles, node_count, decl.pattern, role);
@@ -16732,7 +16811,7 @@ const LocalPatternRoleIndex = struct {
             .mutable_version,
             .local_value,
             => true,
-            .local_proc => |a_expr| a_expr == b.local_proc,
+            .local_proc => |a_proc| std.meta.eql(a_proc, b.local_proc),
         };
     }
 
@@ -16981,10 +17060,14 @@ fn sealCheckedProcedureTemplateRefs(
             if (statement_data != .s_decl) continue;
             const decl = statement_data.s_decl;
             const expr_data = module.expr(decl.expr).data;
-            if (expr_data != .e_lambda and expr_data != .e_closure) continue;
+            const is_alias = if (checked_bodies.patternBinderForSource(decl.pattern)) |binder|
+                checked_bodies.patternBinder(binder).is_scheme_alias
+            else
+                false;
+            if (!is_alias and expr_data != .e_lambda and expr_data != .e_closure) continue;
             const pattern_var = ModuleEnv.varFrom(decl.pattern);
             const generalized = types_store.resolveVar(pattern_var).desc.rank == .generalized;
-            if (!generalized and !instantiated_scheme_roots.contains(pattern_var)) continue;
+            if (!is_alias and !generalized and !instantiated_scheme_roots.contains(pattern_var)) continue;
             const checked_expr = checked_bodies.exprIdForSource(decl.expr) orelse continue;
             try local_schemes.put(@intFromEnum(checked_expr), pattern_var);
         }
@@ -18398,6 +18481,11 @@ const EvidencePass = struct {
     ) Allocator.Error!void {
         const expr_data = self.module.expr(expr).data;
         if (expr_data == .e_lambda or expr_data == .e_closure) return;
+        if (self.checked_bodies.patternBinderForSource(pattern)) |binder| {
+            // Callable aliases now own exact evidence scopes. Their RHS
+            // requirements belong to that scope, not to a representative use.
+            if (self.checked_bodies.patternBinder(binder).is_scheme_alias) return;
+        }
         const pattern_var = ModuleEnv.varFrom(pattern);
         if (self.types.resolveVar(pattern_var).desc.rank != .generalized) return;
         scheme_params.clearRetainingCapacity();
@@ -30846,7 +30934,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 89 records checked error constants for rejected pattern binders.
     // Version 90 records each provided root's exact export declaration ID.
     // Version 91 includes composite scheme requirements in evidence schemas.
-    const serialized_layout_version: u32 = 91;
+    // Version 92 distinguishes generalized callable aliases from runtime
+    // value bindings and function-body declarations.
+    const serialized_layout_version: u32 = 92;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37383,8 +37473,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE0, 0x5A, 0x25, 0x00, 0xE7, 0x2F, 0x24, 0x68, 0x4D, 0x3A, 0x8C, 0x17, 0x9B, 0x99, 0x38, 0x52,
-        0xAF, 0x05, 0xE5, 0x6F, 0x83, 0x10, 0x60, 0xFF, 0x6C, 0xF5, 0x38, 0x50, 0x4F, 0x1E, 0xCE, 0x3A,
+        0x21, 0x6F, 0xBD, 0x37, 0xCB, 0xA9, 0xF5, 0x13, 0x13, 0xE8, 0xA5, 0x08, 0x23, 0x0F, 0x38, 0x58,
+        0x47, 0xE6, 0x62, 0xD1, 0x86, 0x87, 0x6B, 0xAA, 0xE4, 0x5F, 0x1F, 0xF4, 0x35, 0x1A, 0xB6, 0x8C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

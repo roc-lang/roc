@@ -663,6 +663,11 @@ definition. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
+A resolved lookup's module identity is local to the module owning its expression.
+Consumers visiting imported bodies resolve that identity through the expression
+owner's identity table, then use the target module's definition store. An
+unavailable resolved target is a compiler invariant violation.
+
 The checker memoizes this resolution by alias declaration type variable and
 item, while each use still instantiates the selected method scheme separately.
 `CheckedBodyPayloadCopier.copyExprData` treats any unresolved associated lookup
@@ -1849,6 +1854,22 @@ same inline-lambda position—is pinned by
 
 ## Module Completion Boundary
 
+Deferred tuple accesses retain their exact owning expression identity alongside
+the operand and effective result variables. Resolution reports an explicit
+resolved, pending, or rejected outcome. The item/result relation does not
+poison either operand on failure. Immediate rejection marks the still-owned
+expression result for ordinary cascade suppression; deferred rejection replaces
+the access with a checked runtime error without poisoning shared solved types,
+which may already belong to generalized function signatures. Both ambiguous
+shape and concrete invalid access follow this ownership rule.
+
+The deferred worklist stores the expression identity instead of duplicating its
+source region; diagnostics retrieve that region from CIR. Rejected accesses
+are retired after the resolution pass, with shared traversal scratch and one
+default-metadata compaction before further checking. Error-free passes allocate
+no rejection or retirement storage. A discarded access's pending tuple check is
+retired with its explicit subtree invalidation state.
+
 The compile coordinator records phase progress separately from user diagnostics.
 A source module that reaches checking has no user-error `Failure` outcome. It
 must produce its complete `ModuleEnv`, final content identity, and CheckedModule
@@ -2098,11 +2119,18 @@ flow through one graph relation; the checker never performs a pairwise
 argument scan.
 
 Expected aggregate structure is recursive checking context, not a second owner
-of the expression's root relation. Lists, tuples, records, and tag payloads
-project child slots by relating an aggregate skeleton to a rigids-flexed orphan
-copy of the expected type. Nominal constructors explicitly open their declared
-backing before checking the backing expression, and record updates project each
-supplied field from the base row before checking that field's value. A stored
+of the expression's root relation. A record update passes a borrowed base-row
+and field identity; only an aggregate construction consuming that context
+looks up the field. Ordinary stored-value lookups create no expected-shape copy.
+Lists, tuples, records, and tag payloads project child slots by relating an
+aggregate skeleton to an expected-shape copy. This operation preserves structural
+equalities, field kinds, and aliases, and flexes rigids, but does not copy or
+traverse static-dispatch requirements: those belong to the original type and its
+real scheme-use edges. It records no instantiation, literal, ambiguity, or
+dispatch evidence. Context introduces no independent dispatch requirement.
+Nominal constructors explicitly open their declared backing before checking
+the backing expression; demanded update-field type reads obey the same nominal
+opacity and declaration-substitution rules as record unification. A stored
 child is checked and instantiated first; a successful projected-child relation
 is then committed so sibling checking and dispatch can consume it. A rejected
 projected-child relation records no standalone mismatch: the enclosing aggregate's
@@ -5019,6 +5047,30 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Expected Shape Context
+
+An expected aggregate shape guides construction but introduces no new value
+use. `copyExpectedShape` preserves the expected type's structural equalities
+and field kinds in fresh cells, flexes rigid leaves, and omits static-dispatch
+constraints and off-root scheme requirements. Every omitted requirement remains
+on its source type and is enforced by the ordinary enclosing relation and the
+actual stored-value instantiation. Shape copies never enter literal, dispatch,
+ambiguity, or evidence worklists. The copy and its projected relation belong to
+one commit-probe, so a rejected aggregate relation retains neither the copy nor any
+partial unification. Rejection is diagnosed by the owning full-shape relation.
+
+A record update carries its base variable and supplied field identity as
+borrowed context. A consuming aggregate reads the current row on demand,
+including aliases and extensions; a nominal base requires the same opacity
+capability, declaration substitution, and record backing as record unification.
+No solved-graph memo survives between field checks, which can refine the base.
+Ordinary lookups consume no aggregate context and allocate no expected-shape copy.
+
+The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
+arithmetic remains polymorphic, including heterogeneous user arithmetic;
+nominal and extended rows still guide nested defaulted/optional construction;
+inconsistent shared type variables and unsupported real dispatches still fail.
+
 ### Hosted Try Question Widening
 
 `?` unwraps a `Try` condition and re-raises its error row into the enclosing
@@ -5110,6 +5162,13 @@ closed-to-open rejection; composition does not widen a condition type. The
 checker records distinct checked types for the propagated value and the
 function return; post-check lowering consumes its existing explicit return
 boundary and must not reconstruct or widen either type.
+
+Monotype dispatches on the checked return context: a `try_suffix` return lowers
+its value at the source's checked type and retains the active specialization's
+return cell as the boundary target. Constructor preparation must not propagate
+that wider target into the source error payload. Ordinary returns continue to
+lower with the active return cell as their expected type. Lambda Solved and LIR
+consume the retained source/target relation to convert the returned value.
 
 The accepted side is pinned by
 `test/snapshots/issue/issue_11097_bare_and_wrapped_try_on_shared_error_var.md`
@@ -6589,7 +6648,10 @@ Other solved-graph mutations:
 - `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
-  unifying that node with a fresh error variable.
+  unifying that node with a fresh error variable. Tuple access uses this only
+  for immediate rejection while the expression frame owns the result;
+  deferred rejection follows the expression replacement described under Module
+  Completion Boundary and never poisons either shared solved class.
 - `retireCallLikeExprWithErroneousOperands` / statement-owned iterator plan
   recovery (`markErroneous`, `markStaticDispatchFnRejected`, and the explicit
   `call_operand_type_error_exprs` table)—mechanism: Erroneous Call Operand Retirement
@@ -6709,6 +6771,11 @@ Other solved-graph mutations:
   chain pin all sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
+- `copyExpectedShape` / `projectExpectedAggregateShape`—policy: Expected Shape
+  Context (above). Fresh structural context omits dispatch requirements owned by
+  the original type. Only successful ordinary unification with the aggregate
+  skeleton commits the expected-shape relation; the owning relation still checks the actual
+  value against the complete expected type.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
   policy: evidence-param collapse of same-shape requirements as declared in
@@ -6917,6 +6984,15 @@ Procedure-valued lookups are not restored as ordinary constants; they go
 through erased callable construction using the checked procedure template or
 stored `ConstStore` function value that names the callable. A checked lookup
 without a resolved value reference is an invariant failure in boxy lowering.
+
+A local procedure declaration needs a runtime local only when another closure
+captures that binder. Ordinary procedure lookups construct the erased callable
+at their checked, instantiated use, including the procedure's source captures.
+Whether the procedure itself captures values does not require a second,
+unused callable at its declaration. In particular, that unused construction
+must not request descriptors for uninstantiated scheme parameters. Declarations
+whose binders are captured still provide the runtime value required by those
+explicit capture edges.
 
 Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
 the requested checked type. The const node is read from the module that owns the
@@ -7396,6 +7472,24 @@ per-specialization residue of generalized literals.
 
 ### Monotype Instantiation
 
+A generalized local callable alias (`alias = callable`) owns a checked
+instantiation scope, not a runtime monomorphic value cell or a new function
+body. Checking's binding-scheme classification and the declaration's explicit
+lookup edge authorize this plan; CheckedModule construction records it on the
+binder and its resolved procedure uses. Calls and other value-producing computations are not
+alias declarations and retain their original evaluation site.
+
+Every alias use carries its own checked substitution and evidence. Interface
+replay enters the alias scope instead of equating the use with one shared
+binding type. Body lowering installs that substitution in a fresh type-only
+scope and forwards the referenced callable, preserving its identity and
+captures. It does not clone runtime binder tables or create an alias closure,
+wrapper procedure, or specialization family. Monomorphic variables present in
+the substitution retain their existing cells. CheckedModule construction
+compresses alias identity edges to their final callable lookup in linear work without composing
+type graphs. Boxy consumes that target when planning each typed callable use;
+it never materializes an alias at an uninstantiated descriptor.
+
 Monotype lowering is a specialization-time instantiation of checked type graphs.
 This is the same core model as Cor/LSS: each reachable monomorphic
 specialization starts with the checked function/value type graph, creates a
@@ -7426,6 +7520,28 @@ durable specialization record, and contributes its own checked relations.
 Specialization body scheduling may deduplicate global deferred work, but never
 authorizes importing a checked node or root-owned graph state from another
 root.
+
+Instantiation can expose an overlapping tag through a generic extension even
+when the checked call's row was already normalized. Graph row composition
+preserves the checked unifier's head-before-extension precedence: the first
+occurrence supplies the tag's payload and checked-label provenance. Composition
+adds no payload equality; ordinary relations between two rows still relate every
+shared tag's payloads. This is representation normalization of checked data, not
+a relaxation of settled checked-row validation or a new typing rule.
+
+Graph tag heads are unique; row readers establish label order on first use and
+retain that representation-only state in the row. Inserting unrelated graph
+nodes does no sorting work. Flattening gathers an extension chain once, stably
+sorts the combined span, retains its first occurrences, and compresses the root
+while retaining the live residual tail.
+It never repeatedly copies a growing prefix for each chain link. Terminal rows
+need no scratch allocation, ordinary row unification merges sorted spans in one
+pass, and sealing copies already sorted tags directly into durable storage.
+Provisional views use the same normalization without solving new constraints;
+the sealed type store continues to reject duplicate labels.
+Checked-to-specialized interface relations normalize both complete tag rows
+before matching their heads and residual extensions: relating an earlier
+function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.

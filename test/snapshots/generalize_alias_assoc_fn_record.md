@@ -153,7 +153,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(e-runtime-error (tag "erroneous_value_expr"))
 							(e-runtime-error (tag "erroneous_value_expr"))
 							(e-runtime-error (tag "erroneous_value_expr")))))
-				(e-call (constraint-fn-var 324)
+				(e-call (constraint-fn-var 318)
 					(e-field-access
 						(receiver
 							(e-lookup-local

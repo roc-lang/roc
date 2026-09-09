@@ -443,8 +443,15 @@ pub const Store = struct {
         const normalized = try self.allocator.dupe(Tag, values);
         defer self.allocator.free(normalized);
         std.mem.sort(Tag, normalized, name_store, tagLessThan);
-        assertNoDuplicateTags(name_store, normalized);
-        return try self.addTags(normalized);
+        return try self.addSortedTagVariants(name_store, normalized);
+    }
+
+    /// Append a producer-normalized tag span without copying it to sorting
+    /// scratch. The input must be sorted, unique, and owned outside this store.
+    pub fn addSortedTagVariants(self: *Store, name_store: *const names.NameStore, values: []const Tag) std.mem.Allocator.Error!Span {
+        std.debug.assert(std.sort.isSorted(Tag, values, name_store, tagLessThan));
+        assertNoDuplicateTags(name_store, values);
+        return try self.addTags(values);
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {

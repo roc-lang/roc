@@ -3739,13 +3739,23 @@ fn invalidateExprSubtreeMetadata(self: *Self, root: CIR.Expr.Idx) Allocator.Erro
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
 
-    try self.markHoistInvalidatedExprChildren(root, &work);
+    try self.invalidateExprSubtreeMetadataWithScratch(root, &work);
+    self.retireInvalidatedRecordDefaults(root);
+}
+
+/// Batch callers retain traversal capacity and retire default entries once,
+/// after all replacements and before checking consumes the metadata again.
+fn invalidateExprSubtreeMetadataWithScratch(
+    self: *Self,
+    root: CIR.Expr.Idx,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    work.clearRetainingCapacity();
+    try self.markHoistInvalidatedExprChildren(root, work);
     var next: usize = 0;
     while (next < work.items.len) : (next += 1) {
-        try self.markHoistInvalidatedExprChildren(work.items[next], &work);
+        try self.markHoistInvalidatedExprChildren(work.items[next], work);
     }
-
-    self.retireInvalidatedRecordDefaults(root);
 }
 
 fn retireInvalidatedRecordDefaults(self: *Self, root: ?CIR.Expr.Idx) void {
@@ -4842,8 +4852,10 @@ const PendingTupleAccess = struct {
     tuple_var: Var,
     result_var: Var,
     elem_index: u32,
-    region: Region,
+    expr: CIR.Expr.Idx,
 };
+
+const TupleAccessResolution = enum { resolved, pending, rejected };
 
 // env //
 
@@ -6253,23 +6265,23 @@ fn resolvePendingTupleAccess(
     pending: PendingTupleAccess,
     env: *Env,
     final: bool,
-) Allocator.Error!bool {
+) Allocator.Error!TupleAccessResolution {
     const tuple_resolved = self.types.resolveVar(pending.tuple_var);
     switch (tuple_resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .tuple => |tuple| {
                 const elems = self.types.sliceVars(tuple.elems);
                 if (pending.elem_index < elems.len) {
-                    _ = try self.unify(pending.result_var, elems[pending.elem_index], env);
+                    const result = try self.unifyOwnedRelation(pending.result_var, elems[pending.elem_index], env, .none, .construction);
+                    return if (result.isEstablished()) .resolved else .rejected;
                 } else {
                     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_tuple_access = .{
-                        .region = pending.region,
+                        .region = self.cir.store.getExprRegion(pending.expr),
                         .elem_index = pending.elem_index,
                         .reason = .{ .index_out_of_bounds = @intCast(elems.len) },
                     } });
-                    try self.markErroneous(pending.result_var);
+                    return .rejected;
                 }
-                return true;
             },
             .record,
             .record_unbound,
@@ -6282,12 +6294,11 @@ fn resolvePendingTupleAccess(
             .empty_tag_union,
             => {
                 _ = try self.problems.appendProblem(self.gpa, .{ .invalid_tuple_access = .{
-                    .region = pending.region,
+                    .region = self.cir.store.getExprRegion(pending.expr),
                     .elem_index = pending.elem_index,
                     .reason = .not_tuple,
                 } });
-                try self.markErroneous(pending.result_var);
-                return true;
+                return .rejected;
             },
         },
         .alias => |alias| {
@@ -6296,24 +6307,19 @@ fn resolvePendingTupleAccess(
                 .tuple_var = backing_var,
                 .result_var = pending.result_var,
                 .elem_index = pending.elem_index,
-                .region = pending.region,
+                .expr = pending.expr,
             };
             return try self.resolvePendingTupleAccess(alias_pending, env, final);
         },
-        .err, .field_presence => {
-            try self.markErroneous(pending.result_var);
-            return true;
-        },
+        .err, .field_presence => return .rejected,
         .flex, .rigid => {
-            if (!final) return false;
+            if (!final) return .pending;
 
             _ = try self.problems.appendProblem(self.gpa, .{ .tuple_access_needs_annotation = .{
-                .region = pending.region,
+                .region = self.cir.store.getExprRegion(pending.expr),
                 .elem_index = pending.elem_index,
             } });
-            try self.markErroneous(pending.result_var);
-            try self.markErroneous(pending.tuple_var);
-            return true;
+            return .rejected;
         },
     }
 }
@@ -6323,16 +6329,45 @@ fn resolvePendingTupleAccesses(
     env: *Env,
     final: bool,
 ) Allocator.Error!void {
+    var rejected: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer rejected.deinit(self.gpa);
     var write_i: usize = 0;
     var read_i: usize = 0;
     while (read_i < self.pending_tuple_accesses.items.len) : (read_i += 1) {
         const pending = self.pending_tuple_accesses.items[read_i];
-        if (try self.resolvePendingTupleAccess(pending, env, final)) continue;
+        // Another error may already have discarded this access's subtree.
+        if (self.hoistExprInvalidated(pending.expr) or self.cir.store.getExpr(pending.expr) == .e_runtime_error) continue;
+        switch (try self.resolvePendingTupleAccess(pending, env, final)) {
+            .resolved => continue,
+            .rejected => {
+                try rejected.append(self.gpa, pending.expr);
+                continue;
+            },
+            .pending => {},
+        }
 
         self.pending_tuple_accesses.items[write_i] = pending;
         write_i += 1;
     }
     self.pending_tuple_accesses.shrinkRetainingCapacity(write_i);
+
+    if (rejected.items.len == 0) return;
+    var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer work.deinit(self.gpa);
+    for (rejected.items) |expr| {
+        if (self.hoistExprInvalidated(expr) or self.cir.store.getExpr(expr) == .e_runtime_error) continue;
+        const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(expr),
+        } });
+        // The result and operand may now belong to generalized signatures or
+        // independently used bindings. Retire the access without poisoning
+        // either solved class. No solver work observes the batched retirement.
+        try self.invalidateExprSubtreeMetadataWithScratch(expr, &work);
+        self.cir.store.replaceExprWithRuntimeError(expr, diagnostic);
+    }
+    // Tuple-access roots cannot own omitted record fields; their discarded
+    // descendants were marked above, so one compaction retires the whole batch.
+    self.retireInvalidatedRecordDefaults(null);
 }
 
 // instantiate  //
@@ -9543,7 +9578,7 @@ fn hoistedCallableDefForExpr(
             break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
         },
         .e_lookup_associated_resolved => |resolved| blk: {
-            const target_module = self.moduleEnvForIdentity(resolved.module_identity) orelse break :blk null;
+            const target_module = self.moduleEnvForIdentity(module, resolved.module_identity);
             break :blk HoistedCallableDef{ .module = target_module.env, .def = resolved.target_def_idx };
         },
         .e_lookup_associated_local, .e_lookup_associated => null,
@@ -16685,6 +16720,9 @@ const Expected = struct {
     const ExpectedType = struct {
         var_: Var,
         context: problem.Context,
+        /// Borrow a field of `var_` until a construction actually consumes
+        /// this context. Value lookups never need to project the base row.
+        record_field: ?Ident.Idx = null,
     };
 
     fn none() Expected {
@@ -17753,16 +17791,130 @@ fn checkStoredValueExpr(
     };
 }
 
-/// Project an aggregate's child slots from an expected type before checking
-/// those children. The projection is performed against a rigids-flexed orphan
-/// copy: child checking may refine the copy, while the pristine expected var
-/// remains available to the expression that owns the final relation and its
-/// diagnostic.
-///
-/// `shape_var` is a freshly-built aggregate skeleton whose child vars the
-/// caller retains. A non-matching expected constructor is not itself an error
-/// here; the owning relation reports that mismatch after the expression has
-/// checked all of its children.
+/// Copy structural checking context without creating another scheme use.
+/// The source remains the authority on dispatch obligations. In particular,
+/// neither attached constraints nor off-root scheme requirements are copied.
+fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
+    var instantiator = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+        .rank_behavior = .ignore_rank,
+        .purpose = .expected_shape,
+    };
+    self.var_map.clearRetainingCapacity();
+    const fresh_start = self.types.len();
+    const copied = try instantiator.instantiateVar(source);
+    try self.registerExpectedShapeVars(fresh_start, env);
+    return copied;
+}
+
+/// Structural copies need ranks and source regions, but no dispatch,
+/// defaulting, ambiguity, or scheme-use bookkeeping.
+fn registerExpectedShapeVars(self: *Self, fresh_start: u64, env: *Env) Allocator.Error!void {
+    var iterator = self.var_map.iterator();
+    while (iterator.next()) |entry| {
+        const fresh_var = entry.value_ptr.*;
+        // A nominal opening seeds its substitution with borrowed actual args.
+        // Only newly allocated cells need bookkeeping.
+        if (@intFromEnum(fresh_var) < fresh_start) continue;
+        const source_region = self.getRegionAt(entry.key_ptr.*);
+        const rank = self.types.resolveVar(fresh_var).desc.rank;
+        try env.var_pool.addVarToRank(fresh_var, rank);
+        try self.fillInRegionsThrough(fresh_var);
+        self.setRegionAt(fresh_var, source_region);
+    }
+}
+
+/// Borrow an update field from the checked row. Anonymous rows need no copy;
+/// nominal rows open their declaration only when construction demands context.
+/// Row fields are sorted by name, as required by record unification;
+/// extensions use the same left-biased lookup.
+fn borrowExpectedRecordField(self: *Self, base_var: Var, name: Ident.Idx, env: *Env) Allocator.Error!?Var {
+    var current = base_var;
+    var allow_nominal = true;
+    // Brent's cycle detection over the row's single successor (alias backing
+    // or extension). This uses constant space and no per-field hash table.
+    var checkpoint = self.types.resolveVar(base_var).var_;
+    var period: usize = 1;
+    var distance: usize = 0;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        if (distance > 0 and resolved.var_ == checkpoint) return null;
+        if (distance == period) {
+            checkpoint = resolved.var_;
+            period *= 2;
+            distance = 0;
+        }
+        distance += 1;
+        var fields: types_mod.RecordField.SafeMultiList.Range = undefined;
+        var ext: ?Var = null;
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| switch (flat) {
+                .record => |record| {
+                    fields = record.fields;
+                    ext = record.ext;
+                },
+                .record_unbound => |record_fields| fields = record_fields,
+                .nominal_type => |nominal| {
+                    // Record unification opens a nominal only at the outer
+                    // row, requires a record backing, and respects opacity.
+                    if (!allow_nominal or !nominal.canLiftInner(self.cir.selfModuleIdentity())) return null;
+                    const decl_idx = self.types.lookupNominalDecl(nominal) orelse {
+                        std.debug.assert(!nominal.sourceDecl().present);
+                        return null;
+                    };
+                    const decl = self.types.getNominalDecl(decl_idx);
+                    if (!decl.isValid()) return null;
+                    const fresh_start = self.types.len();
+                    const opened = try types_mod.instantiate.instantiateNominalBacking(
+                        self.types,
+                        self.cir.getIdentStoreConst(),
+                        &self.var_map,
+                        decl,
+                        self.types.sliceNominalArgs(nominal),
+                        env.rank(),
+                        .expected_shape,
+                    );
+                    try self.registerExpectedShapeVars(fresh_start, env);
+                    const backing = self.types.resolveVar(opened).desc.content;
+                    if (backing != .structure or backing.structure != .record) return null;
+                    fields = backing.structure.record.fields;
+                    ext = backing.structure.record.ext;
+                },
+                .empty_record, .empty_tag_union, .tag_union, .tuple, .fn_pure, .fn_unbound, .fn_effectful => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+        const field_slice = self.types.getRecordFieldsSlice(fields);
+        const names = field_slice.items(.name);
+        const idents = self.cir.getIdentStoreConst();
+        const wanted = idents.getText(name);
+        var lo: usize = 0;
+        var hi = names.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (std.mem.order(u8, wanted, idents.getText(names[mid]))) {
+                .lt => hi = mid,
+                .gt => lo = mid + 1,
+                .eq => return field_slice.items(.presence)[mid].typeVar(),
+            }
+        }
+        current = ext orelse return null;
+        allow_nominal = false;
+    }
+}
+
+/// Materialize expected structure only when an aggregate consumes it. Shape
+/// copies cannot create executable obligations, and failed projections roll
+/// back their allocations together with the attempted relation. The enclosing
+/// aggregate still owns the ordinary full-shape relation and its diagnostic.
 fn projectExpectedAggregateShape(
     self: *Self,
     expected: Expected,
@@ -17770,19 +17922,21 @@ fn projectExpectedAggregateShape(
     env: *Env,
 ) std.mem.Allocator.Error!bool {
     const aggregate_type = expected.aggregateType() orelse return false;
-    // An erroneous expected graph carries no trustworthy construction shape.
-    // Projecting its Error nodes into an otherwise valid child would make the
-    // child—and then its enclosing lambda or binding—spuriously erroneous.
-    self.var_set.clearRetainingCapacity();
-    const expected_contains_error = try self.varContainsError(aggregate_type.var_, &self.var_set);
-    self.var_set.clearRetainingCapacity();
-    if (expected_contains_error) return false;
-
-    const expected_copy = try self.instantiateVarOrphanFlexed(aggregate_type.var_, env, .use_last_var);
-
     var commit_probe = try self.beginCommitProbe(env);
     var committed = false;
     defer if (!committed) commit_probe.rollback();
+
+    const source = if (aggregate_type.record_field) |name|
+        try self.borrowExpectedRecordField(aggregate_type.var_, name, env) orelse return false
+    else
+        aggregate_type.var_;
+    // Error context is diagnostic recovery, never construction evidence.
+    self.var_set.clearRetainingCapacity();
+    const expected_contains_error = try self.varContainsError(source, &self.var_set);
+    self.var_set.clearRetainingCapacity();
+    if (expected_contains_error) return false;
+
+    const expected_copy = try self.copyExpectedShape(source, env);
     const result = try commit_probe.unifyInContext(expected_copy, shape_var, aggregate_type.context);
     if (!result.isEstablished()) return false;
     committed = true;
@@ -18416,10 +18570,14 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 .tuple_var = self.types.resolveVar(tuple_var).var_,
                 .result_var = expr_var,
                 .elem_index = tuple_access.elem_index,
-                .region = expr_region,
+                .expr = expr_idx,
             };
-            if (!try self.resolvePendingTupleAccess(pending, env, false)) {
-                try self.pending_tuple_accesses.append(self.gpa, pending);
+            switch (try self.resolvePendingTupleAccess(pending, env, false)) {
+                .resolved => {},
+                .pending => try self.pending_tuple_accesses.append(self.gpa, pending),
+                // The expression frame still owns its result: preserve early
+                // cascade suppression and let frame completion record the error.
+                .rejected => try self.markErroneous(expr_var),
             }
         },
         // record //
@@ -18451,53 +18609,31 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     // the update judgment commits it to required before its
                     // owning generalization boundary.
                     const field_kind_var = try self.fresh(env, expr_region);
-                    const projected_field_value = try self.fresh(env, expr_region);
                     try self.pending_record_updates.append(self.gpa, .{
                         .presence_var = field_kind_var,
                         .region = expr_region,
                     });
 
-                    // Create an unbound record with this field
-                    const single_field_record = try self.freshFromContent(.{
-                        .structure = .{
-                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
-                                .name = field.name,
-                                .presence = .unknown(field_kind_var, projected_field_value),
-                            }}),
-                        },
-                    }, env, expr_region);
-
-                    // Relate the update slot to the base row before checking
-                    // its value, so a nested aggregate sees the field shape
-                    // declared by the base record.
+                    // The child borrows this field's structural context. A
+                    // construction resolves it on demand; a stored lookup
+                    // proceeds directly to the actual update judgment below.
                     const update_context = problem.Context{ .record_update = .{
                         .field_name = field.name,
                         .field_region_idx = @enumFromInt(@intFromEnum(field.value)),
                         .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
                         .record_name = record_being_updated_name,
                     } };
-                    const slot_projected = try self.projectExpectedAggregateShape(
-                        child_expected.withContextualType(.{
-                            .var_ = record_being_updated_var,
-                            .context = update_context,
-                        }),
-                        single_field_record,
-                        env,
-                    );
-
-                    const field_expected = if (slot_projected)
-                        child_expected.withContextualType(.{
-                            .var_ = projected_field_value,
-                            .context = update_context,
-                        })
-                    else
-                        child_expected;
+                    const field_expected = child_expected.withContextualType(.{
+                        .var_ = record_being_updated_var,
+                        .record_field = field.name,
+                        .context = update_context,
+                    });
                     const field_value = try self.checkStoredValueExpr(field.value, env, field_expected);
                     does_fx = field_value.does_fx or does_fx;
 
                     // The base row owns the final update judgment and its
                     // record-aware diagnostic. Use the instantiated stored
-                    // value here; the projection above was context only.
+                    // value here; the borrowed field was context only.
                     const actual_field_record = try self.freshFromContent(.{
                         .structure = .{
                             .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
@@ -24567,9 +24703,7 @@ fn checkResolvedAssociatedLookup(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    const target = self.moduleEnvForIdentity(lookup.module_identity) orelse {
-        std.debug.panic("type checker invariant violated: resolved associated lookup target is unavailable", .{});
-    };
+    const target = self.moduleEnvForIdentity(self.cir, lookup.module_identity);
     try self.checkResolvedAssociatedTarget(
         expr_var,
         target.env,
@@ -24646,12 +24780,65 @@ fn internCheckedTargetModuleIdentity(
     return try self.cir.internModuleIdentity(target_hash, display_ident);
 }
 
+/// Resolve an identity in the module that owns the lookup expression. Imported
+/// bodies retain their own identity indices even when this checker visits them.
 fn moduleEnvForIdentity(
     self: *const Self,
+    source_module: *const ModuleEnv,
     module_identity: base.ModuleIdentity.Idx,
-) ?OwnerEnvCandidate {
-    const target_hash = self.cir.moduleIdentityHash(module_identity);
-    return self.owner_envs_by_identity.get(target_hash.*);
+) OwnerEnvCandidate {
+    const target_hash = source_module.moduleIdentityHash(module_identity);
+    return self.owner_envs_by_identity.get(target_hash.*) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "type checker invariant violated: resolved associated lookup target is unavailable in module '{s}', identity={d}",
+                .{ source_module.module_name, @intFromEnum(module_identity) },
+            );
+        }
+        unreachable;
+    };
+}
+
+test "issue 11214 - hoisted associated lookup preserves ownership when both indices are in bounds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\Owner := [].{
+        \\    target = |b| b
+        \\}
+        \\Alias : Owner
+        \\main = |b| Alias.target(b)
+    ;
+    var imported = try TestEnv.init("Imported", source);
+    defer imported.deinit();
+    try imported.assertNoErrors();
+    var root = try TestEnv.init("Root", source);
+    defer root.deinit();
+    try root.assertNoErrors();
+    try appendOwnerEnvByIdentity(std.testing.allocator, &root.checker.owner_envs_by_identity, imported.module_env, false);
+
+    const module = imported.module_env;
+    const defs = module.store.sliceDefs(module.global_value_defs);
+    const main_def = module.store.getDef(defs[defs.len - 1]);
+    const body = module.store.getExpr(main_def.expr).e_lambda.body;
+    const callee = module.store.getExpr(body).e_call.func;
+    const lookup = module.store.getExpr(callee).e_lookup_associated_resolved;
+
+    // Both stores have the same structure, but their self identities name
+    // different modules. The buggy lookup can read a real def in Root without
+    // any bounds failure, so assert the target owner as well as the def index.
+    try std.testing.expectEqual(module.selfModuleIdentity(), lookup.module_identity);
+    try std.testing.expectEqual(root.module_env.selfModuleIdentity(), lookup.module_identity);
+    try std.testing.expect(!base.ModuleIdentity.eql(
+        module.moduleIdentityHash(lookup.module_identity),
+        root.module_env.moduleIdentityHash(lookup.module_identity),
+    ));
+    const imported_def = module.store.getDef(lookup.target_def_idx);
+    const root_def = root.module_env.store.getDef(lookup.target_def_idx);
+    try std.testing.expectEqual(imported_def.expr, root_def.expr);
+
+    const target = root.checker.hoistedCallableDefForExpr(module, callee).?;
+    try std.testing.expectEqual(@as(*const ModuleEnv, module), target.module);
+    try std.testing.expectEqual(lookup.target_def_idx, target.def);
 }
 
 /// Copy a variable from another module into this module

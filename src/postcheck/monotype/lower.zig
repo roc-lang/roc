@@ -1782,8 +1782,15 @@ fn relateCheckedMonoRequestNodeAt(
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
-        .tag_union => |checked_row| switch (request_content) {
-            .tag_union => |request_row| {
+        .tag_union => switch (request_content) {
+            .tag_union => {
+                // Earlier components of this request can instantiate an
+                // extension with a tag already present in the head. Compare
+                // complete normalized rows before relating their residuals.
+                try graph.normalizeTagRow(checked_root);
+                try graph.normalizeTagRow(request_root);
+                const checked_row = graph.content(checked_root).tag_union;
+                const request_row = graph.content(request_root).tag_union;
                 if (checked_row.tags.len == request_row.tags.len) {
                     for (checked_row.tags, request_row.tags) |checked_tag, request_tag| {
                         if (checked_tag.name != request_tag.name or checked_tag.payloads.len != request_tag.payloads.len) break;
@@ -22237,14 +22244,20 @@ const BodyContext = struct {
         return try self.lowerExprWithType(expr_id, expr_ty);
     }
 
-    fn lowerReturn(self: *BodyContext, ret: anytype) Allocator.Error!DraftReturn {
+    fn lowerReturn(self: *BodyContext, ret: anytype, context: checked.CheckedReturnContext) Allocator.Error!DraftReturn {
         const target = self.current_return_target orelse
             Common.invariant("checked return reached lowering without an active specialization return target");
         if (ret.lambda != target.lambda) {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
         return .{
-            .value = try self.lowerExprAtTypeCell(ret.expr, target.cell),
+            // `?` contributes its source error row to the enclosing result;
+            // it does not equate those rows. Keep the checked source type so
+            // the explicit return boundary can convert it to the target.
+            .value = switch (context) {
+                .try_suffix => try self.lowerExpr(ret.expr),
+                .return_expr => try self.lowerExprAtTypeCell(ret.expr, target.cell),
+            },
             .target = target.cell,
         };
     }
@@ -22570,7 +22583,7 @@ const BodyContext = struct {
             else
                 .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
             .for_ => |for_| try self.lowerIteratorFor(for_, .{ .sealed = ty }, &.{}),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
@@ -23289,6 +23302,7 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| {
                     const request_fn_node = try self.activeNodeFromType(ty);
+                    if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
                     const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                     const fn_id = try self.lowerDraftLocalProcAtNode(
                         local,
@@ -32681,6 +32695,7 @@ const BodyContext = struct {
             => Common.invariant("local lookup reached Monotype without a current local binding"),
             .local_proc => |local| blk: {
                 const request_fn_node = try self.activeNodeFromType(ty);
+                if (local.is_alias) break :blk try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
                     local,
@@ -32726,6 +32741,35 @@ const BodyContext = struct {
             Common.invariant("checked type closure query referenced a missing root");
         }
         return !self.view.types.roots[raw].contains_identity_variables;
+    }
+
+    /// A checked callable alias is a scheme-use edge, not a new function or
+    /// runtime local. Install its exact substitution in a fresh type-only
+    /// scope and forward the original callable value. Runtime binder and
+    /// declaration-context tables remain shared with the enclosing body.
+    fn lowerSchemeAliasAtNode(
+        self: *BodyContext,
+        alias: checked.LocalProcedureBinding,
+        use_expr: checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const scope_id = alias.dispatch_scope orelse
+            Common.invariant("generalized callable alias has no checked scheme scope");
+        const edge = try self.evidenceForUseSiteAtNode(use_expr, expected_node);
+        const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        const scope = self.view.templates.dispatch_scopes[@intFromEnum(scope_id)];
+        const previous_instantiation = self.instantiation;
+        const previous_evidence = self.evidence;
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.evidence = evidence;
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.evidence = previous_evidence;
+        }
+        try self.seedSubstitution(evidence.schema.?, edge.subst);
+        try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), expected_node);
+        return try self.lowerExprAtTypeCell(alias.expr, DraftTypeCell.fromGraphNode(expected_node));
     }
 
     fn lowerLookupExprAtNode(
@@ -32790,6 +32834,7 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| {
+                if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, expected_node);
                 const checked_ty = self.view.bodies.expr(checked_expr).ty;
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
@@ -52298,7 +52343,7 @@ const BodyContext = struct {
             .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = checked_expr.source_region,
@@ -53511,6 +53556,8 @@ const BodyContext = struct {
             .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .decl => |decl| blk: {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
+                    const binder = self.localProcBinder(decl.pattern);
+                    if (self.view.bodies.patternBinder(binder).is_scheme_alias) return .{ .stmt = null, .termination = .none };
                     try self.registerLocalProc(decl.pattern, decl.expr, statement_id);
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
@@ -53613,7 +53660,7 @@ const BodyContext = struct {
                 } };
             },
             .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, .return_expr) },
         };
         return .{
             .stmt = try self.addStmt(stmt),
@@ -54044,7 +54091,9 @@ const BodyContext = struct {
     ) bool {
         // A local procedure declaration has a named binder. A lambda assigned
         // to an ignored or erroneous pattern remains an ordinary value.
-        if (self.view.bodies.pattern(pattern_id).data != .assign) return false;
+        const pattern = self.view.bodies.pattern(pattern_id);
+        if (pattern.data != .assign) return false;
+        if (self.view.bodies.patternBinder(pattern.data.assign).is_scheme_alias) return true;
         return switch (self.view.bodies.expr(expr_id).data) {
             .lambda, .closure => true,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
@@ -57745,6 +57794,44 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     try std.testing.expect(graph.sameClass(checked_row, mono_row));
     try std.testing.expect(!graph.sameClass(checked_payload, mono_payload));
     try std.testing.expect(graph.sameClass(checked_backing, mono_backing));
+}
+
+test "issue 11235: request arguments normalize overlapping return extensions before residual matching" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const a = try name_store.internTagLabel("A");
+    const tags = [_]solve.InstTag{.{ .name = a, .checked_name = a, .payloads = &.{} }};
+    const tail = try graph.newNode(.{ .unresolved = solve.InstVariable.row(.empty_tag_union) });
+    const checked_ret = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(solve.InstTag, &tags),
+        .ext = tail,
+    } });
+    const checked_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{tail}),
+        .ret = checked_ret,
+    } });
+    const request_row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(solve.InstTag, &tags),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const request_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{request_row}),
+        .ret = request_row,
+    } });
+
+    _ = try checkedMonoRequestNode(graph, checked_fn, request_fn, .construction);
+    try std.testing.expect(graph.sameClass(checked_fn, request_fn));
+    try std.testing.expect(graph.sameClass(tail, request_row));
+    const normalized = try graph.tagRowNodes(checked_ret);
+    try std.testing.expectEqual(@as(usize, 1), normalized.tags.len);
+    try std.testing.expectEqual(a, normalized.tags[0].name);
+    try std.testing.expect(try graph.tagRowIsClosed(checked_ret));
 }
 
 test "direct call request preserves generated-private return provenance" {

@@ -351,7 +351,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call (constraint-fn-var 405)
+		(e-call (constraint-fn-var 402)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -359,7 +359,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call (constraint-fn-var 419)
+		(e-call (constraint-fn-var 416)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -367,7 +367,7 @@ NO CHANGE
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call (constraint-fn-var 432)
+		(e-call (constraint-fn-var 429)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -385,20 +385,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call (constraint-fn-var 447)
+		(e-call (constraint-fn-var 444)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call (constraint-fn-var 461)
+		(e-call (constraint-fn-var 458)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call (constraint-fn-var 491)
+		(e-call (constraint-fn-var 488)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -414,7 +414,7 @@ NO CHANGE
 			(e-block
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 512)
+				(e-dispatch-call (method "plus") (constraint-fn-var 509)
 					(receiver
 						(e-field-access
 							(receiver
