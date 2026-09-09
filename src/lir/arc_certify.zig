@@ -114,6 +114,7 @@ const arc_sig = @import("arc_sig.zig");
 const arc_dismantle = @import("arc_dismantle.zig");
 const arc_solve = @import("arc_solve.zig");
 const ArcSnapshot = @import("arc_state.zig").Snapshot;
+const ClaimSet = @import("arc_claims.zig").Set;
 const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
@@ -129,6 +130,17 @@ const Allocator = std.mem.Allocator;
 /// verified to a fixpoint (see the join handling in `runSegment`), so a
 /// clean return means every emitted RC schedule was checked.
 pub const CertifyError = error{ OutOfMemory, Certification };
+
+/// Deterministic balance reads for scaling tests through the compilation
+/// pipeline. Sparse enumeration and constraint work are counted separately;
+/// direct LIR tests can also observe work items through CertifierWorkStats.
+pub var balance_queries_certified: u64 = 0;
+
+/// Sparse ownership entries visited by settlement and boundary checks.
+pub var ownership_entries_certified: u64 = 0;
+
+/// Constraints constructed or updated while attributing join ownership.
+pub var join_constraint_steps: u64 = 0;
 
 /// Holds the first violation message for test inspection.
 pub const Diagnostic = struct {
@@ -170,16 +182,15 @@ pub fn certifyStore(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     sigs: arc_sig.SigTable,
     roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
 ) CertifyError!void {
-    return certifyStoreWithWorkStats(allocator, store, layouts, boxy_rc_descs, sigs, roots, diag, null);
+    return certifyStoreWithWorkStats(allocator, store, layouts, sigs, roots, diag, null);
 }
 
 /// Deterministic work counters used by certifier complexity regression tests.
-/// Production certification passes no observer and performs no counter work.
+/// Optional per-invocation counts for direct LIR certification tests.
 const CertifierWorkStats = struct {
     work_items: usize = 0,
     conditional_payload_splits: usize = 0,
@@ -189,7 +200,6 @@ fn certifyStoreWithWorkStats(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     sigs: arc_sig.SigTable,
     roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
@@ -197,7 +207,7 @@ fn certifyStoreWithWorkStats(
 ) CertifyError!void {
     try certifyProcAbiMetadata(allocator, store, layouts, diag);
 
-    const rc_local = try arc_solve.computeLocalContainsRefcounted(allocator, store, layouts, boxy_rc_descs);
+    const rc_local = try arc_solve.computeLocalContainsRefcounted(allocator, store, layouts);
     defer allocator.free(rc_local);
 
     var maybe_uninitialized = try MaybeUninitializedConditions.init(allocator, store, diag);
@@ -206,25 +216,7 @@ fn certifyStoreWithWorkStats(
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
     try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
 
-    var certifier = Certifier{
-        .allocator = allocator,
-        .store = store,
-        .layouts = layouts,
-        .sigs = sigs,
-        .rc_local = rc_local,
-        .maybe_uninitialized = &maybe_uninitialized,
-        .lender_arena = std.heap.ArenaAllocator.init(allocator),
-        .state_arena = std.heap.ArenaAllocator.init(allocator),
-        .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
-        .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
-        .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
-        .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
-        .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
-        .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
-        .seen_outcomes = std.AutoHashMap(u16, void).init(allocator),
-        .diag = diag,
-        .work_stats = work_stats,
-    };
+    var certifier = Certifier.initStore(allocator, store, layouts, sigs, rc_local, &maybe_uninitialized, diag, work_stats);
     defer certifier.deinit();
 
     for (0..store.procSpecCount()) |index| {
@@ -518,12 +510,11 @@ pub fn certifyStoreOrPanic(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     sigs: arc_sig.SigTable,
     roots: []const LIR.LirProcSpecId,
 ) Allocator.Error!void {
     var diag = Diagnostic{};
-    certifyStore(allocator, store, layouts, boxy_rc_descs, sigs, roots, &diag) catch |err| switch (err) {
+    certifyStore(allocator, store, layouts, sigs, roots, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Certification => if (comptime builtin.target.os.tag == .freestanding) {
             @panic("ARC certification failed");
@@ -1142,7 +1133,7 @@ const MaybeUninitializedConditions = struct {
 /// unit claimed from a nested aggregate field), not a manufactured unit.
 const OwnershipMutation = union(enum) {
     balance: struct { value: ValueId, before: i32, after: i32 },
-    claims: struct { value: ValueId, before: u64, after: u64 },
+    claims: struct { value: ValueId, before: ClaimSet, after: ClaimSet },
 };
 
 const RestitutionReceipt = struct {
@@ -1256,7 +1247,7 @@ const State = struct {
     /// takes. A claimed value's remaining unit covers only its unclaimed
     /// fields: it can no longer be released or consumed whole, and at a
     /// terminal it must be fully claimed and residual-released instead.
-    claims: ArcSnapshot(u64, 0),
+    claims: ArcSnapshot(ClaimSet, .{}),
     /// Scalar discriminant locals explicitly read from a direct call result
     /// carrying outcome-conditioned ownership.
     outcome_discriminants: ArcSnapshot(ValueId, no_value),
@@ -1276,9 +1267,10 @@ const State = struct {
     /// producer-authored conditional join clears it, and another guarded read
     /// before either transition is a possible double release.
     maybe_uninitialized_released: ArcSnapshot(bool, false),
-    /// Some value on this path has a negative balance: an aggregate move
-    /// consumed a field read whose take has not settled yet.
-    any_negative: bool = false,
+    /// Exact sign index, changed only when a balance crosses zero. Each bit
+    /// names a deferred ownership debt; empty subtrees require no scanning.
+    /// It shares path roots like balance, and is private to certification.
+    negative_balance: ArcSnapshot(u64, 0),
 
     const ConditionalEntry = struct {
         condition: u32 = no_dense,
@@ -1292,12 +1284,12 @@ const State = struct {
             .balance = ArcSnapshot(i32, 0).init(allocator, proc_local_count),
             .holder = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
             .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
-            .claims = ArcSnapshot(u64, 0).init(allocator, proc_local_count),
+            .claims = ArcSnapshot(ClaimSet, .{}).init(allocator, proc_local_count),
             .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
             .result_discriminant = no_dense,
             .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
             .maybe_uninitialized_released = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .any_negative = false,
+            .negative_balance = ArcSnapshot(u64, 0).init(allocator, (proc_local_count + 63) / 64),
         };
     }
 
@@ -1318,11 +1310,11 @@ const State = struct {
         }
     }
 
-    fn claimsOf(self: *const State, value: ValueId) u64 {
+    fn claimsOf(self: *const State, value: ValueId) ClaimSet {
         return self.claims.get(value);
     }
 
-    fn setClaims(self: *State, value: ValueId, mask: u64) Allocator.Error!void {
+    fn setClaims(self: *State, value: ValueId, mask: ClaimSet) Allocator.Error!void {
         try self.put(&self.claims, value, mask);
     }
 
@@ -1363,6 +1355,7 @@ const State = struct {
     }
 
     fn balanceOf(self: *const State, value: ValueId) i32 {
+        balance_queries_certified += 1;
         return self.balance.get(value);
     }
 
@@ -1377,9 +1370,15 @@ const State = struct {
     }
 
     fn addBalance(self: *State, value: ValueId, delta: i32) Allocator.Error!void {
-        const next = self.balanceOf(value) + delta;
+        const previous = self.balanceOf(value);
+        const next = previous + delta;
         try self.put(&self.balance, value, next);
-        if (next < 0) self.any_negative = true;
+        if ((previous < 0) != (next < 0)) {
+            const word_index = value / 64;
+            const bit = @as(u64, 1) << @as(u6, @intCast(value % 64));
+            const word = self.negative_balance.get(word_index);
+            try self.put(&self.negative_balance, word_index, if (next < 0) word | bit else word & ~bit);
+        }
     }
 
     fn setHolder(self: *State, value: ValueId, holder_value: ValueId) Allocator.Error!void {
@@ -1443,6 +1442,91 @@ test "forked state shares unchanged maybe-uninitialized facts" {
     try testing.expect(source.maybeUninitializedMayBeReleased(2));
     try testing.expect(forked.maybeUninitializedIsUnresolved(0));
     try testing.expect(!forked.maybeUninitializedMayBeReleased(2));
+}
+
+test "certifier debt index follows sign changes and isolates branches" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var state = try State.init(arena.allocator(), &.{}, 0);
+    try state.addBalance(7, -2);
+    try state.addBalance(99999, 1);
+    var fork = try state.clone();
+    try fork.addBalance(7, 1);
+    try testing.expect(fork.negative_balance.get(0) != 0);
+    try fork.addBalance(7, 1);
+    try testing.expect(fork.negative_balance.root == null);
+    try fork.addBalance(99999, -3);
+    var debts = fork.negative_balance.iterator();
+    const entry = debts.next().?;
+    try testing.expectEqual(@as(u32, 99999 / 64), entry.index);
+    try testing.expectEqual(@as(u64, 1) << (99999 % 64), entry.value);
+    try testing.expectEqual(null, debts.next());
+    try testing.expectEqual(@as(i32, -2), state.balanceOf(7));
+    try testing.expectEqual(@as(i32, 1), state.balanceOf(99999));
+    try testing.expectEqual(@as(u64, 1) << 7, state.negative_balance.get(0));
+}
+
+fn joinAttributionChainWork(count: usize) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!u64 {
+    const allocator = testing.allocator;
+    const left = try allocator.alloc(LocalSummary, count);
+    defer allocator.free(left);
+    const right = try allocator.alloc(LocalSummary, count);
+    defer allocator.free(right);
+    // Interleaved pairs form a path. Its endpoints force one variable,
+    // whose solution propagates along the whole path one edge at a time.
+    for (left, right, 0..) |*a, *b, i| {
+        const left_repr = i - i % 2;
+        const right_repr = if (i == 0) 0 else i - (i - 1) % 2;
+        a.* = .{
+            .class = .owned,
+            .repr = @intCast(left_repr),
+            .balance = if (left_repr + 1 < count) 2 else 1,
+            .condition = no_dense,
+            .condition_mask = 0,
+        };
+        b.* = .{
+            .class = .owned,
+            .repr = @intCast(right_repr),
+            .balance = if (i == 0 or right_repr + 1 == count) 1 else 2,
+            .condition = no_dense,
+            .condition_mask = 0,
+        };
+    }
+    var scratch = JoinMeetScratch{};
+    defer scratch.deinit(allocator);
+    const before = join_constraint_steps;
+    try testing.expect(try scratch.solve(allocator, left, right));
+    for (scratch.units.items) |units| try testing.expectEqual(@as(u64, 1), units);
+    return join_constraint_steps - before;
+}
+
+test "certifier join attribution visits each constraint edge once" {
+    const narrow = try joinAttributionChainWork(32);
+    const wide = try joinAttributionChainWork(128);
+    try testing.expectEqual(@as(u64, 4 * 32), narrow);
+    try testing.expectEqual(narrow * 4, wide);
+}
+
+test "certifier join attribution rejects inconsistent and undetermined intersections" {
+    var left = [_]LocalSummary{.{ .class = .owned, .repr = 0, .balance = 2, .condition = no_dense, .condition_mask = 0 }} ** 4;
+    var right = left;
+    // Two crossing two-element classes have no forcing equation.
+    left[2].repr = 2;
+    left[3].repr = 2;
+    right[1].repr = 1;
+    right[3].repr = 1;
+    var scratch = JoinMeetScratch{};
+    defer scratch.deinit(testing.allocator);
+    try testing.expect(!try scratch.solve(testing.allocator, &left, &right));
+    // Singleton right-hand classes force units which disagree with the
+    // left-hand totals. Reuse the scratch to also check reset discipline.
+    for (&right, 0..) |*entry, i| {
+        entry.repr = @intCast(i);
+        entry.balance = 2;
+    }
+    try testing.expect(!try scratch.solve(testing.allocator, &left, &right));
+    for (&right) |*entry| entry.balance = 1;
+    try testing.expect(try scratch.solve(testing.allocator, &left, &right));
 }
 
 /// Sparse lifetime provenance for one alias-class representative. Ownership
@@ -1547,7 +1631,7 @@ const LocalSummary = struct {
     condition_mask: u64,
     /// For owned locals: fields of the value already claimed by field takes.
     /// Set identically on every member of the alias set.
-    claims: u64 = 0,
+    claims: ClaimSet = .{},
 };
 
 const LocalClass = enum(u8) {
@@ -1626,6 +1710,140 @@ const JoinWalk = struct {
     group: usize,
 };
 
+/// Finish pending paths before walking their joined state. Components are
+/// ordered by actual control-flow dependencies; loop components converge
+/// before downstream continuations run. FIFO order within a component lets
+/// already pending arrivals refine a queued group before its next walk.
+const WorkQueue = struct {
+    const PendingJoin = struct { walk: JoinWalk, component: u32, sequence: usize };
+    const Joins = std.PriorityQueue(PendingJoin, void, order);
+
+    segments: std.ArrayList(Segment) = .empty,
+    joins: Joins,
+    components: *const collections.DenseMap(LIR.JoinPointId, u32),
+    sequence: usize = 0,
+
+    fn order(_: void, a: PendingJoin, b: PendingJoin) std.math.Order {
+        const component_order = std.math.order(a.component, b.component);
+        return if (component_order == .eq) std.math.order(a.sequence, b.sequence) else component_order;
+    }
+
+    fn init(components: *const collections.DenseMap(LIR.JoinPointId, u32)) WorkQueue {
+        return .{ .joins = .empty, .components = components };
+    }
+
+    fn deinit(self: *WorkQueue, allocator: Allocator) void {
+        self.segments.deinit(allocator);
+        self.joins.deinit(allocator);
+    }
+
+    fn append(self: *WorkQueue, allocator: Allocator, item: WorkItem) Allocator.Error!void {
+        switch (item) {
+            .segment => |segment| try self.segments.append(allocator, segment),
+            .join_body => |walk| {
+                try self.joins.push(allocator, .{
+                    .walk = walk,
+                    .component = self.components.get(walk.join) orelse unreachable,
+                    .sequence = self.sequence,
+                });
+                self.sequence += 1;
+            },
+        }
+    }
+
+    fn pop(self: *WorkQueue) ?WorkItem {
+        if (self.segments.pop()) |segment| return .{ .segment = segment };
+        if (self.joins.pop()) |pending| return .{ .join_body = pending.walk };
+        return null;
+    }
+};
+
+/// Each fine alias class is the intersection of exactly one class from each
+/// incoming partition, so its ownership variable occurs in exactly two sum
+/// constraints. Keep those two edges explicit and propagate each solution
+/// once, rather than rebuilding member lists or rescanning every equation.
+const JoinMeetScratch = struct {
+    const Constraint = struct { remaining: u64 = 0, unknown: u32 = 0, unknown_xor: u32 = 0 };
+    pairs: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+    reprs: std.ArrayList(u32) = .empty,
+    units: std.ArrayList(u64) = .empty,
+    constraints: std.ArrayList(Constraint) = .empty,
+    work: std.ArrayList(usize) = .empty,
+
+    fn deinit(self: *JoinMeetScratch, allocator: Allocator) void {
+        self.pairs.deinit(allocator);
+        self.reprs.deinit(allocator);
+        self.units.deinit(allocator);
+        self.constraints.deinit(allocator);
+        self.work.deinit(allocator);
+    }
+
+    fn solve(self: *JoinMeetScratch, allocator: Allocator, left: []const LocalSummary, right: []const LocalSummary) Allocator.Error!bool {
+        const n = left.len;
+        std.debug.assert(right.len == n);
+        try self.reprs.resize(allocator, n);
+        try self.units.resize(allocator, n);
+        @memset(self.units.items, 0);
+        try self.constraints.resize(allocator, 2 * n);
+        @memset(self.constraints.items, .{});
+        self.pairs.clearRetainingCapacity();
+        self.work.clearRetainingCapacity();
+        try self.work.ensureTotalCapacity(allocator, 2 * n);
+
+        var unknown_count: usize = 0;
+        for (left, right, 0..) |a, b, dense| {
+            if (a.class == .unbound) {
+                self.reprs.items[dense] = no_dense;
+                continue;
+            }
+            const pair = (@as(u64, a.repr) << 32) | b.repr;
+            const entry = try self.pairs.getOrPut(allocator, pair);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
+            self.reprs.items[dense] = entry.value_ptr.*;
+            // Only the first name of a fine class contributes a variable.
+            if (entry.found_existing or (a.class != .owned and a.class != .conditional_owned)) continue;
+            unknown_count += 1;
+            for ([_]usize{ a.repr, n + b.repr }, [_]u64{ a.balance, b.balance }) |index, total| {
+                const constraint = &self.constraints.items[index];
+                constraint.remaining = total;
+                constraint.unknown += 1;
+                constraint.unknown_xor ^= @intCast(dense);
+                join_constraint_steps += 1;
+            }
+        }
+        for (self.constraints.items, 0..) |constraint, index| {
+            if (constraint.unknown == 1) self.work.appendAssumeCapacity(index);
+        }
+        while (self.work.pop()) |index| {
+            const constraint = self.constraints.items[index];
+            if (constraint.unknown == 0) continue;
+            std.debug.assert(constraint.unknown == 1);
+            // An owned fine class must receive a strictly positive unit count.
+            if (constraint.remaining == 0) return false;
+            const repr = constraint.unknown_xor;
+            const units = constraint.remaining;
+            std.debug.assert(self.units.items[repr] == 0);
+            self.units.items[repr] = units;
+            unknown_count -= 1;
+            for ([_]usize{ left[repr].repr, n + right[repr].repr }) |incident| {
+                const affected = &self.constraints.items[incident];
+                join_constraint_steps += 1;
+                if (units > affected.remaining) return false;
+                affected.remaining -= units;
+                affected.unknown -= 1;
+                affected.unknown_xor ^= repr;
+                if (affected.unknown == 0) {
+                    if (affected.remaining != 0) return false;
+                } else if (affected.unknown == 1) {
+                    self.work.appendAssumeCapacity(incident);
+                }
+            }
+        }
+        // Underdetermined intersections require separate exact entry groups.
+        return unknown_count == 0;
+    }
+};
+
 const Segment = struct {
     cursor: LIR.CFStmtId,
     state: State,
@@ -1667,6 +1885,7 @@ const Certifier = struct {
     /// these need quotient-state memoization.
     memo_points: std.bit_set.DynamicBitSetUnmanaged = .{},
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
+    join_meet_scratch: JoinMeetScratch = .{},
     repr_scratch: collections.DenseMap(ValueId, u32),
     /// Hash-conses sparse descriptors within one proc so join comparisons
     /// usually reduce to pointer equality and repeated walks retain no copies.
@@ -1683,6 +1902,8 @@ const Certifier = struct {
     proc_locals: std.ArrayList(LIR.LocalId) = .empty,
     /// Join bodies of the proc being certified, for jump-following scans.
     join_bodies: collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId),
+    /// Forward topological component per join in the final-LIR control graph.
+    join_components: collections.DenseMap(LIR.JoinPointId, u32),
     /// Per-proc cache for join-body read-before-rebind sets. These bitsets use
     /// dense proc-local positions, so the cache is cleared at each proc boundary.
     reads_before_rebind_cache: collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
@@ -1703,6 +1924,9 @@ const Certifier = struct {
     value_walk_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
     diag: *Diagnostic,
     work_stats: ?*CertifierWorkStats,
+    /// Immutable layout claim sets survive per-procedure state-arena resets.
+    claim_layouts: std.AutoHashMapUnmanaged(layout_mod.Idx, ClaimSet) = .empty,
+    claim_arena: std.heap.ArenaAllocator,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
     current_proc: LIR.LirProcSpecId = undefined,
@@ -1713,15 +1937,51 @@ const Certifier = struct {
     /// Join whose body the current segment certifies, for diagnostics.
     current_origin_join: ?LIR.JoinPointId = null,
 
+    fn initStore(
+        allocator: Allocator,
+        store: *const LirStore,
+        layouts: *const layout_mod.Store,
+        sigs: arc_sig.SigTable,
+        rc_local: []const bool,
+        maybe_uninitialized: *const MaybeUninitializedConditions,
+        diag: *Diagnostic,
+        work_stats: ?*CertifierWorkStats,
+    ) Certifier {
+        return .{
+            .allocator = allocator,
+            .store = store,
+            .layouts = layouts,
+            .sigs = sigs,
+            .rc_local = rc_local,
+            .maybe_uninitialized = maybe_uninitialized,
+            .lender_arena = std.heap.ArenaAllocator.init(allocator),
+            .state_arena = std.heap.ArenaAllocator.init(allocator),
+            .claim_arena = std.heap.ArenaAllocator.init(allocator),
+            .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
+            .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
+            .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+            .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
+            .join_components = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
+            .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
+            .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
+            .seen_outcomes = std.AutoHashMap(u16, void).init(allocator),
+            .diag = diag,
+            .work_stats = work_stats,
+        };
+    }
+
     fn deinit(self: *Certifier) void {
         self.values.deinit(self.allocator);
         self.lender_arena.deinit();
         self.state_arena.deinit();
+        self.claim_layouts.deinit(self.allocator);
+        self.claim_arena.deinit();
         self.clearRecords();
         self.records.deinit();
         self.memo.deinit();
         self.memo_points.deinit(self.allocator);
         self.summary_scratch.deinit(self.allocator);
+        self.join_meet_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
         self.provenance_interner.deinit(self.allocator);
         self.provenance_value_scratch.deinit(self.allocator);
@@ -1732,6 +1992,7 @@ const Certifier = struct {
         self.proc_locals.deinit(self.allocator);
         self.join_bodies.deinit();
         self.clearReadsBeforeRebindCache();
+        self.join_components.deinit();
         self.seen_outcomes.clearRetainingCapacity();
         self.reads_before_rebind_cache.deinit();
         self.erased_owner_states.deinit();
@@ -1753,6 +2014,7 @@ const Certifier = struct {
     }
 
     fn clearReadsBeforeRebindCache(self: *Certifier) void {
+        self.join_components.clearRetainingCapacity();
         var iter = self.reads_before_rebind_cache.valueIterator();
         while (iter.next()) |bitset| bitset.deinit(self.allocator);
         self.reads_before_rebind_cache.clearRetainingCapacity();
@@ -1865,7 +2127,7 @@ const Certifier = struct {
 
         const info = self.values.items[value];
         if (info.always_live) return true;
-        if (state.balanceOf(value) > 0) return true;
+        if (state.balanceOf(value) > 0 and !try self.claimsSpendUnit(state, value)) return true;
         const holder = state.holderOf(value);
         if (holder != no_value and try self.valueIsLiveSeen(state, holder, seen)) {
             return true;
@@ -1971,7 +2233,7 @@ const Certifier = struct {
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) CertifyError!void {
         if (value == no_value) return;
-        if (state.claimsOf(value) != 0 and !self.hasIntactSurplusUnit(state, value)) {
+        if (!state.claimsOf(value).isEmpty() and !try self.hasIntactSurplusUnit(state, value)) {
             return self.fail("consumed partially dismantled local {d}", .{@intFromEnum(local)});
         }
         if (state.balanceOf(value) < 1) {
@@ -2018,11 +2280,10 @@ const Certifier = struct {
         if (info.payload_projection == arc_dismantle.no_projection) return false;
         const container_origin = self.values.items[container].origin;
         const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
-        const bit: u64 = switch (container_layout.tag) {
+        const field: u16 = switch (container_layout.tag) {
             .struct_ => blk: {
                 const field_idx: u16 = @intCast(info.payload_projection & 0xffff);
-                if (field_idx >= 64) return false;
-                break :blk @as(u64, 1) << @intCast(field_idx);
+                break :blk field_idx;
             },
             .tag_union => blk: {
                 if (!arc_dismantle.projectionOwnsAllRc(
@@ -2032,7 +2293,7 @@ const Certifier = struct {
                     info.origin,
                     info.payload_projection,
                 )) return false;
-                break :blk 1;
+                break :blk 0;
             },
             .scalar,
             .box,
@@ -2046,29 +2307,39 @@ const Certifier = struct {
             .ptr,
             => return false,
         };
+        const required = try self.requiredClaims(container) orelse return false;
+        if (!required.contains(field)) return false;
         const existing = state.claimsOf(container);
-        if (existing & bit != 0) {
-            // Same-value aliases can own independent retained units. A
-            // complete projection may spend one intact surplus unit without
-            // claiming the already-dismantled unit's fields a second time.
-            // Partial projections still cannot repeat a field claim.
-            if (self.requiredClaimMask(container) != bit or
-                !self.hasIntactSurplusUnit(state, container)) return false;
-            const before = state.balanceOf(container);
-            try state.addBalance(container, -1);
-            if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
-                .value = container,
-                .before = before,
-                .after = before - 1,
-            } });
-            return true;
+        if (existing.contains(field)) {
+            // Only a complete projection can spend another whole unit;
+            // repeating a partial field claim would lose its other fields.
+            if (!required.isSingleton(field)) return false;
+            // A second stamped take of the same projection spends that field
+            // from an intact surplus aggregate unit. The first unit remains
+            // represented by the existing claim set.
+            if (try self.hasIntactSurplusUnit(state, container)) {
+                const before = state.balanceOf(container);
+                try state.addBalance(container, -1);
+                if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                    .value = container,
+                    .before = before,
+                    .after = before - 1,
+                } });
+                return true;
+            }
+            // A complete projected container can hold another unit in its
+            // parent even when its only explicit balance is the unit already
+            // described by `existing`. Claim that exact parent unit for the
+            // duplicate projection.
+            return try self.tryClaimSeen(state, container, seen, mutations);
         }
         if (!try self.ensureClaimContainerUnit(state, container, seen, mutations)) return false;
-        try state.setClaims(container, existing | bit);
+        const updated = try existing.withField(self.state_arena.allocator(), field);
+        try state.setClaims(container, updated);
         if (mutations) |list| try list.append(self.allocator, .{ .claims = .{
             .value = container,
             .before = existing,
-            .after = existing | bit,
+            .after = updated,
         } });
         return true;
     }
@@ -2100,37 +2371,37 @@ const Certifier = struct {
     /// Whether the value's single unit is fully spent by claims: every
     /// refcounted field's stored unit was taken or residually released, so
     /// no whole release is owed and none is allowed.
-    fn claimsSpendUnit(self: *Certifier, state: *const State, value: ValueId) bool {
+    fn claimsSpendUnit(self: *Certifier, state: *const State, value: ValueId) Allocator.Error!bool {
         const claims = state.claimsOf(value);
-        if (claims == 0) return false;
+        if (claims.isEmpty()) return false;
         if (state.balanceOf(value) != 1) return false;
-        const required = self.requiredClaimMask(value) orelse return false;
-        return claims == required;
+        const required = try self.requiredClaims(value) orelse return false;
+        return claims.eql(required);
     }
 
-    /// The refcounted-field mask a fully dismantled value must have claimed:
-    /// one bit per refcounted field of its struct layout. Null when the
-    /// value's layout does not support claims at all.
-    fn requiredClaimMask(self: *Certifier, value: ValueId) ?u64 {
+    /// Exact committed RC-field identities, cached once per queried layout.
+    /// Scalar siblings never contribute a stored unit or restrict the domain.
+    fn requiredClaims(self: *Certifier, value: ValueId) Allocator.Error!?ClaimSet {
         if (value >= self.values.items.len) return null;
         const origin = self.values.items[value].origin;
-        const origin_layout = self.layouts.getLayout(self.store.getLocal(origin).layout_idx);
-        return switch (origin_layout.tag) {
+        const layout_idx = self.store.getLocal(origin).layout_idx;
+        if (self.claim_layouts.get(layout_idx)) |cached| return cached;
+        const origin_layout = self.layouts.getLayout(layout_idx);
+        const required: ClaimSet = switch (origin_layout.tag) {
             .struct_ => blk: {
                 const info = self.layouts.getStructInfo(origin_layout);
-                var mask: u64 = 0;
+                var fields: ClaimSet = .{};
                 for (0..info.fields.len) |i| {
                     const field = info.fields.get(@intCast(i));
-                    if (field.index >= 64) return null;
+                    if (field.is_padding) continue;
                     if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-                    mask |= @as(u64, 1) << @intCast(field.index);
+                    fields = try fields.withField(self.claim_arena.allocator(), field.index);
                 }
-                break :blk mask;
+                break :blk fields;
             },
-            // A tag path can claim the unit only through a projection that
-            // owns every refcounted byte of the proven active payload. One
-            // such claim therefore spends the tag's whole unit.
-            .tag_union => 1,
+            // A proven complete projection spends the active tag payload's
+            // whole unit, independently of its variant or payload width.
+            .tag_union => .{ .low = 1 },
             .scalar,
             .box,
             .box_of_zst,
@@ -2141,8 +2412,10 @@ const Certifier = struct {
             .erased_callable,
             .zst,
             .ptr,
-            => null,
+            => return null,
         };
+        try self.claim_layouts.put(self.allocator, layout_idx, required);
+        return required;
     }
 
     /// Whether the value still holds an intact unit beyond the one being
@@ -2155,10 +2428,10 @@ const Certifier = struct {
     /// followed by dismantling the surplus. The claims stay outstanding
     /// against the remaining unit, so the terminal leak check still proves
     /// every stored unit was spent exactly once.
-    fn hasIntactSurplusUnit(self: *Certifier, state: *const State, value: ValueId) bool {
-        if (state.claimsOf(value) == 0) return false;
+    fn hasIntactSurplusUnit(self: *Certifier, state: *const State, value: ValueId) Allocator.Error!bool {
+        if (state.claimsOf(value).isEmpty()) return false;
         if (state.balanceOf(value) < 2) return false;
-        return self.requiredClaimMask(value) != null;
+        return try self.requiredClaims(value) != null;
     }
 
     /// Aggregate consumption: one unit moves into the holder. The emitted
@@ -2172,7 +2445,7 @@ const Certifier = struct {
         holder_value: ValueId,
     ) CertifyError!void {
         if (value == no_value) return;
-        if (state.claimsOf(value) != 0 and !self.hasIntactSurplusUnit(state, value)) {
+        if (!state.claimsOf(value).isEmpty() and !try self.hasIntactSurplusUnit(state, value)) {
             return self.fail(
                 "partially dismantled value originating at local {d} moved into an aggregate",
                 .{@intFromEnum(self.values.items[value].origin)},
@@ -2190,28 +2463,61 @@ const Certifier = struct {
     /// emissions never reach a settlement point negative, so this only
     /// rescues balances that were already failures before field takes.
     fn settleNegativeClaims(self: *Certifier, state: *State) Allocator.Error!void {
-        var remaining = false;
-        for (0..self.values.items.len) |value_index| {
-            while (state.balanceOf(@intCast(value_index)) < 0) {
-                if (!try self.tryClaim(state, @intCast(value_index))) break;
-                try state.addBalance(@intCast(value_index), 1);
+        if (state.negative_balance.root == null) return;
+        // Freeze the sign index while claims change balances. A claim can
+        // only increase a container's balance or spend an intact surplus
+        // (at least two units), so it cannot introduce a new negative entry.
+        // Ascending iteration preserves the original settlement order.
+        state.unique = false;
+        var pending = state.negative_balance.iterator();
+        while (pending.next()) |entry| {
+            var bits = entry.value;
+            while (bits != 0) {
+                const value = entry.index * 64 + @as(u32, @intCast(@ctz(bits)));
+                bits &= bits - 1;
+                ownership_entries_certified += 1;
+                while (state.balanceOf(value) < 0) {
+                    if (!try self.tryClaim(state, value)) break;
+                    try state.addBalance(value, 1);
+                }
             }
-            if (state.balanceOf(@intCast(value_index)) < 0) remaining = true;
         }
-        state.any_negative = remaining;
     }
 
     fn checkLeaks(self: *Certifier, state: *State) CertifyError!void {
         try self.settleNegativeClaims(state);
 
-        for (0..self.values.items.len) |value_index| {
-            const units = state.balanceOf(@intCast(value_index));
-            const claims = state.claimsOf(@intCast(value_index));
-            if (claims != 0) {
+        // Claims remain obligations even at zero balance and after the last
+        // local name is rebound. Merge both sparse inventories in value order.
+        var balances = state.balance.iterator();
+        var claimed = state.claims.iterator();
+        var balance_entry = balances.next();
+        var claim_entry = claimed.next();
+        while (balance_entry != null or claim_entry != null) {
+            const value_index = @min(
+                if (balance_entry) |entry| entry.index else no_value,
+                if (claim_entry) |entry| entry.index else no_value,
+            );
+            var units: i32 = 0;
+            var claims: ClaimSet = .{};
+            if (balance_entry) |entry| {
+                if (entry.index == value_index) {
+                    units = entry.value;
+                    balance_entry = balances.next();
+                }
+            }
+            if (claim_entry) |entry| {
+                if (entry.index == value_index) {
+                    claims = entry.value;
+                    claim_entry = claimed.next();
+                }
+            }
+            ownership_entries_certified += 1;
+            if (!claims.isEmpty()) {
                 // A dismantled value's own unit must still be in hand, and
                 // every refcounted field's stored unit must have been spent
                 // exactly once by a take or a residual release.
-                if (self.claimsSpendUnit(state, @intCast(value_index))) continue;
+                if (try self.claimsSpendUnit(state, @intCast(value_index))) continue;
                 const origin = self.values.items[value_index].origin;
                 self.diag.context_local = origin;
                 self.diag.context_proc = self.current_proc;
@@ -2278,7 +2584,7 @@ const Certifier = struct {
             const value = try self.requireLive(state, param);
             if (self.values.items[value].origin != param or
                 state.balanceOf(value) != 1 or
-                state.claimsOf(value) != 0 or
+                !state.claimsOf(value).isEmpty() or
                 state.holderOf(value) != no_value)
             {
                 return self.fail(
@@ -2353,7 +2659,7 @@ const Certifier = struct {
                         try state.addBalance(mutation.value, mutation.before - mutation.after);
                     },
                     .claims => |mutation| {
-                        if (state.claimsOf(mutation.value) != mutation.after) {
+                        if (!state.claimsOf(mutation.value).eql(mutation.after)) {
                             return self.fail("outcome restitution argument {d} field claims changed before refinement", .{position});
                         }
                         try state.setClaims(mutation.value, mutation.before);
@@ -2479,7 +2785,9 @@ const Certifier = struct {
         defer seen.unset(value_index);
 
         const info = self.values.items[value];
-        if (info.always_live or state.balanceOf(value) > 0) {
+        if (info.always_live or
+            (state.balanceOf(value) > 0 and !try self.claimsSpendUnit(state, value)))
+        {
             try appendUniqueValueId(anchors, self.allocator, value);
             return true;
         }
@@ -2695,7 +3003,7 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.abi_live));
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
-            hasher.update(std.mem.asBytes(&entry.claims));
+            entry.claims.hashInto(&hasher);
         }
         return hasher.final();
     }
@@ -2728,7 +3036,7 @@ const Certifier = struct {
                 .unbound => unreachable,
             };
             if (entry.abi_live) self.values.items[value].always_live = true;
-            if (entry.claims != 0) try state.setClaims(value, entry.claims);
+            if (!entry.claims.isEmpty()) try state.setClaims(value, entry.claims);
         }
 
         for (summary, 0..) |entry, dense| {
@@ -2900,7 +3208,7 @@ const Certifier = struct {
                 .unbound => {},
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
-                .owned => if (ga.claims != sb.claims or
+                .owned => if (!ga.claims.eql(sb.claims) or
                     (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
                 .conditional_owned => if (ga.condition != sb.condition or
                     ga.condition_mask != sb.condition_mask or
@@ -2951,115 +3259,32 @@ const Certifier = struct {
     /// place; anything else is a conflict.
     fn meetGroupSummary(self: *Certifier, group: *JoinGroup, summary: []const LocalSummary) CertifyError!MeetOutcome {
         const g = group.summary;
-        const n = g.len;
-
-        // Meet partition: representative per dense position, keyed by the
-        // (group repr, summary repr) pair; the representative is the first
-        // member, so `repr[dense] <= dense` with equality exactly at class
-        // leaders—the shape `stateFromSummary` expects.
-        var meet_repr = try self.allocator.alloc(u32, n);
-        defer self.allocator.free(meet_repr);
-        var pair_repr = std.AutoHashMap(u64, u32).init(self.allocator);
-        defer pair_repr.deinit();
-        for (g, summary, 0..) |ge, se, dense| {
-            if (ge.class == .unbound) {
-                meet_repr[dense] = no_dense;
-                continue;
-            }
-            const key = (@as(u64, ge.repr) << 32) | @as(u64, se.repr);
-            const entry = try pair_repr.getOrPut(key);
-            if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
-            meet_repr[dense] = entry.value_ptr.*;
+        // Identical partitions already state every constraint's solution.
+        // Validate balances directly and avoid allocating or hashing a meet
+        // graph for unchanged arrivals (the usual case for field parsers).
+        var same_partition = true;
+        var same_balances = true;
+        for (g, summary) |a, b| {
+            if (a.class == .unbound) continue;
+            if (a.repr != b.repr) same_partition = false;
+            if ((a.class == .owned or a.class == .conditional_owned) and a.balance != b.balance) same_balances = false;
         }
-
-        // Balance attribution over owned/conditional meet classes. Unknowns
-        // are indexed by meet-class representative; each group class and
-        // each summary class contributes one sum constraint.
-        var solved = try self.allocator.alloc(?u64, n);
-        defer self.allocator.free(solved);
-        @memset(solved, null);
-
-        const Constraint = struct {
-            total: u64,
-            /// Meet-class representatives (deduplicated, this constraint's
-            /// members).
-            members: []u32,
-        };
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        const scratch = arena.allocator();
-
-        var constraints = std.ArrayList(Constraint).empty;
-        // Group classes and summary classes, keyed by their own repr.
-        for (0..2) |side| {
-            const source = if (side == 0) g else summary;
-            var class_members = std.AutoHashMap(u32, std.ArrayList(u32)).init(scratch);
-            var class_total = std.AutoHashMap(u32, u64).init(scratch);
-            for (source, 0..) |entry, dense| {
-                if (entry.class != .owned and entry.class != .conditional_owned) continue;
-                const members = try class_members.getOrPut(entry.repr);
-                if (!members.found_existing) {
-                    members.value_ptr.* = .empty;
-                    try class_total.put(entry.repr, entry.balance);
-                }
-                const meet_class = meet_repr[dense];
-                var already = false;
-                for (members.value_ptr.items) |existing| {
-                    if (existing == meet_class) {
-                        already = true;
-                        break;
-                    }
-                }
-                if (!already) try members.value_ptr.append(scratch, meet_class);
-            }
-            var iter = class_members.iterator();
-            while (iter.next()) |entry| {
-                try constraints.append(scratch, .{
-                    .total = class_total.get(entry.key_ptr.*).?,
-                    .members = entry.value_ptr.items,
-                });
-            }
-        }
-
-        // Propagate: solve any constraint with exactly one unknown member;
-        // verify fully-solved constraints. Each round solves at least one
-        // unknown or stops, so this terminates in at most n rounds.
-        var progress = true;
-        while (progress) {
-            progress = false;
-            for (constraints.items) |constraint| {
-                var assigned_sum: u64 = 0;
-                var unsolved: usize = 0;
-                var unsolved_class: u32 = 0;
-                for (constraint.members) |meet_class| {
-                    if (solved[meet_class]) |units| {
-                        assigned_sum += units;
-                    } else {
-                        unsolved += 1;
-                        unsolved_class = meet_class;
-                    }
-                }
-                if (unsolved == 0) {
-                    if (assigned_sum != constraint.total) return .conflict;
-                } else if (unsolved == 1) {
-                    if (assigned_sum >= constraint.total) return .conflict;
-                    const remaining = constraint.total - assigned_sum;
-                    // A class carrying names summarized as owned always has
-                    // at least one unit on every real edge.
-                    if (remaining == 0) return .conflict;
-                    solved[unsolved_class] = remaining;
-                    progress = true;
+        if (same_partition) {
+            if (!same_balances) return .conflict;
+            var changed = false;
+            for (g, summary) |*entry, incoming| {
+                if (!entry.maybe_uninitialized_released and incoming.maybe_uninitialized_released) {
+                    entry.maybe_uninitialized_released = true;
+                    changed = true;
                 }
             }
+            return if (changed) .refined else .unchanged;
         }
-        for (constraints.items) |constraint| {
-            for (constraint.members) |meet_class| {
-                // Under-determined attribution (proper overlaps in both
-                // partitions with no forcing constraint): fall back to an
-                // exact per-summary group rather than guessing.
-                if (solved[meet_class] == null) return .conflict;
-            }
-        }
+
+        const scratch = &self.join_meet_scratch;
+        if (!try scratch.solve(self.allocator, g, summary)) return .conflict;
+        const meet_repr = scratch.reprs.items;
+        const solved = scratch.units.items;
 
         // Commit: rewrite the group's partition and balances in place.
         var changed = false;
@@ -3075,7 +3300,7 @@ const Certifier = struct {
                 changed = true;
             }
             if (entry.class == .owned or entry.class == .conditional_owned) {
-                const units: u32 = @intCast(solved[new_repr].?);
+                const units: u32 = @intCast(solved[new_repr]);
                 if (entry.balance != units) {
                     entry.balance = units;
                     changed = true;
@@ -4027,6 +4252,8 @@ const Certifier = struct {
             }
         }
 
+        try self.computeJoinComponents(&graph, pred_starts, predecessors);
+
         var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.proc_locals.items.len);
         var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
         var node_work = std.ArrayList(usize).empty;
@@ -4079,6 +4306,67 @@ const Certifier = struct {
             std.debug.panic("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@intFromEnum(start)});
         };
         return cached;
+    }
+
+    /// Kosaraju over the same final-LIR graph used for read-before-rebind
+    /// analysis. Numbering components in forward order makes every inter-
+    /// component predecessor settle before a queued successor join is walked.
+    fn computeJoinComponents(
+        self: *Certifier,
+        graph: *const ReadBeforeRebindGraph,
+        pred_starts: []const usize,
+        predecessors: []const usize,
+    ) Allocator.Error!void {
+        const allocator = graph.allocator;
+        const n = graph.nodes.items.len;
+        const Frame = struct { node: usize, next: usize = 0 };
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, n);
+        var frames = std.ArrayList(Frame).empty;
+        var finished = std.ArrayList(usize).empty;
+        for (0..n) |start| {
+            if (seen.isSet(start)) continue;
+            seen.set(start);
+            try frames.append(allocator, .{ .node = start });
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = graph.nodes.items[frame.node];
+                if (frame.next < node.successor_len) {
+                    const successor = graph.successors.items[node.successor_start + frame.next];
+                    frame.next += 1;
+                    const child = graph.indices.get(successor) orelse unreachable;
+                    if (!seen.isSet(child)) {
+                        seen.set(child);
+                        try frames.append(allocator, .{ .node = child });
+                    }
+                } else {
+                    try finished.append(allocator, frame.node);
+                    _ = frames.pop();
+                }
+            }
+        }
+
+        const components = try allocator.alloc(u32, n);
+        @memset(components, no_dense);
+        var reverse_work = std.ArrayList(usize).empty;
+        var component: u32 = 0;
+        while (finished.pop()) |start| {
+            if (components[start] != no_dense) continue;
+            components[start] = component;
+            try reverse_work.append(allocator, start);
+            while (reverse_work.pop()) |node| {
+                for (predecessors[pred_starts[node]..pred_starts[node + 1]]) |predecessor| {
+                    if (components[predecessor] != no_dense) continue;
+                    components[predecessor] = component;
+                    try reverse_work.append(allocator, predecessor);
+                }
+            }
+            component += 1;
+        }
+        var joins = self.join_bodies.iterator();
+        while (joins.next()) |join| {
+            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
+            try self.join_components.put(join.key_ptr.*, components[node]);
+        }
     }
 
     /// Computes the join's relevant-local set: every refcounted proc local the
@@ -4271,7 +4559,7 @@ const Certifier = struct {
                     (state.balanceOf(value) == 0 and !try self.valueIsLive(state, value));
                 const value_is_intact_cell = value != no_value and
                     state.balanceOf(value) == 1 and
-                    state.claimsOf(value) == 0 and
+                    state.claimsOf(value).isEmpty() and
                     state.holderOf(value) == no_value;
                 const canonicalize_conditional = declared_condition != null and
                     (declared_by_target or
@@ -4359,10 +4647,12 @@ const Certifier = struct {
         // a relevant local; anything else can never be released again. A
         // fully dismantled value is exempt: its unit is already spent by its
         // claims and owes no further release.
-        for (0..self.values.items.len) |value_index| {
-            const units = state.balanceOf(@intCast(value_index));
-            if (units == 0) continue;
-            if (self.claimsSpendUnit(state, @intCast(value_index))) continue;
+        var outstanding = state.balance.iterator();
+        while (outstanding.next()) |entry| {
+            const value_index = entry.index;
+            const units = entry.value;
+            ownership_entries_certified += 1;
+            if (try self.claimsSpendUnit(state, @intCast(value_index))) continue;
             const origin = self.values.items[value_index].origin;
             if (units < 0) {
                 return self.fail(
@@ -4485,7 +4775,7 @@ const Certifier = struct {
             }
         }
 
-        var work = std.ArrayList(WorkItem).empty;
+        var work = WorkQueue.init(&self.join_components);
         defer {
             while (work.pop()) |item| {
                 switch (item) {
@@ -4528,7 +4818,7 @@ const Certifier = struct {
         }
     }
 
-    fn scheduleJoinBody(self: *Certifier, work: *std.ArrayList(WorkItem), walk: JoinWalk) CertifyError!void {
+    fn scheduleJoinBody(self: *Certifier, work: *WorkQueue, walk: JoinWalk) CertifyError!void {
         const record = self.records.getPtr(walk.join) orelse return;
         const group = &record.groups.items[walk.group];
         // A refinement while this item sat on the stack re-queued the group;
@@ -4550,7 +4840,7 @@ const Certifier = struct {
         } });
     }
 
-    fn runSegment(self: *Certifier, work: *std.ArrayList(WorkItem), segment: Segment) CertifyError!void {
+    fn runSegment(self: *Certifier, work: *WorkQueue, segment: Segment) CertifyError!void {
         var state = segment.state;
         defer state.deinit();
         var cursor = segment.cursor;
@@ -4629,18 +4919,21 @@ const Certifier = struct {
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            assign.take_kind,
                         ),
                         .tag_payload => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            assign.take_kind,
                         ),
                         .tag_payload_struct => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            assign.take_kind,
                         ),
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
@@ -4863,9 +5156,19 @@ const Certifier = struct {
                 },
                 .set_local => |assign| {
                     if (assign.target != assign.value) {
-                        _ = try self.requireLive(&state, assign.value);
+                        const value = try self.requireLive(&state, assign.value);
+                        if (assign.mode == .initialize_join_param and
+                            value != no_value and
+                            state.balanceOf(value) == 0 and
+                            try self.tryClaim(&state, value))
+                        {
+                            // A stamped take crossing into its explicit join
+                            // cell settles here, so later residual releases
+                            // cannot claim the transferred field first.
+                            try state.addBalance(value, 1);
+                        }
                         if (self.isRc(assign.target)) {
-                            try state.bindValue(assign.target, state.valueOf(assign.value));
+                            try state.bindValue(assign.target, value);
                         }
                     }
                     if (assign.mode == .initialize_join_param and self.maybe_uninitialized.get(assign.target) != null) {
@@ -5168,14 +5471,14 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, take_kind: LIR.TakeKind) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and self.isInlineStructRepresentation(source)) {
             _ = try self.requireStructRepresentation(state, source);
             return;
         }
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
-        if (source_value != no_value) try self.requireFieldUntaken(state, source_value, source, target, projection);
+        if (source_value != no_value and take_kind == .none) try self.requireFieldUntaken(state, source_value, source, target, projection);
         const value = if (source_value == no_value)
             try self.bindBorrowedFromImplicitLive(state, target)
         else
@@ -5198,16 +5501,15 @@ const Certifier = struct {
         target: LIR.LocalId,
         projection: u64,
     ) CertifyError!void {
-        if (state.any_negative) try self.settleNegativeClaims(state);
+        try self.settleNegativeClaims(state);
         const claims = state.claimsOf(container);
-        if (claims == 0) return;
+        if (claims.isEmpty()) return;
         const container_origin = self.values.items[container].origin;
         const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
         const taken = switch (container_layout.tag) {
             .struct_ => blk: {
                 const field_idx: u16 = @intCast(projection & 0xffff);
-                if (field_idx >= 64) break :blk false;
-                break :blk (claims & (@as(u64, 1) << @intCast(field_idx))) != 0;
+                break :blk claims.contains(field_idx);
             },
             .tag_union => true,
             .scalar,
@@ -5222,7 +5524,7 @@ const Certifier = struct {
             .ptr,
             => false,
         };
-        if (!taken or self.hasIntactSurplusUnit(state, container)) return;
+        if (!taken or try self.hasIntactSurplusUnit(state, container)) return;
         self.diag.context_local = source;
         self.diag.context_proc = self.current_proc;
         self.diag.context_stmt = self.current_stmt;
@@ -5270,21 +5572,18 @@ const Certifier = struct {
             }
             return;
         }
-        const required = self.requiredClaimMask(source_value) orelse 0;
-        var observed: u64 = 0;
+        const required = try self.requiredClaims(source_value) orelse ClaimSet{};
+        var observed: ClaimSet = .{};
         for (0..absent_fields.len) |index| {
             const field_index = GuardedList.at(absent_fields, index);
-            if (field_index >= 64) {
-                return self.fail("residual-shell field index {d} exceeds the certified field domain", .{field_index});
-            }
-            const field_mask = @as(u64, 1) << @intCast(field_index);
-            if ((required & field_mask) == 0) {
+            if (field_index > std.math.maxInt(u16) or !required.contains(@intCast(field_index))) {
                 return self.fail("residual-shell metadata names non-RC or absent field {d}", .{field_index});
             }
-            if ((observed & field_mask) != 0) {
+            const field: u16 = @intCast(field_index);
+            if (observed.contains(field)) {
                 return self.fail("residual-shell metadata repeats field {d}", .{field_index});
             }
-            observed |= field_mask;
+            observed = try observed.withField(self.state_arena.allocator(), field);
         }
 
         // The certifier's field claims settle lazily at consumption and are
@@ -5292,7 +5591,7 @@ const Certifier = struct {
         // path-local residual snapshot attached to this particular binding;
         // ARC's solved plan is the authority for partial masks. Once the
         // whole value is dead, however, every RC field must be absent.
-        if (!try self.valueIsLive(state, source_value) and observed != required) {
+        if (!try self.valueIsLive(state, source_value) and !observed.eql(required)) {
             return self.fail("released struct representation is missing exact residual-shell metadata", .{});
         }
     }
@@ -5342,7 +5641,7 @@ const Certifier = struct {
             self.diag.context_proc = self.current_proc;
             return self.fail("release of unbound local {d}", .{@intFromEnum(local)});
         }
-        if (state.claimsOf(value) != 0 and !self.hasIntactSurplusUnit(state, value)) {
+        if (!state.claimsOf(value).isEmpty() and !try self.hasIntactSurplusUnit(state, value)) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
             return self.fail("whole release of partially dismantled local {d}", .{@intFromEnum(local)});
@@ -5787,17 +6086,17 @@ const CertifyTest = struct {
     }
 
     fn certify(self: *CertifyTest) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, &.{}, arc_sig.SigTable.all_owned, &.{}, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag);
     }
 
     fn certifyAndMeasureWork(self: *CertifyTest) CertifyError!CertifierWorkStats {
         var stats = CertifierWorkStats{};
-        try certifyStoreWithWorkStats(self.allocator, &self.store, &self.layouts, &.{}, arc_sig.SigTable.all_owned, &.{}, &self.diag, &stats);
+        try certifyStoreWithWorkStats(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag, &stats);
         return stats;
     }
 
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, &.{}, sigs, &.{}, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
     }
 
     fn certifyUniqueArgsOnly(self: *CertifyTest) CertifyError!void {
@@ -6218,6 +6517,55 @@ test "certify rejects erased call reuse from a different allocation" {
     try testing.expect(std.mem.find(u8, f.diag.message(), "do not denote the same allocation") != null);
 }
 
+test "certifier terminal checks retain zero-balance claims without a local name" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record = try f.local(f.pair_str);
+    const body = try f.ret(record);
+    const proc_id = try f.addProc(&.{record}, body, f.pair_str);
+    var conditions = try MaybeUninitializedConditions.init(f.allocator, &f.store, &f.diag);
+    defer conditions.deinit();
+    var certifier = Certifier.initStore(f.allocator, &f.store, &f.layouts, .{ .sigs = &.{} }, &.{true}, &conditions, &f.diag, null);
+    defer certifier.deinit();
+    certifier.current_proc = proc_id;
+    certifier.current_stmt = body;
+    try certifier.collectProcLocals(f.store.getProcSpec(proc_id), body);
+    var state = try State.init(certifier.state_arena.allocator(), certifier.local_dense.items, certifier.proc_locals.items.len);
+    const value = try certifier.bindFresh(&state, record, 0, &.{});
+    try state.setClaims(value, .{ .low = 1 });
+    try state.bindValue(record, no_value);
+    try testing.expectError(error.Certification, certifier.checkLeaks(&state));
+    try testing.expect(std.mem.find(u8, f.diag.message(), "ended with balance 0") != null);
+}
+
+test "certifier boundary checks retain ownership after rebinding" {
+    for ([_]bool{ false, true }) |through_join| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const value = try f.local(.str);
+        const result = try f.local(.i64);
+        const ret = try f.ret(result);
+        var next = try f.assignI64(result, ret);
+        if (through_join) {
+            const join_id = f.freshJoinPointId();
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+            next = try f.store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = LIR.LocalSpan.empty(),
+                .body = next,
+                .remainder = jump,
+            } });
+        }
+        const release = try f.decrefStmt(value, .str, next);
+        const replacement = try f.assignStr(value, release);
+        const body = try f.assignStr(value, replacement);
+        _ = try f.addProc(&.{}, body, .i64);
+        try testing.expectError(error.Certification, f.certify());
+        const expected = if (through_join) "not carried into join" else "leaked";
+        try testing.expect(std.mem.find(u8, f.diag.message(), expected) != null);
+    }
+}
+
 test "certify flags a leaked binding" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -6369,11 +6717,6 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
         .next = retain,
     } });
     _ = try f.addProc(&.{ capture, desc_local }, field_read, .i64);
-
-    const boxy_descs = try f.allocator.alloc(?LIR.BoxyDescRef, f.store.localCount());
-    defer f.allocator.free(boxy_descs);
-    @memset(boxy_descs, null);
-    boxy_descs[@intFromEnum(field)] = desc;
     const sigs = [_]arc_sig.RcSig{
         arc_sig.RcSig.all_owned.withBorrowedParam(0),
     };
@@ -6381,7 +6724,6 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
         f.allocator,
         &f.store,
         &f.layouts,
-        boxy_descs,
         .{ .sigs = &sigs },
         &.{},
         &f.diag,
@@ -7214,6 +7556,43 @@ test "certify preserves a holder alternative to a payload lender across a join" 
     try f.certify();
 }
 
+test "a fully claimed holder does not keep a stale alias live across a join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const holder_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+    const payload = try f.local(.str);
+    const holder = try f.local(holder_layout);
+    const taken = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const use_stale_payload = try f.store.addCFStmt(.{ .expect = .{
+        .condition = payload,
+        .next = result_assign,
+    } });
+    const join_id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const release_taken = try f.decrefStmt(taken, .str, jump);
+    const take = try fieldReadStmt(&f, taken, holder, 0, release_taken);
+    const make_holder = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = holder,
+        .fields = try f.store.addLocalSpan(&.{payload}),
+        .next = take,
+    } });
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = use_stale_payload,
+        .remainder = make_holder,
+    } });
+    const body = try f.assignStr(payload, join);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "unbound") != null);
+}
+
 test "certify drops a dead dormant lender from an owned join value" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -7922,6 +8301,157 @@ test "certify accepts a fully dismantled record via field takes" {
     const body = try fieldReadStmt(&f, first, pair, 0, read_second);
     _ = try f.addProc(&.{pair}, body, .i64);
     try f.certify();
+}
+
+test "certify accepts a complete field transfer with wide scalar siblings" {
+    for ([_]u16{ 0, 63, 64, 128 }) |rc_index| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        var fields: [129]layout_mod.StructField = undefined;
+        for (&fields, 0..) |*field, index| {
+            field.* = .{ .index = @intCast(index), .layout = if (index == rc_index) .str else .i64 };
+        }
+        const record_layout = try f.layouts.putStructFields(&fields);
+        const record = try f.local(record_layout);
+        const field = try f.local(.str);
+        const ret = try f.ret(field);
+        const body = try fieldReadStmt(&f, field, record, rc_index, ret);
+        _ = try f.addProc(&.{record}, body, .str);
+        try f.certify();
+    }
+}
+
+test "certify accounts for every stored unit beyond one word of fields" {
+    for ([_]bool{ false, true }) |leave_unspent| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        var fields: [65]layout_mod.StructField = undefined;
+        for (&fields, 0..) |*field, index| {
+            field.* = .{ .index = @intCast(index * 2), .layout = .str };
+        }
+        const record_layout = try f.layouts.putStructFields(&fields);
+        const record = try f.local(record_layout);
+        const result = try f.local(.i64);
+        var body = try f.assignI64(result, try f.ret(result));
+        for (fields) |field| {
+            if (leave_unspent and field.index == 128) continue;
+            const target = try f.local(.str);
+            const release = try f.decrefStmt(target, .str, body);
+            body = try fieldReadStmt(&f, target, record, field.index, release);
+        }
+        _ = try f.addProc(&.{record}, body, .i64);
+        if (leave_unspent) {
+            try testing.expectError(error.Certification, f.certify());
+            try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
+        } else {
+            try f.certify();
+        }
+    }
+}
+
+test "certify joins equal wide claims made in different orders" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 128, .layout = .str },
+        .{ .index = 129, .layout = .str },
+    });
+    const record = try f.local(record_layout);
+    const cond = try f.local(.u8);
+    const last = try f.local(.str);
+    const result = try f.local(.i64);
+    const end = try f.assignI64(result, try f.ret(result));
+    const join_body = try fieldReadStmt(&f, last, record, 0, try f.decrefStmt(last, .str, end));
+    const join_id = f.freshJoinPointId();
+    var branches: [2]LIR.CFStmtId = undefined;
+    const orders = [_][2]u16{ .{ 128, 129 }, .{ 129, 128 } };
+    for (&branches, orders) |*branch, order| {
+        var body = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        for (order) |index| {
+            const field = try f.local(.str);
+            body = try fieldReadStmt(&f, field, record, index, try f.decrefStmt(field, .str, body));
+        }
+        branch.* = body;
+    }
+    const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = branches[0] }}),
+        .default_branch = branches[1],
+    } });
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = join_body,
+        .remainder = choose,
+    } });
+    _ = try f.addProc(&.{ record, cond }, body, .i64);
+    try f.certify();
+}
+
+test "certify rejects repeated wide field takes and reads after a take" {
+    for ([_]bool{ false, true }) |read_after_take| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const record_layout = try f.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = .str },
+            .{ .index = 128, .layout = .str },
+        });
+        const record = try f.local(record_layout);
+        const first = try f.local(.str);
+        const again = try f.local(.str);
+        const result = try f.local(.i64);
+        const end = try f.assignI64(result, try f.ret(result));
+        const release_again = try f.decrefStmt(again, .str, end);
+        const release_first = try f.decrefStmt(first, .str, release_again);
+        const read_again = try fieldReadStmt(&f, again, record, 128, if (read_after_take) release_again else release_first);
+        const body = try fieldReadStmt(&f, first, record, 128, if (read_after_take)
+            try f.decrefStmt(first, .str, read_again)
+        else
+            read_again);
+        _ = try f.addProc(&.{record}, body, .i64);
+        try testing.expectError(error.Certification, f.certify());
+        const expected = if (read_after_take) "after the field's stored unit was taken" else "without an ownership unit";
+        try testing.expect(std.mem.find(u8, f.diag.message(), expected) != null);
+    }
+}
+
+test "certify validates wide residual shell identities across a join" {
+    const cases = [_][]const u32{ &.{128}, &.{}, &.{ 128, 128 }, &.{0}, &.{65536} };
+    for (cases, 0..) |absent, case_index| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const record_layout = try f.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = .i64 },
+            .{ .index = 128, .layout = .str },
+        });
+        const record = try f.local(record_layout);
+        const alias = try f.local(record_layout);
+        const scalar = try f.local(.i64);
+        const join_id = f.freshJoinPointId();
+        const read_scalar = try fieldReadStmt(&f, scalar, alias, 0, try f.ret(scalar));
+        const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = alias,
+            .op = .{ .local = record },
+            .residual_shell_absent_fields = try f.store.addU32Span(absent),
+            .next = read_scalar,
+        } });
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const release = try f.decrefStmt(record, record_layout, jump);
+        const body = try f.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = alias_shell,
+            .remainder = release,
+        } });
+        _ = try f.addProc(&.{record}, body, .i64);
+        if (case_index == 0) {
+            try f.certify();
+        } else {
+            try testing.expectError(error.Certification, f.certify());
+            try testing.expect(std.mem.find(u8, f.diag.message(), "residual-shell") != null);
+        }
+    }
 }
 
 test "certify flags a whole release of a partially dismantled record" {

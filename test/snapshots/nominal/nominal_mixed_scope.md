@@ -27,52 +27,79 @@ UNDECLARED TYPE - nominal_mixed_scope.md:10:9:10:12
 UNDECLARED TYPE - nominal_mixed_scope.md:11:9:11:12
 UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 # PROBLEMS
-── ✗ import must be top level ─────────────────────── nominal_mixed_scope.md:7:5
-
-I was parsing an import, but imports are only allowed at the top level.
-
-import Color.RGB
-^^^^^^
-
-Move this import after the mod header and before declarations or executable
-statements.
-
-For example:
-    import Json
-
-    main = 1
-
-I found import here.
-That word is reserved by Roc, so it cannot be used as a name in this position.
-
-── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:7:12
-
-The type Color is not declared in this scope.
-
-import Color.RGB
-       ^^^^^
-
-── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:10:9
-
-The type RGB is not declared in this scope.
-
-RGB.Red => LocalStatus.Pending
-^^^
-
-── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:11:9
-
-The type RGB is not declared in this scope.
-
-RGB.Green => LocalStatus.Complete
-^^^
-
-── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:12:9
-
-The type RGB is not declared in this scope.
-
-RGB.Blue => LocalStatus.Pending
-^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Import Must Be Top Level")
+		(region (start 7 5) (end 7 11))
+		(headline
+			(reflow "I was parsing an import, but imports are only allowed at the top level."))
+		(document
+			(reflow "Move this import after the mod header and before declarations or executable statements.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "import Json")
+			(line-break)
+			(line-break)
+			(indent 1)
+			(text "main = 1")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "import")
+			(text " here.")
+			(line-break)
+			(reflow "That word is reserved by Roc, so it cannot be used as a name in this position.")
+			(line-break)
+			(line-break)
+			(source-region (file "nominal_mixed_scope.md") (start 7 5) (end 7 11) (annotation error) (line-text "    import Color.RGB"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 7 12) (end 7 17))
+		(headline
+			(reflow "The type ")
+			(annotated code "Color")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_mixed_scope.md") (start 7 12) (end 7 17) (annotation error) (line-text "    import Color.RGB"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 10 9) (end 10 12))
+		(headline
+			(reflow "The type ")
+			(annotated code "RGB")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_mixed_scope.md") (start 10 9) (end 10 12) (annotation error) (line-text "        RGB.Red => LocalStatus.Pending"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 11 9) (end 11 12))
+		(headline
+			(reflow "The type ")
+			(annotated code "RGB")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_mixed_scope.md") (start 11 9) (end 11 12) (annotation error) (line-text "        RGB.Green => LocalStatus.Complete"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 12 9) (end 12 12))
+		(headline
+			(reflow "The type ")
+			(annotated code "RGB")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_mixed_scope.md") (start 12 9) (end 12 12) (annotation error) (line-text "        RGB.Blue => LocalStatus.Pending")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

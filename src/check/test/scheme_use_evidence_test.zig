@@ -20,6 +20,35 @@ fn recordsWithSlot(env: *const ModuleEnv, slot: Slot) usize {
     return count;
 }
 
+test "concrete recursive dispatch records a shared method instance without copying requirements" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(Str), Next(Expr)].{
+        \\  is_eq = |left, right|
+        \\    match (left, right) {
+        \\      (Leaf(a), Leaf(b)) => a == b
+        \\      (Next(a), Next(b)) => a == b
+        \\      _ => False
+        \\    }
+        \\}
+        \\main = Expr.Next(Expr.Leaf("a")) == Expr.Next(Expr.Leaf("a"))
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const env = test_env.module_env;
+    try std.testing.expect(recordsWithSlot(env, .recursive_dispatch_target) > 0);
+    for (env.scheme_uses.items.items) |record| {
+        if (record.slot_kind != @intFromEnum(Slot.recursive_dispatch_target)) continue;
+        try std.testing.expectEqual(@as(u32, 0), record.pairs_len);
+        var found_ancestor_instance = false;
+        for (test_env.checker.dispatch_target_instantiations.items) |instance| {
+            if (@intFromEnum(instance.constraint_fn_var) == record.slot_data) continue;
+            if (@intFromEnum(instance.method_var) == record.scheme_root) found_ancestor_instance = true;
+        }
+        try std.testing.expect(found_ancestor_instance);
+    }
+}
+
 test "value use of a where-clause generic records instantiation evidence" {
     const source =
         \\Thing := [Val(Str)].{
@@ -96,6 +125,28 @@ test "source-forward annotated recursive use records the complete body scheme" {
         found_complete_forward_use = true;
     }
     try std.testing.expect(found_complete_forward_use);
+}
+
+test "recursive reference provenance marks the annotated self use but not an external call" {
+    const source =
+        \\grow : U64 -> U64
+        \\grow = |n| if n == 0 { 0 } else { grow(n - 1) }
+        \\main = grow(2)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("main", "U64");
+
+    const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse unreachable;
+    const env = test_env.module_env;
+    var recursive_records: usize = 0;
+    for (env.scheme_uses.items.items) |record| {
+        if (record.slot_kind != @intFromEnum(Slot.recursive_reference)) continue;
+        recursive_records += 1;
+        const region = env.store.getNodeRegion(@enumFromInt(record.node_idx));
+        try std.testing.expectEqual(@as(u32, @intCast(self_use_offset)), region.start.offset);
+    }
+    try std.testing.expectEqual(@as(usize, 1), recursive_records);
 }
 
 test "discharging a dispatch constraint onto a constrained method target records dispatch_target evidence" {

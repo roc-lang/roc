@@ -19,24 +19,33 @@ main! = print_msg!("Hello, world!")
 NAME NOT IN SCOPE - effectful_with_effectful_annotation.md:7:20:7:32
 EFFECTFUL TOP LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
-── ✗ name not in scope ───────────── effectful_with_effectful_annotation.md:7:20
-
-Nothing is named line! in this scope.
-
-print_msg! = |msg| Stdout.line!(msg)
-                   ^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ effectful top level value ────── effectful_with_effectful_annotation.md:9:9
-
-This top-level definition performs an effect while initializing.
-
-main! = print_msg!("Hello, world!")
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Move the effect into a function body so it runs when the function is called.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 7 20) (end 7 32))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "effectful_with_effectful_annotation.md") (start 7 20) (end 7 32) (annotation error) (line-text "print_msg! = |msg| Stdout.line!(msg)"))))
+	(report
+		(severity runtime_error)
+		(title "Effectful Top Level Value")
+		(region (start 9 9) (end 9 36))
+		(headline
+			(reflow "This top-level definition performs an effect while initializing."))
+		(document
+			(source-region (file "effectful_with_effectful_annotation.md") (start 9 9) (end 9 36) (annotation error) (line-text "main! = print_msg!(\"Hello, world!\")"))
+			(line-break)
+			(line-break)
+			(reflow "Move the effect into a function body so it runs when the function is called."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

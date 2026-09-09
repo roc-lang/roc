@@ -2547,6 +2547,27 @@ const Pass = struct {
         const arg_count = GuardedList.borrowLen(args);
 
         switch (s.op) {
+            .simd_concat_shift_bytes => {
+                std.debug.assert(arg_count == 3);
+                if (s.simd_concat_count == null) {
+                    if (try self.valueOf(GuardedList.at(args, 2))) |node| {
+                        if (self.constValueOf(node)) |count| {
+                            // Unreachable invalid-count arms can still be in
+                            // LIR before their guarding switch is eliminated.
+                            if (count >= 0 and count <= 16) {
+                                if (self.live_pending) {
+                                    self.deferred_rewrites = true;
+                                } else {
+                                    self.store.getCFStmtPtr(stmt).assign_low_level.simd_concat_count = @intCast(count);
+                                }
+                            }
+                        }
+                    }
+                }
+                // This annotation neither changes dataflow nor enables another
+                // proof, so it does not request another range-analysis round.
+                try self.bindFresh(s.target);
+            },
             .list_len => {
                 if (arg_count == 1) {
                     const list_local = GuardedList.at(args, 0);
@@ -2873,7 +2894,6 @@ const Pass = struct {
             .simd_odd_lanes,
             .simd_reverse_lanes,
             .simd_table_lookup,
-            .simd_concat_shift_bytes,
             .simd_widen_lo,
             .simd_widen_hi,
             .simd_pairwise_add_widen,

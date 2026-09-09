@@ -17,17 +17,30 @@ foo = {
 # EXPECTED
 VAR NAME MISSING `$` - for_stmt.md:3:6:3:12
 # PROBLEMS
-── ● var name missing `$` ────────────────────────────────────── for_stmt.md:3:6
-
-The mutable binding result is declared with var but its name does not start
-with $.
-
-var result = 0
-    ^^^^^^
-
-Rename this binding and all of its uses to $result. The name is only a
-convention; mutability comes from the var declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 12))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "result")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$result")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_stmt.md") (start 3 6) (end 3 12) (annotation warning) (line-text "\tvar result = 0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

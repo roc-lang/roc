@@ -31,26 +31,40 @@ main! = |_| {
 UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
-── ● unused variable ──────────────────────────────── unused_vars_simple.md:4:19
-
-Variable x is defined here and then never used:
-
-unused_regular = |x| 42
-                  ^
-
-If you don't need this variable, prefix it with an underscore like _x to
-suppress this warning.
-
-── ● underscore variable used ─────────────────────── unused_vars_simple.md:7:28
-
-Variable _value is prefixed with an underscore but is actually used.
-
-used_underscore = |_value| _value
-                           ^^^^^^
-
-Variables prefixed with _ are intended to be unused. Remove the underscore
-prefix: value.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 4 19) (end 4 20))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "x")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_x")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "unused_vars_simple.md") (start 4 19) (end 4 20) (annotation error) (line-text "unused_regular = |x| 42"))))
+	(report
+		(severity warning)
+		(title "Underscore Variable Used")
+		(region (start 7 28) (end 7 34))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "_value")
+			(reflow " is prefixed with an underscore but is actually used."))
+		(document
+			(reflow "Variables prefixed with ")
+			(annotated symbol-unqualified "_")
+			(reflow " are intended to be unused. Remove the underscore prefix: ")
+			(annotated symbol-unqualified "value")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "unused_vars_simple.md") (start 7 28) (end 7 34) (annotation warning) (line-text "used_underscore = |_value| _value")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

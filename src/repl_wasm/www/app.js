@@ -19,7 +19,6 @@ const editorStatus = document.querySelector("#editor-status");
 const completion = document.querySelector("#completion");
 const definitions = document.querySelector("#definitions");
 const modules = document.querySelector("#modules");
-const toasts = document.querySelector("#toasts");
 
 let worker;
 let ready = false;
@@ -103,31 +102,8 @@ function definitionSummary(snippet) {
   }
 }
 
-function showToast(payload) {
-  const toast = makeElement("div", "toast", payload);
-  toasts.append(toast);
-  setTimeout(() => toast.remove(), 4000);
-}
-
-const effectHandlers = new Map([
-  ["log", (payload) => console.log(`[Roc REPL] ${payload}`)],
-  ["toast", showToast],
-]);
-
-function renderEvent(event, runEffects) {
-  if (event.kind !== "effect") {
-    return makeElement("div", "event", `${event.kind}: ${event.message}`);
-  }
-
-  const handler = effectHandlers.get(event.name);
-  let disposition = "unhandled";
-  if (!runEffects) {
-    disposition = "suppressed";
-  } else if (handler) {
-    handler(event.payload);
-    disposition = "handled";
-  }
-  return makeElement("div", `event effect ${disposition}`, `effect ${event.name}: ${event.payload} (${disposition})`);
+function renderEvent(event) {
+  return makeElement("div", "event", `${event.kind}: ${event.message}`);
 }
 
 function renderSnippet(snippet) {
@@ -144,7 +120,7 @@ function renderSnippet(snippet) {
   }
   for (const event of snippet.events || []) {
     if (event.kind === "crashed") continue;
-    node.append(renderEvent(event, snippet.status === "ok"));
+    node.append(renderEvent(event));
   }
   if (snippet.status === "crashed") {
     node.append(makeElement(

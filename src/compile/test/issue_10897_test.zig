@@ -16,6 +16,7 @@ const roc_target = @import("roc_target");
 
 const CacheManager = @import("../cache_manager.zig").CacheManager;
 const Coordinator = @import("../coordinator.zig").Coordinator;
+const CoordinatorError = @import("../coordinator.zig").CoordinatorError;
 const CoreCtx = @import("ctx").CoreCtx;
 
 const CompileResult = struct {
@@ -23,11 +24,7 @@ const CompileResult = struct {
     cache_hits: u32,
 };
 
-const CompileError = eval.BuiltinModules.InitError || std.Thread.SpawnError || Coordinator.AppDiscoveryError || error{
-    UnsupportedBuiltinAnnotationOnly,
-    BuiltinLowLevelAnnotationMustBeFunction,
-    LowLevelOperationsNotFound,
-};
+const CompileError = eval.BuiltinModules.InitError || std.Thread.SpawnError || Coordinator.AppDiscoveryError || CoordinatorError;
 
 fn compileWithCache(
     gpa: std.mem.Allocator,

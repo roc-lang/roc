@@ -362,6 +362,7 @@ const CliMainError =
         MissingFilesDirectory,
         MissingTargetFile,
         MissingTargetsSection,
+        MissingWasmExports,
         NativeCompilationFailed,
         NoCacheDir,
         NoPlatformSource,
@@ -6375,7 +6376,7 @@ fn writeDevRunImageToSharedMemory(
             ctx.gpa,
             store,
             layouts,
-            static_strings.entries,
+            static_strings.view(),
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
@@ -6384,6 +6385,7 @@ fn writeDevRunImageToSharedMemory(
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
+        try codegen.setStaticDataSymbols(internal_static_data);
         codegen.enable_hot_reload = hot_reload_allocation != null;
 
         const proc_specs = store.getProcSpecs();
@@ -6493,11 +6495,13 @@ fn writeDevRunImageToSharedMemory(
             else
                 0;
             const required_bound = try backend.RunImage.requiredCapacityFromOffset(
+                ctx.gpa,
                 shm.page_size,
                 allocation.region_start,
                 generated_code,
                 entrypoints,
                 code_symbols,
+                codegen.getSymbolNames(),
                 relocations,
                 readonly_data.items,
                 sidecar_blob.bytes,
@@ -6529,6 +6533,7 @@ fn writeDevRunImageToSharedMemory(
             generated_code,
             entrypoints,
             code_symbols,
+            codegen.getSymbolNames(),
             relocations,
             readonly_data.items,
             sidecar_blob.bytes,
@@ -8383,18 +8388,19 @@ fn nativeBuildEntrypoints(
         unreachable;
     }
 
-    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
-    errdefer entrypoints.deinit(ctx.gpa);
+    const entrypoints = try ctx.gpa.alloc(backend.Entrypoint, root_procs.len);
+    errdefer ctx.gpa.free(entrypoints);
 
-    for (root_procs, root_metadata) |root_proc, metadata| {
-        if (metadata.abi != .platform or metadata.exposure != .exported) continue;
+    for (root_procs, root_metadata, entrypoints) |root_proc, metadata, *entrypoint| {
+        std.debug.assert(metadata.kind == .provided_export);
+        std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("native build invariant violated: missing root request order {d}", .{metadata.order});
             }
             unreachable;
         };
-        if (root.kind != .provided_export) continue;
+        std.debug.assert(root.kind == .provided_export);
 
         const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
         const arg_locals = lowered.lir_result.store.getLocalSpan(proc_spec.args);
@@ -8404,22 +8410,21 @@ fn nativeBuildEntrypoints(
             arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
         }
 
-        try entrypoints.append(ctx.gpa, .{
-            .symbol_name = try nativeEntrypointSymbolName(ctx, root_artifact, root),
+        entrypoint.* = .{
+            .symbol_name = nativeEntrypointSymbolName(root_artifact, root),
             .proc = root_proc,
             .arg_layouts = arg_layouts,
             .ret_layout = proc_spec.ret_layout,
-        });
+        };
     }
 
-    return try entrypoints.toOwnedSlice(ctx.gpa);
+    return entrypoints;
 }
 
 fn nativeEntrypointSymbolName(
-    ctx: *CliCtx,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
-) Allocator.Error![]const u8 {
+) []const u8 {
     const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
@@ -8429,7 +8434,7 @@ fn nativeEntrypointSymbolName(
         }
         unreachable;
     };
-    return try ctx.arena.dupe(u8, entrypoint_name);
+    return entrypoint_name;
 }
 
 const PlatformLinkInputs = struct {
@@ -8445,9 +8450,12 @@ fn selectBuildPlatformTarget(
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
-) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
+) (Allocator.Error || error{ InvalidTarget, MissingWasmExports, UnsupportedTarget, WriteFailed })!target_selection.SelectedTarget {
     return switch (target_selection.selectBuildTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
-        .selected => |selected| selected,
+        .selected => |selected| blk: {
+            try requireLinkedWasmExports(ctx, selected, platform_source);
+            break :blk selected;
+        },
         .invalid_target => |target_str| {
             renderValidationError(ctx, .{ .invalid_target = .{ .target_str = target_str } });
             return error.InvalidTarget;
@@ -8489,6 +8497,42 @@ fn selectBuildPlatformTarget(
         },
         .not_runnable_on_host => unreachable,
     };
+}
+
+fn requireLinkedWasmExports(
+    ctx: *CliCtx,
+    selected: target_selection.SelectedTarget,
+    platform_source: ?[]const u8,
+) (Allocator.Error || error{ MissingWasmExports, WriteFailed })!void {
+    if (selected.target.toCpuArch() != .wasm32 or selected.output == .archive) return;
+    if (selected.link_spec.wasm) |wasm| {
+        if (wasm.exports != null) return;
+    }
+
+    var report = try reporting.Report.init(
+        ctx.arena,
+        "Missing Wasm Exports",
+        "Linked WebAssembly targets must explicitly declare their host-visible function exports.",
+        .runtime_error,
+    );
+    defer report.deinit();
+
+    try report.document.addText("Platform: ");
+    try report.document.addAnnotated(platform_source orelse "<unknown>", .path);
+    try report.document.addLineBreak();
+    try report.document.addText("Target: ");
+    try report.document.addAnnotated(@tagName(selected.target), .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Add an `exports:` field to this target. Use `exports: []` when the module intentionally exports no functions.");
+
+    try reporting.renderReportToTerminal(
+        &report,
+        ctx.io.stderr(),
+        reporting.ColorUtils.getPaletteForConfig(ctx.reportConfig(.stderr)),
+        ctx.reportConfig(.stderr),
+    );
+    return error.MissingWasmExports;
 }
 
 fn selectRunPlatformTarget(
@@ -8971,8 +9015,8 @@ fn configuredWasmZeroFilledMemory(wasm: ?roc_target.WasmTargetConfig) bool {
 }
 
 /// Binaryen post-link optimization mode for linked wasm output, derived from
-/// the build's opt level: LLVM opt levels get the matching Binaryen pass;
-/// dev/interpreter builds skip Binaryen entirely.
+/// the build's opt level: speed uses explicit cleanup after LLVM O3, size uses
+/// Binaryen's size pipeline, and dev/interpreter builds skip Binaryen entirely.
 fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
     return switch (opt) {
         .size => .size,
@@ -8981,26 +9025,34 @@ fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
     };
 }
 
-fn wasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
-    if (link_inputs.wasm) |wasm| {
-        if (wasm.exports) |exports| return exports;
-    }
-    return &.{};
+fn requiredWasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
+    const wasm = link_inputs.wasm orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+        }
+        unreachable;
+    };
+    return wasm.exports orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+        }
+        unreachable;
+    };
 }
 
 test "wasm platform exports are exactly the header declaration" {
-    const inputs_without_exports = PlatformLinkInputs{
+    const explicit_empty = PlatformLinkInputs{
         .target_name = "wasm32",
         .platform_files_dir = "targets/wasm32",
         .platform_files_pre = &.{},
         .platform_files_post = &.{},
-        .wasm = .{},
+        .wasm = .{ .exports = &.{} },
     };
-    try std.testing.expectEqual(@as(usize, 0), wasmPlatformExports(inputs_without_exports).len);
+    try std.testing.expectEqual(@as(usize, 0), requiredWasmPlatformExports(explicit_empty).len);
 
-    var explicit = inputs_without_exports;
+    var explicit = explicit_empty;
     explicit.wasm.?.exports = &.{ "run", "result_len" };
-    const exports = wasmPlatformExports(explicit);
+    const exports = requiredWasmPlatformExports(explicit);
     try std.testing.expectEqual(@as(usize, 2), exports.len);
     try std.testing.expectEqualStrings("run", exports[0]);
     try std.testing.expectEqualStrings("result_len", exports[1]);
@@ -9152,7 +9204,7 @@ fn rocBuildWasm(
 
     const object_files = try ctx.arena.alloc([]const u8, 1);
     object_files[0] = obj_path;
-    const wasm_exports = wasmPlatformExports(link_inputs);
+    const wasm_exports = requiredWasmPlatformExports(link_inputs);
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
         .target_abi = null,
@@ -9376,43 +9428,47 @@ fn compileLlvmAppObject(
     const llvm_cpu = llvmCpuNameForTarget(std_target);
     const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
-    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
-        ctx.gpa,
-        &lowered.lir_result.store,
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
-        std_target,
-    );
-    codegen.layout_store = &lowered.lir_result.layouts;
     const emit_debug_info = args.debug;
-    codegen.emit_debug_info = emit_debug_info;
-    codegen.emit_local_debug_info = emit_debug_info;
-    codegen.enable_default_platform_runtime = enable_default_platform_runtime;
-    codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
-    codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
-    codegen.debug_producer = "roc " ++ build_options.compiler_version;
-    defer codegen.deinit();
 
-    const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
-    defer ctx.gpa.free(static_rc_helpers);
-    codegen.static_data_rc_helpers = static_rc_helpers;
+    // Release code-generation scratch before LLVM optimization starts.
+    var bitcode = generate: {
+        var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
+            std_target,
+        );
+        codegen.layout_store = &lowered.lir_result.layouts;
+        codegen.emit_debug_info = emit_debug_info;
+        codegen.emit_local_debug_info = emit_debug_info;
+        codegen.enable_default_platform_runtime = enable_default_platform_runtime;
+        codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
+        codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
+        codegen.debug_producer = "roc " ++ build_options.compiler_version;
+        defer codegen.deinit();
 
-    const static_data_procs = try backend.collectReferencedProcs(ctx.gpa, static_data_exports);
-    defer ctx.gpa.free(static_data_procs);
-    codegen.static_data_procs = static_data_procs;
+        const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
+        defer ctx.gpa.free(static_rc_helpers);
+        codegen.static_data_rc_helpers = static_rc_helpers;
 
-    const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
-    for (entrypoints, 0..) |entrypoint, i| {
-        llvm_entrypoints[i] = .{
-            .symbol_name = entrypoint.symbol_name,
-            .proc = entrypoint.proc,
-            .arg_layouts = entrypoint.arg_layouts,
-            .ret_layout = entrypoint.ret_layout,
-        };
-    }
+        const static_data_procs = try backend.collectReferencedProcs(ctx.gpa, static_data_exports);
+        defer ctx.gpa.free(static_data_procs);
+        codegen.static_data_procs = static_data_procs;
 
-    var bitcode = try codegen.generateEntrypointModule("roc_app_llvm", llvm_entrypoints);
+        const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
+        for (entrypoints, 0..) |entrypoint, i| {
+            llvm_entrypoints[i] = .{
+                .symbol_name = entrypoint.symbol_name,
+                .proc = entrypoint.proc,
+                .arg_layouts = entrypoint.arg_layouts,
+                .ret_layout = entrypoint.ret_layout,
+            };
+        }
+
+        break :generate try codegen.generateEntrypointModule("roc_app_llvm", llvm_entrypoints);
+    };
     defer bitcode.deinit();
 
     const target_name = @tagName(target);
@@ -9603,7 +9659,7 @@ fn rocBuildWasmLlvm(
     const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
     const object_files = try ctx.arena.alloc([]const u8, 1);
     object_files[0] = combined_obj;
-    const wasm_exports = wasmPlatformExports(link_inputs);
+    const wasm_exports = requiredWasmPlatformExports(link_inputs);
 
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
@@ -10674,6 +10730,12 @@ const CliTestResultItem = struct {
     result: CliTestResult,
     order: u32,
     region: base.Region,
+    inline_expect: bool = false,
+    inline_passed: u64 = 0,
+    inline_failed: u64 = 0,
+    inline_suppressed: bool = false,
+    source_env: ?*const ModuleEnv = null,
+    source_path: ?[]const u8 = null,
     transcript: []const CliTestTranscriptEvent = &.{},
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility = .always,
@@ -10685,6 +10747,8 @@ const CliModuleTestResult = struct {
     results: []const CliTestResultItem,
     cached: bool,
 };
+
+const CliTestSourceModuleMap = std.StringHashMapUnmanaged(BuildEnv.CompiledModuleInfo);
 
 const CliTestRunSummary = struct {
     passed: u32 = 0,
@@ -10911,7 +10975,7 @@ fn deinitCliTestPlanEntries(allocator: Allocator, entries: []const CliTestPlanEn
     allocator.free(@constCast(entries));
 }
 
-const cli_test_cache_magic = "ROC_TEST_RESULTS_V6";
+const cli_test_cache_magic = "ROC_TEST_RESULTS_V8";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
@@ -10923,6 +10987,19 @@ fn readU32(bytes: []const u8, offset: *usize) ?u32 {
     if (offset.* + 4 > bytes.len) return null;
     const value = std.mem.readInt(u32, bytes[offset.*..][0..4], .little);
     offset.* += 4;
+    return value;
+}
+
+fn appendU64(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u64) Allocator.Error!void {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buf, value, .little);
+    try bytes.appendSlice(allocator, &buf);
+}
+
+fn readU64(bytes: []const u8, offset: *usize) ?u64 {
+    if (offset.* + 8 > bytes.len) return null;
+    const value = std.mem.readInt(u64, bytes[offset.*..][0..8], .little);
+    offset.* += 8;
     return value;
 }
 
@@ -10963,6 +11040,7 @@ test "CLI test cache key includes specialization strategy" {
 fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
     var summary = CliTestRunSummary{ .modules_with_tests = 1 };
     for (results) |result| {
+        if (result.inline_suppressed) continue;
         switch (result.result) {
             .passed => summary.passed += 1,
             .failed => summary.failed += 1,
@@ -10989,7 +11067,23 @@ fn storeCliTestResultsInCache(
     try bytes.appendSlice(ctx.gpa, cli_test_cache_magic);
     try appendU32(&bytes, ctx.gpa, @intCast(results.len));
     for (results) |result| {
+        std.debug.assert(!result.inline_suppressed);
+        try bytes.append(ctx.gpa, @intFromBool(result.inline_expect));
+        try appendU64(&bytes, ctx.gpa, result.inline_passed);
+        try appendU64(&bytes, ctx.gpa, result.inline_failed);
+        if (result.inline_expect and result.source_env == null) {
+            std.debug.panic("inline test cache result has no declaring module", .{});
+        }
+        if (result.source_env) |source_env| {
+            const qualified_name = source_env.qualifiedModuleName();
+            try appendU32(&bytes, ctx.gpa, @intCast(qualified_name.len));
+            try bytes.appendSlice(ctx.gpa, qualified_name);
+        } else {
+            try appendU32(&bytes, ctx.gpa, 0);
+        }
         try appendU32(&bytes, ctx.gpa, result.order);
+        try appendU32(&bytes, ctx.gpa, result.region.start.offset);
+        try appendU32(&bytes, ctx.gpa, result.region.end.offset);
         try bytes.append(ctx.gpa, switch (result.result) {
             .passed => 0,
             .failed => 1,
@@ -11074,6 +11168,7 @@ fn loadCachedCliTestResults(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     specialization_strategy: base.SpecializationStrategy,
     module: BuildEnv.CompiledModuleInfo,
+    source_modules: *const CliTestSourceModuleMap,
     test_roots: []const check.CheckedArtifact.RootRequest,
 ) (Allocator.Error || error{NoHomeDirectory})!?CliCachedModuleTestResults {
     const manager = cache_manager orelse return null;
@@ -11089,7 +11184,7 @@ fn loadCachedCliTestResults(
     offset += cli_test_cache_magic.len;
 
     const count = readU32(data, &offset) orelse return null;
-    if (count != test_roots.len) return null;
+    if (count < test_roots.len) return null;
 
     var results = std.ArrayList(CliTestResultItem).empty;
     var results_owned_by_module = false;
@@ -11100,10 +11195,40 @@ fn loadCachedCliTestResults(
         }
     }
 
-    for (0..@as(usize, @intCast(count))) |root_index| {
+    var root_index: usize = 0;
+    for (0..@as(usize, @intCast(count))) |_| {
+        const inline_expect = switch (readU8(data, &offset) orelse return null) {
+            0 => false,
+            1 => true,
+            else => return null,
+        };
+        const inline_passed = readU64(data, &offset) orelse return null;
+        const inline_failed = readU64(data, &offset) orelse return null;
+        if (inline_expect != (inline_passed +| inline_failed != 0)) return null;
+        const source_name_len: usize = @intCast(readU32(data, &offset) orelse return null);
+        if (inline_expect and source_name_len == 0) return null;
+        if (!inline_expect and source_name_len != 0) return null;
+        if (offset + source_name_len > data.len) return null;
+        const source_name = data[offset..][0..source_name_len];
+        offset += source_name_len;
+        var source_env: ?*const ModuleEnv = null;
+        var source_path: ?[]const u8 = null;
+        if (source_name.len != 0) {
+            if (source_modules.get(source_name)) |source_module| {
+                source_env = source_module.semantic.env;
+                source_path = source_module.path;
+            }
+            if (source_env == null) return null;
+        }
         const order = readU32(data, &offset) orelse return null;
-        const root = test_roots[root_index];
-        if (order != root.order) return null;
+        const region_start = readU32(data, &offset) orelse return null;
+        const region_end = readU32(data, &offset) orelse return null;
+        if (region_start > region_end) return null;
+        if (!inline_expect) {
+            if (root_index >= test_roots.len) return null;
+            if (order != test_roots[root_index].order) return null;
+            root_index += 1;
+        }
 
         const result_tag = readU8(data, &offset) orelse return null;
         const result: CliTestResult = switch (result_tag) {
@@ -11112,6 +11237,7 @@ fn loadCachedCliTestResults(
             2 => return null,
             else => return null,
         };
+        if (inline_expect and (result == .failed) != (inline_failed != 0)) return null;
         const transcript = (try loadCliTestTranscriptEvents(ctx.gpa, data, &offset)) orelse return null;
         var transcript_owned_by_result = false;
         defer {
@@ -11120,7 +11246,8 @@ fn loadCachedCliTestResults(
 
         const has_message = readU8(data, &offset) orelse return null;
 
-        const region = testRootRegion(module.semantic.env, root);
+        const region = base.Region.from_raw_offsets(region_start, region_end);
+        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1]))) return null;
 
         var visibility: CliTestFailureDetailVisibility = .always;
         const message = if (has_message == 0) null else blk: {
@@ -11143,12 +11270,18 @@ fn loadCachedCliTestResults(
             .result = result,
             .order = order,
             .region = region,
+            .inline_expect = inline_expect,
+            .inline_passed = inline_passed,
+            .inline_failed = inline_failed,
+            .source_env = source_env,
+            .source_path = source_path,
             .transcript = transcript,
             .failure_detail = message,
             .failure_detail_visibility = visibility,
         });
         transcript_owned_by_result = true;
     }
+    if (root_index != test_roots.len) return null;
     if (offset != data.len) return null;
 
     var summary = summarizeTestResults(results.items);
@@ -11391,7 +11524,6 @@ fn collectExpectBindingPatterns(
                 try stack.append(allocator, binop.rhs);
             },
             .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
-            .e_unary_not => |unary| try stack.append(allocator, unary.expr),
             .e_field_access => |field| try stack.append(allocator, field.receiver),
             .e_method_call => |call| {
                 try stack.append(allocator, call.receiver);
@@ -11637,10 +11769,10 @@ fn inlineExpectModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineExpe
 
 /// Which checked root definitions become LIR roots for a backend.
 const CheckedLirRoots = union(enum) {
-    /// Provided exports plus platform-required bindings: LIR consumed by host
+    /// Provided exports: LIR consumed by host
     /// shims and interpreters (run, embedded builds, hot reload, glue).
     platform_entrypoints: PlatformEntrypointArtifact,
-    /// Provided exports plus platform-required bindings, with static data
+    /// Provided exports, with static data
     /// exports materialized: LIR for linked outputs (native/LLVM builds).
     linked_output,
     /// Pre-selected expect/test roots with their plan metadata (roc test).
@@ -12079,6 +12211,7 @@ fn runInterpreterTestRoots(
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
+    source_modules: *const CliTestSourceModuleMap,
 ) Allocator.Error!void {
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var host_env = CliInterpreterTestHostEnv.init(ctx.gpa, ctx.io.std_io);
@@ -12095,6 +12228,24 @@ fn runInterpreterTestRoots(
         .preserve,
     );
     defer interpreter.deinit();
+
+    const expect_counts = try ctx.gpa.alloc(eval.Inspected.ExpectCounts, lowered.lir_result.expect_sites.items.len);
+    defer ctx.gpa.free(expect_counts);
+    @memset(expect_counts, .{});
+    const ExpectObserver = struct {
+        fn observe(context: *anyopaque, site: lir.LIR.ExpectSiteId, passed: bool) void {
+            const counts: [*]eval.Inspected.ExpectCounts = @ptrCast(@alignCast(context));
+            if (passed) {
+                counts[@intFromEnum(site)].passed +|= 1;
+            } else {
+                counts[@intFromEnum(site)].failed +|= 1;
+            }
+        }
+    };
+    if (expect_counts.len != 0) interpreter.setExpectObserver(.{
+        .context = expect_counts.ptr,
+        .observe = &ExpectObserver.observe,
+    });
 
     for (root_runs) |run| {
         host_env.resetObservation();
@@ -12178,6 +12329,67 @@ fn runInterpreterTestRoots(
                 detail.visibility,
             );
         }
+    }
+
+    try appendInlineExpectResults(ctx, &lowered.lir_result.store, lowered.lir_result.expect_sites.items, expect_counts, results, summary, source_modules);
+}
+
+fn appendInlineExpectResults(
+    ctx: *CliCtx,
+    store: *const lir.LirStore,
+    sites: []const lir.LIR.ExpectSite,
+    counts: []const eval.Inspected.ExpectCounts,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!void {
+    std.debug.assert(sites.len == counts.len);
+    var observed = std.ArrayList(u32).empty;
+    defer observed.deinit(ctx.gpa);
+    for (counts, 0..) |count, site_index| {
+        if (count.passed +| count.failed != 0) try observed.append(ctx.gpa, @intCast(site_index));
+    }
+    const SortContext = struct {
+        sites: []const lir.LIR.ExpectSite,
+
+        fn lessThan(sort: @This(), lhs: u32, rhs: u32) bool {
+            const a = sort.sites[lhs];
+            const b = sort.sites[rhs];
+            if (a.loc.file != b.loc.file) return a.loc.file < b.loc.file;
+            if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
+            return a.region.end.offset < b.region.end.offset;
+        }
+    };
+    std.mem.sort(u32, observed.items, SortContext{ .sites = sites }, SortContext.lessThan);
+
+    for (observed.items, 0..) |site_index, observed_index| {
+        const site = sites[site_index];
+        const count = counts[site_index];
+        const result: CliTestResult = if (count.failed == 0) .passed else .failed;
+        var source_env: ?*const ModuleEnv = null;
+        var source_path: ?[]const u8 = null;
+        if (!site.loc.hasLocation()) std.debug.panic("test expect site has no source location", .{});
+        const qualified_name = store.sourceFileQualifiedName(site.loc.file);
+        if (source_modules.get(qualified_name)) |source_module| {
+            source_env = source_module.semantic.env;
+            source_path = source_module.path;
+        }
+        if (source_env == null) {
+            std.debug.panic("test expect source module {s} was absent from the checked module plan", .{qualified_name});
+        }
+        try results.append(ctx.gpa, .{
+            .result = result,
+            .order = std.math.maxInt(u32) - @as(u32, @intCast(observed.items.len - observed_index)),
+            .region = site.region,
+            .inline_expect = true,
+            .inline_passed = count.passed,
+            .inline_failed = count.failed,
+            .source_env = source_env,
+            .source_path = source_path,
+            .failure_detail = null,
+            .failure_detail_visibility = .always,
+        });
+        addCliTestResultToSummary(summary, result);
     }
 }
 
@@ -12286,6 +12498,7 @@ fn runCompiledTestRoots(
     summary: *CliTestRunSummary,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     max_workers: ?usize,
+    source_modules: *const CliTestSourceModuleMap,
 ) Allocator.Error!void {
     var bool_roots = try ctx.gpa.alloc(eval.Inspected.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
@@ -12299,8 +12512,8 @@ fn runCompiledTestRoots(
         };
     }
 
-    const eval_results = switch (mode) {
-        .dev => eval.Inspected.devEvalBoolRootsWithTimingAndMaxWorkers(
+    var eval_batch = switch (mode) {
+        .dev => eval.Inspected.devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
@@ -12308,21 +12521,24 @@ fn runCompiledTestRoots(
             bool_roots,
             dev_timing,
             max_workers,
+            lowered.lir_result.expect_sites.items.len,
         ),
-        .llvm_size => eval.Inspected.llvmEvalBoolRoots(
+        .llvm_size => eval.Inspected.llvmEvalBoolRootsWithExpectSites(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
+            lowered.lir_result.expect_sites.items.len,
             .size,
         ),
-        .llvm_speed => eval.Inspected.llvmEvalBoolRoots(
+        .llvm_speed => eval.Inspected.llvmEvalBoolRootsWithExpectSites(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
+            lowered.lir_result.expect_sites.items.len,
             .speed,
         ),
         .interpreter => unreachable,
@@ -12432,11 +12648,12 @@ fn runCompiledTestRoots(
             return;
         },
     };
-    defer eval.Inspected.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+    defer eval_batch.deinit(ctx.gpa);
 
-    for (root_runs, eval_results) |run, eval_result| {
+    for (root_runs, eval_batch.results) |run, eval_result| {
         try appendEvalResultForRun(ctx, run, eval_result, results, summary);
     }
+    try appendInlineExpectResults(ctx, &lowered.lir_result.store, lowered.lir_result.expect_sites.items, eval_batch.expect_counts, results, summary, source_modules);
 }
 
 fn lowerPlannedTestModule(
@@ -12514,6 +12731,7 @@ fn runCheckedArtifactTests(
     timing: ?*lir.CheckedPipeline.Timing,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     max_workers: ?usize,
+    source_modules: *const CliTestSourceModuleMap,
 ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
@@ -12529,8 +12747,8 @@ fn runCheckedArtifactTests(
     var summary = CliTestRunSummary{};
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
-        .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
-        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers),
+        .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, source_modules),
+        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers, source_modules),
         .llvm_size, .llvm_speed => unreachable,
     }
     summary.modules_with_tests = 1;
@@ -12565,6 +12783,7 @@ fn runLlvmLoweredTestModulesOnce(
     summaries: []CliTestRunSummary,
     max_workers: ?usize,
     live_output: ?*CliOptimizedLiveTestOutput,
+    source_modules: *const CliTestSourceModuleMap,
 ) ReportRenderError!void {
     if (lowered_modules.len == 0) return;
 
@@ -12599,6 +12818,7 @@ fn runLlvmLoweredTestModulesOnce(
             .layouts = &lowered_module.lowered.lir_result.layouts,
             .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered_module.lowered.lir_result),
             .roots = bool_roots,
+            .expect_site_count = lowered_module.lowered.lir_result.expect_sites.items.len,
         });
     }
 
@@ -12617,7 +12837,7 @@ fn runLlvmLoweredTestModulesOnce(
     }
     defer if (live_output) |live| live.clearRuns();
 
-    const eval_results = eval.Inspected.llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
+    var eval_batch = eval.Inspected.llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
         ctx.gpa,
         bool_modules.items,
         switch (mode) {
@@ -12758,10 +12978,11 @@ fn runLlvmLoweredTestModulesOnce(
             return;
         },
     };
-    defer eval.Inspected.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+    defer eval_batch.deinit(ctx.gpa);
     if (live_output) |live| try live.checkError();
 
     var eval_index: usize = 0;
+    var expect_site_base: usize = 0;
     for (lowered_modules) |*lowered_module| {
         var results = std.ArrayList(CliTestResultItem).empty;
         errdefer {
@@ -12773,12 +12994,23 @@ fn runLlvmLoweredTestModulesOnce(
             try appendEvalResultForRun(
                 ctx,
                 run,
-                eval_results[eval_index],
+                eval_batch.results[eval_index],
                 &results,
                 &summaries[lowered_module.planned_index],
             );
             eval_index += 1;
         }
+        const sites = lowered_module.lowered.lir_result.expect_sites.items;
+        try appendInlineExpectResults(
+            ctx,
+            &lowered_module.lowered.lir_result.store,
+            sites,
+            eval_batch.expect_counts[expect_site_base..][0..sites.len],
+            &results,
+            &summaries[lowered_module.planned_index],
+            source_modules,
+        );
+        expect_site_base += sites.len;
         summaries[lowered_module.planned_index].modules_with_tests = 1;
         fresh_results[lowered_module.planned_index] = try results.toOwnedSlice(ctx.gpa);
     }
@@ -12802,6 +13034,63 @@ fn appendPlannedModuleResult(
     results_owned_by_module = true;
 }
 
+const InlineExpectResultKey = struct {
+    env: *const ModuleEnv,
+    region_start: u32,
+    region_end: u32,
+};
+
+/// Combine executions of the same source `expect` reached through distinct
+/// planned root modules. Each module's uncombined counts remain independently
+/// cacheable; this pass only changes the complete command's result view.
+fn coalesceInlineExpectResults(
+    allocator: Allocator,
+    module_results: []CliModuleTestResult,
+    total: *CliTestRunSummary,
+) Allocator.Error!void {
+    var first_results = std.AutoHashMapUnmanaged(InlineExpectResultKey, *CliTestResultItem){};
+    defer first_results.deinit(allocator);
+
+    for (module_results) |module_result| {
+        for (@constCast(module_result.results)) |*result| {
+            if (!result.inline_expect) continue;
+            const source_env = result.source_env orelse {
+                std.debug.panic("inline test result has no declaring module", .{});
+            };
+            const key: InlineExpectResultKey = .{
+                .env = source_env,
+                .region_start = result.region.start.offset,
+                .region_end = result.region.end.offset,
+            };
+            const entry = try first_results.getOrPut(allocator, key);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = result;
+                continue;
+            }
+
+            const first = entry.value_ptr.*;
+            first.inline_passed +|= result.inline_passed;
+            first.inline_failed +|= result.inline_failed;
+            first.result = if (first.inline_failed == 0) .passed else .failed;
+            result.inline_suppressed = true;
+        }
+    }
+
+    total.passed = 0;
+    total.failed = 0;
+    total.compiler_errors = 0;
+    for (module_results) |module_result| {
+        for (module_result.results) |result| {
+            if (result.inline_suppressed) continue;
+            switch (result.result) {
+                .passed => total.passed += 1,
+                .failed => total.failed += 1,
+                .compiler_error => total.compiler_errors += 1,
+            }
+        }
+    }
+}
+
 fn runOptimizedTestPlan(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -12814,6 +13103,7 @@ fn runOptimizedTestPlan(
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
     timing: ?*lir.CheckedPipeline.Timing,
+    source_modules: *const CliTestSourceModuleMap,
 ) (ReportRenderError || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
@@ -12845,13 +13135,16 @@ fn runOptimizedTestPlan(
         if (planned.cached_results != null) {
             summaries[planned_index] = planned.cached_summary;
             if (live_output) |live| {
-                for (planned.cached_results.?, 0..) |result, root_index| {
+                var root_index: u32 = 0;
+                for (planned.cached_results.?) |result| {
+                    if (result.inline_expect) continue;
                     live.publishCopiedEntry(
-                        @intCast(planned.first_entry_index + @as(u32, @intCast(root_index))),
+                        @intCast(planned.first_entry_index + root_index),
                         planned.module.semantic.env,
                         planned.module.path,
                         result,
                     );
+                    root_index += 1;
                 }
                 try live.checkError();
             }
@@ -12864,7 +13157,7 @@ fn runOptimizedTestPlan(
         );
     }
 
-    try runLlvmLoweredTestModulesOnce(ctx, mode, lowered_modules.items, fresh_results, summaries, max_workers, live_output);
+    try runLlvmLoweredTestModulesOnce(ctx, mode, lowered_modules.items, fresh_results, summaries, max_workers, live_output, source_modules);
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
@@ -14099,6 +14392,16 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     }
     const modules = try build_env.getCompiledModules(ctx.gpa);
     defer ctx.gpa.free(modules);
+    var source_modules = CliTestSourceModuleMap{};
+    defer source_modules.deinit(ctx.gpa);
+    for (modules) |module| {
+        const qualified_name = module.semantic.env.qualifiedModuleName();
+        const entry = try source_modules.getOrPut(ctx.gpa, qualified_name);
+        if (entry.found_existing) {
+            std.debug.panic("compiled module plan contains duplicate source module {s}", .{qualified_name});
+        }
+        entry.value_ptr.* = module;
+    }
 
     finishFrontEndPhase(&reporter, build_env.getTimingInfo());
 
@@ -14125,6 +14428,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             planned.artifact,
             specialization_strategy,
             planned.module,
+            &source_modules,
             planned.test_roots,
         )) |cached| {
             planned.cached_results = cached.results;
@@ -14217,6 +14521,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             &total,
             if (live_output) |*output| output else null,
             &spec_timing,
+            &source_modules,
         ),
         .interpreter, .dev => {
             for (test_plan.modules) |*planned| {
@@ -14236,6 +14541,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     &spec_timing,
                     &dev_timing,
                     args.max_threads,
+                    &source_modules,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;
@@ -14245,6 +14551,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             }
         },
     }
+    try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
     reporter.end();
     recordPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
@@ -14264,6 +14571,15 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
 
     if (!use_live_optimized_output) {
         try renderTestResultBodies(
+            ctx.gpa,
+            &stdout_body.writer,
+            &stderr_body.writer,
+            module_results.items,
+            args.verbose,
+            report_config,
+        );
+    } else {
+        try renderInlineTestResultBodies(
             ctx.gpa,
             &stdout_body.writer,
             &stderr_body.writer,
@@ -14987,37 +15303,51 @@ fn renderCliTestResultEntry(
         );
     }
     try renderCliTestTranscriptEvents(stdout_body, stderr_body, entry.result.transcript[transcript_events_already_rendered..]);
+    const source_env = entry.result.source_env orelse entry.env;
+    const source_path = entry.result.source_path orelse entry.path;
+    var inline_detail: ?[]u8 = null;
+    defer if (inline_detail) |detail| allocator.free(detail);
+    if (entry.result.inline_expect and entry.result.result == .failed) {
+        const total = entry.result.inline_passed +| entry.result.inline_failed;
+        if (total > 1) {
+            inline_detail = try std.fmt.allocPrint(
+                allocator,
+                "This test ran {d} times: {d} passed, {d} failed",
+                .{ total, entry.result.inline_passed, entry.result.inline_failed },
+            );
+        }
+    }
     switch (entry.result.result) {
         .passed => {
             if (!verbose) return;
-            const region_info = entry.env.calcRegionInfo(entry.result.region);
+            const region_info = source_env.calcRegionInfo(entry.result.region);
             const green = if (report_config.shouldUseColors()) ansi_term.green else "";
             const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-            try stdout_body.print("{s}PASS{s}: {s}:{}\n", .{ green, reset, entry.path, region_info.start_line_idx + 1 });
+            try stdout_body.print("{s}PASS{s}: {s}:{}\n", .{ green, reset, source_path, region_info.start_line_idx + 1 });
         },
         .failed => {
-            const region_info = entry.env.calcRegionInfo(entry.result.region);
+            const region_info = source_env.calcRegionInfo(entry.result.region);
             try printTestProblem(
                 allocator,
                 stderr_body,
-                entry.path,
-                entry.env,
+                source_path,
+                source_env,
                 region_info,
                 "Fail",
                 .runtime_error,
-                entry.result.failure_detail,
+                inline_detail orelse entry.result.failure_detail,
                 entry.result.failure_detail_visibility,
                 verbose,
                 report_config,
             );
         },
         .compiler_error => {
-            const region_info = entry.env.calcRegionInfo(entry.result.region);
+            const region_info = source_env.calcRegionInfo(entry.result.region);
             try printTestProblem(
                 allocator,
                 stderr_body,
-                entry.path,
-                entry.env,
+                source_path,
+                source_env,
                 region_info,
                 "Compiler Error",
                 .warning,
@@ -15046,7 +15376,9 @@ fn renderTestResultBodies(
     // stderr. This matches the pre-refactor layout.
     var entry_count: usize = 0;
     for (module_results) |module_result| {
-        entry_count += module_result.results.len;
+        for (module_result.results) |result| {
+            if (!result.inline_suppressed) entry_count += 1;
+        }
     }
 
     var coordinator = try CliTestTranscriptCoordinator.init(
@@ -15063,12 +15395,37 @@ fn renderTestResultBodies(
     var result_index: usize = 0;
     for (module_results) |module_result| {
         for (module_result.results) |*result| {
+            if (result.inline_suppressed) continue;
             try coordinator.publishFinished(result_index, .{
                 .env = module_result.env,
                 .path = module_result.path,
                 .result = result,
             });
             result_index += 1;
+        }
+    }
+}
+
+fn renderInlineTestResultBodies(
+    allocator: Allocator,
+    stdout_body: *std.Io.Writer,
+    stderr_body: *std.Io.Writer,
+    module_results: []const CliModuleTestResult,
+    verbose: bool,
+    report_config: reporting.ReportingConfig,
+) ReportRenderError!void {
+    for (module_results) |module_result| {
+        for (module_result.results) |*result| {
+            if (!result.inline_expect or result.inline_suppressed) continue;
+            try renderCliTestResultEntry(
+                allocator,
+                stdout_body,
+                stderr_body,
+                .{ .env = module_result.env, .path = module_result.path, .result = result },
+                verbose,
+                report_config,
+                0,
+            );
         }
     }
 }
@@ -15663,7 +16020,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15689,10 +16046,12 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]
         .{ .name = "Nominal backing instances scanned", .count = graph.nominal_backing_instances_scanned },
         .{ .name = "Nominal backing tombstone deletions", .count = graph.nominal_backing_tombstone_deletions },
         .{ .name = "Union-find resolutions", .count = graph.union_find_resolutions },
+        .{ .name = "Argument class snapshot nodes", .count = graph.argument_class_members_snapshotted },
+        .{ .name = "Structural backing visited slots", .count = graph.structural_backing_scan_slots },
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -15715,6 +16074,8 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]p
         .{ .name = "Nested callable checks", .count = body.nested_callable_checks },
         .{ .name = "Nested lambdas prepared", .count = body.nested_lambdas_prepared },
         .{ .name = "Nested closures prepared", .count = body.nested_closures_prepared },
+        .{ .name = "Nested lookup probes", .count = body.nested_lookup_probes },
+        .{ .name = "Draft commit lookup steps", .count = body.draft_commit_lookup_steps },
     };
 }
 

@@ -764,9 +764,6 @@ const FindTagAtOffsetContext = struct {
             .e_unary_minus => |u| {
                 ctx.walkExpr(u.expr, null, null);
             },
-            .e_unary_not => |u| {
-                ctx.walkExpr(u.expr, null, null);
-            },
             .e_field_access => |fa| {
                 ctx.walkExpr(fa.receiver, null, null);
             },
@@ -1506,7 +1503,6 @@ pub fn resolveSymbolAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.I
             .e_lambda,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_method_call,
             .e_dispatch_call,

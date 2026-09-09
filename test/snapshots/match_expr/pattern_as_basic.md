@@ -12,14 +12,23 @@ match (1, 2) {
 # EXPECTED
 UNCONDITIONAL CONDITION - pattern_as_basic.md:1:7:1:13
 # PROBLEMS
-── ● unconditional condition ─────────────────────────── pattern_as_basic.md:1:7
-
-This match value is known at compile time, so this match will always inspect
-the same value.
-
-match (1, 2) {
-      ^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 1 7) (end 1 13))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "match value")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this match will always inspect the same value."))
+		(document
+			(source-region (file "pattern_as_basic.md") (start 1 7) (end 1 13) (annotation warning) (line-text "match (1, 2) {")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,Int,Comma,Int,CloseRound,OpenCurly,

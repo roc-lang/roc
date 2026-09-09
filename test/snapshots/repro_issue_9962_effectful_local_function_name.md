@@ -18,24 +18,39 @@ main! = |_| {
 EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:1:1:1:9
 EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:4:5:4:10
 # PROBLEMS
-── ● effectful function name ─ repro_issue_9962_effectful_local_function_name.md:1:1
-
-This function performs an effect, so its name must end in `!`.
-
-topThunk = || echo!("top")
-^^^^^^^^
-
-Add a trailing ! to this function name.
-
-── ● effectful function name ─ repro_issue_9962_effectful_local_function_name.md:4:5
-
-This function performs an effect, so its name must end in `!`.
-
-thunk = || echo!("local")
-^^^^^
-
-Add a trailing ! to this function name.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Effectful Function Name")
+		(region (start 1 1) (end 1 9))
+		(headline
+			(reflow "This function performs an effect, so its name must end in `!`."))
+		(document
+			(source-region (file "repro_issue_9962_effectful_local_function_name.md") (start 1 1) (end 1 9) (annotation warning) (line-text "topThunk = || echo!(\"top\")"))
+			(line-break)
+			(line-break)
+			(reflow "Add a trailing")
+			(reflow " ")
+			(annotated code "!")
+			(reflow " ")
+			(reflow "to this function name.")))
+	(report
+		(severity warning)
+		(title "Effectful Function Name")
+		(region (start 4 5) (end 4 10))
+		(headline
+			(reflow "This function performs an effect, so its name must end in `!`."))
+		(document
+			(source-region (file "repro_issue_9962_effectful_local_function_name.md") (start 4 5) (end 4 10) (annotation warning) (line-text "    thunk = || echo!(\"local\")"))
+			(line-break)
+			(line-break)
+			(reflow "Add a trailing")
+			(reflow " ")
+			(annotated code "!")
+			(reflow " ")
+			(reflow "to this function name."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,

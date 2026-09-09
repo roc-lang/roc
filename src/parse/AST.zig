@@ -413,7 +413,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     const ctx = ParseReportContext.init(self, env, diagnostic, allocator, filename);
 
     return switch (diagnostic.tag) {
-        .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
+        .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app or package header, and it names more than one platform.", "An app or package can use at most one `platform` entry. Keep the platform entry you want, and make every other dependency a normal package string.", .{ .example = "package [Api] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
         .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
@@ -423,7 +423,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_exposes_open_square => reportParseProblem(ctx, "Expected Opening Bracket", "I was parsing an `exposes` section, and I expected an opening `[`.", "The exposed names must be written inside square brackets.", .{ .example = "exposes [main]" }),
         .expected_package_or_platform_name => reportParseProblem(ctx, "Expected Dependency Name", "I was parsing an app dependency record, and I expected a lowercase field name.", "Each package or platform entry starts with a lowercase field name, followed by `:` and a string path or `platform` path.", .{ .example = "pf: platform \"../platform/main.roc\"" }),
         .expected_package_or_platform_colon => reportParseProblem(ctx, "Expected Dependency Colon", "I was parsing an app dependency entry, and I expected `:` after the field name.", "A dependency entry uses a colon between the local package name and the package path.", .{ .example = "json: \"../json/main.roc\"" }),
-        .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing an app dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
+        .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing an app or package dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
         .expected_package_platform_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing an app or package dependency record, and I expected a closing `}`.", "Dependency records must be closed with `}` after the final entry.", .{ .example = "{ pf: platform \"../platform/main.roc\" }" }),
         .expected_app_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing an app header, and I expected an opening `{` for dependencies.", "App headers write the platform and package dependencies in a record after the provided names list.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\" }" }),
         .expected_packages => reportParseProblem(ctx, "Expected Packages", "I was parsing a platform header, and I expected the `packages` section.", "A platform header must include a packages record that names package dependencies.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
@@ -524,6 +524,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
+        .where_alias_expected_colon => reportParseProblem(ctx, "Expected Where Alias Colon", "I was parsing a where alias declaration, and I expected `:` after its name.", "A where alias separates its name from its `where` clause with a colon.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
         .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
         .deprecated_number_suffix => reportDeprecatedNumberSuffix(ctx),
         .expected_targets_colon => reportParseProblem(ctx, "Expected Targets Colon", "I was parsing a `targets` section, and I expected `:` after `targets`.", "The targets section starts with `targets:` followed by a configuration record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
@@ -663,6 +664,7 @@ pub const Diagnostic = struct {
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
         where_alias_cannot_have_associated,
+        where_alias_expected_colon,
         where_alias_expected_where,
         deprecated_number_suffix,
 
@@ -1357,6 +1359,7 @@ pub const Pattern = union(enum) {
     },
     single_quote: struct {
         token: Token.Idx,
+        type_ident: ?base.Ident.Idx = null,
         region: TokenizedRegion,
     },
     record: struct {
@@ -1515,6 +1518,9 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, sq.region);
                 try tree.pushStringPair("raw", ast.resolve(sq.token));
+                if (sq.type_ident) |type_ident| {
+                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -1694,6 +1700,24 @@ pub const BinOp = struct {
     }
 };
 
+/// Records the syntactic interpretation of a pipe target. This distinction is
+/// intentionally made by the parser: canonicalization must not infer pipe
+/// semantics from the shape of the right-hand expression.
+pub const PipeTargetKind = enum {
+    ordinary,
+    method_call,
+};
+
+/// A pipe expression and the parser's final syntactic interpretation of its
+/// target.
+pub const ArrowCall = struct {
+    left: Expr.Idx,
+    right: Expr.Idx,
+    operator: Token.Idx,
+    region: TokenizedRegion,
+    target_kind: PipeTargetKind = .ordinary,
+};
+
 /// Whether a record-field access segment requires the field to be present or
 /// queries a runtime-optional field.
 pub const FieldAccessMode = enum(u8) {
@@ -1811,6 +1835,10 @@ pub const Header = union(enum) {
     },
     package: struct {
         exposes: Collection.Idx,
+        /// The `pf: platform "..."` entry of `packages`, or null when the
+        /// package does not directly depend on a platform. The entry remains
+        /// in `packages` so formatting and comments preserve source order.
+        platform_idx: ?RecordField.Idx,
         packages: Collection.Idx,
         /// The optional `roc: "<version>"` entry of `packages`, which still
         /// appears in `packages` too.
@@ -2704,9 +2732,7 @@ pub const WhereClause = union(enum) {
     mod_method: struct {
         var_tok: Token.Idx,
         name_tok: Token.Idx,
-        args: Collection.Idx,
-        ret_anno: TypeAnno.Idx,
-        effectful: bool,
+        anno: TypeAnno.Idx,
         region: TokenizedRegion,
     },
 
@@ -2751,19 +2777,8 @@ pub const WhereClause = union(enum) {
                 // remove preceding dot
                 const method_name = ast.resolve(m.name_tok)[1..];
                 try tree.pushStringPair("name", method_name);
-                if (m.effectful) try tree.pushBoolPair("effectful", true);
                 const attrs = tree.beginNode();
-
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
-                const attrs2 = tree.beginNode();
-                const args = ast.store.typeAnnoSlice(.{ .span = ast.store.getCollection(m.args).span });
-                for (args) |arg| {
-                    try ast.store.getTypeAnno(arg).pushToSExprTree(gpa, env, ast, tree);
-                }
-                try tree.endNode(args_begin, attrs2);
-
-                try ast.store.getTypeAnno(m.ret_anno).pushToSExprTree(gpa, env, ast, tree);
+                try ast.store.getTypeAnno(m.anno).pushToSExprTree(gpa, env, ast, tree);
 
                 try tree.endNode(begin, attrs);
             },
@@ -2832,6 +2847,7 @@ pub const Expr = union(enum) {
     },
     single_quote: struct {
         token: Token.Idx,
+        type_ident: ?base.Ident.Idx = null,
         region: TokenizedRegion,
     },
     string_part: struct { // TODO: this should be more properly represented in its own union enum
@@ -2889,7 +2905,7 @@ pub const Expr = union(enum) {
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },
-    arrow_call: BinOp,
+    arrow_call: ArrowCall,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,
@@ -3074,6 +3090,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
+                if (a.type_ident) |type_ident| {
+                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

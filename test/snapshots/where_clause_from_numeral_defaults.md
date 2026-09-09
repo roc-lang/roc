@@ -68,27 +68,27 @@ EndOfFile,
 				(ty-var (raw "b")))
 			(where
 				(method (mod-of "a") (name "iter")
-					(args
-						(ty-var (raw "a")))
-					(ty-apply
-						(ty (name "Iter"))
-						(ty-var (raw "item"))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-apply
+							(ty (name "Iter"))
+							(ty-var (raw "item")))))
 				(method (mod-of "b") (name "from_numeral")
-					(args
-						(ty (name "Numeral")))
-					(ty-apply
-						(ty (name "Try"))
-						(ty-var (raw "b"))
-						(ty-tag-union
-							(tags
-								(ty-apply
-									(ty (name "InvalidNumeral"))
-									(ty (name "Str")))))))
+					(ty-fn
+						(ty (name "Numeral"))
+						(ty-apply
+							(ty (name "Try"))
+							(ty-var (raw "b"))
+							(ty-tag-union
+								(tags
+									(ty-apply
+										(ty (name "InvalidNumeral"))
+										(ty (name "Str"))))))))
 				(method (mod-of "b") (name "plus")
-					(args
+					(ty-fn
 						(ty-var (raw "b"))
-						(ty-var (raw "item")))
-					(ty-var (raw "b")))))
+						(ty-var (raw "item"))
+						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "sum"))
 			(e-lambda
@@ -166,7 +166,7 @@ main! = |_| {}
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$s"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 347)
+							(e-dispatch-call (method "plus") (constraint-fn-var 344)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$s"))))
@@ -182,29 +182,29 @@ main! = |_| {}
 				(ty-rigid-var (name "b")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "iter")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-apply (name "Iter") (builtin)
-						(ty-rigid-var (name "item"))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-apply (name "Iter") (builtin)
+							(ty-rigid-var (name "item")))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "from_numeral")
-					(args
-						(ty-lookup (name "Numeral") (builtin)))
-					(ty-apply (name "Try") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-						(ty-tag-union
-							(ty-tag-name (name "InvalidNumeral")
-								(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-lookup (name "Numeral") (builtin))
+						(ty-apply (name "Try") (builtin)
+							(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+							(ty-tag-union
+								(ty-tag-name (name "InvalidNumeral")
+									(ty-lookup (name "Str") (builtin)))))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "plus")
-					(args
+					(ty-fn (effectful false)
 						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "item"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
+						(ty-rigid-var-lookup (ty-rigid-var (name "item")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
 		(p-assign (ident "total"))
-		(e-call (constraint-fn-var 383)
+		(e-call (constraint-fn-var 380)
 			(e-lookup-local
 				(p-assign (ident "sum")))
-			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 381)
+			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 378)
 				(receiver
 					(e-num (value "1")))
 				(args

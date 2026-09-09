@@ -26,23 +26,47 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - binops.md:16:5:16:5
 # PROBLEMS
-── ✗ type mismatch ────────────────────────────────────────────── binops.md:16:5
-
-The first pattern in this match is incompatible.
-
-None ?? 0,
-^^^^^^^^^
-
-The first pattern is trying to match:
-
-    Try(ok, err)
-
-But the expression between the match parenthesis has the type:
-
-    [None, ..]
-
-These can never match! Either the pattern or expression has a problem.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 16 5) (end 16 14))
+		(headline
+			(reflow "The first pattern in this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "is incompatible."))
+		(document
+			(source-underlines
+				(display (file "binops.md") (start 16 5) (end 16 14) (annotation dim) (line-text "    None ?? 0,"))
+				(underline (start 16 5) (end 16 14) (annotation error)))
+			(line-break)
+			(reflow "The first pattern is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try(ok, err)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[None, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem."))))
+~~~
 # TOKENS
 ~~~zig
 OpenRound,

@@ -11,24 +11,32 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 MOD NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 # PROBLEMS
-── ✗ mod not found ───────────── package_header_nonempty_singleline_1.md:1:21
-
-The mod SomeType was not found in this Roc project.
-
-package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
-                    ^^^^^^^^
-
-── ✗ exposed but not defined ────── package_header_nonempty_singleline_1.md:1:10
-
-The mod header says that something is exposed, but it is not defined
-anywhere in this mod.
-
-package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
-         ^^^^^^^^^
-
-You can fix this by either defining something in this mod, or by removing it
-from the list of exposed values.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 21) (end 1 29))
+		(headline
+			(text "The mod ")
+			(annotated code "SomeType")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "package_header_nonempty_singleline_1.md") (start 1 21) (end 1 29) (annotation error) (line-text "package [something, SomeType] { somePkg: \"../main.roc\", other: \"../../other/main.roc\" }"))))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 1 10) (end 1 19))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "something")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "package_header_nonempty_singleline_1.md") (start 1 10) (end 1 19) (annotation error) (line-text "package [something, SomeType] { somePkg: \"../main.roc\", other: \"../../other/main.roc\" }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "something")
+			(reflow " in this mod, or by removing it from the list of exposed values."))))
+~~~
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

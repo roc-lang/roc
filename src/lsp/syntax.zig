@@ -2882,7 +2882,6 @@ pub const SyntaxChecker = struct {
             .e_hosted_lambda,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_method_call,
             .e_dispatch_call,

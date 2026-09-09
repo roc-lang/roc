@@ -189,9 +189,6 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_unary_minus => |u| {
                     self.walkExpr(store, u.expr);
                 },
-                .e_unary_not => |u| {
-                    self.walkExpr(store, u.expr);
-                },
                 .e_field_access => |field_access| {
                     self.walkExpr(store, field_access.receiver);
                     if (self.stopped) return;
@@ -678,11 +675,7 @@ pub fn CirVisitor(comptime Context: type) type {
                     .w_method => |m| {
                         self.walkTypeAnno(store, m.var_);
                         if (self.stopped) return;
-                        for (store.sliceTypeAnnos(m.args)) |arg| {
-                            self.walkTypeAnno(store, arg);
-                            if (self.stopped) return;
-                        }
-                        self.walkTypeAnno(store, m.ret);
+                        self.walkTypeAnno(store, m.anno);
                     },
                     .w_alias => |a| {
                         self.walkTypeAnno(store, a.var_);

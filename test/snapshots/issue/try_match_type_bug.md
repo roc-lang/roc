@@ -16,14 +16,23 @@ get_greeting = |{}| {
 # EXPECTED
 UNCONDITIONAL CONDITION - try_match_type_bug.md:3:11:3:16
 # PROBLEMS
-── ● unconditional condition ──────────────────────── try_match_type_bug.md:3:11
-
-This match value is known at compile time, so this match will always inspect
-the same value.
-
-match 0.U64 {
-      ^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 3 11) (end 3 16))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "match value")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this match will always inspect the same value."))
+		(document
+			(source-region (file "try_match_type_bug.md") (start 3 11) (end 3 16) (annotation warning) (line-text "    match 0.U64 {")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,Underscore,CloseRound,

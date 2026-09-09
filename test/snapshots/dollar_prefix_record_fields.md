@@ -16,26 +16,44 @@ g = |_| "x"
 DOLLAR PREFIX WITHOUT `VAR` - dollar_prefix_record_fields.md:3:8:3:10
 UNUSED VARIABLE - dollar_prefix_record_fields.md:3:8:3:10
 # PROBLEMS
-── ● dollar prefix without `var` ──────────── dollar_prefix_record_fields.md:3:8
-
-The immutable binding $a starts with $ but is not declared with var.
-
-f = |{ $a }| "y"
-       ^^
-
-Either rename this binding and all of its uses to a, or declare it with var if
-it should be mutable.
-
-── ● unused variable ──────────────────────── dollar_prefix_record_fields.md:3:8
-
-Variable $a is defined here and then never used:
-
-f = |{ $a }| "y"
-       ^^
-
-If you don't need this variable, prefix it with an underscore like _$a to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Dollar Prefix Without `var`")
+		(region (start 3 8) (end 3 10))
+		(headline
+			(reflow "The immutable binding ")
+			(annotated symbol-unqualified "$a")
+			(reflow " starts with ")
+			(annotated code "$")
+			(reflow " but is not declared with ")
+			(annotated keyword "var")
+			(reflow "."))
+		(document
+			(reflow "Either rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "a")
+			(reflow ", or declare it with ")
+			(annotated keyword "var")
+			(reflow " if it should be mutable.")
+			(line-break)
+			(line-break)
+			(source-region (file "dollar_prefix_record_fields.md") (start 3 8) (end 3 10) (annotation warning) (line-text "f = |{ $a }| \"y\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 3 8) (end 3 10))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "$a")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_$a")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "dollar_prefix_record_fields.md") (start 3 8) (end 3 10) (annotation error) (line-text "f = |{ $a }| \"y\"")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,Int,CloseCurly,

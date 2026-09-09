@@ -53,9 +53,9 @@ EndOfFile,
 				(ty (name "Str")))
 			(where
 				(method (mod-of "a") (name "describe")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "h"))
 			(e-lambda
@@ -71,9 +71,9 @@ EndOfFile,
 				(ty (name "Str")))
 			(where
 				(method (mod-of "a") (name "describe")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "g"))
 			(e-lambda
@@ -88,9 +88,9 @@ EndOfFile,
 				(ty (name "Str")))
 			(where
 				(method (mod-of "a") (name "describe")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "f"))
 			(e-lambda
@@ -157,7 +157,7 @@ main = f(Named.N("ok"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "describe") (constraint-fn-var 313)
+			(e-dispatch-call (method "describe") (constraint-fn-var 312)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -168,15 +168,15 @@ main = f(Named.N("ok"))
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "describe")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "g"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 328)
+			(e-call (constraint-fn-var 326)
 				(e-lookup-local
 					(p-assign (ident "h")))
 				(e-lookup-local
@@ -187,15 +187,15 @@ main = f(Named.N("ok"))
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "describe")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "f"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 342)
+			(e-call (constraint-fn-var 339)
 				(e-lookup-local
 					(p-assign (ident "g")))
 				(e-lookup-local
@@ -206,9 +206,9 @@ main = f(Named.N("ok"))
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "describe")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "where_clause_forwarding_chain_evidence.Named.describe"))
 		(e-lambda
@@ -223,7 +223,7 @@ main = f(Named.N("ok"))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 380)
+		(e-call (constraint-fn-var 377)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-nominal (nominal "Named")

@@ -711,6 +711,16 @@ pub const SchemeUseRecord = extern struct {
         /// The edge shares the definition's vars, so its record has no copy
         /// pairs but still names the exact scheme root used by checking.
         shared_value_use,
+        /// A fully concrete recursive dispatch reuses an ancestor's selected
+        /// method instance. `slot_data` identifies this constraint, and
+        /// `scheme_root` names the reused instance; no fresh pairs are minted.
+        /// Its requirements are determined by the target's callable paths.
+        recursive_dispatch_target,
+        /// Producer-authored provenance for a reference to a definition in an
+        /// on-stack recursive binding group. This record carries no evidence
+        /// or substitution of its own; an accompanying value/shared use owns
+        /// those facts when the referenced scheme has quantified variables.
+        recursive_reference,
     };
 };
 
@@ -862,10 +872,17 @@ pub const BindingScheme = extern struct {
 /// the complete callable graph and metadata without reconstructing either from
 /// the receiver's final shape.
 pub const BindingSchemeCodecRequirement = extern struct {
+    /// Binding source var, or a synthetic pristine imported scheme var. The
+    /// latter has no CIR node but still owns a complete evidence schema.
     node_idx: u32,
     scheme_root: u32,
     receiver_var: u32,
     constraint_index: u32,
+    /// The checker retired definition-side validation because this relation
+    /// must be instantiated before a concrete codec can be selected.
+    requires_instantiation: u32,
+    /// Persist the producer's classification for checked-environment rechecks.
+    is_synthetic: u32,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -4576,12 +4593,16 @@ pub fn recordBindingSchemeCodecRequirement(
     scheme_root: TypeVar,
     receiver_var: TypeVar,
     constraint_index: u32,
+    requires_instantiation: bool,
+    is_synthetic: bool,
 ) std.mem.Allocator.Error!void {
     const entry = BindingSchemeCodecRequirement{
         .node_idx = @intFromEnum(node_idx),
         .scheme_root = @intFromEnum(scheme_root),
         .receiver_var = @intFromEnum(receiver_var),
         .constraint_index = constraint_index,
+        .requires_instantiation = @intFromBool(requires_instantiation),
+        .is_synthetic = @intFromBool(is_synthetic),
     };
     const entries = self.binding_scheme_codec_requirements.items.items;
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
@@ -4591,6 +4612,7 @@ pub fn recordBindingSchemeCodecRequirement(
             existing.receiver_var == entry.receiver_var and
             existing.constraint_index == entry.constraint_index)
         {
+            std.debug.assert(existing.requires_instantiation == entry.requires_instantiation and existing.is_synthetic == entry.is_synthetic);
             return;
         }
     }
@@ -4656,8 +4678,15 @@ pub fn recordNumeralDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .numeral, target_var, fn_var);
+    try self.store.recordLiteralDispatchPlan(
+        node_idx,
+        .numeral,
+        target_var,
+        fn_var,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+    );
 }
 
 /// Return the checked `from_numeral` function for a numeric expression.
@@ -4681,8 +4710,15 @@ pub fn recordQuoteDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .quote, target_var, fn_var);
+    try self.store.recordLiteralDispatchPlan(
+        node_idx,
+        .quote,
+        target_var,
+        fn_var,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+    );
 }
 
 /// Record a constrained-scheme use for static-dispatch evidence.

@@ -38,16 +38,16 @@ EndOfFile,
 							(ty (name "DecodeErr"))))))
 			(where
 				(method (mod-of "a") (name "decode")
-					(args
+					(ty-fn
 						(ty-apply
 							(ty (name "List"))
-							(ty (name "U8"))))
-					(ty-apply
-						(ty (name "Try"))
-						(ty-var (raw "a"))
-						(ty-tag-union
-							(tags
-								(ty (name "DecodeErr"))))))))
+							(ty (name "U8")))
+						(ty-apply
+							(ty (name "Try"))
+							(ty-var (raw "a"))
+							(ty-tag-union
+								(tags
+									(ty (name "DecodeErr")))))))))
 		(s-decl
 			(p-ident (raw "deserialize"))
 			(e-lambda
@@ -78,13 +78,13 @@ NO CHANGE
 						(ty-tag-name (name "DecodeErr")))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "decode")
-					(args
+					(ty-fn (effectful false)
 						(ty-apply (name "List") (builtin)
-							(ty-lookup (name "U8") (builtin))))
-					(ty-apply (name "Try") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-						(ty-tag-union
-							(ty-tag-name (name "DecodeErr")))))))))
+							(ty-lookup (name "U8") (builtin)))
+						(ty-apply (name "Try") (builtin)
+							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+							(ty-tag-union
+								(ty-tag-name (name "DecodeErr"))))))))))
 ~~~
 # TYPES
 ~~~clojure

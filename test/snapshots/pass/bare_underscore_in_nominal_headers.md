@@ -13,28 +13,29 @@ Opaque(_) :: Str
 UNDERSCORE IN NOMINAL TYPE - bare_underscore_in_nominal_headers.md:1:9:1:10
 UNDERSCORE IN OPAQUE TYPE - bare_underscore_in_nominal_headers.md:3:8:3:9
 # PROBLEMS
-── ✗ underscore in nominal type ────── bare_underscore_in_nominal_headers.md:1:9
-
-A bare underscore is not allowed in nominal type declarations.
-
-Nominal(_) := Str
-        ^
-
-A bare underscore in a type annotation means "I don't care about this type", so
-it does not declare a type parameter. If this parameter is intentionally
-phantom, give it an underscore-prefixed name like `_a` instead.
-
-── ✗ underscore in opaque type ─────── bare_underscore_in_nominal_headers.md:3:8
-
-A bare underscore is not allowed in opaque type declarations.
-
-Opaque(_) :: Str
-       ^
-
-A bare underscore in a type annotation means "I don't care about this type", so
-it does not declare a type parameter. If this parameter is intentionally
-phantom, give it an underscore-prefixed name like `_a` instead.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Underscore In Nominal Type")
+		(region (start 1 9) (end 1 10))
+		(headline
+			(reflow "A bare underscore is not allowed in nominal type declarations."))
+		(document
+			(source-region (file "bare_underscore_in_nominal_headers.md") (start 1 9) (end 1 10) (annotation error) (line-text "Nominal(_) := Str"))
+			(line-break)
+			(reflow "A bare underscore in a type annotation means \"I don't care about this type\", so it does not declare a type parameter. If this parameter is intentionally phantom, give it an underscore-prefixed name like `_a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Opaque Type")
+		(region (start 3 8) (end 3 9))
+		(headline
+			(reflow "A bare underscore is not allowed in opaque type declarations."))
+		(document
+			(source-region (file "bare_underscore_in_nominal_headers.md") (start 3 8) (end 3 9) (annotation error) (line-text "Opaque(_) :: Str"))
+			(line-break)
+			(reflow "A bare underscore in a type annotation means \"I don't care about this type\", so it does not declare a type parameter. If this parameter is intentionally phantom, give it an underscore-prefixed name like `_a` instead."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,OpColonEqual,UpperIdent,

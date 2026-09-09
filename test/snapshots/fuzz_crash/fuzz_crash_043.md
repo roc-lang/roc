@@ -16,85 +16,126 @@ UNEXPECTED STATEMENT - fuzz_crash_043.md:2:5:2:6
 MALFORMED TYPE - fuzz_crash_043.md:2:3:2:4
 DECLARATION HAS NO VALUE - fuzz_crash_043.md:2:1:2:4
 # PROBLEMS
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_043.md:1:20
-
-I was parsing a statement, and this token cannot start a statement here.
-
-app[]{f:platform""}{
-                   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_043.md:2:3
-
-I was parsing a type annotation, and this token cannot start a type here.
-
-o:0}0
-  ^
-
-Types can be type variables, uppercase type names, function types, tuples,
-records, or tag unions.
-
-For example:
-    List(U64)
-
-I found 0 here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_043.md:2:4
-
-I was parsing a statement, and this token cannot start a statement here.
-
-o:0}0
-   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found } here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_043.md:2:5
-
-I was parsing a statement, and this token cannot start a statement here.
-
-o:0}0
-    ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found 0 here.
-
-── ✗ malformed type ────────────────────────────────────── fuzz_crash_043.md:2:3
-
-This type annotation is malformed or contains invalid syntax.
-
-o:0}0
-  ^
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_043.md:2:1
-
-This declaration has a type annotation but no implementation.
-
-o:0}0
-^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 20) (end 1 21))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_043.md") (start 1 20) (end 1 21) (annotation error) (line-text "app[]{f:platform\"\"}{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Type Syntax")
+		(region (start 2 3) (end 2 4))
+		(headline
+			(reflow "I was parsing a type annotation, and this token cannot start a type here."))
+		(document
+			(reflow "Types can be type variables, uppercase type names, function types, tuples, records, or tag unions.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "0")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_043.md") (start 2 3) (end 2 4) (annotation error) (line-text "o:0}0"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 2 4) (end 2 5))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "}")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_043.md") (start 2 4) (end 2 5) (annotation error) (line-text "o:0}0"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 2 5) (end 2 6))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "0")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_043.md") (start 2 5) (end 2 6) (annotation error) (line-text "o:0}0"))))
+	(report
+		(severity runtime_error)
+		(title "Malformed Type")
+		(region (start 2 3) (end 2 4))
+		(headline
+			(reflow "This type annotation is malformed or contains invalid syntax."))
+		(document
+			(source-region (file "fuzz_crash_043.md") (start 2 3) (end 2 4) (annotation error) (line-text "o:0}0"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 2 1) (end 2 4))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_043.md") (start 2 1) (end 2 4) (annotation error) (line-text "o:0}0"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpenCurly,

@@ -65,6 +65,9 @@ pub const SolveError = std.mem.Allocator.Error;
 /// polynomial state domain in scaling tests.
 pub var outcome_solver_iterations: u64 = 0;
 
+/// Debug-only number of scratch entries initialized or scanned by restitution.
+pub var outcome_scratch_entries: u64 = 0;
+
 const no_local: u32 = std.math.maxInt(u32);
 
 /// Presence-bit condition guarding a payload local whose storage may not be
@@ -441,17 +444,18 @@ const DefKind = union(enum) {
     borrow_capable: u32,
 };
 
-/// Compute whether each LIR local's committed representation contains RC state.
+/// Classify committed representations once, in local order. Descriptors select
+/// dynamic RC behavior; their presence does not imply an ownership resource.
+/// Constructors and aliases preserve the RC shape already committed in layouts,
+/// including nested erased boxes, so classification requires no value-flow solve.
+/// Capture views participate here as borrow anchors; emission excludes them in
+/// its separate table. Certification independently classifies the final store.
 pub fn computeLocalContainsRefcounted(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
 ) SolveError![]bool {
     const local_count = store.localCount();
-    if (boxy_rc_descs.len != 0 and boxy_rc_descs.len != local_count) {
-        solveInvariant("ARC Boxy descriptor table did not cover every local");
-    }
     const contains = try allocator.alloc(bool, local_count);
     errdefer allocator.free(contains);
     for (0..local_count) |index| {
@@ -460,62 +464,7 @@ pub fn computeLocalContainsRefcounted(
         contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
     }
 
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_ref) {
-                const assign = stmt.assign_ref;
-                switch (assign.op) {
-                    .local => |source| changed = markLocalRcIfSourceRc(contains, assign.target, source) or changed,
-                    .nominal => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .list_reinterpret => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .field, .tag_payload, .tag_payload_struct, .discriminant => {},
-                }
-            } else if (stmt == .assign_list) {
-                const assign = stmt.assign_list;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed;
-            } else if (stmt == .assign_struct) {
-                const assign = stmt.assign_struct;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed;
-            } else if (stmt == .assign_tag) {
-                const assign = stmt.assign_tag;
-                if (assign.payload) |payload| changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
-                if (assign.target_desc != null) changed = markLocalRc(contains, assign.target) or changed;
-            } else if (stmt == .assign_boxy_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_box.target) or changed;
-            } else if (stmt == .assign_boxy_reuse_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_reuse_box.target) or changed;
-            } else if (stmt == .assign_boxy_tag) {
-                changed = markLocalRc(contains, stmt.assign_boxy_tag.target) or changed;
-            }
-        }
-    }
     return contains;
-}
-
-fn markLocalRc(contains: []bool, local: LIR.LocalId) bool {
-    const index = @intFromEnum(local);
-    if (index >= contains.len or contains[index]) return false;
-    contains[index] = true;
-    return true;
-}
-
-fn markLocalRcIfSourceRc(contains: []bool, target: LIR.LocalId, source: LIR.LocalId) bool {
-    const source_index = @intFromEnum(source);
-    if (source_index >= contains.len or !contains[source_index]) return false;
-    return markLocalRc(contains, target);
-}
-
-fn markLocalRcIfSpanContainsRc(store: *const LirStore, contains: []bool, target: LIR.LocalId, span: LIR.LocalSpan) bool {
-    const locals = store.getLocalSpan(span);
-    for (0..GuardedList.borrowLen(locals)) |span_index| {
-        const local_index = @intFromEnum(GuardedList.at(locals, span_index));
-        if (local_index < contains.len and contains[local_index]) return markLocalRc(contains, target);
-    }
-    return false;
 }
 
 /// Dense module-wide domain of locals that participate in ARC equations.
@@ -1056,7 +1005,7 @@ pub fn solve(
         solution.pinned.deinit(allocator);
     }
 
-    try computeOutcomeRestitution(allocator, store, layouts, rc_local, consume_dead_boxes, &solution);
+    try computeOutcomeRestitution(allocator, store, layouts, rc_local, consume_dead_boxes, &solution, solver.proc_stmts);
 
     return solution;
 }
@@ -1205,18 +1154,24 @@ fn computeOutcomeRestitution(
     rc_local: []const bool,
     consume_dead_boxes: bool,
     solution: *Solution,
+    statements_by_proc: []const std.ArrayList(LIR.CFStmtId),
 ) SolveError!void {
     var all_outcomes = std.ArrayList(arc_sig.Outcome).empty;
     errdefer all_outcomes.deinit(allocator);
 
-    const escape_discriminants = try allocator.alloc(u32, store.cfStmtCount());
-    defer allocator.free(escape_discriminants);
-    const escape_masks = try allocator.alloc(arc_sig.ParamMask, store.cfStmtCount());
-    defer allocator.free(escape_masks);
-    const bit_escape_discriminants = try allocator.alloc(u32, store.cfStmtCount());
-    defer allocator.free(bit_escape_discriminants);
-    const bit_escape_present = try allocator.alloc(bool, store.cfStmtCount());
-    defer allocator.free(bit_escape_present);
+    // Reuse capacity across procedures, but address and initialize only the
+    // active procedure's explicit statement inventory. The structural lift
+    // has already collected it; restitution performs no reachability walk.
+    var statement_indices = collections.DenseMap(LIR.CFStmtId, u32).init(allocator);
+    defer statement_indices.deinit();
+    var discriminant_buffer = std.ArrayList(u32).empty;
+    defer discriminant_buffer.deinit(allocator);
+    var mask_buffer = std.ArrayList(arc_sig.ParamMask).empty;
+    defer mask_buffer.deinit(allocator);
+    var bit_discriminant_buffer = std.ArrayList(u32).empty;
+    defer bit_discriminant_buffer.deinit(allocator);
+    var bit_present_buffer = std.ArrayList(bool).empty;
+    defer bit_present_buffer.deinit(allocator);
     const ambiguous_discriminant = no_local - 1;
 
     for (0..store.procSpecCount()) |proc_index| {
@@ -1226,12 +1181,10 @@ fn computeOutcomeRestitution(
         const body = proc.body orelse continue;
         if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
 
-        var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
-        defer proc_stmts.deinit(allocator);
-        try collectProcStatements(allocator, store, body, &proc_stmts);
+        const proc_stmts = statements_by_proc[proc_index].items;
         var returned_local: ?LIR.LocalId = null;
         var return_shape_valid = true;
-        for (proc_stmts.items) |stmt_id| {
+        for (proc_stmts) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
             if (stmt != .ret) continue;
             const local = stmt.ret.value;
@@ -1249,8 +1202,6 @@ fn computeOutcomeRestitution(
         const ret_index = @intFromEnum(ret_local);
         if (ret_index >= rc_local.len or !rc_local[ret_index]) continue;
 
-        @memset(escape_discriminants, no_local);
-        @memset(escape_masks, 0);
         var initial: arc_sig.ParamMask = 0;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |position| {
@@ -1263,9 +1214,23 @@ fn computeOutcomeRestitution(
         }
         if (initial == 0) continue;
 
+        statement_indices.clearRetainingCapacity();
+        for (proc_stmts, 0..) |stmt, index| try statement_indices.putNoClobber(stmt, @intCast(index));
+        try discriminant_buffer.resize(allocator, proc_stmts.len);
+        try mask_buffer.resize(allocator, proc_stmts.len);
+        try bit_discriminant_buffer.resize(allocator, proc_stmts.len);
+        try bit_present_buffer.resize(allocator, proc_stmts.len);
+        const escape_discriminants = discriminant_buffer.items;
+        const escape_masks = mask_buffer.items;
+        const bit_escape_discriminants = bit_discriminant_buffer.items;
+        const bit_escape_present = bit_present_buffer.items;
+        @memset(escape_discriminants, no_local);
+        @memset(escape_masks, 0);
+        if (@import("builtin").mode == .Debug) outcome_scratch_entries += proc_stmts.len + escape_discriminants.len + escape_masks.len;
+
         var joins = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator);
         defer joins.deinit();
-        for (proc_stmts.items) |stmt_id| {
+        for (proc_stmts) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
             if (stmt != .join) continue;
             const join_point = stmt.join;
@@ -1284,6 +1249,7 @@ fn computeOutcomeRestitution(
             const active_param = GuardedList.at(params, param_position);
             @memset(bit_escape_discriminants, no_local);
             @memset(bit_escape_present, false);
+            if (@import("builtin").mode == .Debug) outcome_scratch_entries += bit_escape_discriminants.len + bit_escape_present.len;
             var bit_accum = std.AutoHashMap(u16, OutcomeBitAccum).init(allocator);
             defer bit_accum.deinit();
             var stack = std.ArrayList(OutcomeWalkState).empty;
@@ -1549,7 +1515,8 @@ fn computeOutcomeRestitution(
                             break;
                         }
                         if (target_stmt == .ret and target_stmt.ret.value == ret_local and next_state.discriminant != no_local) {
-                            const stmt_index = @intFromEnum(current);
+                            const stmt_index = statement_indices.get(current) orelse
+                                solveInvariant("ARC outcome escape was outside its lifted procedure inventory");
                             const old = bit_escape_discriminants[stmt_index];
                             if (old == no_local) {
                                 bit_escape_discriminants[stmt_index] = next_state.discriminant;
@@ -1575,7 +1542,8 @@ fn computeOutcomeRestitution(
                         } else {
                             entry.value_ptr.* = .{ .present_on_all_paths = next_state.present };
                         }
-                        const stmt_index = @intFromEnum(current);
+                        const stmt_index = statement_indices.get(current) orelse
+                            solveInvariant("ARC outcome escape was outside its lifted procedure inventory");
                         const old = bit_escape_discriminants[stmt_index];
                         if (old == no_local) {
                             bit_escape_discriminants[stmt_index] = discriminant;
@@ -1620,6 +1588,7 @@ fn computeOutcomeRestitution(
                 if (!valid) break;
             }
 
+            if (@import("builtin").mode == .Debug) outcome_scratch_entries += bit_escape_discriminants.len;
             for (bit_escape_discriminants, 0..) |discriminant, stmt_index| {
                 if (discriminant == no_local) continue;
                 const old = escape_discriminants[stmt_index];
@@ -1657,11 +1626,12 @@ fn computeOutcomeRestitution(
             .start = @intCast(start),
             .len = @intCast(all_outcomes.items.len - start),
         };
+        if (@import("builtin").mode == .Debug) outcome_scratch_entries += escape_discriminants.len;
         for (escape_discriminants, 0..) |discriminant, stmt_index| {
             if (discriminant == no_local or discriminant == ambiguous_discriminant) continue;
             const outcome = accum.get(@intCast(discriminant)) orelse
                 solveInvariant("ARC outcome escape named an unreturned discriminant");
-            solution.restitution_params_by_stmt[stmt_index] = escape_masks[stmt_index] & outcome.remaining_on_all_paths;
+            solution.restitution_params_by_stmt[@intFromEnum(proc_stmts[stmt_index])] = escape_masks[stmt_index] & outcome.remaining_on_all_paths;
         }
     }
 

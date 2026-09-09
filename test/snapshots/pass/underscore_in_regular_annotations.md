@@ -40,45 +40,69 @@ AMBIGUOUS FUNCTION TYPE - underscore_in_regular_annotations.md:28:22:28:24
 UNEXPECTED STATEMENT - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
-── ✗ ambiguous function type ──────── underscore_in_regular_annotations.md:28:22
-
-I was parsing a function type, and multiple arrows need parentheses.
-
-transform : _a -> _b -> _b
-                     ^^
-
-Use parentheses to say whether the function returns another function or takes a
-function as an argument.
-
-For example:
-    a -> (b -> c)
-    (a -> b) -> c
-
-── ✗ unexpected statement ─────────── underscore_in_regular_annotations.md:28:25
-
-I was parsing a statement, and this token cannot start a statement here.
-
-transform : _a -> _b -> _b
-                        ^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found _b here.
-
-── ● unused variable ───────────────── underscore_in_regular_annotations.md:9:12
-
-Variable list is defined here and then never used:
-
-process = |list| "processed"
-           ^^^^
-
-If you don't need this variable, prefix it with an underscore like _list to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Ambiguous Function Type")
+		(region (start 28 22) (end 28 24))
+		(headline
+			(reflow "I was parsing a function type, and multiple arrows need parentheses."))
+		(document
+			(reflow "Use parentheses to say whether the function returns another function or takes a function as an argument.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a -> (b -> c)")
+			(line-break)
+			(indent 1)
+			(text "(a -> b) -> c")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "underscore_in_regular_annotations.md") (start 28 22) (end 28 24) (annotation error) (line-text "transform : _a -> _b -> _b"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 28 25) (end 28 27))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "_b")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "underscore_in_regular_annotations.md") (start 28 25) (end 28 27) (annotation error) (line-text "transform : _a -> _b -> _b"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 9 12) (end 9 16))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "list")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_list")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "underscore_in_regular_annotations.md") (start 9 12) (end 9 16) (annotation error) (line-text "process = |list| \"processed\"")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,

@@ -12,6 +12,46 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "tce: argument cycles and duplicated owning sources",
+        .source_kind = .module,
+        .source =
+        \\walk : List(U64), List(U64), List(U64), U64 -> { a: List(U64), b: List(U64), c: List(U64) }
+        \\walk = |a, b, c, n| {
+        \\    if n == 0 { { a, b, c } }
+        \\    else if n % 2 == 0 { walk(b, c, a, n - 1) }
+        \\    else { walk(b, List.append(a, 0), b, n - 1) }
+        \\}
+        \\main : U64
+        \\main = {
+        \\    result = walk(List.repeat(1, 5), List.repeat(2, 6), List.repeat(3, 7), 2001)
+        \\    List.len(result.a) + 10 * List.len(result.b) + 100 * List.len(result.c)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "10666" },
+    },
+
+    .{
+        .name = "tce: shared loop continuation is stack bounded",
+        .source_kind = .module,
+        .source =
+        \\walk : List(U64), U64, U64 -> U64
+        \\walk = |xs, n, acc| {
+        \\    if n == 0 { acc } else {
+        \\        var $total = 0
+        \\        for y in xs { $total = $total + y }
+        \\        if $total % 2 == 0 {
+        \\            walk(xs, n - 1, acc + $total)
+        \\        } else {
+        \\            walk(xs, n - 1, acc + $total + 1)
+        \\        }
+        \\    }
+        \\}
+        \\main : U64
+        \\main = walk([1, 2, 3], 2000, 0)
+        ,
+        .expected = .{ .inspect_str = "12000" },
+    },
+    .{
         .name = "trmc: linked list repeat and naive length",
         .source_kind = .module,
         .source =

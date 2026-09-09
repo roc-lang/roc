@@ -933,13 +933,14 @@ pub const ReportBuilder = struct {
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
-                    .platform_requirement => |ctx| {
+                    .platform_requirement, .platform_requirement_return => |ctx| {
+                        const is_return = mismatch.context == .platform_requirement_return;
                         var report = try self.makeMismatchReport(
                             ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
-                            &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(" to have a specific type.") },
-                            &.{D.bytes("Here it has the type:")},
+                            &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(if (is_return) " to return a specific type." else " to have a specific type.") },
+                            &.{D.bytes(if (is_return) "This function currently returns:" else "Here it has the type:")},
                             mismatch.types.actual_snapshot,
-                            &.{D.bytes("But the platform requires:")},
+                            &.{D.bytes(if (is_return) "But the platform requires it to return:" else "But the platform requires:")},
                             mismatch.types.expected_snapshot,
                             &.{},
                         );
@@ -2681,9 +2682,9 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Recursive Dispatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
-            D.bytes("This"),
+            D.bytes("The type requirements for"),
             D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("dispatch would have to call itself to satisfy its own type."),
+            D.bytes("cannot be resolved."),
         }, self, &report, &report.headline);
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
@@ -2701,7 +2702,7 @@ pub const ReportBuilder = struct {
         }
 
         try D.renderSlice(&.{
-            D.bytes("The dispatcher type is:"),
+            D.bytes("The method is being selected for this type:"),
         }, self, &report);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -2726,13 +2727,27 @@ pub const ReportBuilder = struct {
             }, self, &report);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Using"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("for this type requires the same method again, before all of its type requirements have been determined."),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
         }
 
         try D.renderSlice(&.{
+            D.bytes("Recursive function calls are allowed. This error is about a cycle in the type requirements, before the function can run."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Use a more specific result type, or add an associated function whose"),
+            D.bytes("Check the argument, result, and additional method requirements of"),
             D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("implementation does not require the same dispatch on the same type."),
+            D.bytes("to find which requirement leads back to this call."),
         }, self, &report);
 
         return report;

@@ -44,10 +44,11 @@ const Ident = base.Ident;
 pub fn instantiateNominalBacking(
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *std.AutoHashMap(Var, Var),
+    var_map: *@import("collections").DenseMap(Var, Var),
     decl: types_mod.NominalDecl,
     args: []const Var,
     current_rank: Rank,
+    purpose: Instantiator.Purpose,
 ) std.mem.Allocator.Error!Var {
     const formals = store.sliceVars(decl.formals);
     std.debug.assert(formals.len == args.len);
@@ -78,6 +79,7 @@ pub fn instantiateNominalBacking(
         .idents = idents,
         .var_map = var_map,
         .current_rank = current_rank,
+        .purpose = purpose,
         // Rigids naming a formal take that formal's arg; any other rigid
         // (impossible in a well-formed template) stays rigid rather than
         // silently flexing.
@@ -243,16 +245,23 @@ pub const Instantiator = struct {
     // not owned
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *std.AutoHashMap(Var, Var),
+    var_map: *@import("collections").DenseMap(Var, Var),
 
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
+    purpose: Purpose = .instantiation,
+
     /// A rank-1 scheme can contain quantified leaves below monomorphic
     /// structural nodes. While instantiating such a scheme, copy that complete
     /// structural spine so the walk reaches every generalized descendant;
     /// monomorphic flex/rigid leaves remain shared.
     copy_scheme_structure: bool = false,
+
+    /// Expected shape is structural context, not another use of a constrained
+    /// value. Its source keeps every dispatch obligation; the shape copy must
+    /// neither duplicate those obligations nor traverse their callable graphs.
+    pub const Purpose = enum { instantiation, expected_shape };
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -462,7 +471,7 @@ pub const Instantiator = struct {
                 const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
                 try self.var_map.put(resolved_var, fresh_var);
 
-                if (rigid.constraints.len() == 0) {
+                if (self.purpose == .expected_shape or rigid.constraints.len() == 0) {
                     const fresh_content = switch (fresh_type) {
                         .flex => Content{ .flex = Flex{ .name = rigid.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } },
                         .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } },
@@ -494,7 +503,7 @@ pub const Instantiator = struct {
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
-                if (flex.constraints.len() == 0) {
+                if (self.purpose == .expected_shape or flex.constraints.len() == 0) {
                     const fresh_content = Content{ .flex = Flex{ .name = flex.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } };
                     try self.fillPlaceholder(fresh_var, fresh_content, empty_tag_union_is_default);
                     try machine.value_stack.append(self.store.gpa, fresh_var);

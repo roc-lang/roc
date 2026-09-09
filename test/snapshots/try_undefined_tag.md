@@ -12,28 +12,63 @@ A?
 TRY OPERATOR OUTSIDE FUNCTION - try_undefined_tag.md:1:1:1:3
 TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 # PROBLEMS
-── ✗ try operator outside function ──────────────────── try_undefined_tag.md:1:1
-
-The ? operator can only be used inside function bodies because it can cause an
-early return.
-
-A?
-^^
-
-── ✗ type mismatch ──────────────────────────────────── try_undefined_tag.md:1:1
-
-The ? operator expects a Try type (a tag union containing ONLY Ok and Err
-tags), but I found.
-
-A?
-^
-
-This expression has type:
-
-    [A, ..]
-
-Tip: Maybe wrap a value using Ok(value) or Err(value).
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Try Operator Outside Function")
+		(region (start 1 1) (end 1 3))
+		(headline
+			(reflow "The ")
+			(annotated code "?")
+			(reflow " operator can only be used inside function bodies because it can cause an early return."))
+		(document
+			(source-region (file "try_undefined_tag.md") (start 1 1) (end 1 3) (annotation error) (line-text "A?"))))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 1) (end 1 2))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operator expects a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "type (a tag union containing ONLY")
+			(reflow " ")
+			(annotated code "Ok")
+			(reflow " ")
+			(reflow "and")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "tags), but I found."))
+		(document
+			(source-region (file "try_undefined_tag.md") (start 1 1) (end 1 2) (annotation error) (line-text "A?"))
+			(line-break)
+			(reflow "This expression has type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[A, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated underline "Tip:")
+			(reflow " ")
+			(reflow "Maybe wrap a value using")
+			(reflow " ")
+			(annotated code "Ok(value)")
+			(reflow " ")
+			(reflow "or")
+			(reflow " ")
+			(annotated code "Err(value)")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpQuestion,

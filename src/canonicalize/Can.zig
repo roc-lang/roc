@@ -76,6 +76,28 @@ pub const ModuleInitContext = struct {
     compiler_version: ?[]const u8 = null,
     /// How this module's compile-time roots are established. See `Validation`.
     validation: Validation = .checking,
+    /// Whether this file is the build's entry module: the file the compiler was
+    /// pointed at, rather than a module discovered inside some package.
+    ///
+    /// Only an entry module may be classified `default_app`, because that
+    /// classification is what injects the synthetic `echo!` hosted lambda. The
+    /// classification is otherwise purely file-local, so without this gate any
+    /// package could ship a headerless module with a valid `main!`, or a
+    /// module carrying a platformless `app` header, and thereby hand itself a
+    /// real host-bound effect: the exact thing the package/platform boundary
+    /// exists to prevent.
+    ///
+    /// Defaults to false so that omitting it fails closed. This is a privilege
+    /// gate, and the cost of the two failure directions is not symmetric: a
+    /// caller that should have said true loses `echo!` and hears about it
+    /// immediately as `Nothing is named echo! in this scope`, whereas a caller
+    /// that should have said false hands out a host-bound effect and says
+    /// nothing at all. Callers that canonicalize the one file they were
+    /// pointed at -- the REPL, the snapshot tool, the language server, the
+    /// playground, direct-canonicalization tests -- set it true explicitly.
+    /// The coordinator is the component that knows a module is *not* the entry
+    /// module, and it is the one that says so.
+    is_entry_module: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -293,6 +315,10 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 compiler_version: ?[]const u8 = null,
 /// How this module's compile-time roots are established. See `Validation`.
 validation: Validation = .checking,
+/// Whether this file is the build's entry module. Defaults to false so an
+/// omission withholds the capability rather than granting it. See
+/// `ModuleInitContext.is_entry_module`.
+is_entry_module: bool = false,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
@@ -762,6 +788,9 @@ fn initInternal(
         .skip_file_import_contents = if (maybe_context) |context| context.skip_file_import_contents else false,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
+        // `initBuiltin` passes no context. A builtin module is never a default
+        // app, and the fail-closed answer is the correct one for it anyway.
+        .is_entry_module = if (maybe_context) |context| context.is_entry_module else false,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
@@ -4382,7 +4411,14 @@ pub fn canonicalizeFile(
             // An app that names no platform gets the built-in Echo platform,
             // the same one a headerless app gets, so it canonicalizes as a
             // default app: `echo!` is in scope and no platform is required.
-            self.env.module_kind = if (h.platform_idx == null) .default_app else .app;
+            //
+            // Gated on the entry module for the same reason the `type_module`
+            // branch below is: `default_app` is what injects the synthetic
+            // `echo!` hosted lambda, so a module shipped inside a package must
+            // not reach the host merely by carrying a platformless `app`
+            // header. Outside the entry module such a file stays an ordinary
+            // `app`, which names no platform and so cannot check.
+            self.env.module_kind = if (h.platform_idx == null and self.is_entry_module) .default_app else .app;
             try self.checkRocVersionPin(h.roc_version);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
@@ -4391,10 +4427,21 @@ pub fn canonicalizeFile(
             try self.createExposedScope(h.provides);
         },
         .type_module => {
-            // Check if file has a main! function, making it a default app
+            // A headerless file with a valid `main!` is a default app, but
+            // only when it is the file the compiler was pointed at. That
+            // classification grants the synthetic `echo!` hosted lambda
+            // below, so a module living inside some package must not earn it
+            // merely by defining `main!`: that would hand any dependency a
+            // real host-bound effect.
+            //
+            // Such a module stays an ordinary type module, and its `main!` an
+            // ordinary top-level definition. Deliberately with no diagnostic:
+            // outside an entry module `main!` is just a name, and an author
+            // who meant it as an entrypoint hears about it through the errors
+            // on whatever effects that module was reaching for.
             // Don't report errors here - validation will handle that
             const main_status = try self.checkMainFunction(false);
-            if (main_status == .valid) {
+            if (main_status == .valid and self.is_entry_module) {
                 self.env.module_kind = .default_app;
             } else {
                 // Set to undefined placeholder - will be properly set during validation
@@ -6536,6 +6583,12 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     const scratch_exports_start = self.env.store.scratchDefTop();
 
     const defs_slice = self.env.store.sliceDefs(self.env.top_level_value_defs);
+    const file = self.parse_ir.store.getFile();
+    const header = self.parse_ir.store.getHeader(file.header);
+    const has_implicit_default_app_main = self.env.module_kind == .default_app and switch (header) {
+        .type_module, .default_app => true,
+        .app, .module, .package, .platform, .hosted, .malformed => false,
+    };
 
     // Check each definition to see if it corresponds to an exposed item.
     // We check exposed_idents which only contains items from the exposing clause,
@@ -6550,8 +6603,13 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
-            // Check if this identifier was explicitly exposed in the module header
-            if (self.exposed_idents.contains(pattern.assign.ident)) {
+            // Headerless default apps have an implicit `provides [main!]`.
+            // Record it in the same exact export-definition inventory that
+            // explicit app headers produce, so checked root construction
+            // consumes this inventory instead of the broader exposed-item map.
+            const is_implicit_main = has_implicit_default_app_main and
+                pattern.assign.ident.eql(self.env.idents.main_bang);
+            if (self.exposed_idents.contains(pattern.assign.ident) or is_implicit_main) {
                 try self.env.store.addScratchDef(def_idx);
                 try self.env.setExposedValueNodeIndexById(pattern.assign.ident, @intFromEnum(def_idx));
             }
@@ -8030,9 +8088,20 @@ fn canonicalizeSingleQuote(
     self: *Self,
     token_region: AST.TokenizedRegion,
     token: Token.Idx,
+    type_ident: ?Ident.Idx,
     comptime Idx: type,
 ) std.mem.Allocator.Error!?Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(token_region);
+
+    const suffix_target = if (type_ident) |ident|
+        (try self.resolveNumericSuffixTarget(ident)) orelse {
+            return try self.env.pushMalformed(Idx, Diagnostic{ .undeclared_type = .{
+                .name = ident,
+                .region = region,
+            } });
+        }
+    else
+        null;
 
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
@@ -8061,13 +8130,21 @@ fn canonicalizeSingleQuote(
     }
 
     if (comptime Idx == Expr.Idx) {
-        const expr_idx = try self.env.addExpr(CIR.Expr{
-            .e_num = .{
+        const expr = if (type_ident) |ident|
+            CIR.Expr{ .e_typed_int = .{
+                .value = value_content,
+                .type_name = ident,
+            } }
+        else
+            CIR.Expr{ .e_num = .{
                 .value = value_content,
                 .kind = .int_unbound,
-            },
-        }, region);
+            } };
+        const expr_idx = try self.env.addExpr(expr, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
+        if (suffix_target) |target| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), target);
+        }
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
         const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
@@ -8075,6 +8152,9 @@ fn canonicalizeSingleQuote(
             .kind = .int_unbound,
         } }, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(pat_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
+        if (suffix_target) |target| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pat_idx), target);
+        }
         return pat_idx;
     } else {
         @compileError("Unsupported Idx type");
@@ -9108,7 +9188,6 @@ fn warnTrailingTrySuffix(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Erro
         .e_lambda,
         .e_binop,
         .e_unary_minus,
-        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -9693,7 +9772,6 @@ const DefiniteInitAnalyzer = struct {
                 break :blk try self.analyzeExpr(binop.rhs, state, breaks);
             },
             .e_unary_minus => |unary| try self.analyzeExpr(unary.expr, state, breaks),
-            .e_unary_not => |unary| try self.analyzeExpr(unary.expr, state, breaks),
             .e_field_access => |field| try self.analyzeExpr(field.receiver, state, breaks),
             .e_method_call => |call| blk: {
                 if (!try self.analyzeExpr(call.receiver, state, breaks)) break :blk false;
@@ -10814,7 +10892,6 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
                     .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_unary_not => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
                     .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
                     .e_method_call => |call| {
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
@@ -11219,7 +11296,7 @@ fn runExprKernel(
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
-                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, Expr.Idx) orelse {
+                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Expr.Idx) orelse {
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
                         continue :expr_kernel_loop .dispatch;
                     };
@@ -11936,6 +12013,40 @@ fn runExprKernel(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const free_vars_start = self.scratch_free_vars.top();
                     const right_expr = self.parse_ir.store.getExpr(e.right);
+                    if (e.target_kind == .method_call) {
+                        if (right_expr != .method_call) unreachable;
+                        const method = right_expr.method_call;
+                        const method_name = self.parse_ir.tokens.resolveIdentifier(method.method_token) orelse {
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                                .region = region,
+                            } });
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        };
+
+                        const raw_method_region = self.parse_ir.tokens.resolve(method.method_token);
+                        const method_name_region = if (raw_method_region.end.offset > raw_method_region.start.offset)
+                            Region{ .start = .{ .offset = raw_method_region.start.offset + 1 }, .end = raw_method_region.end }
+                        else
+                            raw_method_region;
+
+                        const args_slice = self.parse_ir.store.exprSlice(method.args);
+                        try stacks.pushFinishMethodCall(frame_allocator, .{
+                            .region = region,
+                            .free_vars_start = free_vars_start,
+                            .method_name = method_name,
+                            .method_name_region = method_name_region,
+                            .arg_count = args_slice.len + 1,
+                        });
+                        var i = args_slice.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
+                        }
+                        try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
+                        try stacks.pushParse(frame_allocator, .{ .idx = method.receiver, .target = .scratch });
+                        continue :expr_kernel_loop .dispatch;
+                    }
                     if (right_expr == .apply) {
                         const apply = right_expr.apply;
                         const ast_fn = self.parse_ir.store.getExpr(apply.@"fn");
@@ -13136,9 +13247,7 @@ fn runExprKernel(
                     .e_unary_minus = Expr.UnaryMinus.init(can_operand.idx),
                 }, state.region)
             else if (operator_token.tag == .OpBang)
-                try self.env.addExpr(Expr{
-                    .e_unary_not = Expr.UnaryNot.init(can_operand.idx),
-                }, state.region)
+                try self.addBoolNotCall(can_operand.idx, state.region)
             else
                 unreachable;
 
@@ -14378,6 +14487,38 @@ fn runExprKernel(
 
     std.debug.assert(child_slots.items.len == 0);
     return last_expr;
+}
+
+/// Logical negation always calls the compiler-owned Bool.not, independent of
+/// the operand's type and any source declarations shadowing Bool.
+fn addBoolNotCall(self: *Self, operand: Expr.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const callee = if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| blk: {
+        const bool_stmt = bool_info.statement_idx orelse unreachable;
+        const type_node = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt) orelse unreachable;
+        break :blk try self.canonicalizedExternalAssociatedLookup(
+            try self.getOrCreateCompilerBuiltinAutoImport(),
+            type_node,
+            self.env.idents.bool,
+            self.env.idents.not,
+            region,
+        );
+    } else blk: {
+        // Builtin.roc refers to its own Bool declaration, including forward
+        // references from definitions that precede Bool.not.
+        const builtin_ident = try self.env.insertIdent(Ident.for_text("Builtin"));
+        const owner_path = self.moduleParserTypePathForSegments(&.{ builtin_ident, self.env.idents.bool }) orelse unreachable;
+        const qualified = try self.insertQualifiedIdent("Builtin.Bool", "not");
+        const pattern = (try self.lookupOrCreateAssocValuePattern(owner_path, self.env.idents.not, qualified, region)) orelse unreachable;
+        break :blk try self.canonicalizedAssociatedLookup(owner_path, self.env.idents.not, pattern, region);
+    };
+    const args_start = self.env.store.scratchExprTop();
+    try self.env.store.addScratchExpr(operand);
+    const args = try self.env.store.exprSpanFrom(args_start);
+    return self.env.addExpr(.{ .e_call = .{
+        .func = callee.idx,
+        .args = args,
+        .called_via = .unary_op,
+    } }, region);
 }
 
 fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
@@ -18104,7 +18245,7 @@ pub fn canonicalizePattern(
                     last_pattern = try self.canonicalizeStringPattern(e);
                 },
                 .single_quote => |e| {
-                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
+                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Pattern.Idx);
                 },
                 .tag => |e| {
                     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse {
@@ -21835,26 +21976,13 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 break :blk try self.env.insertIdent(Ident.for_text(method_name_clean));
             };
 
-            // Canonicalize argument types
-            const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
-            const args_start = self.env.store.scratchTypeAnnoTop();
-            for (args_slice) |arg_idx| {
-                var arg_ctx = TypeAnnoCtx.init(type_anno_ctx);
-                const canonicalized_arg = try self.runTypeAnnoKernel(arg_idx, &arg_ctx);
-                try self.env.store.addScratchTypeAnno(canonicalized_arg);
-            }
-            const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
-
-            // Canonicalize return type
-            var ret_ctx = TypeAnnoCtx.init(type_anno_ctx);
-            const ret = try self.runTypeAnnoKernel(mm.ret_anno, &ret_ctx);
+            var anno_ctx = TypeAnnoCtx.init(type_anno_ctx);
+            const anno = try self.runTypeAnnoKernel(mm.anno, &anno_ctx);
 
             return try self.env.addWhereClause(WhereClause{ .w_method = .{
                 .var_ = var_anno_idx,
                 .method_name = method_ident,
-                .args = args_span,
-                .ret = ret,
-                .effectful = mm.effectful,
+                .anno = anno,
             } }, region);
         },
         .mod_alias => |ma| {

@@ -239,9 +239,6 @@ pub const ScopeMap = struct {
             .e_unary_minus => |unary| {
                 try self.traverseExpr(module_env, unary.expr, scope_end, depth + 1);
             },
-            .e_unary_not => |unary| {
-                try self.traverseExpr(module_env, unary.expr, scope_end, depth + 1);
-            },
             .e_list => |list| {
                 const elems = module_env.store.sliceExpr(list.elems);
                 for (elems) |elem_idx| {

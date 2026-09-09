@@ -13,26 +13,64 @@ describe = |rec| match rec {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 # PROBLEMS
-── ✗ type mismatch ───────────────────────────── destructure_closed_match.md:2:5
-
-The first pattern in this match is incompatible.
-
-describe = |rec| match rec {
-    { x, y } => x + y
-}
-
-The first pattern is trying to match:
-
-    { x: U64, y: U64 }
-
-But the expression between the match parenthesis has the type:
-
-    { x: U64, y: U64, z: U64 }
-
-These can never match! Either the pattern or expression has a problem.
-Hint: This pattern doesn't bind the z field. Match it explicitly with z: _, or
-add .. to match all the remaining fields.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 2 18) (end 4 2))
+		(headline
+			(reflow "The first pattern in this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "is incompatible."))
+		(document
+			(source-underlines
+				(display (file "destructure_closed_match.md") (start 2 18) (end 4 2) (annotation dim) (line-text "describe = |rec| match rec {\n    { x, y } => x + y\n}"))
+				(underline (start 3 5) (end 3 13) (annotation error)))
+			(line-break)
+			(reflow "The first pattern is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ x: U64, y: U64 }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ x: U64, y: U64, z: U64 }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem.")
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This pattern doesn't bind the")
+			(reflow " ")
+			(annotated code "z")
+			(reflow " ")
+			(reflow "field. Match it explicitly with")
+			(reflow " ")
+			(annotated code "z: _")
+			(reflow ",")
+			(reflow " ")
+			(reflow "or add")
+			(reflow " ")
+			(annotated code "..")
+			(reflow " ")
+			(reflow "to match all the remaining fields."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,OpArrow,UpperIdent,

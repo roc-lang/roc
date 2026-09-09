@@ -30,62 +30,91 @@ INVALID NUMBER - numbers.md:9:5:9:11
 INVALID NUMBER - numbers.md:10:5:10:10
 INVALID NUMBER - numbers.md:11:5:11:10
 # PROBLEMS
-── ✗ uppercase base ────────────────────────────────────────────────────────────
-
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-── ✗ uppercase base ────────────────────────────────────────────────────────────
-
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-── ✗ uppercase base ────────────────────────────────────────────────────────────
-
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-── ✗ invalid number ───────────────────────────────────────────── numbers.md:8:5
-
-This number literal does not fit in the inferred type.
-
-0.1e42,
-^^^^^^
-
-The inferred type is:
-
-    Dec
-
-── ✗ invalid number ───────────────────────────────────────────── numbers.md:9:5
-
-This number literal does not fit in the inferred type.
-
-0.1E42,
-^^^^^^
-
-The inferred type is:
-
-    Dec
-
-── ✗ invalid number ──────────────────────────────────────────── numbers.md:10:5
-
-This number literal does not fit in the inferred type.
-
-1.e42,
-^^^^^
-
-The inferred type is:
-
-    Dec
-
-── ✗ invalid number ──────────────────────────────────────────── numbers.md:11:5
-
-This number literal does not fit in the inferred type.
-
-1.E42,
-^^^^^
-
-The inferred type is:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Uppercase Base")
+		(headline
+			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Uppercase Base")
+		(headline
+			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Uppercase Base")
+		(headline
+			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 8 5) (end 8 11))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "numbers.md") (start 8 5) (end 8 11) (annotation error) (line-text "    0.1e42,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 9 5) (end 9 11))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "numbers.md") (start 9 5) (end 9 11) (annotation error) (line-text "    0.1E42,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 10 5) (end 10 10))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "numbers.md") (start 10 5) (end 10 10) (annotation error) (line-text "    1.e42,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 11 5) (end 11 10))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "numbers.md") (start 11 5) (end 11 10) (annotation error) (line-text "    1.E42,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenRound,

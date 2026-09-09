@@ -8,19 +8,44 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-MISSING METHOD - not_tag.md:1:1:1:8
+TYPE MISMATCH - not_tag.md:1:3:1:7
 # PROBLEMS
-── ✗ missing method ───────────────────────────────────────────── not_tag.md:1:1
-
-This not method is being called on a value whose type doesn't have that method.
-
-!(C(2))
-^^^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 3) (end 1 7))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
+		(document
+			(source-region (file "not_tag.md") (start 1 3) (end 1 7) (annotation error) (line-text "!(C(2))"))
+			(line-break)
+			(reflow "This argument has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the function needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Bool")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpBang,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,Int,CloseRound,CloseRound,
@@ -40,9 +65,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "erroneous_value_expr"))
+(e-call
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17421") (target-def "17421"))
+	(e-tag (name "C")
+		(args
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[C(Dec), ..]"))
+(expr (type "Error"))
 ~~~

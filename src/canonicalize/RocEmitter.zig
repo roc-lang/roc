@@ -318,10 +318,11 @@ fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
     const receiver = self.module_env.store.getExpr(receiver_idx);
     if (surfaceBinopOp(receiver) != null) return true;
     const tag = std.meta.activeTag(receiver);
-    if (tag == .e_unary_minus or tag == .e_unary_not) return true;
+    if (tag == .e_unary_minus) return true;
+    if (tag == .e_call and receiver.e_call.called_via == .unary_op) return true;
     if (tag == .e_dispatch_call) {
         const origin = std.meta.activeTag(receiver.e_dispatch_call.surface_origin);
-        return origin == .unary_minus or origin == .unary_not;
+        return origin == .unary_minus;
     }
     if (tag == .e_num) return receiver.e_num.value.kind == .i128 and receiver.e_num.value.toI128() < 0;
     if (tag == .e_frac_f32) return std.math.signbit(receiver.e_frac_f32.value);
@@ -385,7 +386,6 @@ fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool 
             .e_lambda,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_structural_eq,
             .e_method_eq,
@@ -397,9 +397,10 @@ fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool 
             => return true,
 
             .e_dispatch_call => |call| return switch (call.surface_origin) {
-                .binop, .unary_minus, .unary_not => true,
+                .binop, .unary_minus => true,
                 .method_call => false,
             },
+            .e_call => |call| return call.called_via == .unary_op,
 
             // Nominal nodes emit only their transparent backing expression,
             // so iteratively peel them before classifying surface precedence.
@@ -418,7 +419,6 @@ fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool 
             .e_list,
             .e_empty_list,
             .e_tuple,
-            .e_call,
             .e_record,
             .e_empty_record,
             .e_block,
@@ -473,6 +473,7 @@ fn callCalleeNeedsParens(self: *Self, callee_idx: Expr.Idx) bool {
     while (true) {
         const expr = self.module_env.store.getExpr(current_idx);
         if (expr == .e_field_access) return true;
+        if (expr == .e_call and expr.e_call.called_via == .unary_op) return true;
         if (expr == .e_nominal) {
             current_idx = expr.e_nominal.backing_expr;
             continue;
@@ -676,7 +677,13 @@ fn emitExprFrame(
             }
         },
         .e_call => |call| {
-            try self.write("");
+            if (call.called_via == .unary_op) {
+                const args = self.module_env.store.sliceExpr(call.args);
+                std.debug.assert(args.len == 1);
+                try self.pushUnaryReceiverFrames(args[0], frames, allocator);
+                try frames.append(allocator, .{ .write = "!" });
+                return;
+            }
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(call.args), ")", ", ");
             try frames.append(allocator, .{ .write = "(" });
             try self.pushCallCalleeFrames(call.func, frames, allocator);
@@ -749,10 +756,6 @@ fn emitExprFrame(
             try self.pushUnaryReceiverFrames(unary.expr, frames, allocator);
             try frames.append(allocator, .{ .write = "-" });
         },
-        .e_unary_not => |unary| {
-            try self.pushUnaryReceiverFrames(unary.expr, frames, allocator);
-            try frames.append(allocator, .{ .write = "!" });
-        },
         .e_field_access => |field_access| {
             try frames.append(allocator, .{ .field_access_suffix = field_access.segments });
             try self.pushFieldAccessPathReceiverFrames(field_access.receiver, frames, allocator);
@@ -778,9 +781,9 @@ fn emitExprFrame(
                     try frames.append(allocator, .{ .write = " " });
                     try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = method_call.receiver, .outer_op = op, .side = .left } });
                 },
-                .unary_minus, .unary_not => {
+                .unary_minus => {
                     try self.pushUnaryReceiverFrames(method_call.receiver, frames, allocator);
-                    try frames.append(allocator, .{ .write = if (method_call.surface_origin == .unary_minus) "-" else "!" });
+                    try frames.append(allocator, .{ .write = "-" });
                 },
                 .method_call => {
                     try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
