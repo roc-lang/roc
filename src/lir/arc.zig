@@ -10786,6 +10786,51 @@ test "RC tag union dismantles through its payload view when the payload dies fie
     try testing.expectEqual(@as(usize, 2), f.countAllRc());
 }
 
+test "RC tag union dismantles through its payload view when one field remains for residual release" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const tag_value = try f.local(tag_pair);
+    const disc = try f.local(.u8);
+    const view = try f.local(f.pair_str);
+    const first_read = try f.local(.str);
+    const first_sink = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    // Leave the second field in the view for the residual release.
+    const ret = try f.ret(result);
+    const first_call = try f.assignCall(first_sink, &.{first_read}, ret);
+    const read_first = try f.assignRefField(first_read, view, 0, first_call);
+    const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read_first,
+    } });
+    const default_body = try f.assignI64(result, 0, ret);
+    const switch_stmt = try f.switchStmt(disc, view_read, default_body, ret);
+    const disc_read = try f.assignDiscriminant(disc, tag_value, switch_stmt);
+    const tag_assign = try f.assignTag(tag_value, 1, pair, disc_read);
+    const assign_pair = try f.assignStruct(pair, &.{ first, second }, tag_assign);
+    const assign_second = try f.assignStr(second, "second", assign_pair);
+    const assign_result = try f.assignI64(result, 7, assign_second);
+    const body = try f.assignStr(first, "first", assign_result);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // The fresh tag read needs only the union representation, while the
+    // remaining field release still requires the live payload view.
+    try f.expectRc(first_read, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 0), f.countRc(tag_value, .incref));
+    try testing.expectEqual(@as(usize, 2), f.countRc(tag_value, .decref));
+    try testing.expectEqual(@as(usize, 3), f.countAllRc());
+}
+
 fn chainedJoinSolveWork(join_count: usize) Allocator.Error!u64 {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

@@ -11957,9 +11957,11 @@ same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the
 ownership place live. The certifier represents this state explicitly as a
-struct representation shell. A shell may cross a join, may be copied only by
-a same-layout pure local alias, and may be used only as the source of a
-non-refcounted field read. It cannot be consumed, released again, passed to a
+aggregate representation shell. A shell may cross a join, may be copied only by
+a same-layout pure local alias, and may be used as the source of a
+non-refcounted struct field read or an inline union discriminant read. A union
+keeps its tag bytes and variant witness after its payload view claims its unit;
+a residual-release dispatch reads those bytes without observing payload ownership. It cannot be consumed, released again, passed to a
 call, or used for an RC-bearing field or payload read. Thus backends still see
 ordinary field reads and explicit RC statements, while certification keeps
 representation availability distinct from ownership-unit availability. A

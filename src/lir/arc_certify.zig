@@ -2246,27 +2246,27 @@ const Certifier = struct {
         return value;
     }
 
-    fn isInlineStructRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
+    fn isInlineAggregateRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
         const layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        return layout.tag == .struct_;
+        return layout.tag == .struct_ or layout.tag == .tag_union;
     }
 
-    /// Requires only the inline representation of a struct, not an RC unit
+    /// Requires only the inline representation of an aggregate, not an RC unit
     /// reachable through it. ARC may move or release every stored RC unit and
-    /// still read an inline scalar sibling; all operations that can observe RC
+    /// still read an inline scalar sibling or union tag; operations that observe RC
     /// state continue to use `requireLive` instead.
-    fn requireStructRepresentation(
+    fn requireAggregateRepresentation(
         self: *Certifier,
         state: *const State,
         local: LIR.LocalId,
     ) CertifyError!ValueId {
         if (!self.isRc(local)) return no_value;
-        if (!self.isInlineStructRepresentation(local)) return self.requireLive(state, local);
+        if (!self.isInlineAggregateRepresentation(local)) return self.requireLive(state, local);
         const value = state.valueOf(local);
         if (value == no_value) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
-            return self.fail("use of unbound struct representation {d}", .{@intFromEnum(local)});
+            return self.fail("use of unbound aggregate representation {d}", .{@intFromEnum(local)});
         }
         return value;
     }
@@ -2763,7 +2763,7 @@ const Certifier = struct {
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
-                } else if (self.isInlineStructRepresentation(self.proc_locals.items[dense])) {
+                } else if (self.isInlineAggregateRepresentation(self.proc_locals.items[dense])) {
                     summary = .{
                         .class = .representation,
                         .repr = repr,
@@ -4673,7 +4673,7 @@ const Certifier = struct {
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
-                        } else if (self.isInlineStructRepresentation(local)) {
+                        } else if (self.isInlineAggregateRepresentation(local)) {
                             summary = .{
                                 .class = .representation,
                                 .repr = repr,
@@ -4972,7 +4972,7 @@ const Certifier = struct {
                             }
                         },
                         .discriminant => |op| {
-                            const source_value = try self.requireLive(&state, op.source);
+                            const source_value = try self.requireAggregateRepresentation(&state, op.source);
                             try state.removeOutcomeDiscriminant(assign.target);
                             if (source_value != no_value and
                                 !self.values.items[source_value].call_outcomes.isEmpty())
@@ -5562,8 +5562,10 @@ const Certifier = struct {
     }
 
     fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, take_kind: LIR.TakeKind, tag_discriminant: ?u16) CertifyError!void {
-        if (!self.isRc(target) and self.isRc(source) and self.isInlineStructRepresentation(source)) {
-            _ = try self.requireStructRepresentation(state, source);
+        if (!self.isRc(target) and self.isRc(source) and
+            self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .struct_)
+        {
+            _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
         const source_value = try self.requireLive(state, source);
@@ -5708,8 +5710,8 @@ const Certifier = struct {
     fn bindLocalAlias(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
         const target_layout = self.store.getLocal(target).layout_idx;
         const source_layout = self.store.getLocal(source).layout_idx;
-        const source_value = if (self.isRc(source) and target_layout == source_layout and self.isInlineStructRepresentation(source))
-            try self.requireStructRepresentation(state, source)
+        const source_value = if (self.isRc(source) and target_layout == source_layout and self.isInlineAggregateRepresentation(source))
+            try self.requireAggregateRepresentation(state, source)
         else
             try self.requireLive(state, source);
         if (!self.isRc(target)) return;
@@ -8082,6 +8084,60 @@ test "certify carries a released struct representation across a join for scalar 
     } });
     _ = try f.addProc(&.{record}, body, .i64);
     try f.certify();
+}
+
+test "certify carries a released union tag across a join and alias" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), f.pair_str });
+    const tag = try f.local(tag_layout);
+    const alias = try f.local(tag_layout);
+    const disc = try f.local(.u16);
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(disc);
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = alias } },
+        .next = ret,
+    } });
+    const copy = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = tag },
+        .next = read,
+    } });
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const release = try f.decrefStmt(tag, tag_layout, jump);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = copy,
+        .remainder = release,
+    } });
+    _ = try f.addProc(&.{tag}, body, .u16);
+    try f.certify();
+}
+
+test "certify rejects a payload view through a released union representation" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), f.pair_str });
+    const tag = try f.local(tag_layout);
+    const view = try f.local(f.pair_str);
+    const disc = try f.local(.u16);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const read_payload = try tagPayloadStructReadStmt(&f, view, tag, 1, result_assign);
+    const read_tag = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = tag } },
+        .next = read_payload,
+    } });
+    const release = try f.decrefStmt(tag, tag_layout, read_tag);
+    _ = try f.addProc(&.{tag}, release, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+    try testing.expectEqual(read_payload, f.diag.context_stmt.?);
 }
 
 test "certify rejects a released struct alias without exact residual-shell fields" {
