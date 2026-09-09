@@ -2855,8 +2855,14 @@ const Unifier = struct {
                         // Write the pure type before visiting the dependencies
                         // so a recursive group, whose members depend on each
                         // other, terminates at the member already made pure.
+                        // A dependency that turns out effectful fails the
+                        // whole demand, and this function's effect then still
+                        // depends on it, so the write is undone on that path.
                         try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_pure = .{ .args = func.args, .ret = func.ret } } });
-                        try self.demandPureEffectDeps(func.effect_deps);
+                        self.demandPureEffectDeps(func.effect_deps) catch |err| {
+                            try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_unbound = func } });
+                            return err;
+                        };
                         return;
                     },
                     .record,

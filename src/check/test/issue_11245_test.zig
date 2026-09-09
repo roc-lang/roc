@@ -8,7 +8,6 @@
 //! mismatch. Without that enforcement an `expect` that performs an effect is
 //! accepted and crashes at runtime.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "issue 11245 - effectful function in a list handed to a pure join_map callback is rejected" {
