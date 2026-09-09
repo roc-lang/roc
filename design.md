@@ -11113,6 +11113,13 @@ transfer must still prove that allocation live. This rule neither rewrites
 statement order nor adds eager scalar snapshots, and no backend selects RC
 behavior from it.
 
+The interpreter's debug shape validator follows the same representation boundary.
+Pure list copies (`local`, `list_reinterpret`, and `nominal` reference operations)
+validate the copied descriptor without walking its allocation. Newly produced
+lists and payload extractions retain item validation; nested payload checks
+keep their existing rules. Debug validation must not add allocation reads to a
+statement that only copies saved metadata.
+
 Inference lifts each proc body once, assigning fresh resource variables, and
 generates constraints per statement:
 

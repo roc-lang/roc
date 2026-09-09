@@ -1604,6 +1604,10 @@ pub const Interpreter = struct {
         },
     };
 
+    /// A copied list descriptor does not read its allocation. New values and
+    /// payload extractions additionally validate the items they produce.
+    const DebugListValidation = enum { descriptor, items };
+
     fn setLocalChecked(
         self: *LirInterpreter,
         frame: *Frame,
@@ -1619,6 +1623,7 @@ pub const Interpreter = struct {
             value,
             allow_zeroed_box_payload_holes,
             .empty(),
+            .items,
         );
     }
 
@@ -1630,6 +1635,7 @@ pub const Interpreter = struct {
         value: Value,
         allow_zeroed_box_payload_holes: bool,
         residual_shell_absent_fields: LIR.U32Span,
+        root_list_validation: DebugListValidation,
     ) Error!void {
         const layout_idx = self.store.getLocal(local_id).layout_idx;
         const normalized_value = try self.normalizeFloatNanValue(value, layout_idx);
@@ -1646,6 +1652,7 @@ pub const Interpreter = struct {
                 &visited,
                 allow_zeroed_box_payload_holes,
                 residual_shell_absent_fields,
+                root_list_validation,
             );
         }
 
@@ -1734,6 +1741,7 @@ pub const Interpreter = struct {
         visited: *std.ArrayList(DebugVisitedValue),
         allow_zeroed_box_payload_holes: bool,
         residual_shell_absent_fields: LIR.U32Span,
+        root_list_validation: DebugListValidation,
     ) void {
         var path_buf: [96]DebugValuePathStep = undefined;
         self.debugAssertValueMatchesLayoutAt(
@@ -1747,6 +1755,7 @@ pub const Interpreter = struct {
             0,
             allow_zeroed_box_payload_holes,
             residual_shell_absent_fields,
+            root_list_validation,
         );
     }
 
@@ -1762,6 +1771,7 @@ pub const Interpreter = struct {
         path_len: usize,
         allow_zeroed_box_payload_holes: bool,
         residual_shell_absent_fields: LIR.U32Span,
+        root_list_validation: DebugListValidation,
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
@@ -1839,6 +1849,7 @@ pub const Interpreter = struct {
                     next_len,
                     allow_nested_zeroed_box_payload_holes,
                     residual_shell_absent_fields,
+                    root_list_validation,
                 );
             },
             .erased_callable => {
@@ -1874,6 +1885,10 @@ pub const Interpreter = struct {
                         "non-empty list had null bytes pointer",
                     );
                 }
+                // Pure list copies preserve by-value metadata after ARC has
+                // released the buffer. Validate that descriptor without making
+                // the debug checker an extra allocation-dependent use.
+                if (path_len == 0 and root_list_validation == .descriptor) return;
                 if (list.len() == 0 or list.bytes == null) return;
 
                 // The raw list child can be an unresolved layout; the runtime
@@ -1902,6 +1917,7 @@ pub const Interpreter = struct {
                         next_len,
                         allow_zeroed_box_payload_holes,
                         residual_shell_absent_fields,
+                        root_list_validation,
                     );
                 }
             },
@@ -1956,6 +1972,7 @@ pub const Interpreter = struct {
                         next_len,
                         allow_zeroed_box_payload_holes,
                         residual_shell_absent_fields,
+                        root_list_validation,
                     );
                 }
             },
@@ -2005,6 +2022,7 @@ pub const Interpreter = struct {
                     next_len,
                     allow_zeroed_box_payload_holes,
                     residual_shell_absent_fields,
+                    root_list_validation,
                 );
             },
             .closure => {
@@ -2577,7 +2595,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited, false, .empty());
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited, false, .empty(), .items);
                 }
                 const raw_layout_val = self.layout_store.getLayout(raw_layout);
                 const coercion_unwraps = raw_layout != proc_spec.ret_layout and
@@ -2593,7 +2611,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false, .empty());
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false, .empty(), .items);
                 }
                 // When the declared return layout merely relabels the returned
                 // local's bytes, keep the local's own layout so the descriptor
@@ -2676,6 +2694,10 @@ pub const Interpreter = struct {
                         value,
                         false,
                         assign.residual_shell_absent_fields,
+                        switch (assign.op) {
+                            .local, .list_reinterpret, .nominal => .descriptor,
+                            .field, .tag_payload, .tag_payload_struct, .discriminant => .items,
+                        },
                     );
                     if (assign.op == .local) {
                         const source = assign.op.local;
