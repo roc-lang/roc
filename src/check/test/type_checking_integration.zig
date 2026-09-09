@@ -4031,6 +4031,88 @@ test "check type - tuple access on non-tuple does not cascade" {
     try checkTypesModule(source, .fail, "Invalid Tuple Access");
 }
 
+test "check type - tuple access deferred ambiguity preserves its callable signature" {
+    const source =
+        \\f = |t| t.0
+        \\independent : U64
+        \\independent = 42
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Ambiguous Tuple Access");
+    try test_env.assertDefTypeOptions("f", "_arg -> _ret", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("independent", "U64", .{ .allow_type_errors = true });
+}
+
+test "check type - tuple access deferred invalid shape preserves annotated results" {
+    const source =
+        \\f : Bool -> U64
+        \\f = |run| if run (|t| t.0)({ value: 1 }) else 42
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Invalid Tuple Access");
+    try test_env.assertDefTypeOptions("f", "Bool -> U64", .{ .allow_type_errors = true });
+}
+
+test "check type - tuple access deferred out of bounds preserves annotated results" {
+    const source =
+        \\f : Bool -> U64
+        \\f = |run| if run (|t| t.2)((1, 2)) else 42
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Invalid Tuple Access");
+    try test_env.assertDefTypeOptions("f", "Bool -> U64", .{ .allow_type_errors = true });
+}
+
+test "check type - tuple access deferred element mismatch preserves its producer" {
+    const source =
+        \\pair : (Str, U64)
+        \\pair = ("hello", 42)
+        \\f : Bool -> U64
+        \\f = |run| if run (|t| t.0)(pair) else 42
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    try test_env.assertDefTypeOptions("pair", "(Str, U64)", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("f", "Bool -> U64", .{ .allow_type_errors = true });
+}
+
+test "check type - tuple access resolves valid deferred and annotated shapes" {
+    const source =
+        \\Pair : (Str, U64)
+        \\first : Pair -> Str
+        \\first = |t| t.0
+        \\second = (|t| t.1)(("hello", 42.U64))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U64");
+}
+
+test "check type - tuple access batch retires discarded defaults and preserves independent defaults" {
+    const source =
+        \\Foo := { bar : U64 ?? 3 }
+        \\poly : Foo -> a
+        \\poly = |_x| crash "unreachable"
+        \\first = |_x| (poly({})).0
+        \\second = |_x| (poly({})).1
+        \\independent : Foo
+        \\independent = {}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expectEqual(2, test_env.checker.problems.problems.items.len);
+    for (test_env.checker.problems.problems.items) |problem| {
+        try testing.expect(problem == .tuple_access_needs_annotation);
+    }
+    try test_env.assertDefTypeOptions("independent", "Foo", .{ .allow_type_errors = true });
+    const omissions = test_env.module_env.record_omitted_defaults.items.items;
+    try testing.expectEqual(1, omissions.len);
+    const independent = test_env.module_env.store.getDef(test_env.module_env.store.defAt(test_env.module_env.all_defs, 3));
+    try testing.expectEqual(independent.expr, omissions[0].expr);
+}
+
 test "check type - if else - annotated branch mismatch reports error" {
     // Exercises the expected-return-type path in checkIfElseExpr
     // (checkBranchBodyAgainstExpected). The else branch (a number) does not
