@@ -48,7 +48,7 @@ const opaque_argument_app =
 
 /// Lower the app with the post-check settings `roc build` uses at its
 /// default `--opt speed` and report the post-check program size.
-fn liftedExprCount(app_body: []const u8) !usize {
+fn liftedExprCount(app_body: []const u8) harness.LowerToLirHarnessError!usize {
     var lifted_exprs: usize = 0;
     try harness.expectLowersToLirWithOptions(app_body, .{
         .inline_mode = .wrappers,
@@ -69,5 +69,21 @@ test "issue 11143: a recursive walker called with a known constructor lowers at 
             .{ known_count, opaque_count },
         );
         return error.PostCheckProgramGrewUnboundedly;
+    }
+}
+
+test "issue 11143: repeated distribution retains strict bindings in iterator arms" {
+    // These iterator chains distribute matches more than once. Bindings
+    // introduced by the first distribution must still enclose the recorded
+    // result when the next distribution replaces the arm's tail.
+    for ([_][]const u8{
+        "test/wasm/iter_for_static_lib_app.roc",
+        "test/wasm/iter_list_hoist_static_lib_app.roc",
+    }) |app_path| {
+        try harness.expectAppPathLowersToLirWithOptions(app_path, .{
+            .target_usize = .u32,
+            .inline_mode = .wrappers,
+            .spec_constr_clone_inlining = .all_calls,
+        });
     }
 }
