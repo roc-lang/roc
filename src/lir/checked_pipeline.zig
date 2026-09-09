@@ -17,6 +17,9 @@ const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
+const SingleUseInline = @import("single_use_inline.zig");
+const ForwardingJoinInline = @import("forwarding_join_inline.zig");
+const TagCaseFusion = @import("tag_case_fusion.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const TagReachability = @import("tag_reachability.zig");
@@ -63,6 +66,9 @@ pub const RootRequestSet = struct {
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
 };
+
+/// Deterministic task counts for parallel solved-LIR body lowering.
+pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
@@ -112,6 +118,8 @@ pub const TargetConfig = struct {
     /// so a differential harness can execute the Debug verifier's materialized
     /// Lambda Mono program. The slot receives a value only in Debug builds.
     debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
+    /// Optional deterministic task counts for solved-LIR body-shard lowering.
+    solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving. Every later post-check stage walks that program in full, so the
     /// count is the size measure a growth regression shows up in.
@@ -570,53 +578,50 @@ pub const LoweredProgram = struct {
         self.lir_result.deinit();
     }
 
+    /// Host compilation selects only provided roots before lowering. Their
+    /// emitted order is the common symbol/procedure/dispatch-ordinal mapping.
     pub fn platformEntrypoints(
         self: *const LoweredProgram,
         allocator: Allocator,
     ) Allocator.Error![]LirImage.PlatformEntrypoint {
         const root_procs = self.lir_result.root_procs.items;
         const root_metadata = self.lir_result.root_metadata.items;
-        if (root_procs.len != root_metadata.len) {
-            checkedPipelineInvariant("root metadata count differs from root proc count");
+        std.debug.assert(root_procs.len == root_metadata.len);
+
+        const entrypoints = try allocator.alloc(LirImage.PlatformEntrypoint, root_procs.len);
+        for (root_procs, root_metadata, entrypoints, 0..) |root_proc, metadata, *entrypoint, ordinal| {
+            std.debug.assert(metadata.kind == .provided_export);
+            std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
+            entrypoint.* = .{ .ordinal = @intCast(ordinal), .root_proc = root_proc };
         }
-
-        var entrypoints = std.ArrayList(LirImage.PlatformEntrypoint).empty;
-        errdefer entrypoints.deinit(allocator);
-
-        for (root_procs, root_metadata) |root_proc, metadata| {
-            if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
-            try entrypoints.append(allocator, .{
-                .ordinal = @intCast(entrypoints.items.len),
-                .root_proc = root_proc,
-            });
-        }
-
-        return try entrypoints.toOwnedSlice(allocator);
+        return entrypoints;
     }
 
+    /// Own the symbol strings: run images outlive their checked modules.
     pub fn platformEntrypointNames(
         self: *const LoweredProgram,
         allocator: Allocator,
         root_module: *const checked.Module,
     ) Allocator.Error![]const []const u8 {
         const root_metadata = self.lir_result.root_metadata.items;
-
-        var names = std.ArrayList([]const u8).empty;
+        const names = try allocator.alloc([]const u8, root_metadata.len);
+        var initialized: usize = 0;
         errdefer {
-            for (names.items) |name| allocator.free(name);
-            names.deinit(allocator);
+            for (names[0..initialized]) |name| allocator.free(name);
+            allocator.free(names);
         }
 
-        for (root_metadata) |metadata| {
-            if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
+        for (root_metadata, names) |metadata, *name| {
+            std.debug.assert(metadata.kind == .provided_export);
+            std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
             const root = root_module.lookupRootRequestByOrder(metadata.order) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked root request");
-            const name = root_module.entrypointNameForRoot(root) orelse
-                checkedPipelineInvariant("platform entrypoint root metadata has no checked entrypoint name");
-            try names.append(allocator, try allocator.dupe(u8, name));
+            const symbol = root_module.providedEntrypointName(root) orelse
+                checkedPipelineInvariant("platform entrypoint root metadata has no checked export declaration");
+            name.* = try allocator.dupe(u8, symbol);
+            initialized += 1;
         }
-
-        return try names.toOwnedSlice(allocator);
+        return names;
     }
 };
 
@@ -715,7 +720,12 @@ pub fn lowerCheckedModulesToLir(
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
         spec_constr_timing_scope.end();
         break :blk usage;
-    } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
+    } else blk: {
+        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
+        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusion(allocator, &lifted);
+        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
+        break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
+    };
     defer procedure_usage.deinit();
 
     if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
@@ -746,6 +756,7 @@ pub fn lowerCheckedModulesToLir(
     solved = undefined;
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .inline_plan = inline_plan.view(),
+        .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = switch (target.checked_module_state) {
@@ -756,6 +767,7 @@ pub fn lowerCheckedModulesToLir(
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
+        .parallel_metrics = target.solved_lir_parallel_metrics_out,
     });
     lir_gen_timing_scope.end();
     errdefer lowered.deinit();
@@ -777,6 +789,11 @@ fn finishLoweredOutput(
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    if (target.specialization_strategy == .lss and target.inline_mode == .none) {
+        try SingleUseInline.run(&lowered.lir_result);
+        try ForwardingJoinInline.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+        try TagCaseFusion.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     if (target.promote_loop_appends) {
         try LoopAppendPromote.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
@@ -867,6 +884,7 @@ fn lowerBoxyCheckedModulesToLir(
             .target_usize = target.target_usize,
             .list_in_place_map = target.list_in_place_map,
             .proc_debug_names = target.proc_debug_names,
+            .observe_expects = roots.test_plan_metadata.len != 0,
         },
     );
     errdefer lowered.deinit();
@@ -1018,22 +1036,8 @@ pub fn selectPlatformExportRoots(
     return try selected.toOwnedSlice(allocator);
 }
 
-/// Select platform roots for LIR images consumed by host shims/interpreters.
-pub fn selectPlatformEntrypointRoots(
-    allocator: Allocator,
-    requests: []const checked.RootRequest,
-) Allocator.Error![]checked.RootRequest {
-    var selected = std.ArrayList(checked.RootRequest).empty;
-    errdefer selected.deinit(allocator);
-
-    for (requests) |request| {
-        if (request.kind == .provided_export or request.kind == .platform_required_binding) {
-            try selected.append(allocator, request);
-        }
-    }
-
-    return try selected.toOwnedSlice(allocator);
-}
+/// Host shims and linked outputs have the same checked export roots.
+pub const selectPlatformEntrypointRoots = selectPlatformExportRoots;
 
 fn collectStaticDataRequests(
     allocator: Allocator,

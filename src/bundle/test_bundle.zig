@@ -18,6 +18,7 @@ const unbundle_mod = @import("unbundle");
 const DirExtractWriter = bundle.DirExtractWriter;
 const BufferExtractWriter = unbundle_mod.BufferExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
+const EntryIterator = test_util.EntryIterator;
 
 // Use fast compression for tests
 const TEST_COMPRESSION_LEVEL: c_int = 2;
@@ -220,7 +221,7 @@ test "bundle validates paths correctly" {
         var iter = FilePathIterator{ .paths = &paths };
 
         var error_ctx: bundle.ErrorContext = undefined;
-        const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, null, &error_ctx);
+        const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, &error_ctx);
 
         try testing.expectError(error.InvalidPath, result);
         try testing.expectEqual(bundle.PathValidationReason.windows_reserved_name, error_ctx.reason);
@@ -239,8 +240,9 @@ test "bundle validates paths correctly" {
         const paths = [_][]const u8{"normal.txt"};
         var iter = FilePathIterator{ .paths = &paths };
 
-        const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, null, null);
-        defer allocator.free(filename);
+        const result = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, null);
+        defer allocator.free(result.filename);
+        try testing.expectEqual(@as(u64, "Normal content".len), result.uncompressed_size);
 
         // Should succeed
         var list = bundle_writer.toArrayList();
@@ -370,7 +372,7 @@ test "bundle and unbundle roundtrip" {
     var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
     defer bundle_writer.deinit();
 
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null, null);
+    const filename = (try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null)).filename;
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -456,7 +458,7 @@ test "bundle and unbundle over socket stream" {
     var file_iter = FilePathIterator{ .paths = &file_paths };
     var bundle_writer_buffer: [4096]u8 = undefined;
     var bundle_writer = bundle_file.writer(io, &bundle_writer_buffer);
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.interface, src_dir, null, null);
+    const filename = (try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.interface, src_dir, null)).filename;
     try bundle_writer.interface.flush();
     defer allocator.free(filename);
 
@@ -601,7 +603,7 @@ test "minimal bundle unbundle" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null, null);
+    const filename = (try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null)).filename;
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -622,7 +624,7 @@ test "minimal bundle unbundle" {
     try testing.expectEqualStrings("Hello", content);
 }
 
-test "bundle with path prefix stripping" {
+test "bundle stores an archive path distinct from its source path" {
     const testing = std.testing;
     var allocator = testing.allocator;
     const io = std.testing.io;
@@ -636,7 +638,7 @@ test "bundle with path prefix stripping" {
     try src_dir.createDirPath(io, "foo/bar/src");
     try src_dir.createDirPath(io, "foo/bar/src/utils");
 
-    // Create test files with the prefix
+    // Create source files below a nested directory.
     {
         const file = try src_dir.createFile(io, "foo/bar/src/main.txt", .{});
         defer file.close(io);
@@ -648,20 +650,18 @@ test "bundle with path prefix stripping" {
         try file.writeStreamingAll(io, "Helper file content");
     }
 
-    // Bundle with path prefix
+    // Store each file relative to that directory in the archive.
     var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
     defer bundle_writer.deinit();
 
-    // File paths include the full prefix
-    const file_paths = [_][]const u8{
-        "foo/bar/src/main.txt",
-        "foo/bar/src/utils/helper.txt",
+    const entries = [_]bundle.Entry{
+        .{ .source_path = "foo/bar/src/main.txt", .archive_path = "main.txt" },
+        .{ .source_path = "foo/bar/src/utils/helper.txt", .archive_path = "utils/helper.txt" },
     };
 
-    var file_iter = FilePathIterator{ .paths = &file_paths };
+    var entry_iter = EntryIterator{ .entries = &entries };
 
-    // Bundle with prefix "foo/bar/src/"
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, "foo/bar/src/", null);
+    const filename = (try bundle.bundle(&entry_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null)).filename;
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -708,7 +708,7 @@ test "blake3 hash verification failure" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null, null);
+    const filename = (try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null)).filename;
     defer allocator.free(filename);
 
     // Create destination directory
@@ -751,7 +751,7 @@ test "unbundle tolerates a pre-existing directory named after the archive" {
     const files = [_][]const u8{"test.txt"};
     var iter = FilePathIterator{ .paths = &files };
 
-    const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &output_writer.writer, src_dir, null, null);
+    const filename = (try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &output_writer.writer, src_dir, null)).filename;
     defer allocator.free(filename);
 
     // Create a destination directory that already contains a directory
@@ -798,7 +798,7 @@ test "blake3 hash detects corruption" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null, null);
+    const filename = (try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, src_dir, null)).filename;
     defer allocator.free(filename);
 
     // Corrupt the data by flipping a bit
@@ -885,7 +885,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     }
     var iter1 = FilePathIterator{ .paths = paths1.items };
 
-    const filename1 = try bundle.bundle(&iter1, TEST_COMPRESSION_LEVEL, &allocator, io, &first_bundle_writer.writer, initial_dir, null, null);
+    const filename1 = (try bundle.bundle(&iter1, TEST_COMPRESSION_LEVEL, &allocator, io, &first_bundle_writer.writer, initial_dir, null)).filename;
     defer allocator.free(filename1);
 
     // Write first bundle to file
@@ -926,7 +926,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     var iter2 = FilePathIterator{ .paths = paths2.items };
 
     const extracted1_dir = try unbundle1_dir.openDir(io, "extracted1", .{});
-    const filename2 = try bundle.bundle(&iter2, TEST_COMPRESSION_LEVEL, &allocator, io, &second_bundle_writer.writer, extracted1_dir, null, null);
+    const filename2 = (try bundle.bundle(&iter2, TEST_COMPRESSION_LEVEL, &allocator, io, &second_bundle_writer.writer, extracted1_dir, null)).filename;
     defer allocator.free(filename2);
 
     // Filenames should be identical (same content = same hash)
@@ -1116,7 +1116,7 @@ test "download from local server" {
     };
     var file_iter = FilePathIterator{ .paths = &file_paths };
 
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, null, null);
+    const filename = (try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, null)).filename;
     defer allocator.free(filename);
 
     // Extract hash from filename
@@ -1286,7 +1286,7 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
     var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
     defer bundle_writer.deinit();
 
-    const filename = try bundle.bundle(
+    const filename = (try bundle.bundle(
         &file_iter,
         TEST_COMPRESSION_LEVEL,
         &allocator,
@@ -1294,8 +1294,7 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
         &bundle_writer.writer,
         src_dir,
         null,
-        null,
-    );
+    )).filename;
     defer allocator.free(filename);
 
     // Parse hash from filename
@@ -1374,7 +1373,7 @@ test "unbundleStream with large file (multi-block zstd)" {
     var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
     defer bundle_writer.deinit();
 
-    const filename = try bundle.bundle(
+    const filename = (try bundle.bundle(
         &file_iter,
         TEST_COMPRESSION_LEVEL,
         &allocator,
@@ -1382,8 +1381,7 @@ test "unbundleStream with large file (multi-block zstd)" {
         &bundle_writer.writer,
         src_dir,
         null,
-        null,
-    );
+    )).filename;
     defer allocator.free(filename);
 
     // Parse hash from filename
@@ -1458,7 +1456,7 @@ test "unbundleStream reports expanded size and enforces the limit" {
     var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
     defer bundle_writer.deinit();
 
-    const filename = try bundle.bundle(
+    const filename = (try bundle.bundle(
         &file_iter,
         TEST_COMPRESSION_LEVEL,
         &allocator,
@@ -1466,8 +1464,7 @@ test "unbundleStream reports expanded size and enforces the limit" {
         &bundle_writer.writer,
         src_dir,
         null,
-        null,
-    );
+    )).filename;
     defer allocator.free(filename);
 
     const hash_str = filename[0 .. filename.len - ".tar.zst".len];

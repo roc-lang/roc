@@ -15,27 +15,24 @@ match result {
 # EXPECTED
 POLYMORPHIC VALUE - branch_scoping.md:1:1:6:2
 # PROBLEMS
-── ✗ polymorphic value ─────────────────────────────────── branch_scoping.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
-match result {
-    Ok(value) => value + 1
-    Err(value) => value - 1
-    Ok(different) => different * 2
-    Err(different) => different / 2
-}
-
-Its type is:
-a
-  where [
-    a.div_by : a, Dec -> a,
-    a.minus : a, Dec -> a,
-    a.plus : a, Dec -> a,
-    a.times : a, Dec -> a,
-  ]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 1 1) (end 6 2))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "branch_scoping.md") (start 1 1) (end 6 2) (annotation error) (line-text "match result {\n    Ok(value) => value + 1\n    Err(value) => value - 1\n    Ok(different) => different * 2\n    Err(different) => different / 2\n}"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "a\n  where [\n    a.div_by : a, Dec -> a,\n    a.minus : a, Dec -> a,\n    a.plus : a, Dec -> a,\n    a.times : a, Dec -> a,\n  ]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

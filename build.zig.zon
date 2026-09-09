@@ -49,43 +49,43 @@
         // Net effect: these stay correct on any CPU of their architecture no
         // matter which `-Dcpu` roc itself is built with.
         .roc_deps_aarch64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-macos-none.tar.xz",
-            .hash = "N-V-__8AAKS-VRH7JXsaDHpnFPSd-B5fSdtnDbh0XrfnncWc",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/aarch64-macos-none.tar.xz",
+            .hash = "N-V-__8AAI7KVRG6J1Tp9i70olobTIwsFtoF_O54b2H3PnHZ",
             .lazy = true,
         },
         .roc_deps_aarch64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-linux-musl.tar.xz",
-            .hash = "N-V-__8AACK4KheKSiltX0PPURTNh0CvJhsopNXzcXpvq9pS",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/aarch64-linux-musl.tar.xz",
+            .hash = "N-V-__8AAHzIKhc4RFMeZgW2iBmdo3tsRO5ZpNElA4Fm7THu",
             .lazy = true,
         },
         .roc_deps_aarch64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-windows-gnu.zip",
-            .hash = "N-V-__8AAPEjNhjVXuc6-b70fcyHFGS_ckUIx5_ICD3-3HZk",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/aarch64-windows-gnu.zip",
+            .hash = "N-V-__8AAHIzNhjDkOXYZnta3YtR_7LrghBqs1jXUvmCpjCu",
             .lazy = true,
         },
         .roc_deps_arm_linux_musleabihf = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/arm-linux-musleabihf.tar.xz",
-            .hash = "N-V-__8AAKywPxfY01H2OMTuZllxIuavfyGGm3kpW7-1RmkP",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/arm-linux-musleabihf.tar.xz",
+            .hash = "N-V-__8AAGa9PxcZ8NvCQI5IquwW3ml3U9eoLBVIsRf28aBF",
             .lazy = true,
         },
         .roc_deps_x86_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86-linux-musl.tar.xz",
-            .hash = "N-V-__8AAMg8ihSrg9Udc8ZJ1trVVUgglxJg8CbHoYG51dZq",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86-linux-musl.tar.xz",
+            .hash = "N-V-__8AAHRLihScN14ACLeAAXmQB7hKYq8Ii5wPWSXn18cl",
             .lazy = true,
         },
         .roc_deps_x86_64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-linux-musl.tar.xz",
-            .hash = "N-V-__8AAGJLMhhn8pu3uyxtKTIlha8CxCjE6TNpLYvvj-cz",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86_64-linux-musl.tar.xz",
+            .hash = "N-V-__8AAGRcMhjhLwO3ey8ICFyBlvCT3_7XhM1xrEzWIBRD",
             .lazy = true,
         },
         .roc_deps_x86_64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-macos-none.tar.xz",
-            .hash = "N-V-__8AAJrG0hG7ZWMT8yxRBa17ivn77bWqDpseO904PYT7",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86_64-macos-none.tar.xz",
+            .hash = "N-V-__8AANLT0hHDnp788OOENaNTO0osBQU25xaf6WT4g75U",
             .lazy = true,
         },
         .roc_deps_x86_64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-windows-gnu.zip",
-            .hash = "N-V-__8AADfFZhvsrNly3AbA2PmVP9piXKNto_CmeqLuNNsd",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86_64-windows-gnu.zip",
+            .hash = "N-V-__8AALjVZhvbkIwdq0GDQB5m6lsopY3B2XZ2awlF4i2c",
             .lazy = true,
         },
         // No runtime dispatch, and nothing that would benefit from it: every

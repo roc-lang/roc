@@ -133,7 +133,7 @@ expect sumResult == 10
 				(p-assign (ident "step")))
 			(e-block
 				(s-var
-					(p-assign (ident "$state"))
+					(p-var-assign (ident "$state"))
 					(e-lookup-local
 						(p-assign (ident "init"))))
 				(s-for
@@ -142,17 +142,17 @@ expect sumResult == 10
 						(p-assign (ident "list")))
 					(e-block
 						(s-reassign
-							(p-assign (ident "$state"))
+							(p-var-assign (ident "$state"))
 							(e-call (constraint-fn-var 315)
 								(e-lookup-local
 									(p-assign (ident "step")))
 								(e-lookup-local
-									(p-assign (ident "$state")))
+									(p-var-assign (ident "$state")))
 								(e-lookup-local
 									(p-assign (ident "item")))))
 						(e-empty_record)))
 				(e-lookup-local
-					(p-assign (ident "$state")))))
+					(p-var-assign (ident "$state")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -166,7 +166,7 @@ expect sumResult == 10
 				(ty-rigid-var-lookup (ty-rigid-var (name "state"))))))
 	(d-let
 		(p-assign (ident "sumResult"))
-		(e-call (constraint-fn-var 365)
+		(e-call (constraint-fn-var 367)
 			(e-lookup-local
 				(p-assign (ident "fold")))
 			(e-list
@@ -180,7 +180,7 @@ expect sumResult == 10
 				(args
 					(p-assign (ident "acc"))
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 363)
+				(e-dispatch-call (method "plus") (constraint-fn-var 365)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "acc"))))

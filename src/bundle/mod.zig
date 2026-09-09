@@ -24,6 +24,8 @@ pub const BundleError = bundle.BundleError;
 pub const PathValidationError = bundle.PathValidationError;
 pub const PathValidationReason = bundle.PathValidationReason;
 pub const ErrorContext = bundle.ErrorContext;
+pub const Entry = bundle.Entry;
+pub const Result = bundle.Result;
 
 // Re-export constants
 pub const STREAM_BUFFER_SIZE = bundle.STREAM_BUFFER_SIZE;

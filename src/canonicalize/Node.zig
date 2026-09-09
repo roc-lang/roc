@@ -107,7 +107,6 @@ pub const Tag = enum {
     expr_record_update,
     expr_bin_op,
     expr_unary_minus,
-    expr_unary_not,
     expr_suffix_single_question,
     expr_if_then_else,
     expr_match,
@@ -149,11 +148,11 @@ pub const Tag = enum {
     ty_malformed,
     // Where clause
     where_method,
-    where_method_effectful,
     where_alias,
     where_malformed,
     // Patterns
     pattern_identifier,
+    pattern_var_identifier,
     pattern_as,
     pattern_applied_tag,
     pattern_nominal,
@@ -245,6 +244,7 @@ pub const Tag = enum {
     diag_invalid_main_type_rename_in_exposing,
     diag_var_across_function_boundary,
     diag_shadowing_warning,
+    diag_binding_name_does_not_match_mutability,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_undeclared_type_var,
@@ -287,6 +287,7 @@ pub const Tag = enum {
     diag_if_expr_without_else,
     diag_break_outside_loop,
     diag_infinite_loop_never_exits,
+    diag_trailing_try_suffix,
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
@@ -382,6 +383,7 @@ pub const Payload = extern union {
     expr_return: ExprReturn,
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
+    pattern_var_identifier: PatternIdentifier,
     pattern_as: PatternAs,
     pattern_applied_tag: PatternAppliedTag,
     pattern_record_destructure: PatternRecordDestructure,
@@ -1098,8 +1100,7 @@ pub const Payload = extern union {
     pub const WhereClause = extern struct {
         var_idx: u32,
         name: u32,
-        args_ret_idx: u32, // Index into span_with_node_data: (args.start, args.len, ret)
-        effectful: u32,
+        anno: u32,
     };
 
     pub const WhereMalformed = extern struct {

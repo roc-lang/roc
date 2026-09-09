@@ -85,58 +85,42 @@ greeting = f("hello ")
 (can-ir
 	(d-let
 		(p-assign (ident "earlier"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 259)
+		(e-dispatch-call (method "plus") (constraint-fn-var 245)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "x"))))
 			(args
 				(e-num (value "1")))))
 	(d-let
-		(p-record-destructure
-			(destructs
-				(record-destruct (label "x") (ident "x")
-					(required
-						(p-assign (ident "x"))))))
-		(e-record
-			(fields
-				(field (name "x")
-					(e-num (value "1"))))))
+		(p-assign (ident "x"))
+		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "later"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 268)
+		(e-dispatch-call (method "plus") (constraint-fn-var 254)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "x"))))
 			(args
 				(e-num (value "2")))))
 	(d-let
-		(p-record-destructure
-			(destructs
-				(record-destruct (label "f") (ident "f")
-					(required
-						(p-assign (ident "f"))))
-				(record-destruct (label "n") (ident "n")
-					(required
-						(p-assign (ident "n"))))))
-		(e-record
-			(fields
-				(field (name "f")
-					(e-lambda
-						(args
-							(p-assign (ident "v")))
-						(e-call (constraint-fn-var 279)
-							(e-lookup-external
-								(builtin))
-							(e-lookup-local
-								(p-assign (ident "v")))
-							(e-lookup-local
-								(p-assign (ident "n"))))))
-				(field (name "n")
-					(e-string
-						(e-literal (string "s")))))))
+		(p-assign (ident "f"))
+		(e-lambda
+			(args
+				(p-assign (ident "v")))
+			(e-call (constraint-fn-var 270)
+				(e-lookup-external
+					(builtin))
+				(e-lookup-local
+					(p-assign (ident "v")))
+				(e-lookup-local
+					(p-assign (ident "n"))))))
+	(d-let
+		(p-assign (ident "n"))
+		(e-string
+			(e-literal (string "s"))))
 	(d-let
 		(p-assign (ident "greeting"))
-		(e-call (constraint-fn-var 301)
+		(e-call (constraint-fn-var 281)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-string
@@ -148,11 +132,15 @@ greeting = f("hello ")
 	(defs
 		(patt (type "Dec"))
 		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Str -> Str"))
+		(patt (type "Str"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Dec"))
-		(expr (type "{ x: Dec }"))
 		(expr (type "Dec"))
-		(expr (type "{ f: Str -> Str, n: Str }"))
+		(expr (type "Dec"))
+		(expr (type "Str -> Str"))
+		(expr (type "Str"))
 		(expr (type "Str"))))
 ~~~

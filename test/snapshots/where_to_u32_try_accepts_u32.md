@@ -41,12 +41,12 @@ EndOfFile,
 				(ty (name "U32")))
 			(where
 				(method (mod-of "a") (name "to_u32_try")
-					(args
-						(ty-var (raw "a")))
-					(ty-apply
-						(ty (name "Try"))
-						(ty (name "U32"))
-						(_)))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-apply
+							(ty (name "Try"))
+							(ty (name "U32"))
+							(_))))))
 		(s-decl
 			(p-ident (raw "function"))
 			(e-lambda
@@ -94,7 +94,7 @@ _ = function(value)
 			(args
 				(p-assign (ident "convertible")))
 			(e-block
-				(e-dispatch-call (method "ok_or") (constraint-fn-var 253)
+				(e-dispatch-call (method "ok_or") (constraint-fn-var 247)
 					(receiver
 						(e-dispatch-call (method "to_u32_try") (constraint-fn-var 244)
 							(receiver
@@ -109,11 +109,11 @@ _ = function(value)
 				(ty-lookup (name "U32") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_u32_try")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-apply (name "Try") (builtin)
-						(ty-lookup (name "U32") (builtin))
-						(ty-underscore))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-apply (name "Try") (builtin)
+							(ty-lookup (name "U32") (builtin))
+							(ty-underscore)))))))
 	(d-let
 		(p-assign (ident "value"))
 		(e-num (value "123"))
@@ -121,7 +121,7 @@ _ = function(value)
 			(ty-lookup (name "U32") (builtin))))
 	(d-let
 		(p-underscore)
-		(e-call (constraint-fn-var 278)
+		(e-call (constraint-fn-var 280)
 			(e-lookup-local
 				(p-assign (ident "function")))
 			(e-lookup-local

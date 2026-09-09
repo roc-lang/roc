@@ -10,23 +10,41 @@ match 42 {}
 # EXPECTED
 EMPTY MATCH - empty_match.md:1:1:1:6
 # PROBLEMS
-── ✗ empty match ──────────────────────────────────────────── empty_match.md:1:1
-
-I was parsing a match expression, but it has no branches.
-
-match 42 {}
-^^^^^
-
-A match expression needs at least one branch inside the braces.
-
-For example:
-    match result {
-        Ok(value) => value
-    }
-
-I found match here.
-That word is reserved by Roc, so it cannot be used as a name in this position.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Empty Match")
+		(region (start 1 1) (end 1 6))
+		(headline
+			(reflow "I was parsing a match expression, but it has no branches."))
+		(document
+			(reflow "A match expression needs at least one branch inside the braces.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "match result {")
+			(line-break)
+			(indent 1)
+			(text "    Ok(value) => value")
+			(line-break)
+			(indent 1)
+			(text "}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "match")
+			(text " here.")
+			(line-break)
+			(reflow "That word is reserved by Roc, so it cannot be used as a name in this position.")
+			(line-break)
+			(line-break)
+			(source-region (file "empty_match.md") (start 1 1) (end 1 6) (annotation error) (line-text "match 42 {}")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,Int,OpenCurly,CloseCurly,

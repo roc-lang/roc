@@ -14,18 +14,25 @@ run = || {
 # EXPECTED
 MISSING METHOD - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
 # PROBLEMS
-── ✗ missing method ─────────── static_dispatch_discarded_iter_issue_9815.md:3:9
-
-This is trying to dispatch a method named from_iter on an unresolved type
-variable, but unresolved type variables have no methods.
-
-_ = Iter.collect(Iter.custom(0.U64, Unknown, f))
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 3 9) (end 3 53))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "from_iter")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "static_dispatch_discarded_iter_issue_9815.md") (start 3 9) (end 3 53) (annotation error) (line-text "    _ = Iter.collect(Iter.custom(0.U64, Unknown, f))"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,

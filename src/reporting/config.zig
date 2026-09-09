@@ -29,6 +29,10 @@ pub const RenderTargetPreference = enum {
 
 /// Configuration for the reporting system.
 pub const ReportingConfig = struct {
+    /// Absolute working directory for terminal source locations. Borrowed for
+    /// the duration of rendering; null preserves the supplied paths.
+    source_path_base: ?[]const u8 = null,
+
     /// Color preference
     color_preference: ColorPreference,
 

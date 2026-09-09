@@ -147,7 +147,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 369)
+						(e-dispatch-call (method "plus") (constraint-fn-var 359)
 							(receiver
 								(e-field-access
 									(receiver
@@ -172,7 +172,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 423)
+						(e-dispatch-call (method "minus") (constraint-fn-var 403)
 							(receiver
 								(e-field-access
 									(receiver
@@ -196,7 +196,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 465)
+				(e-call (constraint-fn-var 445)
 					(e-lookup-local
 						(p-assign (ident "advance")))
 					(e-record
@@ -215,7 +215,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 519)
+				(e-call (constraint-fn-var 499)
 					(e-lookup-local
 						(p-assign (ident "retreat")))
 					(e-record
@@ -234,10 +234,10 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 573)
+				(e-call (constraint-fn-var 553)
 					(e-lookup-local
 						(p-assign (ident "advance")))
-					(e-call (constraint-fn-var 572)
+					(e-call (constraint-fn-var 552)
 						(e-lookup-local
 							(p-assign (ident "retreat")))
 						(e-record

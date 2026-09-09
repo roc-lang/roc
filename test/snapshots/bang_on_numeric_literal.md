@@ -8,23 +8,27 @@ type=expr
 !3
 ~~~
 # EXPECTED
-MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
+TYPE MISMATCH - bang_on_numeric_literal.md:1:2:1:3
 # PROBLEMS
-── ✗ missing method ───────────────────────────── bang_on_numeric_literal.md:1:1
-
-This not method is being called on a value whose type doesn't have that method.
-
-!3
-^^
-
-The value's type, which does not have a method named not, is:
-
-    Dec
-
-Hint: This numeric literal was given the type Dec because it was never used as
-any concrete number type. To use a different numeric type, add a suffix or a
-type annotation.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 2) (end 1 3))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "bang_on_numeric_literal.md") (start 1 2) (end 1 3) (annotation error) (line-text "!3"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Bool")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpBang,Int,
@@ -41,9 +45,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "erroneous_value_expr"))
+(e-call (constraint-fn-var 215)
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17337") (target-def "17337"))
+	(e-runtime-error (tag "erroneous_value_expr")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Bool"))
 ~~~

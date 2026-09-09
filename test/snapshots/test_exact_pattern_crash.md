@@ -36,27 +36,56 @@ main = {
 UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
 TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
-── ● unused variable ────────────────────────── test_exact_pattern_crash.md:19:5
-
-Variable p1 is defined here and then never used:
-
-p1 = swap_pair((1, 2))
-^^
-
-If you don't need this variable, prefix it with an underscore like _p1 to
-suppress this warning.
-
-── ✗ too many args ─────────────────────────── test_exact_pattern_crash.md:23:10
-
-The map_pair function expects 3 arguments, but it got 4 instead.
-
-p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
-     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The map_pair function has the type:
-
-    Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 19 5) (end 19 7))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "p1")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_p1")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "test_exact_pattern_crash.md") (start 19 5) (end 19 7) (annotation error) (line-text "    p1 = swap_pair((1, 2))"))))
+	(report
+		(severity runtime_error)
+		(title "Too Many Args")
+		(region (start 23 10) (end 23 50))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "map_pair")
+			(reflow " function expects")
+			(reflow " ")
+			(reflow "3")
+			(reflow " ")
+			(reflow "arguments")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but it got")
+			(reflow " ")
+			(reflow "4")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "test_exact_pattern_crash.md") (start 23 10) (end 23 50) (annotation error) (line-text "    p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(annotated code "map_pair")
+			(reflow " function has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

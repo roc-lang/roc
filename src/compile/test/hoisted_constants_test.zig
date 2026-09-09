@@ -62,6 +62,9 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         PatternExtractionRootWasNotSyntheticMatch,
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
+        StaticDataInitializerCountMismatch,
+        StaticDataInitializerPrecededRootBody,
+        StaticDataInitializerRequestOrderMismatch,
         StaticDataLiteralNotFound,
         StaticDataSymbolNotFound,
         TestExpectedEqual,
@@ -443,7 +446,7 @@ test "imported checked bodies restore their module's hoisted constants" {
     defer lowered.deinit();
 }
 
-test "hoisted list constants lower to internal static data" {
+test "hoisted list constants lower to internal static data in request order" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -458,10 +461,14 @@ test "hoisted list constants lower to internal static data" {
         \\import pf.Echo
         \\
         \\numbers = [11.I64, 22.I64, 33.I64, 44.I64]
+        \\more_numbers = [55.I64, 66.I64]
         \\
         \\main! = |args| {
         \\    var $sum = List.len(args).to_i64_wrap()
         \\    for n in numbers {
+        \\        $sum = $sum + n
+        \\    }
+        \\    for n in more_numbers {
         \\        $sum = $sum + n
         \\    }
         \\    _ = $sum
@@ -521,8 +528,19 @@ test "hoisted list constants lower to internal static data" {
     );
     defer lowered.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
+    if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
     try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
+    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer);
+    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer);
+    const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
+    const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
+    // Reachable roots form a barrier before queued initializers, whose request
+    // order must then determine their body order.
+    if (@intFromEnum(first_body) >= @intFromEnum(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
+    for (lowered.lir_result.root_procs.items) |root_proc| {
+        const root_body = lowered.lir_result.store.getProcSpec(root_proc).body orelse return error.StaticDataLiteralNotFound;
+        if (@intFromEnum(root_body) >= @intFromEnum(first_body)) return error.StaticDataInitializerPrecededRootBody;
+    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -1968,7 +1986,7 @@ fn expectPatternExtractionSyntheticRegions(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
-            .pattern_validation => continue,
+            .pattern_validation, .pattern_error => continue,
         };
         extraction_count += 1;
 
@@ -2394,13 +2412,10 @@ fn scalarConstNodeI64(
     return actual;
 }
 
-test "issue 9733: nested expect statements are collected as test roots" {
+test "issue 9733: nested expect statements remain inline" {
     // https://github.com/roc-lang/roc/issues/9733
-    // The module has two `expect`s: the outer one and the one nested inside its
-    // block body. Both must be collected as compile-time `expect` roots so that
-    // `roc test` evaluates the nested `expect 3 == 4` (which must fail). Today
-    // only the top-level expect is collected, so this count is 1 and `roc test`
-    // wrongly reports "All (1) tests passed".
+    // Only the outer expect is an execution root. The nested expect executes as
+    // part of that root and is counted through runtime test observation.
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -2455,7 +2470,7 @@ test "issue 9733: nested expect statements are collected as test roots" {
     const app_artifact = coord.appRootCheckedArtifact();
 
     try std.testing.expectEqual(
-        @as(usize, 2),
+        @as(usize, 1),
         countCompileTimeRootKind(app_artifact, .expect),
     );
 }

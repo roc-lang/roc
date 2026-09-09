@@ -14,7 +14,8 @@ const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const SystemV = @import("SystemV.zig");
 const WindowsFastcall = @import("WindowsFastcall.zig");
-const Relocation = @import("../Relocation.zig").Relocation;
+const Relocation = @import("../Relocation.zig").IndexedRelocation;
+const SymbolTable = @import("../SymbolTable.zig");
 const FrameBuilderMod = @import("../FrameBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
@@ -74,6 +75,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         allocator: Allocator,
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
+        symbols: SymbolTable.Table = .{},
         free_general: u32,
         free_float: u32,
         callee_saved_used: u16, // Bitmask of callee-saved regs we used
@@ -97,11 +99,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn deinit(self: *Self) void {
             self.emit.deinit();
             self.relocations.deinit(self.allocator);
+            self.symbols.deinit(self.allocator);
         }
 
         pub fn reset(self: *Self) void {
             self.emit.buf.clearRetainingCapacity();
             self.relocations.clearRetainingCapacity();
+            self.symbols.clearRetainingCapacity();
             self.stack_offset = 0;
             self.free_general = CC.CALLER_SAVED_GENERAL_MASK;
             self.free_float = CC.CALLER_SAVED_FLOAT_MASK;
@@ -623,13 +627,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
-        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) Allocator.Error!void {
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol: SymbolTable.Id) Allocator.Error!void {
             const start = self.currentOffset();
             try self.emit.leaRegRipRel(dst, 0);
             try self.relocations.append(self.allocator, .{
                 .linked_data = .{
                     .offset = @intCast(start + 3),
-                    .name = symbol_name,
+                    .symbol = symbol,
                     .kind = .rel32,
                 },
             });
@@ -669,13 +673,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit function call with relocation
-        pub fn emitCall(self: *Self, name: []const u8) Allocator.Error!void {
+        pub fn emitCall(self: *Self, symbol: SymbolTable.Id) Allocator.Error!void {
             const offset = self.currentOffset();
             try self.emit.callRel32(0); // Placeholder
-            try self.relocations.append(.{
+            try self.relocations.append(self.allocator, .{
                 .linked_function = .{
                     .offset = @intCast(offset + 1), // After E8 opcode
-                    .name = name,
+                    .symbol = symbol,
                 },
             });
         }

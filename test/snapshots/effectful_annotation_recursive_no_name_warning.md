@@ -25,15 +25,24 @@ main! = |_| {
 # EXPECTED
 EFFECTFUL FUNCTION NAME - effectful_annotation_recursive_no_name_warning.md:11:1:11:7
 # PROBLEMS
-── ● effectful function name ─ effectful_annotation_recursive_no_name_warning.md:11:1
-
-This function performs an effect, so its name must end in `!`.
-
-caller = |n| recurse(n)
-^^^^^^
-
-Add a trailing ! to this function name.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Effectful Function Name")
+		(region (start 11 1) (end 11 7))
+		(headline
+			(reflow "This function performs an effect, so its name must end in `!`."))
+		(document
+			(source-region (file "effectful_annotation_recursive_no_name_warning.md") (start 11 1) (end 11 7) (annotation warning) (line-text "caller = |n| recurse(n)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a trailing")
+			(reflow " ")
+			(annotated code "!")
+			(reflow " ")
+			(reflow "to this function name."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpFatArrow,UpperIdent,
@@ -249,7 +258,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 413)
+			(e-call (constraint-fn-var 416)
 				(e-lookup-local
 					(p-assign (ident "recurse")))
 				(e-lookup-local
@@ -262,7 +271,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 421)
+					(e-call (constraint-fn-var 427)
 						(e-lookup-local
 							(p-assign (ident "caller")))
 						(e-num (value "0"))))

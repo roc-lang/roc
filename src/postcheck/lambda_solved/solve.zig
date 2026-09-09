@@ -39,6 +39,10 @@ const UnifyFinishAction = union(enum) {
         var_: Type.TypeVarId,
         target: Type.TypeVarId,
     },
+    link_structural_to_inspectable_named: struct {
+        structural: Type.TypeVarId,
+        named: Type.TypeVarId,
+    },
     set_left_erased_link_right: struct {
         lhs: Type.TypeVarId,
         rhs: Type.TypeVarId,
@@ -103,6 +107,7 @@ const Solver = struct {
     expr_tys: []?Type.TypeVarId,
     pat_tys: []?Type.TypeVarId,
     expr_done: []bool,
+    expr_stack: std.ArrayList(ExprFrame),
     generated_backing_pats: []bool,
     loop_results: std.ArrayList(Type.TypeVarId),
     loop_params: std.ArrayList(Type.Span),
@@ -131,6 +136,16 @@ const Solver = struct {
     /// allocating and zeroing chunks; pooled maps keep chunks across uses.
     solved_set_pool: collections.DenseMapPool(Type.TypeVarId, void),
     solved_position_pool: collections.DenseMapPool(Type.TypeVarId, u32),
+    /// Tag positions by name per stored tag row, keyed by the row's start.
+    /// Rows are immutable once stored, so an index stays valid for the
+    /// solver's lifetime and a row unified against many small rows is
+    /// indexed once.
+    tag_row_indexes: std.AutoHashMapUnmanaged(u32, TagRowIndex),
+    /// The clone context every callable-free lazy leaf expands in. A
+    /// callable-free Monotype has no lambda-set state to solve, so all of its
+    /// uses can read one clone; giving each use its own would make every
+    /// meeting of two uses unify the whole type again.
+    shared_leaf_context: ?u32,
     mono_set_pool: collections.DenseMapPool(MonoType.TypeId, void),
     clone_map_pool: collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId),
 
@@ -233,6 +248,7 @@ const Solver = struct {
             .expr_tys = expr_tys,
             .pat_tys = pat_tys,
             .expr_done = expr_done,
+            .expr_stack = .empty,
             .generated_backing_pats = generated_backing_pats,
             .loop_results = .empty,
             .loop_params = .empty,
@@ -247,12 +263,17 @@ const Solver = struct {
             .leaf_contexts = .empty,
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
+            .tag_row_indexes = .empty,
+            .shared_leaf_context = null,
             .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
             .clone_map_pool = collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        var row_indexes = self.tag_row_indexes.valueIterator();
+        while (row_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
+        self.tag_row_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
         self.mono_set_pool.deinit();
         self.solved_position_pool.deinit();
@@ -270,6 +291,7 @@ const Solver = struct {
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
         self.allocator.free(self.generated_backing_pats);
+        self.expr_stack.deinit(self.allocator);
         self.allocator.free(self.expr_done);
         self.allocator.free(self.pat_tys);
         self.allocator.free(self.expr_tys);
@@ -630,105 +652,200 @@ const Solver = struct {
         }
     }
 
-    fn inferExpr(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
-        const index = @intFromEnum(expr_id);
-        const expected = try self.exprSlot(expr_id);
-        if (self.expr_done[index]) return expected;
-        self.expr_done[index] = true;
+    /// A suspended expression or statement. Sequential spans retain one cursor,
+    /// so their length does not increase either native or continuation depth.
+    const ExprFrame = struct {
+        node: union(enum) { expr: Lifted.ExprId, stmt: Lifted.StmtId },
+        ty: ?Type.TypeVarId = null,
+        finish_slot: ?Type.TypeVarId = null,
+        cursor: usize = 0,
+        branch: usize = 0,
+        binding: usize = 0,
+        match_phase: enum { bind_pattern, bindings, guard, body, next_branch } = .bind_pattern,
+        generated_backing: bool = false,
+    };
 
-        const expr = self.lifted.exprs[index];
+    const ExprRequest = union(enum) {
+        expr: struct {
+            id: Lifted.ExprId,
+            expected: ?Type.TypeVarId = null,
+            generated_backing: bool = false,
+        },
+        stmt: Lifted.StmtId,
+    };
+
+    fn beginExpr(self: *Solver, request: ExprRequest) Allocator.Error!?ExprFrame {
+        switch (request) {
+            .stmt => |stmt| return .{ .node = .{ .stmt = stmt } },
+            .expr => |expr| {
+                const slot = if (expr.expected) |expected| try self.expectExprSlot(expr.id, expected) else null;
+                const ty = try self.exprSlot(expr.id);
+                const index = @intFromEnum(expr.id);
+                if (self.expr_done[index]) {
+                    if (slot) |expected| try self.unify(expected, ty);
+                    return null;
+                }
+                self.expr_done[index] = true;
+                return .{ .node = .{ .expr = expr.id }, .ty = ty, .finish_slot = slot, .generated_backing = expr.generated_backing };
+            },
+        }
+    }
+
+    fn inferredExpr(self: *Solver, expr: Lifted.ExprId) Type.TypeVarId {
+        std.debug.assert(self.expr_done[@intFromEnum(expr)]);
+        return self.program.types.rootCompressed(self.expr_tys[@intFromEnum(expr)].?);
+    }
+
+    fn inferExpr(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
+        std.debug.assert(self.expr_stack.items.len == 0);
+        defer self.expr_stack.clearRetainingCapacity();
+        var frame = (try self.beginExpr(.{ .expr = .{ .id = expr_id } })) orelse return self.inferredExpr(expr_id);
+        while (true) {
+            if (try self.stepExpr(&frame)) |request| {
+                if (try self.beginExpr(request)) |child| {
+                    try self.expr_stack.append(self.allocator, frame);
+                    frame = child;
+                }
+            } else {
+                if (frame.finish_slot) |slot| try self.unify(slot, self.program.types.rootCompressed(frame.ty.?));
+                frame = self.expr_stack.pop() orelse break;
+            }
+        }
+        return self.inferredExpr(expr_id);
+    }
+
+    /// Resume at the next source-ordered child, after all constraints from the
+    /// previous child have been applied. Scope stacks stay live until the
+    /// owning expression's last child returns.
+    fn stepExpr(self: *Solver, frame: *ExprFrame) Allocator.Error!?ExprRequest {
+        const expr_id = switch (frame.node) {
+            .expr => |expr| expr,
+            .stmt => |stmt_id| {
+                const stmt = self.lifted.stmts[@intFromEnum(stmt_id)];
+                if (frame.cursor != 0) {
+                    if (stmt == .let_) try self.bindPattern(stmt.let_.pat, self.inferredExpr(stmt.let_.value));
+                    return null;
+                }
+                frame.cursor = 1;
+                switch (stmt) {
+                    .uninitialized => |pat| {
+                        const pat_ty = try self.lowerTypeFresh(self.lifted.pats[@intFromEnum(pat)].ty);
+                        try self.bindPattern(pat, pat_ty);
+                        return null;
+                    },
+                    .let_ => |let_| return .{ .expr = .{ .id = let_.value } },
+                    .expr, .expect, .dbg => |expr| return .{ .expr = .{ .id = expr } },
+                    .return_ => |ret| return .{ .expr = .{ .id = ret.value, .expected = try self.returnTargetTy(ret.target) } },
+                    .crash => return null,
+                }
+            },
+        };
+        const expr = self.lifted.exprs[@intFromEnum(expr_id)];
+        const expected = frame.ty.?;
+        const cursor = frame.cursor;
+        frame.cursor += 1;
+
+        if (frame.generated_backing) switch (expr.data) {
+            .record => |fields| {
+                const children = self.lifted.fieldExprSpan(fields);
+                return if (cursor < children.len) .{ .expr = .{ .id = children[cursor].value } } else null;
+            },
+            .record_update => |update| {
+                if (cursor == 0) return .{ .expr = .{ .id = update.base } };
+                const children = self.lifted.fieldExprSpan(update.fields);
+                return if (cursor - 1 < children.len) .{ .expr = .{ .id = children[cursor - 1].value } } else null;
+            },
+            .tuple, .tag => {
+                const children = self.lifted.exprSpan(if (expr.data == .tuple) expr.data.tuple else expr.data.tag.payloads);
+                return if (cursor < children.len) .{ .expr = .{ .id = children[cursor] } } else null;
+            },
+            .static_data_candidate, .nominal => {
+                const child = if (expr.data == .nominal) expr.data.nominal else expr.data.static_data_candidate.runtime_expr;
+                return if (cursor == 0) .{ .expr = .{ .id = child, .generated_backing = true } } else null;
+            },
+            .let_ => |let_| {
+                if (cursor == 0) return .{ .expr = .{ .id = let_.value } };
+                if (cursor == 1) {
+                    try self.bindPattern(let_.bind, self.inferredExpr(let_.value));
+                    return .{ .expr = .{ .id = let_.rest, .generated_backing = true } };
+                }
+                return null;
+            },
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .comptime_branch_taken => {},
+        };
+
         switch (expr.data) {
             .local => |local| try self.unify(expected, self.localTy(local)),
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .uninitialized,
-            .uninitialized_payload,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            => {},
-            .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
+            .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .comptime_exhaustiveness_failed, .@"unreachable" => {},
+            .static_data_candidate => |candidate| {
+                if (cursor == 0) return .{ .expr = .{ .id = candidate.runtime_expr, .expected = expected } };
+            },
+            .typed_boundary => |boundary| {
+                if (cursor == 0) return .{ .expr = .{ .id = boundary.value } };
+                try self.unify(expected, self.inferredExpr(boundary.value));
+            },
             .list => |items| {
-                const elem_ty = try self.listElem(expected);
-                for (self.lifted.exprSpan(items)) |child| {
-                    _ = try self.expectExpr(child, elem_ty);
-                }
+                const children = self.lifted.exprSpan(items);
+                if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = try self.listElem(expected) } };
             },
             .tuple => |items| {
-                const item_tys = try self.tupleItemsSpan(expected);
+                const tys = try self.tupleItemsSpan(expected);
                 const children = self.lifted.exprSpan(items);
-                if (item_tys.count() != children.len) Common.invariant("tuple expression arity differs from its checked type");
-                for (children, 0..) |child, i| {
-                    const item_ty = self.program.types.spanItem(item_tys, i);
-                    _ = try self.expectExpr(child, item_ty);
-                }
+                if (tys.count() != children.len) Common.invariant("tuple expression arity differs from its checked type");
+                if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = self.program.types.spanItem(tys, cursor) } };
             },
             .record => |fields| {
-                for (self.lifted.fieldExprSpan(fields)) |field| {
-                    _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
+                const children = self.lifted.fieldExprSpan(fields);
+                if (cursor < children.len) {
+                    const field = children[cursor];
+                    return .{ .expr = .{ .id = field.value, .expected = try self.recordField(expected, field.name) } };
                 }
             },
             .record_update => |update| {
-                _ = try self.expectExpr(update.base, expected);
-                for (self.lifted.fieldExprSpan(update.fields)) |field| {
-                    _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
+                if (cursor == 0) return .{ .expr = .{ .id = update.base } };
+                if (cursor == 1) try self.relateRecordUpdate(expected, self.inferredExpr(update.base), update.fields);
+                const children = self.lifted.fieldExprSpan(update.fields);
+                if (cursor - 1 < children.len) {
+                    const field = children[cursor - 1];
+                    return .{ .expr = .{ .id = field.value, .expected = try self.recordField(expected, field.name) } };
                 }
             },
             .tag => |tag| {
-                const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
-                const payloads = self.lifted.exprSpan(tag.payloads);
-                if (payload_tys.count() != payloads.len) Common.invariant("tag expression payload arity differs from its checked type");
-                for (payloads, 0..) |payload, i| {
-                    const expected_payload_ty = self.program.types.spanItem(payload_tys, i);
-                    _ = try self.expectExpr(payload, expected_payload_ty);
-                }
+                const tys = try self.tagPayloadsSpan(expected, tag.name);
+                const children = self.lifted.exprSpan(tag.payloads);
+                if (tys.count() != children.len) Common.invariant("tag expression payload arity differs from its checked type");
+                if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = self.program.types.spanItem(tys, cursor) } };
             },
             .nominal => |backing| {
-                if (try self.namedBacking(expected)) |backing_ty| {
-                    if (try self.hasBuiltinOwner(expected, .fields) or try self.hasBuiltinOwner(expected, .field)) {
-                        try self.inferGeneratedOpaqueBacking(backing);
-                    } else {
-                        _ = try self.expectExpr(backing, backing_ty);
+                if (cursor == 0) {
+                    if (try self.namedBacking(expected)) |ty| {
+                        if (try self.hasBuiltinOwner(expected, .fields) or try self.hasBuiltinOwner(expected, .field)) {
+                            return .{ .expr = .{ .id = backing, .generated_backing = true } };
+                        }
+                        return .{ .expr = .{ .id = backing, .expected = ty } };
                     }
-                } else {
-                    _ = try self.inferExpr(backing);
+                    return .{ .expr = .{ .id = backing } };
                 }
             },
             .let_ => |let_| {
-                const value_ty = try self.inferExpr(let_.value);
-                try self.bindPattern(let_.bind, value_ty);
-                _ = try self.expectExpr(let_.rest, expected);
+                if (cursor == 0) return .{ .expr = .{ .id = let_.value } };
+                if (cursor == 1) {
+                    try self.bindPattern(let_.bind, self.inferredExpr(let_.value));
+                    return .{ .expr = .{ .id = let_.rest, .expected = expected } };
+                }
             },
-            .lambda,
-            .def_ref,
-            .fn_def,
-            => Common.invariant("pre-lift function expression reached Lambda Solved"),
-            .fn_ref => |fn_ref| {
-                try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)]);
-                const captures = self.liftedCapturesForFn(fn_ref.fn_id);
-                const capture_operands = self.lifted.captureOperandSpan(fn_ref.captures);
-                if (captures.len != capture_operands.len) {
-                    Common.invariant("function reference capture count differs from its target");
-                }
-                for (captures, capture_operands) |capture, operand| {
-                    if (operand.id != self.lifted.captureIdOfLocal(capture.local)) {
-                        Common.invariant("function reference capture operand CaptureId did not match its slot");
-                    }
-                    _ = try self.expectExpr(operand.value, self.localTy(capture.local));
-                }
+            .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached Lambda Solved"),
+            .fn_ref => |ref| {
+                if (cursor == 0) try self.unify(expected, self.program.fn_tys.items[@intFromEnum(ref.fn_id)]);
+                return try self.captureRequest(ref.fn_id, ref.captures, cursor);
             },
             .call_value => |call| {
-                const func = try self.functionShape(try self.inferExpr(call.callee));
+                if (cursor == 0) return .{ .expr = .{ .id = call.callee } };
+                const func = try self.functionShape(self.inferredExpr(call.callee));
                 const args = self.lifted.exprSpan(call.args);
                 if (func.args.count() != args.len) Common.invariant("value call arity differs from its checked type");
-                try self.unify(expected, func.ret);
-                for (args, 0..) |arg, i| {
-                    _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
-                }
+                if (cursor == 1) try self.unify(expected, func.ret);
+                if (cursor - 1 < args.len) return .{ .expr = .{ .id = args[cursor - 1], .expected = self.program.types.spanItem(func.args, cursor - 1) } };
             },
             .call_proc => |call| {
                 const args = self.lifted.exprSpan(call.args);
@@ -736,295 +853,228 @@ const Solver = struct {
                     .local => |callee| {
                         const func = try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)]);
                         if (func.args.count() != args.len) Common.invariant("procedure call arity differs from its checked type");
-                        try self.unify(expected, func.ret);
-                        for (args, 0..) |arg, i| {
-                            _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
-                        }
-                        const captures = self.liftedCapturesForFn(callee);
-                        const capture_operands = self.lifted.captureOperandSpan(call.captures);
-                        if (captures.len != capture_operands.len) Common.invariant("procedure call capture count differs from its callee");
-                        for (captures, capture_operands) |capture, operand| {
-                            if (operand.id != self.lifted.captureIdOfLocal(capture.local)) {
-                                Common.invariant("procedure call capture operand CaptureId did not match its slot");
-                            }
-                            _ = try self.expectExpr(operand.value, self.localTy(capture.local));
-                        }
+                        if (cursor == 0) try self.unify(expected, func.ret);
+                        if (cursor < args.len) return .{ .expr = .{ .id = args[cursor], .expected = self.program.types.spanItem(func.args, cursor) } };
+                        return try self.captureRequest(callee, call.captures, cursor - args.len);
                     },
                     .imported => {
-                        for (args) |arg| {
-                            _ = try self.inferExpr(arg);
-                        }
+                        if (cursor < args.len) return .{ .expr = .{ .id = args[cursor] } };
                         if (call.captures.len != 0) Common.invariant("imported direct call carried local capture operands");
                     },
                 }
             },
             .low_level => |call| {
                 const args = self.lifted.exprSpan(call.args);
-                const arg_tys = try self.allocator.alloc(Type.TypeVarId, args.len);
-                defer self.allocator.free(arg_tys);
-                for (args, 0..) |arg, i| {
-                    arg_tys[i] = try self.inferExpr(arg);
-                }
-                try self.bindLowLevelTypes(call.op, expected, arg_tys);
+                if (cursor < args.len) return .{ .expr = .{ .id = args[cursor] } };
+                const tys = try self.allocator.alloc(Type.TypeVarId, args.len);
+                defer self.allocator.free(tys);
+                for (args, tys) |arg, *ty| ty.* = self.inferredExpr(arg);
+                try self.bindLowLevelTypes(call.op, expected, tys);
             },
             .field_access => |field| {
-                var prefix_ty = try self.inferExpr(field.receiver);
+                if (cursor == 0) return .{ .expr = .{ .id = field.receiver } };
+                var ty = self.inferredExpr(field.receiver);
                 const segments = self.lifted.fieldAccessSegmentSpan(field.segments);
                 if (segments.len == 0) Common.invariant("field access path had no segments");
-                for (segments) |segment| {
-                    prefix_ty = try self.recordField(prefix_ty, segment.field);
-                }
-                try self.unify(expected, prefix_ty);
+                for (segments) |segment| ty = try self.recordField(ty, segment.field);
+                try self.unify(expected, ty);
             },
             .tuple_access => |access| {
-                const receiver_ty = try self.inferExpr(access.tuple);
-                const items = try self.tupleItemsSpan(receiver_ty);
+                if (cursor == 0) return .{ .expr = .{ .id = access.tuple } };
+                const items = try self.tupleItemsSpan(self.inferredExpr(access.tuple));
                 if (access.elem_index >= items.count()) Common.invariant("tuple access index exceeds tuple arity");
                 try self.unify(expected, self.program.types.spanItem(items, access.elem_index));
             },
             .structural_eq => |eq| {
-                const lhs = try self.inferExpr(eq.lhs);
-                const rhs = try self.inferExpr(eq.rhs);
-                try self.unify(lhs, rhs);
+                if (cursor == 0) return .{ .expr = .{ .id = eq.lhs } };
+                if (cursor == 1) return .{ .expr = .{ .id = eq.rhs } };
+                try self.unify(self.inferredExpr(eq.lhs), self.inferredExpr(eq.rhs));
             },
             .structural_hash => |h| {
-                _ = try self.inferExpr(h.value);
-                const hasher = try self.inferExpr(h.hasher);
-                // `to_hash` threads the Hasher through, so the result type equals
-                // the Hasher argument's type.
-                try self.unify(expected, hasher);
+                if (cursor == 0) return .{ .expr = .{ .id = h.value } };
+                if (cursor == 1) return .{ .expr = .{ .id = h.hasher } };
+                try self.unify(expected, self.inferredExpr(h.hasher));
             },
             .match_ => |match| {
-                const scrutinee_ty = try self.inferExpr(match.scrutinee);
-                for (self.lifted.branchSpan(match.branches)) |branch| {
-                    try self.bindPattern(branch.pat, scrutinee_ty);
-                    for (self.lifted.stmtSpan(branch.bindings)) |binding| try self.inferStmt(binding);
-                    if (branch.guard) |guard| _ = try self.inferExpr(guard);
-                    _ = try self.expectExpr(branch.body, expected);
+                if (cursor == 0) return .{ .expr = .{ .id = match.scrutinee } };
+                const branches = self.lifted.branchSpan(match.branches);
+                while (frame.branch < branches.len) {
+                    const branch = branches[frame.branch];
+                    switch (frame.match_phase) {
+                        .bind_pattern => {
+                            try self.bindPattern(branch.pat, self.inferredExpr(match.scrutinee));
+                            frame.binding = 0;
+                            frame.match_phase = .bindings;
+                        },
+                        .bindings => {
+                            const bindings = self.lifted.stmtSpan(branch.bindings);
+                            if (frame.binding < bindings.len) {
+                                const stmt = bindings[frame.binding];
+                                frame.binding += 1;
+                                return .{ .stmt = stmt };
+                            }
+                            frame.match_phase = .guard;
+                        },
+                        .guard => {
+                            frame.match_phase = .body;
+                            if (branch.guard) |guard| return .{ .expr = .{ .id = guard } };
+                        },
+                        .body => {
+                            frame.match_phase = .next_branch;
+                            return .{ .expr = .{ .id = branch.body, .expected = expected } };
+                        },
+                        .next_branch => {
+                            frame.branch += 1;
+                            frame.match_phase = .bind_pattern;
+                        },
+                    }
                 }
             },
             .if_ => |if_| {
-                for (self.lifted.ifBranchSpan(if_.branches)) |branch| {
-                    _ = try self.inferExpr(branch.cond);
-                    _ = try self.expectExpr(branch.body, expected);
+                const branches = self.lifted.ifBranchSpan(if_.branches);
+                if (cursor / 2 < branches.len) {
+                    const branch = branches[cursor / 2];
+                    return .{ .expr = if (cursor % 2 == 0) .{ .id = branch.cond } else .{ .id = branch.body, .expected = expected } };
                 }
-                _ = try self.expectExpr(if_.final_else, expected);
+                if (cursor == 2 * branches.len) return .{ .expr = .{ .id = if_.final_else, .expected = expected } };
             },
-            .if_initialized_payload => |payload_switch| {
-                _ = try self.inferExpr(payload_switch.cond);
-                _ = self.localTy(payload_switch.payload);
-                _ = try self.expectExpr(payload_switch.initialized, expected);
-                _ = try self.expectExpr(payload_switch.uninitialized, expected);
+            .if_initialized_payload => |payload| {
+                if (cursor == 0) return .{ .expr = .{ .id = payload.cond } };
+                if (cursor == 1) {
+                    _ = self.localTy(payload.payload);
+                    return .{ .expr = .{ .id = payload.initialized, .expected = expected } };
+                }
+                if (cursor == 2) return .{ .expr = .{ .id = payload.uninitialized, .expected = expected } };
             },
-            .try_sequence => |sequence| {
-                const try_ty = try self.inferExpr(sequence.try_expr);
-                const content = try self.shapeContent(try_ty);
-                if (std.meta.activeTag(content) != .tag_union) Common.invariant("try_sequence input was not a Try tag union");
-                const tags = content.tag_union;
-                var ok_ty: ?Type.TypeVarId = null;
-                var err_ty: ?Type.TypeVarId = null;
-                for (0..tags.count()) |tag_index| {
-                    const tag = self.program.types.tagItem(tags, tag_index);
-                    const text = self.lifted.names.tagLabelText(tag.name);
-                    if (std.mem.eql(u8, text, "Ok")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
-                        ok_ty = self.program.types.spanItem(tag.payloads, 0);
-                    } else if (std.mem.eql(u8, text, "Err")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_sequence Err tag had unexpected payload arity");
-                        err_ty = self.program.types.spanItem(tag.payloads, 0);
+            .try_sequence, .try_record_sequence => {
+                const input = if (expr.data == .try_sequence) expr.data.try_sequence.try_expr else expr.data.try_record_sequence.try_expr;
+                if (cursor == 0) return .{ .expr = .{ .id = input } };
+                if (cursor == 1) {
+                    const content = try self.shapeContent(self.inferredExpr(input));
+                    if (content != .tag_union) Common.invariant("try sequence input was not a Try tag union");
+                    var ok_ty: ?Type.TypeVarId = null;
+                    var err_ty: ?Type.TypeVarId = null;
+                    for (0..content.tag_union.count()) |index| {
+                        const tag = self.program.types.tagItem(content.tag_union, index);
+                        const name = self.lifted.names.tagLabelText(tag.name);
+                        if (std.mem.eql(u8, name, "Ok") or std.mem.eql(u8, name, "Err")) {
+                            if (tag.payloads.count() != 1) Common.invariant("try sequence tag had unexpected payload arity");
+                            if (std.mem.eql(u8, name, "Ok")) ok_ty = self.program.types.spanItem(tag.payloads, 0) else err_ty = self.program.types.spanItem(tag.payloads, 0);
+                        }
                     }
-                }
-                try self.unify(self.localTy(sequence.ok_local), ok_ty orelse Common.invariant("try_sequence input had no Ok tag"));
-                if (sequence.err_target) |target| {
-                    const params = self.activeJoinPoint(target).params;
-                    if (params.count() != 1) Common.invariant("try_sequence error target did not have one parameter");
-                    try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try_sequence input had no Err tag"));
-                }
-                _ = try self.expectExpr(sequence.ok_body, expected);
-            },
-            .try_record_sequence => |sequence| {
-                const try_ty = try self.inferExpr(sequence.try_expr);
-                const content = try self.shapeContent(try_ty);
-                if (std.meta.activeTag(content) != .tag_union) Common.invariant("try_record_sequence input was not a Try tag union");
-                const tags = content.tag_union;
-                var ok_ty: ?Type.TypeVarId = null;
-                var err_ty: ?Type.TypeVarId = null;
-                for (0..tags.count()) |tag_index| {
-                    const tag = self.program.types.tagItem(tags, tag_index);
-                    const text = self.lifted.names.tagLabelText(tag.name);
-                    if (std.mem.eql(u8, text, "Ok")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
-                        ok_ty = self.program.types.spanItem(tag.payloads, 0);
-                    } else if (std.mem.eql(u8, text, "Err")) {
-                        if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Err tag had unexpected payload arity");
-                        err_ty = self.program.types.spanItem(tag.payloads, 0);
+                    const ok = ok_ty orelse Common.invariant("try sequence input had no Ok tag");
+                    const target = if (expr.data == .try_sequence) expr.data.try_sequence.err_target else expr.data.try_record_sequence.err_target;
+                    if (expr.data == .try_sequence) {
+                        try self.unify(self.localTy(expr.data.try_sequence.ok_local), ok);
+                    } else {
+                        const seq = expr.data.try_record_sequence;
+                        try self.unify(self.localTy(seq.value_local), try self.recordField(ok, seq.value_field));
+                        try self.unify(self.localTy(seq.rest_local), try self.recordField(ok, seq.rest_field));
                     }
+                    if (target) |id| {
+                        const params = self.activeJoinPoint(id).params;
+                        if (params.count() != 1) Common.invariant("try sequence error target did not have one parameter");
+                        try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try sequence input had no Err tag"));
+                    }
+                    const body = if (expr.data == .try_sequence) expr.data.try_sequence.ok_body else expr.data.try_record_sequence.ok_body;
+                    return .{ .expr = .{ .id = body, .expected = expected } };
                 }
-                const ok_record_ty = ok_ty orelse Common.invariant("try_record_sequence input had no Ok tag");
-                try self.unify(self.localTy(sequence.value_local), try self.recordField(ok_record_ty, sequence.value_field));
-                try self.unify(self.localTy(sequence.rest_local), try self.recordField(ok_record_ty, sequence.rest_field));
-                if (sequence.err_target) |target| {
-                    const params = self.activeJoinPoint(target).params;
-                    if (params.count() != 1) Common.invariant("try_record_sequence error target did not have one parameter");
-                    try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try_record_sequence input had no Err tag"));
-                }
-                _ = try self.expectExpr(sequence.ok_body, expected);
             },
-            .@"unreachable" => {},
             .block => |block| {
-                for (self.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
-                _ = try self.expectExpr(block.final_expr, expected);
+                const statements = self.lifted.stmtSpan(block.statements);
+                if (cursor < statements.len) return .{ .stmt = statements[cursor] };
+                if (cursor == statements.len) return .{ .expr = .{ .id = block.final_expr, .expected = expected } };
             },
             .loop_ => |loop| {
                 const params = self.lifted.typedLocalSpan(loop.params);
                 const initials = self.lifted.exprSpan(loop.initial_values);
                 if (params.len != initials.len) Common.invariant("loop parameter count differs from initial value count");
-                const param_tys = try self.allocator.alloc(Type.TypeVarId, params.len);
-                defer self.allocator.free(param_tys);
-                for (params, 0..) |param, i| {
-                    param_tys[i] = self.localTy(param.local);
-                    _ = try self.expectExpr(initials[i], param_tys[i]);
+                if (cursor < params.len) return .{ .expr = .{ .id = initials[cursor], .expected = self.localTy(params[cursor].local) } };
+                if (cursor == params.len) {
+                    const tys = try self.allocator.alloc(Type.TypeVarId, params.len);
+                    defer self.allocator.free(tys);
+                    for (params, tys) |param, *ty| ty.* = self.localTy(param.local);
+                    try self.loop_results.append(self.allocator, expected);
+                    try self.loop_params.append(self.allocator, try self.program.types.addSpan(tys));
+                    return .{ .expr = .{ .id = loop.body, .expected = expected } };
                 }
-                try self.loop_results.append(self.allocator, expected);
-                try self.loop_params.append(self.allocator, try self.program.types.addSpan(param_tys));
-                defer _ = self.loop_params.pop();
-                defer _ = self.loop_results.pop();
-                _ = try self.expectExpr(loop.body, expected);
+                _ = self.loop_params.pop();
+                _ = self.loop_results.pop();
             },
-            .break_ => |maybe| {
-                if (maybe) |value| {
-                    _ = try self.expectExpr(value, self.currentLoopResult());
-                }
+            .break_ => |value| {
+                if (cursor == 0) if (value) |child| return .{ .expr = .{ .id = child, .expected = self.currentLoopResult() } };
             },
-            .continue_ => |continue_| {
+            .continue_ => |cont| {
                 const params = self.currentLoopParams();
-                const values = self.lifted.exprSpan(continue_.values);
+                const values = self.lifted.exprSpan(cont.values);
                 if (params.count() != values.len) Common.invariant("continue value count differs from loop parameter count");
-                for (values, 0..) |value, i| {
-                    const param_ty = self.program.types.spanItem(params, i);
-                    _ = try self.expectExpr(value, param_ty);
-                }
+                if (cursor < values.len) return .{ .expr = .{ .id = values[cursor], .expected = self.program.types.spanItem(params, cursor) } };
             },
-            .join_point => |join_point| {
-                const params = self.lifted.typedLocalSpan(join_point.params);
-                const param_tys = try self.allocator.alloc(Type.TypeVarId, params.len);
-                defer self.allocator.free(param_tys);
-                for (params, 0..) |param, param_index| {
-                    param_tys[param_index] = self.localTy(param.local);
+            .join_point => |join| {
+                if (cursor == 0) {
+                    const params = self.lifted.typedLocalSpan(join.params);
+                    const tys = try self.allocator.alloc(Type.TypeVarId, params.len);
+                    defer self.allocator.free(tys);
+                    for (params, tys) |param, *ty| ty.* = self.localTy(param.local);
+                    try self.join_points.append(self.allocator, .{ .id = join.id, .params = try self.program.types.addSpan(tys) });
+                    return .{ .expr = .{ .id = join.body, .expected = expected } };
                 }
-                try self.join_points.append(self.allocator, .{
-                    .id = join_point.id,
-                    .params = try self.program.types.addSpan(param_tys),
-                });
-                defer _ = self.join_points.pop();
-                _ = try self.expectExpr(join_point.body, expected);
-                _ = try self.expectExpr(join_point.remainder, expected);
+                if (cursor == 1) return .{ .expr = .{ .id = join.remainder, .expected = expected } };
+                _ = self.join_points.pop();
             },
             .jump => |jump| {
                 const params = self.activeJoinPoint(jump.target).params;
                 const args = self.lifted.exprSpan(jump.args);
                 if (params.count() != args.len) Common.invariant("jump argument count differs from join-point parameter count");
-                for (args, 0..) |arg, arg_index| {
-                    _ = try self.expectExpr(arg, self.program.types.spanItem(params, arg_index));
-                }
+                if (cursor < args.len) return .{ .expr = .{ .id = args[cursor], .expected = self.program.types.spanItem(params, cursor) } };
                 const loop_params = self.lifted.typedLocalSpan(jump.loop_params);
-                const loop_values = self.lifted.exprSpan(jump.loop_values);
-                if (loop_params.len != loop_values.len) Common.invariant("jump loop-update parameter count differs from value count");
-                for (loop_params, loop_values) |param, value| {
-                    _ = try self.expectExpr(value, self.localTy(param.local));
-                }
+                const values = self.lifted.exprSpan(jump.loop_values);
+                if (loop_params.len != values.len) Common.invariant("jump loop-update parameter count differs from value count");
+                if (cursor - args.len < values.len) return .{ .expr = .{ .id = values[cursor - args.len], .expected = self.localTy(loop_params[cursor - args.len].local) } };
             },
-            .return_ => |ret| _ = try self.expectExpr(ret.value, try self.returnTargetTy(ret.target)),
-            .dbg,
-            .expect,
-            => |child| _ = try self.inferExpr(child),
-            .expect_err => |expect_err| _ = try self.inferExpr(expect_err.msg),
-            .comptime_branch_taken => |taken| _ = try self.expectExpr(taken.body, expected),
+            .return_ => |ret| {
+                if (cursor == 0) return .{ .expr = .{ .id = ret.value, .expected = try self.returnTargetTy(ret.target) } };
+            },
+            .dbg, .expect => |child| {
+                if (cursor == 0) return .{ .expr = .{ .id = child } };
+            },
+            .expect_err => |err| {
+                if (cursor == 0) return .{ .expr = .{ .id = err.msg } };
+            },
+            .comptime_branch_taken => |taken| {
+                if (cursor == 0) return .{ .expr = .{ .id = taken.body, .expected = expected } };
+            },
         }
-        return self.program.types.rootCompressed(expected);
+        return null;
     }
 
-    fn inferStmt(self: *Solver, stmt_id: Lifted.StmtId) Allocator.Error!void {
-        switch (self.lifted.stmts[@intFromEnum(stmt_id)]) {
-            .uninitialized => |pat| {
-                const pat_ty = try self.lowerTypeFresh(self.lifted.pats[@intFromEnum(pat)].ty);
-                try self.bindPattern(pat, pat_ty);
-            },
-            .let_ => |let_| {
-                const value_ty = try self.inferExpr(let_.value);
-                try self.bindPattern(let_.pat, value_ty);
-            },
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| _ = try self.inferExpr(expr),
-            .return_ => |ret| _ = try self.expectExpr(ret.value, try self.returnTargetTy(ret.target)),
-            .crash => {},
+    /// Only unchanged fields flow from the base. Replacement fields may have
+    /// distinct specialized representations and callable sets.
+    fn relateRecordUpdate(self: *Solver, result: Type.TypeVarId, base: Type.TypeVarId, updates: Lifted.Span(Lifted.FieldExpr)) Allocator.Error!void {
+        const result_content = try self.shapeContent(result);
+        const base_content = try self.shapeContent(base);
+        if (result_content != .record or base_content != .record) Common.invariant("record update had a non-record type");
+        const result_fields = result_content.record;
+        const base_fields = base_content.record;
+        if (result_fields.count() != base_fields.count()) Common.invariant("record update changed its field names");
+        for (0..result_fields.count()) |index| {
+            const result_field = self.program.types.fieldItem(result_fields, index);
+            const base_field = self.program.types.fieldItem(base_fields, index);
+            if (result_field.name != base_field.name) Common.invariant("record update changed its ordered field names");
+            const replaced = for (self.lifted.fieldExprSpan(updates)) |field| {
+                if (field.name == result_field.name) break true;
+            } else false;
+            if (!replaced) try self.unify(result_field.ty, base_field.ty);
         }
     }
 
-    fn inferGeneratedOpaqueBacking(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!void {
-        const index = @intFromEnum(expr_id);
-        if (self.expr_done[index]) return;
-
-        const expr = self.lifted.exprs[index];
-        const tag = std.meta.activeTag(expr.data);
-        if (tag == .record) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            for (self.lifted.fieldExprSpan(expr.data.record)) |field| {
-                _ = try self.inferExpr(field.value);
-            }
-            return;
-        }
-        if (tag == .record_update) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            const update = expr.data.record_update;
-            _ = try self.inferExpr(update.base);
-            for (self.lifted.fieldExprSpan(update.fields)) |field| {
-                _ = try self.inferExpr(field.value);
-            }
-            return;
-        }
-        if (tag == .tuple) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            for (self.lifted.exprSpan(expr.data.tuple)) |item| {
-                _ = try self.inferExpr(item);
-            }
-            return;
-        }
-        if (tag == .tag) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            for (self.lifted.exprSpan(expr.data.tag.payloads)) |payload| {
-                _ = try self.inferExpr(payload);
-            }
-            return;
-        }
-        if (tag == .static_data_candidate) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            try self.inferGeneratedOpaqueBacking(expr.data.static_data_candidate.runtime_expr);
-            return;
-        }
-        if (tag == .nominal) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            try self.inferGeneratedOpaqueBacking(expr.data.nominal);
-            return;
-        }
-        if (tag == .let_) {
-            _ = try self.exprSlot(expr_id);
-            self.expr_done[index] = true;
-            const let_ = expr.data.let_;
-            const value_ty = try self.inferExpr(let_.value);
-            try self.bindPattern(let_.bind, value_ty);
-            try self.inferGeneratedOpaqueBacking(let_.rest);
-            return;
-        }
-        _ = try self.inferExpr(expr_id);
+    fn captureRequest(self: *Solver, fn_id: Lifted.FnId, span: Lifted.Span(Lifted.CaptureOperand), index: usize) Allocator.Error!?ExprRequest {
+        const captures = self.liftedCapturesForFn(fn_id);
+        const operands = self.lifted.captureOperandSpan(span);
+        if (captures.len != operands.len) Common.invariant("capture operand count differs from its target");
+        if (index == operands.len) return null;
+        if (operands[index].id != self.lifted.captureIdOfLocal(captures[index].local)) Common.invariant("capture operand CaptureId did not match its slot");
+        return .{ .expr = .{ .id = operands[index].value, .expected = self.localTy(captures[index].local) } };
     }
 
     fn bindPattern(self: *Solver, pat_id: Lifted.PatId, value_ty: Type.TypeVarId) Allocator.Error!void {
@@ -1384,8 +1434,14 @@ const Solver = struct {
     /// same cyclic graph an eager clone produced.
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
+            const raw_id = @intFromEnum(leaf.id);
+            const callable_free = !self.contains_callable[raw_id] and !self.contains_forced_dynamic[raw_id];
+            if (callable_free) {
+                if (self.shared_leaf_context) |shared| break :blk shared;
+            }
             const index: u32 = @intCast(self.leaf_contexts.items.len);
             try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+            if (callable_free) self.shared_leaf_context = index;
             break :blk index;
         };
         if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
@@ -1402,7 +1458,14 @@ const Solver = struct {
         defer cloner.deinit();
         const content = try cloner.lowerContent(self.lifted.types.get(leaf.id));
         self.program.types.set(root, content);
+        self.registerNamedBacking(content);
         return content;
+    }
+
+    fn registerNamedBacking(self: *Solver, content: Type.Content) void {
+        if (content == .named) {
+            if (content.named.backing) |backing| self.program.types.markNamedBacking(backing.ty);
+        }
     }
 
     fn resolvedContentAt(self: *Solver, root: Type.TypeVarId) Allocator.Error!Type.Content {
@@ -1741,11 +1804,17 @@ const Solver = struct {
         structural_ty: Type.TypeVarId,
         backing_ty: Type.TypeVarId,
     ) Allocator.Error!void {
-        try stack.append(self.allocator, .{ .process = .{
-            .lhs = structural_ty,
-            .rhs = backing_ty,
-            .structural_isolated = true,
-        } });
+        try stack.append(self.allocator, .{
+            .process = .{
+                // Keep the owned backing as the representative when the
+                // structural shapes are merged. The isolated clone may later be
+                // related to a nominal root, but a backing must never resolve to
+                // the nominal type that owns it.
+                .lhs = backing_ty,
+                .rhs = structural_ty,
+                .structural_isolated = true,
+            },
+        });
     }
 
     fn processUnifyPair(
@@ -1755,8 +1824,8 @@ const Solver = struct {
         rhs: Type.TypeVarId,
         structural_isolated: bool,
     ) Allocator.Error!void {
-        const a = self.program.types.rootCompressed(lhs);
-        const b = self.program.types.rootCompressed(rhs);
+        var a = self.program.types.rootCompressed(lhs);
+        var b = self.program.types.rootCompressed(rhs);
         if (a == b) return;
 
         const raw_left = self.program.types.get(a);
@@ -1767,6 +1836,11 @@ const Solver = struct {
         }
         const left = if (std.meta.activeTag(raw_left) == .mono) try self.expandMonoRoot(a, raw_left.mono) else raw_left;
         const right = if (std.meta.activeTag(raw_right) == .mono) try self.expandMonoRoot(b, raw_right.mono) else raw_right;
+        // Expanding a leaf already materialized in its context links the
+        // root to that clone, so the pair may have become one class.
+        a = self.program.types.rootCompressed(a);
+        b = self.program.types.rootCompressed(b);
+        if (a == b) return;
 
         const left_tag = std.meta.activeTag(left);
         if (left_tag == .link) Common.invariant("Lambda Solved root returned a link");
@@ -1996,6 +2070,12 @@ const Solver = struct {
             .none => {},
             .link_rhs_to_lhs => |link| self.program.types.set(link.rhs, .{ .link = link.lhs }),
             .link_var_to_root => |link| self.program.types.set(link.var_, .{ .link = self.program.types.rootCompressed(link.target) }),
+            .link_structural_to_inspectable_named => |link| {
+                const structural_root = self.program.types.rootCompressed(link.structural);
+                const named_root = self.program.types.rootCompressed(link.named);
+                if (structural_root == named_root or self.program.types.isOwnedNamedBacking(structural_root)) return;
+                self.program.types.set(structural_root, .{ .link = named_root });
+            },
             .set_left_erased_link_right => |set| {
                 self.program.types.set(set.lhs, .{ .erased = .{
                     .source_fn_ty = set.source_fn_ty,
@@ -2122,10 +2202,12 @@ const Solver = struct {
             structural_ty
         else
             try self.program.types.add(structural_content);
-        stack.items[finish_index].finish.action = .{ .link_var_to_root = .{
-            .var_ = structural_ty,
-            .target = named_ty,
-        } };
+        if (!structural_isolated) {
+            stack.items[finish_index].finish.action = .{ .link_structural_to_inspectable_named = .{
+                .structural = structural_ty,
+                .named = named_ty,
+            } };
+        }
         try self.pushIsolatedStructuralPair(stack, working_structural, backing.ty);
         return true;
     }
@@ -2248,7 +2330,9 @@ const Solver = struct {
     /// shape into its producer-authored generated-private representation.
     /// Monotype has already sealed both representations, so this relation
     /// deliberately preserves every composite and named root. Only callable
-    /// slots (and still-open Lambda Solved slots) are unified.
+    /// slots (and still-open Lambda Solved slots) are unified. A checked-public
+    /// inspectable named type may correspond to its structural backing in the
+    /// private witness; walk through that backing without linking either root.
     fn relateGeneratedPrivateEvidence(
         self: *Solver,
         public_ty: Type.TypeVarId,
@@ -2363,7 +2447,15 @@ const Solver = struct {
                 try self.relateGeneratedPrivateEvidence(public_fn.ret, private_fn.ret);
             },
             .named => |public_named| {
-                if (private_content_tag != .named) Common.invariant("generated-private evidence relation received different type structure");
+                if (private_content_tag != .named) {
+                    const public_backing = public_named.backing orelse
+                        Common.invariant("generated-private evidence relation could not traverse a public named type without backing");
+                    if (public_backing.authority != .checked_public or public_backing.use != .inspectable) {
+                        Common.invariant("generated-private evidence relation could not traverse an opaque public named type");
+                    }
+                    try self.relateGeneratedPrivateEvidence(public_backing.ty, private_root);
+                    return;
+                }
                 const private_named = private.named;
                 const same_identity = public_named.kind == private_named.kind and
                     std.meta.eql(public_named.def, private_named.def) and
@@ -2635,42 +2727,73 @@ const Solver = struct {
 
     /// Merge two tag unions, collecting the shared tags' payload spans for the
     /// caller to unify once the merged span has been recorded.
+    /// Positions of a stored tag row's tags by name; the first position wins
+    /// for a repeated name.
+    const TagRowIndex = struct {
+        len: u32,
+        by_name: std.AutoHashMapUnmanaged(Type.names.TagNameId, usize),
+    };
+
+    fn tagRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const TagRowIndex {
+        const gop = try self.tag_row_indexes.getOrPut(self.allocator, span.start);
+        if (gop.found_existing and gop.value_ptr.len == span.len) return gop.value_ptr;
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len, .by_name = .empty };
+        gop.value_ptr.len = span.len;
+        gop.value_ptr.by_name.clearRetainingCapacity();
+        try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
+        for (0..span.count()) |index| {
+            const entry = gop.value_ptr.by_name.getOrPutAssumeCapacity(self.program.types.tagItem(span, index).name);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+        return gop.value_ptr;
+    }
+
     fn mergeTags(
         self: *Solver,
         lhs: Type.Span,
         rhs: Type.Span,
         payload_pairs: *std.ArrayList(DeferredSpanPair),
     ) Allocator.Error!Type.Span {
-        var merged = std.ArrayList(Type.Tag).empty;
-        defer merged.deinit(self.allocator);
+        const right_index = try self.tagRowIndex(rhs);
         var shared_count: usize = 0;
-
+        var every_left_in_right = true;
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
-            try merged.append(self.allocator, left_tag);
-            for (0..rhs.count()) |right_index| {
-                const right_tag = self.program.types.tagItem(rhs, right_index);
-                if (left_tag.name != right_tag.name) continue;
+            if (right_index.by_name.get(left_tag.name)) |right_position| {
                 try payload_pairs.append(self.allocator, .{
                     .lhs = left_tag.payloads,
-                    .rhs = right_tag.payloads,
+                    .rhs = self.program.types.tagItem(rhs, right_position).payloads,
                 });
                 shared_count += 1;
-                break;
+            } else {
+                every_left_in_right = false;
             }
         }
 
         if (shared_count == 0) Common.invariant("disjoint tag unions failed Lambda Solved unification");
 
-        for (0..rhs.count()) |right_index| {
-            const right_tag = self.program.types.tagItem(rhs, right_index);
-            for (0..lhs.count()) |left_index| {
-                if (self.program.types.tagItem(lhs, left_index).name == right_tag.name) break;
-            } else {
-                try merged.append(self.allocator, right_tag);
-            }
-        }
+        // The right row already holds every left tag: the merge is the right
+        // row itself.
+        if (every_left_in_right) return rhs;
 
+        var merged = std.ArrayList(Type.Tag).empty;
+        defer merged.deinit(self.allocator);
+        var left_names = std.AutoHashMapUnmanaged(Type.names.TagNameId, void).empty;
+        defer left_names.deinit(self.allocator);
+        try left_names.ensureTotalCapacity(self.allocator, @intCast(lhs.count()));
+        for (0..lhs.count()) |left_index| {
+            const left_tag = self.program.types.tagItem(lhs, left_index);
+            try merged.append(self.allocator, left_tag);
+            left_names.putAssumeCapacity(left_tag.name, {});
+        }
+        for (0..rhs.count()) |right_position| {
+            const right_tag = self.program.types.tagItem(rhs, right_position);
+            if (left_names.contains(right_tag.name)) continue;
+            try merged.append(self.allocator, right_tag);
+        }
+        // Every right tag already sits in the left row: the merge is the
+        // left row itself.
+        if (merged.items.len == lhs.count()) return lhs;
         return try self.program.types.addTags(merged.items);
     }
 
@@ -3030,7 +3153,9 @@ const TypeCloner = struct {
         }
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
-        self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
+        const lowered = try self.lowerContent(self.solver.lifted.types.get(ty));
+        self.solver.program.types.set(reserved, lowered);
+        self.solver.registerNamedBacking(lowered);
         if (shareable) try self.solver.shared_clones.put(ty, reserved);
         return reserved;
     }
@@ -3222,6 +3347,8 @@ fn solvedTypeDigestTestSolver(
     solver.lifted = undefined;
     solver.lifted.names = name_store;
     solver.solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator);
+    solver.tag_row_indexes = .empty;
+    solver.shared_leaf_context = null;
     return solver;
 }
 
@@ -3373,8 +3500,208 @@ test "inspectable backing unification isolates the structural type variable once
 
     try std.testing.expectEqual(vars_before_unify + 1, program.types.vars.items.len);
     try std.testing.expectEqual(program.types.root(outer_named), program.types.root(structural));
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, try solver.shapeContent(structural));
+}
+
+test "inspectable backing unification never redirects an owned backing to its nominal type" {
+    const allocator = std.testing.allocator;
+
+    var program: Ast.Program = undefined;
+    program.types = Type.Store.init(allocator);
+    defer program.types.deinit();
+
+    const backing = try program.types.add(.{ .primitive = .u64 });
+    const named = try program.types.add(.{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = backing, .use = .inspectable },
+    } });
+    const backing_representative = try program.types.add(.{ .primitive = .u64 });
+
+    var solver: Solver = undefined;
+    solver.allocator = allocator;
+    solver.program = &program;
+    solver.lifted = undefined;
+    solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
+    defer solver.active_unifications.deinit();
+    solver.unify_stack = .empty;
+    defer solver.unify_stack.deinit(allocator);
+    program.types.markNamedBacking(backing);
+    program.types.set(backing, .{ .link = backing_representative });
+    solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator);
+    defer solver.solved_set_pool.deinit();
+    solver.mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator);
+    defer solver.mono_set_pool.deinit();
+
+    try solver.unify(backing, named);
+
+    try std.testing.expectEqual(backing_representative, program.types.root(backing));
+    try std.testing.expect(program.types.root(backing) != program.types.root(named));
+    try std.testing.expect(program.types.isOwnedNamedBacking(backing));
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, program.types.rootContent(backing));
+}
+
+test "generated-private evidence traverses a public inspectable named backing" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var program = Ast.Program.init(allocator, lifted);
+    lifted = undefined;
+    defer program.deinit();
+
+    const field_name = try program.lifted.names.internRecordFieldLabel("step");
+    const ret_ty = try program.types.add(.zst);
+    const public_callable = try program.types.add(.unbound);
+    const private_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = @enumFromInt(1),
+        .captures = .empty(),
+    }}) });
+    const public_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = public_callable,
+        .ret = ret_ty,
+    } });
+    const private_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = private_callable,
+        .ret = ret_ty,
+    } });
+    const public_backing = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = public_fn,
+        .default = null,
+    }}) });
+    const private_record = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = private_fn,
+        .default = null,
+    }}) });
+    const public_named = try program.types.add(.{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = public_backing, .use = .inspectable },
+    } });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.relateGeneratedPrivateEvidence(public_named, private_record);
+
+    try std.testing.expectEqual(
+        program.types.rootCompressed(public_callable),
+        program.types.rootCompressed(private_callable),
+    );
+    try std.testing.expect(program.types.rootCompressed(public_named) != program.types.rootCompressed(private_record));
+    try std.testing.expect(program.types.rootCompressed(public_backing) != program.types.rootCompressed(private_record));
 }
 
 test "lambda solved solve declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
+    return Lifted.Program.init(
+        allocator,
+        names.NameStore.init(allocator),
+        MonoType.Store.init(allocator),
+        .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
+        .empty, // exprs
+        .empty, // pats
+        .empty, // stmts
+        .empty, // locals
+        .empty, // expr_ids
+        .empty, // pat_ids
+        .empty, // typed_locals
+        .empty, // stmt_ids
+        .empty, // field_exprs
+        .empty, // field_access_segments
+        .empty, // fn_def_captures
+        .empty, // capture_operands
+        .empty, // record_destructs
+        .empty, // str_pattern_steps
+        .empty, // branches
+        .empty, // if_branches
+        .empty, // string_literals
+        Lifted.ProcDebugNameMap.init(allocator),
+        .empty, // source_files
+        .empty, // expr_locs
+        .empty, // expr_regions
+        .empty, // stmt_locs
+        .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
+        .empty, // local_names
+        .empty, // static_data_values
+        .empty, // comptime_sites
+        0, // next_symbol
+    );
+}
+
+test "lambda solved traverses deep sequential and nested expressions without native recursion" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const unit_ty = try lifted.types.add(.zst);
+    const unit = try lifted.addExpr(.{ .ty = unit_ty, .data = .unit });
+    var body = unit;
+    for (0..50_000) |_| {
+        const local = try lifted.addLocal(@enumFromInt(@as(u32, @intCast(lifted.localsView().len))), unit_ty);
+        const bind = try lifted.addPat(.{ .ty = unit_ty, .data = .{ .bind = local } });
+        body = try lifted.addExpr(.{ .ty = unit_ty, .data = .{ .typed_boundary = .{ .value = body } } });
+        body = try lifted.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{ .bind = bind, .value = unit, .rest = body } } });
+    }
+    _ = try lifted.addFn(.{ .symbol = @enumFromInt(50_001), .args = .empty(), .captures = .empty(), .body = .{ .roc = body }, .ret = unit_ty });
+    var program = Ast.Program.init(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.solve();
+    for (solver.expr_done) |done| try std.testing.expect(done);
+    try std.testing.expectEqual(solver.inferredExpr(unit), solver.inferredExpr(body));
+}
+
+test "lambda solved compact record updates relate only unchanged field representations" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const u8_ty = try lifted.types.add(.{ .primitive = .u8 });
+    const u16_ty = try lifted.types.add(.{ .primitive = .u16 });
+    const a = try lifted.names.internRecordFieldLabel("a");
+    const b = try lifted.names.internRecordFieldLabel("b");
+    const base_ty = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &.{
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u8_ty, .default = null },
+    }) });
+    const result_ty = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &.{
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u16_ty, .default = null },
+    }) });
+    const local = try lifted.addLocal(@enumFromInt(@as(u32, @intCast(lifted.localsView().len))), base_ty);
+    const base = try lifted.addExpr(.{ .ty = base_ty, .data = .{ .local = local } });
+    const value = try lifted.addExpr(.{ .ty = u16_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 256)), .kind = .i128 } } });
+    const update = try lifted.addExpr(.{ .ty = result_ty, .data = .{ .record_update = .{
+        .base = base,
+        .fields = try lifted.addFieldExprSpan(&.{.{ .name = b, .value = value }}),
+    } } });
+    _ = try lifted.addFn(.{ .symbol = @enumFromInt(1), .args = try lifted.addTypedLocalSpan(&.{.{ .local = local, .ty = base_ty }}), .captures = .empty(), .body = .{ .roc = update }, .ret = result_ty });
+    var program = Ast.Program.init(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.solve();
+    const solved_base = solver.inferredExpr(base);
+    const solved_update = solver.inferredExpr(update);
+    try std.testing.expectEqual(try solver.recordField(solved_base, a), try solver.recordField(solved_update, a));
+    try std.testing.expect((try solver.recordField(solved_base, b)) != (try solver.recordField(solved_update, b)));
 }

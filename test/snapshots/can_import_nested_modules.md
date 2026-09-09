@@ -45,109 +45,181 @@ MISSING NESTED TYPE - can_import_nested_mods.md:23:44:23:58
 MISSING NESTED TYPE - can_import_nested_mods.md:23:60:23:74
 DOES NOT EXIST - can_import_nested_mods.md:24:24:24:41
 # PROBLEMS
-── ✗ missing nested type ───────────────────── can_import_nested_mods.md:6:15
-
-Config is in scope, but it doesn't have a nested type named Settings.
-
-parseConfig : Config.Settings -> Str
-              ^^^^^^^^^^^^^^^
-
-── ✗ does not exist ────────────────────────── can_import_nested_mods.md:7:26
-
-Config.toString does not exist.
-
-parseConfig = |settings| Config.toString(settings)
-                         ^^^^^^^^^^^^^^^
-
-Config is in scope, but it has no associated toString.
-
-── ✗ missing nested type ──────────────────── can_import_nested_mods.md:10:28
-
-HttpAuth is in scope, but it doesn't have a nested type named Token.
-
-authenticate : Str, Str -> HttpAuth.Token
-                           ^^^^^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────── can_import_nested_mods.md:11:29
-
-HttpAuth.login does not exist.
-
-authenticate = |user, pass| HttpAuth.login(user, pass)
-                            ^^^^^^^^^^^^^^
-
-HttpAuth is in scope, but it has no associated login.
-
-── ✗ missing nested type ──────────────────── can_import_nested_mods.md:14:15
-
-Config is in scope, but it doesn't have a nested type named Advanced.
-
-processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
-              ^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ missing nested type ──────────────────── can_import_nested_mods.md:14:55
-
-Config is in scope, but it doesn't have a nested type named Error.
-
-processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
-                                                      ^^^^^^^^^^^^^^^^^^^
-
-── ✗ does not exist ────────────────────────── can_import_nested_mods.md:16:5
-
-Config.Parser.Advanced.parseWith does not exist.
-
-Config.Parser.Advanced.parseWith(advancedConfig, input)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Config.Parser.Advanced is in scope, but it has no associated parseWith.
-
-── ✗ name not in scope ────────────────────── can_import_nested_mods.md:20:23
-
-Nothing is named padLeft in this scope.
-
-formatOutput = |text| padLeft(text, Config.defaultPadding)
-                      ^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ does not exist ───────────────────────── can_import_nested_mods.md:20:37
-
-Config.defaultPadding does not exist.
-
-formatOutput = |text| padLeft(text, Config.defaultPadding)
-                                    ^^^^^^^^^^^^^^^^^^^^^
-
-Config is in scope, but it has no associated defaultPadding.
-
-── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:16
-
-HttpAuth is in scope, but it doesn't have a nested type named Credentials.
-
-validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
-               ^^^^^^^^^^^^^^^^^^^^
-
-── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:44
-
-HttpAuth is in scope, but it doesn't have a nested type named Token.
-
-validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
-                                           ^^^^^^^^^^^^^^
-
-── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:60
-
-HttpAuth is in scope, but it doesn't have a nested type named Error.
-
-validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
-                                                           ^^^^^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────── can_import_nested_mods.md:24:24
-
-HttpAuth.validate does not exist.
-
-validateAuth = |creds| HttpAuth.validate(creds)
-                       ^^^^^^^^^^^^^^^^^
-
-HttpAuth is in scope, but it has no associated validate.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 6 15) (end 6 30))
+		(headline
+			(annotated code "Config")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Settings")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_nested_mods.md") (start 6 15) (end 6 30) (annotation error) (line-text "parseConfig : Config.Settings -> Str"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 7 26) (end 7 41))
+		(headline
+			(annotated code "Config.toString")
+			(reflow " does not exist."))
+		(document
+			(annotated code "Config")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "toString")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_nested_mods.md") (start 7 26) (end 7 41) (annotation error) (line-text "parseConfig = |settings| Config.toString(settings)"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 10 28) (end 10 42))
+		(headline
+			(annotated code "HttpAuth")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Token")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_nested_mods.md") (start 10 28) (end 10 42) (annotation error) (line-text "authenticate : Str, Str -> HttpAuth.Token"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 11 29) (end 11 43))
+		(headline
+			(annotated code "HttpAuth.login")
+			(reflow " does not exist."))
+		(document
+			(annotated code "HttpAuth")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "login")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_nested_mods.md") (start 11 29) (end 11 43) (annotation error) (line-text "authenticate = |user, pass| HttpAuth.login(user, pass)"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 14 15) (end 14 37))
+		(headline
+			(annotated code "Config")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Advanced")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_nested_mods.md") (start 14 15) (end 14 37) (annotation error) (line-text "processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 14 55) (end 14 74))
+		(headline
+			(annotated code "Config")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Error")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_nested_mods.md") (start 14 55) (end 14 74) (annotation error) (line-text "processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 16 5) (end 16 37))
+		(headline
+			(annotated code "Config.Parser.Advanced.parseWith")
+			(reflow " does not exist."))
+		(document
+			(annotated code "Config.Parser.Advanced")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "parseWith")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_nested_mods.md") (start 16 5) (end 16 37) (annotation error) (line-text "    Config.Parser.Advanced.parseWith(advancedConfig, input)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 20 23) (end 20 30))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "padLeft")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_nested_mods.md") (start 20 23) (end 20 30) (annotation error) (line-text "formatOutput = |text| padLeft(text, Config.defaultPadding)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 20 37) (end 20 58))
+		(headline
+			(annotated code "Config.defaultPadding")
+			(reflow " does not exist."))
+		(document
+			(annotated code "Config")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "defaultPadding")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_nested_mods.md") (start 20 37) (end 20 58) (annotation error) (line-text "formatOutput = |text| padLeft(text, Config.defaultPadding)"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 23 16) (end 23 36))
+		(headline
+			(annotated code "HttpAuth")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Credentials")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_nested_mods.md") (start 23 16) (end 23 36) (annotation error) (line-text "validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 23 44) (end 23 58))
+		(headline
+			(annotated code "HttpAuth")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Token")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_nested_mods.md") (start 23 44) (end 23 58) (annotation error) (line-text "validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 23 60) (end 23 74))
+		(headline
+			(annotated code "HttpAuth")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Error")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_nested_mods.md") (start 23 60) (end 23 74) (annotation error) (line-text "validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 24 24) (end 24 41))
+		(headline
+			(annotated code "HttpAuth.validate")
+			(reflow " does not exist."))
+		(document
+			(annotated code "HttpAuth")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "validate")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_nested_mods.md") (start 24 24) (end 24 41) (annotation error) (line-text "validateAuth = |creds| HttpAuth.validate(creds)")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,

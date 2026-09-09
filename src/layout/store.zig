@@ -86,9 +86,10 @@ pub const Store = struct {
 
     // Recursive layout graphs need a representation-complete key because their
     // ordinary layout keys necessarily contain provisional cycle indices.
-    // These keys encode the rooted logical graph with allocation-order-neutral
-    // backreferences, so only isomorphic runtime representations are reused.
-    interned_recursive_graphs: std.StringHashMap(Idx),
+    // These keys identify a node by its position in its reduced recursive
+    // group (see `RecursiveGraphAnalysis`), so exactly the nodes describing
+    // the same infinite runtime representation share a layout.
+    interned_recursive_graphs: RecursiveGraphMap,
 
     // The target's usize type (32-bit or 64-bit) - used for layout calculations
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
@@ -254,7 +255,7 @@ pub const Store = struct {
             .tag_union_data = tag_union_data,
             .interned_layouts = std.StringHashMap(Idx).init(allocator),
             .scratch_intern_key = .empty,
-            .interned_recursive_graphs = std.StringHashMap(Idx).init(allocator),
+            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
             .target_usize = target_usize,
         };
 
@@ -292,10 +293,6 @@ pub const Store = struct {
         }
         self.interned_layouts.deinit();
         self.scratch_intern_key.deinit(self.allocator);
-        var recursive_keys = self.interned_recursive_graphs.keyIterator();
-        while (recursive_keys.next()) |key_ptr| {
-            self.allocator.free(key_ptr.*);
-        }
         self.interned_recursive_graphs.deinit();
     }
 
@@ -759,58 +756,54 @@ pub const Store = struct {
         return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
+    /// Committed layout per recursive-graph node identity.
+    pub const RecursiveGraphMap = std.AutoHashMap(RecursiveGraphAnalysis.RecursiveKey, Idx);
+
+    /// Canonical identity of every cyclic node of a temporary layout graph.
+    ///
+    /// The graph's condensation is discovered by Tarjan's algorithm, which
+    /// pops components children-first, so every reference leaving a popped
+    /// component already has a settled digest. An acyclic node digests its
+    /// encoding with those child digests. A cyclic component is reduced by
+    /// bisimulation refinement over content labels, its reduced positions are
+    /// ordered by their final labels, the whole group is rendered once with
+    /// group-relative back-references, and every member is identified by its
+    /// position against that rendering's digest. Nominal nodes are transparent:
+    /// references resolve through them and they carry no identity of their
+    /// own.
     const RecursiveGraphAnalysis = struct {
         allocator: Allocator,
-        cyclic_nodes: []bool,
-        keys: []?[]u8,
+        /// Identity per node; null for acyclic and nominal nodes.
+        keys: []?RecursiveKey,
+
+        pub const RecursiveKey = [32]u8;
+
+        const no_component = std.math.maxInt(u32);
+        const unvisited = std.math.maxInt(u32);
+        const domain = "roc.layout.recursive-graph.v1";
 
         fn init(allocator: Allocator, graph: *const LayoutGraph) Allocator.Error!RecursiveGraphAnalysis {
-            const cyclic_nodes = try allocator.alloc(bool, graph.nodes.items.len);
-            errdefer allocator.free(cyclic_nodes);
-            @memset(cyclic_nodes, false);
-            try markCyclicNodes(allocator, graph, cyclic_nodes);
-
-            const keys = try allocator.alloc(?[]u8, graph.nodes.items.len);
+            const node_count = graph.nodes.items.len;
+            const keys = try allocator.alloc(?RecursiveKey, node_count);
             errdefer allocator.free(keys);
             @memset(keys, null);
-            errdefer {
-                for (keys) |maybe_key| {
-                    if (maybe_key) |key| allocator.free(key);
-                }
-            }
 
-            for (cyclic_nodes, 0..) |is_cyclic, i| {
-                if (!is_cyclic) continue;
-                if (graph.getNode(@enumFromInt(i)) == .nominal) continue;
-
-                var key = std.ArrayList(u8).empty;
-                defer key.deinit(allocator);
-                var visited = collections.DenseMap(GraphNodeId, u32).init(allocator);
-                defer visited.deinit();
-
-                try key.append(allocator, 1); // Recursive graph key format version.
-                try appendRefKey(graph, allocator, &key, &visited, .{ .local = @enumFromInt(i) });
-                keys[i] = try key.toOwnedSlice(allocator);
+            var engine = try Engine.init(allocator, graph, keys);
+            defer engine.deinit();
+            for (graph.nodes.items, 0..) |node, i| {
+                if (node == .nominal) continue;
+                if (engine.visit_index[i] != unvisited) continue;
+                try engine.strongConnect(@intCast(i));
             }
 
             return .{
                 .allocator = allocator,
-                .cyclic_nodes = cyclic_nodes,
                 .keys = keys,
             };
         }
 
         fn deinit(self_analysis: *RecursiveGraphAnalysis) void {
-            for (self_analysis.keys) |maybe_key| {
-                if (maybe_key) |key| self_analysis.allocator.free(key);
-            }
             self_analysis.allocator.free(self_analysis.keys);
-            self_analysis.allocator.free(self_analysis.cyclic_nodes);
-        }
-
-        fn appendValue(key: *std.ArrayList(u8), allocator: Allocator, value: anytype) Allocator.Error!void {
-            var copy = value;
-            try key.appendSlice(allocator, std.mem.asBytes(&copy));
         }
 
         fn resolveNominalRef(graph: *const LayoutGraph, start: GraphRef) GraphRef {
@@ -828,200 +821,421 @@ pub const Store = struct {
             std.debug.panic("layout.Store invariant violated: logical layout graph contained a nominal-only cycle", .{});
         }
 
-        fn appendRefKey(
-            graph: *const LayoutGraph,
-            allocator: Allocator,
-            key: *std.ArrayList(u8),
-            visited: *collections.DenseMap(GraphNodeId, u32),
-            unresolved_ref: GraphRef,
-        ) Allocator.Error!void {
-            const ref = resolveNominalRef(graph, unresolved_ref);
-            switch (ref) {
-                .canonical => |layout_idx| {
-                    try key.append(allocator, 0);
-                    try appendValue(key, allocator, @as(u32, @intFromEnum(layout_idx)));
-                },
-                .local => |node_id| {
-                    if (visited.get(node_id)) |backref| {
-                        try key.append(allocator, 1);
-                        try appendValue(key, allocator, backref);
-                        return;
-                    }
-
-                    const visit_id: u32 = @intCast(visited.count());
-                    try visited.put(node_id, visit_id);
-                    try key.append(allocator, 2);
-                    try appendValue(key, allocator, visit_id);
-                    try appendNodeKey(graph, allocator, key, visited, node_id);
-                },
-            }
-        }
-
-        fn appendNodeKey(
-            graph: *const LayoutGraph,
-            allocator: Allocator,
-            key: *std.ArrayList(u8),
-            visited: *collections.DenseMap(GraphNodeId, u32),
-            node_id: GraphNodeId,
-        ) Allocator.Error!void {
-            switch (graph.getNode(node_id)) {
+        /// The single encoding of one non-nominal node: a content-kind
+        /// discriminator, every non-reference value, and its ordered child
+        /// references resolved through nominals via `sink.child`.
+        fn encodeNode(graph: *const LayoutGraph, node_index: u32, sink: anytype) Allocator.Error!void {
+            switch (graph.getNode(@enumFromInt(node_index))) {
                 .pending, .nominal => unreachable,
                 .box => |child| {
-                    try key.append(allocator, 0);
-                    try appendRefKey(graph, allocator, key, visited, child);
+                    try sink.writeByte(0);
+                    try sink.child(resolveNominalRef(graph, child));
                 },
                 .list => |child| {
-                    try key.append(allocator, 1);
-                    try appendRefKey(graph, allocator, key, visited, child);
+                    try sink.writeByte(1);
+                    try sink.child(resolveNominalRef(graph, child));
                 },
                 .closure => |child| {
-                    try key.append(allocator, 2);
-                    try appendRefKey(graph, allocator, key, visited, child);
+                    try sink.writeByte(2);
+                    try sink.child(resolveNominalRef(graph, child));
                 },
-                .erased_callable => try key.append(allocator, 3),
+                .erased_callable => try sink.writeByte(3),
                 .struct_ => |span| {
-                    try key.append(allocator, 4);
+                    try sink.writeByte(4);
+                    try sink.writeByte(@intFromEnum(span.order));
                     const fields = graph.getFields(span);
-                    try key.append(allocator, @intFromEnum(span.order));
-                    try appendValue(key, allocator, @as(u16, @intCast(fields.len)));
+                    try sink.writeU32(@intCast(fields.len));
                     for (fields) |field| {
-                        try appendValue(key, allocator, field.index);
-                        try key.append(allocator, @intFromBool(field.is_padding));
-                        try appendRefKey(graph, allocator, key, visited, field.child);
+                        try sink.writeU32(field.index);
+                        try sink.writeByte(@intFromBool(field.is_padding));
+                        try sink.child(resolveNominalRef(graph, field.child));
                     }
                 },
                 .tag_union => |span| {
-                    try key.append(allocator, 5);
+                    try sink.writeByte(5);
                     const refs = graph.getRefs(span);
-                    try appendValue(key, allocator, @as(u16, @intCast(refs.len)));
+                    try sink.writeU32(@intCast(refs.len));
                     for (refs) |child| {
-                        try appendRefKey(graph, allocator, key, visited, child);
+                        try sink.child(resolveNominalRef(graph, child));
                     }
                 },
             }
         }
 
-        fn markCyclicNodes(allocator: Allocator, graph: *const LayoutGraph, cyclic_nodes: []bool) Allocator.Error!void {
-            const visit_index = try allocator.alloc(i32, graph.nodes.items.len);
-            defer allocator.free(visit_index);
-            const lowlink = try allocator.alloc(i32, graph.nodes.items.len);
-            defer allocator.free(lowlink);
-            const on_stack = try allocator.alloc(bool, graph.nodes.items.len);
-            defer allocator.free(on_stack);
-            @memset(visit_index, -1);
-            @memset(lowlink, 0);
-            @memset(on_stack, false);
-
-            var stack = std.ArrayList(GraphNodeId).empty;
-            defer stack.deinit(allocator);
-
-            const Finder = struct {
-                allocator: Allocator,
-                graph: *const LayoutGraph,
-                visit_index: []i32,
-                lowlink: []i32,
-                on_stack: []bool,
-                stack: *std.ArrayList(GraphNodeId),
-                cyclic_nodes: []bool,
-                next_index: i32 = 0,
-
-                fn visitRef(self_finder: *@This(), child: GraphRef, parent_index: usize) Allocator.Error!void {
-                    const child_id = switch (child) {
-                        .canonical => return,
-                        .local => |id| id,
-                    };
-                    const child_index = @intFromEnum(child_id);
-                    if (self_finder.visit_index[child_index] == -1) {
-                        try self_finder.strongConnect(child_id);
-                        self_finder.lowlink[parent_index] = @min(self_finder.lowlink[parent_index], self_finder.lowlink[child_index]);
-                    } else if (self_finder.on_stack[child_index]) {
-                        self_finder.lowlink[parent_index] = @min(self_finder.lowlink[parent_index], self_finder.visit_index[child_index]);
-                    }
-                }
-
-                fn hasSelfEdge(self_finder: *@This(), node_id: GraphNodeId) bool {
-                    return switch (self_finder.graph.getNode(node_id)) {
-                        .pending, .erased_callable => false,
-                        .nominal, .box, .list, .closure => |child| switch (child) {
-                            .canonical => false,
-                            .local => |child_id| child_id == node_id,
-                        },
-                        .struct_ => |span| blk: {
-                            for (self_finder.graph.getFields(span)) |field| {
-                                switch (field.child) {
-                                    .canonical => {},
-                                    .local => |child_id| if (child_id == node_id) break :blk true,
-                                }
-                            }
-                            break :blk false;
-                        },
-                        .tag_union => |span| blk: {
-                            for (self_finder.graph.getRefs(span)) |child| {
-                                switch (child) {
-                                    .canonical => {},
-                                    .local => |child_id| if (child_id == node_id) break :blk true,
-                                }
-                            }
-                            break :blk false;
-                        },
-                    };
-                }
-
-                fn strongConnect(self_finder: *@This(), node_id: GraphNodeId) Allocator.Error!void {
-                    const index = @intFromEnum(node_id);
-                    self_finder.visit_index[index] = self_finder.next_index;
-                    self_finder.lowlink[index] = self_finder.next_index;
-                    self_finder.next_index += 1;
-                    try self_finder.stack.append(self_finder.allocator, node_id);
-                    self_finder.on_stack[index] = true;
-
-                    switch (self_finder.graph.getNode(node_id)) {
-                        .pending, .erased_callable => {},
-                        .nominal, .box, .list, .closure => |child| try self_finder.visitRef(child, index),
-                        .struct_ => |span| {
-                            for (self_finder.graph.getFields(span)) |field| {
-                                try self_finder.visitRef(field.child, index);
-                            }
-                        },
-                        .tag_union => |span| {
-                            for (self_finder.graph.getRefs(span)) |child| {
-                                try self_finder.visitRef(child, index);
-                            }
-                        },
-                    }
-
-                    if (self_finder.lowlink[index] != self_finder.visit_index[index]) return;
-
-                    var component = std.ArrayList(GraphNodeId).empty;
-                    defer component.deinit(self_finder.allocator);
-                    while (true) {
-                        const member = self_finder.stack.pop() orelse unreachable;
-                        self_finder.on_stack[@intFromEnum(member)] = false;
-                        try component.append(self_finder.allocator, member);
-                        if (member == node_id) break;
-                    }
-
-                    if (component.items.len > 1 or self_finder.hasSelfEdge(node_id)) {
-                        for (component.items) |member| {
-                            self_finder.cyclic_nodes[@intFromEnum(member)] = true;
-                        }
-                    }
-                }
-            };
-
-            var finder = Finder{
-                .allocator = allocator,
-                .graph = graph,
-                .visit_index = visit_index,
-                .lowlink = lowlink,
-                .on_stack = on_stack,
-                .stack = &stack,
-                .cyclic_nodes = cyclic_nodes,
-            };
-            for (graph.nodes.items, 0..) |_, i| {
-                if (visit_index[i] == -1) try finder.strongConnect(@enumFromInt(i));
-            }
+        fn littleEndianBytes(value: u32) [4]u8 {
+            return .{ @truncate(value), @truncate(value >> 8), @truncate(value >> 16), @truncate(value >> 24) };
         }
+
+        fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+            const bytes = littleEndianBytes(value);
+            hasher.update(&bytes);
+        }
+
+        fn digestLessThan(_: void, lhs: RecursiveKey, rhs: RecursiveKey) bool {
+            for (lhs, rhs) |lhs_byte, rhs_byte| {
+                if (lhs_byte != rhs_byte) return lhs_byte < rhs_byte;
+            }
+            return false;
+        }
+
+        const Engine = struct {
+            allocator: Allocator,
+            graph: *const LayoutGraph,
+            keys: []?RecursiveKey,
+            /// Settled digest per node, valid once `component[node]` is set.
+            digests: []RecursiveKey,
+            /// Popped component per node, `no_component` until popped.
+            component: []u32,
+            /// Member position within its popped component.
+            position: []u32,
+            component_count: u32 = 0,
+            visit_index: []u32,
+            low_link: []u32,
+            on_stack: []bool,
+            next_visit: u32 = 0,
+            stack: std.ArrayList(u32) = .empty,
+            members: std.ArrayList(u32) = .empty,
+            /// In-component child node indices of the component being
+            /// resolved, contiguous per member.
+            edges: std.ArrayList(u32) = .empty,
+            edge_start: std.ArrayList(u32) = .empty,
+            edge_len: std.ArrayList(u32) = .empty,
+            render_buf: std.ArrayList(u8) = .empty,
+
+            fn init(allocator: Allocator, graph: *const LayoutGraph, keys: []?RecursiveKey) Allocator.Error!Engine {
+                const node_count = graph.nodes.items.len;
+                const digests = try allocator.alloc(RecursiveKey, node_count);
+                errdefer allocator.free(digests);
+                const component = try allocator.alloc(u32, node_count);
+                errdefer allocator.free(component);
+                @memset(component, no_component);
+                const position = try allocator.alloc(u32, node_count);
+                errdefer allocator.free(position);
+                const visit_index = try allocator.alloc(u32, node_count);
+                errdefer allocator.free(visit_index);
+                @memset(visit_index, unvisited);
+                const low_link = try allocator.alloc(u32, node_count);
+                errdefer allocator.free(low_link);
+                const on_stack = try allocator.alloc(bool, node_count);
+                errdefer allocator.free(on_stack);
+                @memset(on_stack, false);
+                return .{
+                    .allocator = allocator,
+                    .graph = graph,
+                    .keys = keys,
+                    .digests = digests,
+                    .component = component,
+                    .position = position,
+                    .visit_index = visit_index,
+                    .low_link = low_link,
+                    .on_stack = on_stack,
+                };
+            }
+
+            fn deinit(self_engine: *Engine) void {
+                self_engine.render_buf.deinit(self_engine.allocator);
+                self_engine.edge_len.deinit(self_engine.allocator);
+                self_engine.edge_start.deinit(self_engine.allocator);
+                self_engine.edges.deinit(self_engine.allocator);
+                self_engine.members.deinit(self_engine.allocator);
+                self_engine.stack.deinit(self_engine.allocator);
+                self_engine.allocator.free(self_engine.on_stack);
+                self_engine.allocator.free(self_engine.low_link);
+                self_engine.allocator.free(self_engine.visit_index);
+                self_engine.allocator.free(self_engine.position);
+                self_engine.allocator.free(self_engine.component);
+                self_engine.allocator.free(self_engine.digests);
+            }
+
+            /// Discovery sink: visits every local child during Tarjan's walk.
+            const VisitSink = struct {
+                engine: *Engine,
+                parent: u32,
+
+                fn writeByte(_: VisitSink, _: u8) Allocator.Error!void {}
+
+                fn writeU32(_: VisitSink, _: u32) Allocator.Error!void {}
+
+                fn child(self_sink: VisitSink, ref: GraphRef) Allocator.Error!void {
+                    const child_index: u32 = switch (ref) {
+                        .canonical => return,
+                        .local => |node_id| @intFromEnum(node_id),
+                    };
+                    const engine = self_sink.engine;
+                    if (engine.visit_index[child_index] == unvisited) {
+                        try engine.strongConnect(child_index);
+                        engine.low_link[self_sink.parent] = @min(engine.low_link[self_sink.parent], engine.low_link[child_index]);
+                    } else if (engine.on_stack[child_index]) {
+                        engine.low_link[self_sink.parent] = @min(engine.low_link[self_sink.parent], engine.visit_index[child_index]);
+                    }
+                }
+            };
+
+            /// Edge sink: collects the ordered children that lie inside the
+            /// component being resolved.
+            const EdgeSink = struct {
+                engine: *Engine,
+                component_id: u32,
+
+                fn writeByte(_: EdgeSink, _: u8) Allocator.Error!void {}
+
+                fn writeU32(_: EdgeSink, _: u32) Allocator.Error!void {}
+
+                fn child(self_sink: EdgeSink, ref: GraphRef) Allocator.Error!void {
+                    const child_index: u32 = switch (ref) {
+                        .canonical => return,
+                        .local => |node_id| @intFromEnum(node_id),
+                    };
+                    const engine = self_sink.engine;
+                    if (engine.component[child_index] != self_sink.component_id) return;
+                    try engine.edges.append(engine.allocator, child_index);
+                }
+            };
+
+            /// Label sink: hashes a node's encoding with every child outside
+            /// the component rendered as its settled digest and every child
+            /// inside it as a bare positional marker.
+            const LabelSink = struct {
+                engine: *Engine,
+                hasher: *std.crypto.hash.sha2.Sha256,
+                component_id: u32,
+
+                fn writeByte(self_sink: LabelSink, value: u8) Allocator.Error!void {
+                    self_sink.hasher.update(&.{value});
+                }
+
+                fn writeU32(self_sink: LabelSink, value: u32) Allocator.Error!void {
+                    hashU32(self_sink.hasher, value);
+                }
+
+                fn child(self_sink: LabelSink, ref: GraphRef) Allocator.Error!void {
+                    switch (ref) {
+                        .canonical => |layout_idx| {
+                            try self_sink.writeByte(0);
+                            try self_sink.writeU32(@intFromEnum(layout_idx));
+                        },
+                        .local => |node_id| {
+                            const child_index = @intFromEnum(node_id);
+                            const engine = self_sink.engine;
+                            if (engine.component[child_index] == self_sink.component_id) {
+                                try self_sink.writeByte(2);
+                                return;
+                            }
+                            std.debug.assert(engine.component[child_index] != no_component);
+                            try self_sink.writeByte(1);
+                            self_sink.hasher.update(&engine.digests[child_index]);
+                        },
+                    }
+                }
+            };
+
+            /// Group rendering sink: writes a node's encoding with every
+            /// child outside the component rendered as its settled digest and
+            /// every child inside it as its canonical position.
+            const RenderSink = struct {
+                engine: *Engine,
+                component_id: u32,
+                rank_of_member: []const u32,
+
+                fn writeByte(self_sink: RenderSink, value: u8) Allocator.Error!void {
+                    try self_sink.engine.render_buf.append(self_sink.engine.allocator, value);
+                }
+
+                fn writeU32(self_sink: RenderSink, value: u32) Allocator.Error!void {
+                    const bytes = littleEndianBytes(value);
+                    try self_sink.engine.render_buf.appendSlice(self_sink.engine.allocator, &bytes);
+                }
+
+                fn child(self_sink: RenderSink, ref: GraphRef) Allocator.Error!void {
+                    switch (ref) {
+                        .canonical => |layout_idx| {
+                            try self_sink.writeByte(0);
+                            try self_sink.writeU32(@intFromEnum(layout_idx));
+                        },
+                        .local => |node_id| {
+                            const child_index = @intFromEnum(node_id);
+                            const engine = self_sink.engine;
+                            if (engine.component[child_index] == self_sink.component_id) {
+                                try self_sink.writeByte(2);
+                                try self_sink.writeU32(self_sink.rank_of_member[engine.position[child_index]]);
+                                return;
+                            }
+                            std.debug.assert(engine.component[child_index] != no_component);
+                            try self_sink.writeByte(1);
+                            try engine.render_buf.appendSlice(engine.allocator, &engine.digests[child_index]);
+                        },
+                    }
+                }
+            };
+
+            fn strongConnect(self_engine: *Engine, node_index: u32) Allocator.Error!void {
+                self_engine.visit_index[node_index] = self_engine.next_visit;
+                self_engine.low_link[node_index] = self_engine.next_visit;
+                self_engine.next_visit += 1;
+                try self_engine.stack.append(self_engine.allocator, node_index);
+                self_engine.on_stack[node_index] = true;
+
+                try encodeNode(self_engine.graph, node_index, VisitSink{ .engine = self_engine, .parent = node_index });
+
+                if (self_engine.low_link[node_index] != self_engine.visit_index[node_index]) return;
+
+                self_engine.members.clearRetainingCapacity();
+                while (true) {
+                    const member = self_engine.stack.pop() orelse unreachable;
+                    self_engine.on_stack[member] = false;
+                    try self_engine.members.append(self_engine.allocator, member);
+                    if (member == node_index) break;
+                }
+                try self_engine.resolveComponent();
+            }
+
+            /// Settle the digests of the component in `members`, whose every
+            /// outgoing reference already carries a settled digest.
+            fn resolveComponent(self_engine: *Engine) Allocator.Error!void {
+                const members = self_engine.members.items;
+                const component_id = self_engine.component_count;
+                self_engine.component_count += 1;
+                for (members, 0..) |member, pos| {
+                    self_engine.component[member] = component_id;
+                    self_engine.position[member] = @intCast(pos);
+                }
+
+                self_engine.edges.clearRetainingCapacity();
+                self_engine.edge_start.clearRetainingCapacity();
+                self_engine.edge_len.clearRetainingCapacity();
+                for (members) |member| {
+                    const start: u32 = @intCast(self_engine.edges.items.len);
+                    try encodeNode(self_engine.graph, member, EdgeSink{ .engine = self_engine, .component_id = component_id });
+                    try self_engine.edge_start.append(self_engine.allocator, start);
+                    try self_engine.edge_len.append(self_engine.allocator, @intCast(self_engine.edges.items.len - start));
+                }
+
+                if (members.len == 1 and self_engine.edges.items.len == 0) {
+                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    hasher.update(domain);
+                    hasher.update("acyclic");
+                    try encodeNode(self_engine.graph, members[0], LabelSink{
+                        .engine = self_engine,
+                        .hasher = &hasher,
+                        .component_id = component_id,
+                    });
+                    self_engine.digests[members[0]] = hasher.finalResult();
+                    return;
+                }
+
+                try self_engine.resolveCyclicComponent(component_id);
+            }
+
+            fn resolveCyclicComponent(self_engine: *Engine, component_id: u32) Allocator.Error!void {
+                const allocator = self_engine.allocator;
+                const members = self_engine.members.items;
+                const member_count = members.len;
+
+                // Refine to the stable bisimulation partition: every member
+                // starts from its content label, and each round relabels it
+                // by its own label followed by the labels reached by every
+                // ordered in-component reference, until a round stops
+                // separating members. Labels are pure functions of a
+                // member's unfolding, so bisimilar members carry equal labels
+                // and the labels are the same for bisimilar positions of any
+                // two graphs whatever their node counts or allocation order.
+                var labels = try allocator.alloc(RecursiveKey, member_count);
+                defer allocator.free(labels);
+                var next_labels = try allocator.alloc(RecursiveKey, member_count);
+                defer allocator.free(next_labels);
+                var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(allocator);
+                defer distinct_labels.deinit();
+                for (members, 0..) |member, pos| {
+                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    try encodeNode(self_engine.graph, member, LabelSink{
+                        .engine = self_engine,
+                        .hasher = &hasher,
+                        .component_id = component_id,
+                    });
+                    labels[pos] = hasher.finalResult();
+                    try distinct_labels.put(labels[pos], no_component);
+                }
+                var label_count: u32 = distinct_labels.count();
+                while (true) {
+                    distinct_labels.clearRetainingCapacity();
+                    for (members, 0..) |_, pos| {
+                        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                        hasher.update(&labels[pos]);
+                        const edges = self_engine.edges.items[self_engine.edge_start.items[pos]..][0..self_engine.edge_len.items[pos]];
+                        for (edges) |child_index| {
+                            hasher.update(&labels[self_engine.position[child_index]]);
+                        }
+                        next_labels[pos] = hasher.finalResult();
+                        try distinct_labels.put(next_labels[pos], no_component);
+                    }
+                    const next_count: u32 = distinct_labels.count();
+                    const stable = next_count == label_count;
+                    const finished_labels = labels;
+                    labels = next_labels;
+                    next_labels = finished_labels;
+                    label_count = next_count;
+                    if (stable) break;
+                }
+
+                // Canonical order: the reduced positions sorted by label.
+                const block_count = label_count;
+                const sorted_labels = try allocator.alloc(RecursiveKey, block_count);
+                defer allocator.free(sorted_labels);
+                {
+                    var it = distinct_labels.keyIterator();
+                    var next: usize = 0;
+                    while (it.next()) |label| : (next += 1) {
+                        sorted_labels[next] = label.*;
+                    }
+                    std.debug.assert(next == block_count);
+                }
+                std.mem.sort(RecursiveKey, sorted_labels, {}, digestLessThan);
+                for (sorted_labels, 0..) |label, rank| {
+                    const slot = distinct_labels.getPtr(label) orelse unreachable;
+                    slot.* = @intCast(rank);
+                }
+                const rank_of_member = try allocator.alloc(u32, member_count);
+                defer allocator.free(rank_of_member);
+                const block_rep = try allocator.alloc(u32, block_count);
+                defer allocator.free(block_rep);
+                @memset(block_rep, no_component);
+                for (members, 0..) |member, pos| {
+                    const rank = distinct_labels.get(labels[pos]) orelse unreachable;
+                    rank_of_member[pos] = rank;
+                    if (block_rep[rank] == no_component) block_rep[rank] = member;
+                }
+
+                // One group rendering in canonical order; every reduced
+                // position digests as its rank against the rendering's digest.
+                self_engine.render_buf.clearRetainingCapacity();
+                try self_engine.render_buf.appendSlice(allocator, domain);
+                try self_engine.render_buf.appendSlice(allocator, "group");
+                for (block_rep) |rep| {
+                    try encodeNode(self_engine.graph, rep, RenderSink{
+                        .engine = self_engine,
+                        .component_id = component_id,
+                        .rank_of_member = rank_of_member,
+                    });
+                }
+                var group_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                group_hasher.update(self_engine.render_buf.items);
+                const group_digest = group_hasher.finalResult();
+                const block_digest = try allocator.alloc(RecursiveKey, block_count);
+                defer allocator.free(block_digest);
+                for (0..block_count) |rank| {
+                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    hasher.update("recursive-member");
+                    hashU32(&hasher, @intCast(rank));
+                    hasher.update(&group_digest);
+                    block_digest[rank] = hasher.finalResult();
+                }
+                for (members, 0..) |member, pos| {
+                    const digest = block_digest[rank_of_member[pos]];
+                    self_engine.digests[member] = digest;
+                    self_engine.keys[member] = digest;
+                }
+            }
+        };
     };
 
     fn translateGraphRef(mapping: []const GraphRef, ref: GraphRef) GraphRef {
@@ -1051,7 +1265,7 @@ pub const Store = struct {
         defer self.allocator.free(mapping);
         var working = LayoutGraph{};
         defer working.deinit(self.allocator);
-        var pending_recursive = std.StringHashMap(GraphRef).init(self.allocator);
+        var pending_recursive = std.AutoHashMap(RecursiveGraphAnalysis.RecursiveKey, GraphRef).init(self.allocator);
         defer pending_recursive.deinit();
         var first_working_node: ?GraphNodeId = null;
 
@@ -1162,7 +1376,6 @@ pub const Store = struct {
                 }
             } else {
                 try self.interned_recursive_graphs.put(key, value_layouts[i]);
-                analysis.keys[i] = null;
             }
         }
 
@@ -3086,6 +3299,221 @@ test "commitGraph produces identical recursive tag union shapes regardless of co
         const b_tag = store.getLayout(info_b.variants.get(i).payload_layout).tag;
         try testing.expectEqual(a_tag, b_tag);
     }
+}
+
+test "commitGraph identifies recursive nodes by reduced position, not by unrolling depth" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `T = [Z, Box(T)]` tied directly.
+    var tied = LayoutGraph{};
+    defer tied.deinit(testing.allocator);
+    const tied_union = try tied.reserveNode(testing.allocator);
+    const tied_box = try tied.reserveNode(testing.allocator);
+    tied.setNode(tied_box, .{ .box = .{ .local = tied_union } });
+    tied.setNode(tied_union, .{ .tag_union = try tied.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = tied_box } }) });
+    var tied_commit = try store.commitGraph(&tied, .{ .local = tied_union });
+    defer tied_commit.deinit(testing.allocator);
+
+    // The same infinite type unrolled once before the knot closes:
+    // `T1 = [Z, Box(T2)]`, `T2 = [Z, Box(T1)]`.
+    var unrolled = LayoutGraph{};
+    defer unrolled.deinit(testing.allocator);
+    const union_one = try unrolled.reserveNode(testing.allocator);
+    const box_one = try unrolled.reserveNode(testing.allocator);
+    const union_two = try unrolled.reserveNode(testing.allocator);
+    const box_two = try unrolled.reserveNode(testing.allocator);
+    unrolled.setNode(box_one, .{ .box = .{ .local = union_two } });
+    unrolled.setNode(box_two, .{ .box = .{ .local = union_one } });
+    unrolled.setNode(union_one, .{ .tag_union = try unrolled.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = box_one } }) });
+    unrolled.setNode(union_two, .{ .tag_union = try unrolled.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = box_two } }) });
+    var unrolled_commit = try store.commitGraph(&unrolled, .{ .local = union_one });
+    defer unrolled_commit.deinit(testing.allocator);
+
+    try testing.expectEqual(tied_commit.root_idx, unrolled_commit.root_idx);
+    try testing.expectEqual(tied_commit.root_idx, unrolled_commit.value_layouts[@intFromEnum(union_two)]);
+}
+
+test "commitGraph keeps distinct-field recursive struct payloads apart" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `T = [C0({ f0 : List(T) }), ..., CN({ fN : List(T) })]`: every struct is
+    // its own reduced position in one cyclic group.
+    const variant_count = 64;
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    const union_node = try graph.reserveNode(testing.allocator);
+    const list_node = try graph.reserveNode(testing.allocator);
+    graph.setNode(list_node, .{ .list = .{ .local = union_node } });
+    var variants: [variant_count]GraphRef = undefined;
+    for (&variants, 0..) |*variant, index| {
+        const struct_node = try graph.reserveNode(testing.allocator);
+        const fields = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+            .{ .index = @intCast(index), .child = .{ .local = list_node } },
+        });
+        graph.setNode(struct_node, .{ .struct_ = fields });
+        variant.* = .{ .local = struct_node };
+    }
+    graph.setNode(union_node, .{ .tag_union = try graph.appendRefs(testing.allocator, &variants) });
+
+    var analysis = try Store.RecursiveGraphAnalysis.init(testing.allocator, &graph);
+    defer analysis.deinit();
+    var seen_keys = std.AutoHashMap(Store.RecursiveGraphAnalysis.RecursiveKey, void).init(testing.allocator);
+    defer seen_keys.deinit();
+    for (variants) |variant| {
+        const key = analysis.keys[@intFromEnum(variant.local)] orelse return error.MissingRecursiveKey;
+        try testing.expect(!seen_keys.contains(key));
+        try seen_keys.put(key, {});
+    }
+    try testing.expect(analysis.keys[@intFromEnum(union_node)] != null);
+    try testing.expect(analysis.keys[@intFromEnum(list_node)] != null);
+
+    var commit = try store.commitGraph(&graph, .{ .local = union_node });
+    defer commit.deinit(testing.allocator);
+    try testing.expectEqual(LayoutTag.tag_union, store.getLayout(commit.root_idx).tag);
+    try testing.expectEqual(@as(usize, variant_count), store.getTagUnionInfo(store.getLayout(commit.root_idx)).variants.len);
+}
+
+test "commitGraph interns a recursive layout identically regardless of how its cycle is shared" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // One union that boxes itself.
+    var self_loop = LayoutGraph{};
+    defer self_loop.deinit(testing.allocator);
+    const loop_union = try self_loop.reserveNode(testing.allocator);
+    const loop_box = try self_loop.reserveNode(testing.allocator);
+    self_loop.setNode(loop_box, .{ .box = .{ .local = loop_union } });
+    const loop_refs = try self_loop.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = loop_box } });
+    self_loop.setNode(loop_union, .{ .tag_union = loop_refs });
+    var loop_commit = try store.commitGraph(&self_loop, .{ .local = loop_union });
+    defer loop_commit.deinit(testing.allocator);
+
+    // Two copies of that union boxing each other: the same unfolding, spelled
+    // as a two-node cycle.
+    var pair = LayoutGraph{};
+    defer pair.deinit(testing.allocator);
+    const first_union = try pair.reserveNode(testing.allocator);
+    const first_box = try pair.reserveNode(testing.allocator);
+    const second_union = try pair.reserveNode(testing.allocator);
+    const second_box = try pair.reserveNode(testing.allocator);
+    pair.setNode(first_box, .{ .box = .{ .local = second_union } });
+    pair.setNode(second_box, .{ .box = .{ .local = first_union } });
+    const first_refs = try pair.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = first_box } });
+    const second_refs = try pair.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = second_box } });
+    pair.setNode(first_union, .{ .tag_union = first_refs });
+    pair.setNode(second_union, .{ .tag_union = second_refs });
+    var pair_commit = try store.commitGraph(&pair, .{ .local = second_union });
+    defer pair_commit.deinit(testing.allocator);
+
+    try testing.expectEqual(loop_commit.root_idx, pair_commit.root_idx);
+    try testing.expectEqual(loop_commit.root_idx, pair_commit.value_layouts[@intFromEnum(first_union)]);
+    try testing.expectEqual(loop_commit.value_layouts[@intFromEnum(loop_box)], pair_commit.value_layouts[@intFromEnum(first_box)]);
+    try testing.expectEqual(loop_commit.value_layouts[@intFromEnum(loop_box)], pair_commit.value_layouts[@intFromEnum(second_box)]);
+}
+
+test "commitGraph keeps distinguishable nodes of one cycle distinct" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `a` and `b` box each other, but only `b` carries a `u8` payload.
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    const a = try graph.reserveNode(testing.allocator);
+    const a_box = try graph.reserveNode(testing.allocator);
+    const b = try graph.reserveNode(testing.allocator);
+    const b_box = try graph.reserveNode(testing.allocator);
+    graph.setNode(a_box, .{ .box = .{ .local = b } });
+    graph.setNode(b_box, .{ .box = .{ .local = a } });
+    const a_refs = try graph.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = a_box } });
+    const b_refs = try graph.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .u8 }, .{ .local = b_box } });
+    graph.setNode(a, .{ .tag_union = a_refs });
+    graph.setNode(b, .{ .tag_union = b_refs });
+    var commit = try store.commitGraph(&graph, .{ .local = a });
+    defer commit.deinit(testing.allocator);
+
+    try testing.expect(commit.value_layouts[@intFromEnum(a)] != commit.value_layouts[@intFromEnum(b)]);
+
+    // Entering the same cycle at `b` reuses both interned layouts.
+    var from_b = LayoutGraph{};
+    defer from_b.deinit(testing.allocator);
+    const b2 = try from_b.reserveNode(testing.allocator);
+    const b2_box = try from_b.reserveNode(testing.allocator);
+    const a2 = try from_b.reserveNode(testing.allocator);
+    const a2_box = try from_b.reserveNode(testing.allocator);
+    from_b.setNode(b2_box, .{ .box = .{ .local = a2 } });
+    from_b.setNode(a2_box, .{ .box = .{ .local = b2 } });
+    const b2_refs = try from_b.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .u8 }, .{ .local = b2_box } });
+    const a2_refs = try from_b.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = a2_box } });
+    from_b.setNode(b2, .{ .tag_union = b2_refs });
+    from_b.setNode(a2, .{ .tag_union = a2_refs });
+    var commit_b = try store.commitGraph(&from_b, .{ .local = b2 });
+    defer commit_b.deinit(testing.allocator);
+
+    try testing.expectEqual(commit.value_layouts[@intFromEnum(b)], commit_b.root_idx);
+    try testing.expectEqual(commit.value_layouts[@intFromEnum(a)], commit_b.value_layouts[@intFromEnum(a2)]);
+}
+
+test "commitGraph collapses interchangeable copies of a recursive closure layout (issue #11072)" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `copies` unions, each holding one capture-record variant per union
+    // that boxes that union: every union, capture record and box is
+    // interchangeable with its peers, so the whole graph is one small
+    // recursive layout spelled out `copies` times.
+    const copies = 6;
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    var unions: [copies]GraphNodeId = undefined;
+    var boxes: [copies]GraphNodeId = undefined;
+    for (0..copies) |i| {
+        unions[i] = try graph.reserveNode(testing.allocator);
+        boxes[i] = try graph.reserveNode(testing.allocator);
+        graph.setNode(boxes[i], .{ .box = .{ .local = unions[i] } });
+    }
+    var first_capture: ?GraphNodeId = null;
+    for (0..copies) |i| {
+        var refs: [copies + 1]GraphRef = undefined;
+        refs[0] = .{ .canonical = .zst };
+        for (0..copies) |j| {
+            const capture = try graph.reserveNode(testing.allocator);
+            if (first_capture == null) first_capture = capture;
+            const fields = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+                .{ .index = 0, .child = .{ .canonical = .u64 } },
+                .{ .index = 1, .child = .{ .local = boxes[j] } },
+            });
+            graph.setNode(capture, .{ .struct_ = fields });
+            refs[j + 1] = .{ .local = capture };
+        }
+        graph.setNode(unions[i], .{ .tag_union = try graph.appendRefs(testing.allocator, &refs) });
+    }
+    var commit = try store.commitGraph(&graph, .{ .local = unions[0] });
+    defer commit.deinit(testing.allocator);
+
+    for (1..copies) |i| {
+        try testing.expectEqual(commit.root_idx, commit.value_layouts[@intFromEnum(unions[i])]);
+        try testing.expectEqual(commit.value_layouts[@intFromEnum(boxes[0])], commit.value_layouts[@intFromEnum(boxes[i])]);
+    }
+    const root = store.getLayout(commit.root_idx);
+    try testing.expectEqual(LayoutTag.tag_union, root.tag);
+    const info = store.getTagUnionInfo(root);
+    try testing.expectEqual(@as(usize, copies + 1), info.variants.len);
+    const capture_layout = info.variants.get(1).payload_layout;
+    for (2..copies + 1) |variant| {
+        try testing.expectEqual(capture_layout, info.variants.get(variant).payload_layout);
+    }
+    try testing.expectEqual(capture_layout, commit.value_layouts[@intFromEnum(first_capture.?)]);
+
+    // The store remembers one union, one box and one capture record, not
+    // one of each per copy.
+    try testing.expectEqual(@as(usize, 3), store.interned_recursive_graphs.count());
 }
 
 test "commitGraph resolves locally built container children inside struct fields" {

@@ -14,15 +14,22 @@ main! = |_| Stdout.line!("Hello, world!")
 # EXPECTED
 NAME NOT IN SCOPE - hello_world.md:5:13:5:25
 # PROBLEMS
-── ✗ name not in scope ───────────────────────────────────── hello_world.md:5:13
-
-Nothing is named line! in this scope.
-
-main! = |_| Stdout.line!("Hello, world!")
-            ^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 5 13) (end 5 25))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "hello_world.md") (start 5 13) (end 5 25) (annotation error) (line-text "main! = |_| Stdout.line!(\"Hello, world!\")")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

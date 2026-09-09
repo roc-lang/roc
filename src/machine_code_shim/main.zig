@@ -8,6 +8,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const stack_probe = @import("stack_probe.zig");
+const instruction_cache = @import("instruction_cache.zig");
 const base_mod = @import("base");
 const backend = @import("backend");
 const builtins = @import("builtins");
@@ -99,6 +100,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     UnsupportedRelocationEncoding,
     UnresolvedSymbol,
     VirtualProtectFailed,
+    FlushInstructionCacheFailed,
 };
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError;
@@ -449,8 +451,8 @@ fn prepareDirectImageForRelocation(view: *const RunImage.ProgramView) ipc.platfo
     try protectDataPages(view, .read_write);
 }
 
-fn finishDirectImageRelocation(view: *const RunImage.ProgramView) ipc.platform.MemoryProtectError!void {
-    flushInstructionCache(view.executable);
+fn finishDirectImageRelocation(view: *const RunImage.ProgramView) (ipc.platform.MemoryProtectError || instruction_cache.Error)!void {
+    try instruction_cache.flush(view.executable);
     try ipc.platform.protectMappedMemory(view.executable.ptr, view.executable.len, .read_execute);
     try protectDataPages(view, .read_only);
 }
@@ -527,21 +529,6 @@ fn hostArch() HostArch {
         .xtensaeb,
         => .other,
     };
-}
-
-fn flushInstructionCache(memory: []const u8) void {
-    // Resolved at comptime so the `__clear_cache` reference is only analyzed
-    // on the architectures that need it. The shim no longer links compiler-rt,
-    // which is where that builtin would come from.
-    switch (comptime hostArch()) {
-        .x86, .x86_64 => {},
-        .aarch64, .other => {
-            const clearCache = struct {
-                extern fn __clear_cache(start: *const anyopaque, end: *const anyopaque) void;
-            }.__clear_cache;
-            clearCache(memory.ptr, memory.ptr + memory.len);
-        },
-    }
 }
 
 fn findFunctionStub(stubs: []const FunctionStub, name: []const u8) ?usize {
@@ -1000,6 +987,7 @@ test "loaded dev program borrows direct shared image metadata" {
         page_size,
         code,
         &entrypoints,
+        &.{},
         &.{},
         &.{},
         &.{},

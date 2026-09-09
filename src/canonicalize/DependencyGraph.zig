@@ -322,7 +322,7 @@ const DemandAnalyzer = struct {
                     const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @enumFromInt(record.node_idx));
                     if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
                 },
-                .nested_function_use, .dispatch_target => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference => {},
             }
         }
 
@@ -829,7 +829,6 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit = binop.rhs });
             },
             .e_unary_minus => |unop| try walk.push(self.allocator, .{ .visit = unop.expr }),
-            .e_unary_not => |unop| try walk.push(self.allocator, .{ .visit = unop.expr }),
             .e_block => |block| {
                 try walk.push(self.allocator, .{ .visit = block.final_expr });
                 const stmts = self.cir.store.sliceStatements(block.stmts);
@@ -953,6 +952,7 @@ const DemandAnalyzer = struct {
                 }
             },
             .assign,
+            .var_assign,
             .num_literal,
             .num_from_numeral_literal,
             .small_dec_literal,
@@ -1106,6 +1106,7 @@ fn appendChildPatterns(
             }
         },
         .assign,
+        .var_assign,
         .num_literal,
         .num_from_numeral_literal,
         .small_dec_literal,
@@ -1143,7 +1144,7 @@ pub fn appendPatternBinders(
 /// Whether a pattern node itself binds a name (nested binders aside).
 fn patternBindsName(pattern: CIR.Pattern) bool {
     return switch (pattern) {
-        .assign, .as => true,
+        .assign, .var_assign, .as => true,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -1473,7 +1474,6 @@ pub fn collectNameReferences(
                 try scratch_stack.append(allocator, binop.rhs);
             },
             .e_unary_minus => |unop| try scratch_stack.append(allocator, unop.expr),
-            .e_unary_not => |unop| try scratch_stack.append(allocator, unop.expr),
             .e_block => |block| {
                 for (cir.store.sliceStatements(block.stmts)) |stmt_idx| {
                     switch (cir.store.getStatement(stmt_idx)) {

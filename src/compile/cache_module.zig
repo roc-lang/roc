@@ -178,8 +178,10 @@ pub const CacheModule = struct {
     }
 
     /// Restore ModuleEnv from the cached data
-    /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
-    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) (Allocator.Error || error{ BufferTooSmall, CorruptSerializedModuleEnv })!*ModuleEnv {
+    /// `module_basename` is the source-visible final path segment, not the
+    /// logical import path. Both it and `source` must remain valid for the
+    /// lifetime of the restored ModuleEnv.
+    pub fn restore(self: *const CacheModule, allocator: Allocator, module_basename: []const u8, source: []const u8) (Allocator.Error || error{ BufferTooSmall, CorruptSerializedModuleEnv })!*ModuleEnv {
         // The entire data section contains the serialized ModuleEnv
         const serialized_data = self.data;
 
@@ -197,7 +199,7 @@ pub const CacheModule = struct {
         const base_addr = @intFromPtr(serialized_data.ptr);
 
         // Deserialize the ModuleEnv with mutable types so it can be type-checked further
-        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserializeWithMutableTypes(base_addr, allocator, source, module_name);
+        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserializeWithMutableTypes(base_addr, allocator, source, module_basename);
 
         return module_env_ptr;
     }
@@ -309,8 +311,8 @@ test "MODULE_ENV_VERSION_HASH golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xDC, 0x1A, 0x00, 0x9D, 0x93, 0x22, 0xF9, 0x7F, 0xF8, 0xC8, 0x9A, 0x78, 0xF6, 0x51, 0xE0, 0x4F,
-        0x10, 0x5C, 0xED, 0xAF, 0xD6, 0xBC, 0x0F, 0xF7, 0x22, 0x7D, 0x16, 0x25, 0xE0, 0xCC, 0x94, 0xC7,
+        0xE8, 0x4D, 0xB2, 0xA5, 0xA1, 0x85, 0x66, 0xF9, 0x94, 0x48, 0xC3, 0x33, 0xB7, 0x43, 0x98, 0x72,
+        0x49, 0xDB, 0x9E, 0x05, 0xE8, 0x07, 0xCD, 0x9B, 0x28, 0xC3, 0xA0, 0xC9, 0x4B, 0xE6, 0x7C, 0x78,
     };
     try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
 }

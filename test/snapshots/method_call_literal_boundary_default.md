@@ -17,26 +17,41 @@ result = func(10, 20)
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:8:4:9
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 # PROBLEMS
-── ● literal defaulted ───────────── method_call_literal_boundary_default.md:4:8
-
-Nothing in this definition's type determines the type of this number literal,
-so it was given the default type Dec instead.
-
-add_x(5).plus(add_y(5))
-      ^
-
-Hint: To use a different numeric type here, add a suffix or a type annotation.
-
-── ● literal defaulted ──────────── method_call_literal_boundary_default.md:4:22
-
-Nothing in this definition's type determines the type of this number literal,
-so it was given the default type Dec instead.
-
-add_x(5).plus(add_y(5))
-                    ^
-
-Hint: To use a different numeric type here, add a suffix or a type annotation.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Literal Defaulted")
+		(region (start 4 8) (end 4 9))
+		(headline
+			(reflow "Nothing in this definition's type determines the type of this number literal, so it was given the default type")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "method_call_literal_boundary_default.md") (start 4 8) (end 4 9) (annotation error) (line-text "\tadd_x(5).plus(add_y(5))"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "To use a different numeric type here, add a suffix or a type annotation.")))
+	(report
+		(severity warning)
+		(title "Literal Defaulted")
+		(region (start 4 22) (end 4 23))
+		(headline
+			(reflow "Nothing in this definition's type determines the type of this number literal, so it was given the default type")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "method_call_literal_boundary_default.md") (start 4 22) (end 4 23) (annotation error) (line-text "\tadd_x(5).plus(add_y(5))"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "To use a different numeric type here, add a suffix or a type annotation."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,
@@ -153,7 +168,7 @@ NO CHANGE
 							(e-num (value "5"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 301)
+		(e-call (constraint-fn-var 308)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "10"))

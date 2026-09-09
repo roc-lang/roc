@@ -15,20 +15,37 @@ missing = record.gamma
 # EXPECTED
 TYPE MISMATCH - record_access_missing_field_keeps_record_type.md:6:17:6:23
 # PROBLEMS
-── ✗ type mismatch ─────── record_access_missing_field_keeps_record_type.md:6:17
-
-This record does not have a gamma field.
-
-missing = record.gamma
-                ^^^^^^
-
-This is often due to a typo. The most similar fields are:
-
-    - beta
-    - alpha
-
-So maybe gamma should be beta?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 6 17) (end 6 23))
+		(headline
+			(reflow "This record does not have a")
+			(reflow " ")
+			(annotated code "gamma")
+			(reflow " ")
+			(reflow "field."))
+		(document
+			(source-region (file "record_access_missing_field_keeps_record_type.md") (start 6 17) (end 6 23) (annotation error) (line-text "missing = record.gamma"))
+			(line-break)
+			(reflow "This is often due to a typo. The most similar fields are:")
+			(line-break)
+			(line-break)
+			(text "    - ")
+			(annotated code "beta")
+			(line-break)
+			(text "    - ")
+			(annotated code "alpha")
+			(line-break)
+			(line-break)
+			(reflow "So maybe ")
+			(annotated code "gamma")
+			(reflow " should be ")
+			(annotated code "beta")
+			(text "?"))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,

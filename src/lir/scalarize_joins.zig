@@ -62,7 +62,17 @@ const max_rounds = 4096;
 /// Scalarizes eligible struct-typed join parameters across every proc in the
 /// store, repeating until no parameter qualifies.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!void {
+    return runMeasured(store, layouts, null);
+}
+
+const Metrics = struct {
+    collected_statements: usize = 0,
+    alias_edges: usize = 0,
+};
+
+fn runMeasured(store: *LirStore, layouts: *const layout_mod.Store, metrics: ?*Metrics) ScalarizeError!void {
     var pass = Pass{
+        .metrics = metrics,
         .store = store,
         .layouts = layouts,
         .allocator = store.allocator,
@@ -71,10 +81,15 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!vo
         .init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
         .write_other = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
         .struct_builds = collections.DenseMap(LIR.LocalId, StructBuild).init(store.allocator),
+        .tag_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
+        .tag_builds = collections.DenseMap(LIR.LocalId, TagBuild).init(store.allocator),
+        .tag_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
+        .struct_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
         .alias_init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
         .alias_defs = collections.DenseMap(LIR.LocalId, AliasDef).init(store.allocator),
         .join_params = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
         .transparent = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
+        .alias_children = collections.DenseMap(LIR.LocalId, LIR.LocalId).init(store.allocator),
         .removed = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(store.allocator),
         .visited = collections.DenseMap(LIR.CFStmtId, void).init(store.allocator),
         .stack = .empty,
@@ -111,14 +126,71 @@ const BuildSite = struct {
     fields: LIR.LocalSpan,
 };
 
+const TagBuild = struct {
+    builds: std.ArrayList(TagBuildSite),
+    uses: u32,
+    init_uses: u32,
+};
+
+const TagBuildSite = struct {
+    stmt: LIR.CFStmtId,
+    variant_index: u16,
+    discriminant: u16,
+    payload: ?LIR.LocalId,
+};
+
 const AliasDef = struct {
     stmt: LIR.CFStmtId,
     source: LIR.LocalId,
     /// A local defined by more than one alias statement is never transparent.
     def_count: u32,
+    next_sibling: ?LIR.LocalId = null,
+    root_state: enum { pending, active, complete } = .pending,
+    /// Null for a transparent cycle, which cannot reach a constructor or a
+    /// join parameter and therefore cannot authorize scalarizing either.
+    root: ?LIR.LocalId = null,
 };
 
+/// Compress the settled alias graph once per collection round. Every
+/// transparent edge is followed once; an active node proves a cycle.
+fn resolveTransparentRoots(
+    allocator: Allocator,
+    alias_defs: *collections.DenseMap(LIR.LocalId, AliasDef),
+    transparent: *const collections.DenseMap(LIR.LocalId, void),
+    metrics: ?*Metrics,
+) ScalarizeError!void {
+    var path = std.ArrayList(LIR.LocalId).empty;
+    defer path.deinit(allocator);
+    var aliases = alias_defs.iterator();
+    while (aliases.next()) |entry| {
+        const start = entry.key_ptr.*;
+        if (!transparent.contains(start) or entry.value_ptr.root_state == .complete) continue;
+        path.clearRetainingCapacity();
+        var current = start;
+        const root: ?LIR.LocalId = while (true) {
+            if (!transparent.contains(current)) break current;
+            const def = alias_defs.getPtr(current).?;
+            switch (def.root_state) {
+                .complete => break def.root,
+                .active => break null,
+                .pending => {
+                    if (metrics) |counts| counts.alias_edges += 1;
+                    try path.append(allocator, current);
+                    def.root_state = .active;
+                    current = def.source;
+                },
+            }
+        };
+        for (path.items) |local| {
+            const def = alias_defs.getPtr(local).?;
+            def.root = root;
+            def.root_state = .complete;
+        }
+    }
+}
+
 const Pass = struct {
+    metrics: ?*Metrics,
     store: *LirStore,
     layouts: *const layout_mod.Store,
     allocator: Allocator,
@@ -132,6 +204,19 @@ const Pass = struct {
     write_other: collections.DenseMap(LIR.LocalId, void),
     /// Struct-literal defs per target local.
     struct_builds: collections.DenseMap(LIR.LocalId, StructBuild),
+    /// Tag payload/discriminant projections per source. Unlike a whole-value
+    /// use, these remain transparent through `ref.local` chains.
+    tag_reads: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    /// Literal tag constructors per target, used for exact single-variant
+    /// scalar replacement.
+    tag_builds: collections.DenseMap(LIR.LocalId, TagBuild),
+    /// Join-parameter initializers that forward a one-variant tag unchanged,
+    /// keyed by their source. These are representation-transparent and are
+    /// rewritten to forward the payload when the source parameter scalarizes.
+    tag_forward_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    /// Same-layout struct transfers between join parameters. They are broken
+    /// by rebuilding from scalar fields while one side of a cycle scalarizes.
+    struct_forward_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// Direct `ref.local` assignments into a join parameter, per parameter.
     /// Lowering initializes a join parameter on some edges this way instead
     /// of with `set_local`; such a statement is an initializer that can seed
@@ -152,6 +237,10 @@ const Pass = struct {
     join_params: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// Aliases proved transparent this round.
     transparent: collections.DenseMap(LIR.LocalId, void),
+    /// Explicit reverse alias dependencies; closure queries visit only members.
+    alias_children: collections.DenseMap(LIR.LocalId, LIR.LocalId),
+    /// Reusable worklist for alias propagation and closure traversal.
+    alias_work: std.ArrayList(LIR.LocalId) = .empty,
     /// Deleted build statements mapped to their continuations, for edge
     /// patching.
     removed: collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId),
@@ -168,10 +257,16 @@ const Pass = struct {
         self.init_writes.deinit();
         self.write_other.deinit();
         self.struct_builds.deinit();
+        self.tag_reads.deinit();
+        self.tag_builds.deinit();
+        self.tag_forward_writes.deinit();
+        self.struct_forward_writes.deinit();
         self.alias_init_writes.deinit();
         self.alias_defs.deinit();
         self.join_params.deinit();
         self.transparent.deinit();
+        self.alias_children.deinit();
+        self.alias_work.deinit(self.allocator);
         self.removed.deinit();
         self.visited.deinit();
         self.stack.deinit(self.allocator);
@@ -189,6 +284,14 @@ const Pass = struct {
         while (listing_joins.next()) |list| list.deinit(self.allocator);
         var builds = self.struct_builds.valueIterator();
         while (builds.next()) |build| build.builds.deinit(self.allocator);
+        var tag_reads = self.tag_reads.valueIterator();
+        while (tag_reads.next()) |tag_read_list| tag_read_list.deinit(self.allocator);
+        var tag_builds = self.tag_builds.valueIterator();
+        while (tag_builds.next()) |build| build.builds.deinit(self.allocator);
+        var tag_forward_writes = self.tag_forward_writes.valueIterator();
+        while (tag_forward_writes.next()) |forward_list| forward_list.deinit(self.allocator);
+        var struct_forward_writes = self.struct_forward_writes.valueIterator();
+        while (struct_forward_writes.next()) |forward_list| forward_list.deinit(self.allocator);
     }
 
     fn resetProc(self: *Pass) void {
@@ -198,10 +301,16 @@ const Pass = struct {
         self.init_writes.clearRetainingCapacity();
         self.write_other.clearRetainingCapacity();
         self.struct_builds.clearRetainingCapacity();
+        self.tag_reads.clearRetainingCapacity();
+        self.tag_builds.clearRetainingCapacity();
+        self.tag_forward_writes.clearRetainingCapacity();
+        self.struct_forward_writes.clearRetainingCapacity();
         self.alias_init_writes.clearRetainingCapacity();
         self.alias_defs.clearRetainingCapacity();
         self.join_params.clearRetainingCapacity();
         self.transparent.clearRetainingCapacity();
+        self.alias_children.clearRetainingCapacity();
+        self.alias_work.clearRetainingCapacity();
         self.removed.clearRetainingCapacity();
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
@@ -211,6 +320,7 @@ const Pass = struct {
     fn noteUse(self: *Pass, local: LIR.LocalId) ScalarizeError!void {
         try self.use_other.put(local, {});
         if (self.struct_builds.getPtr(local)) |build| build.uses += 1;
+        if (self.tag_builds.getPtr(local)) |build| build.uses += 1;
     }
 
     fn noteDescUse(self: *Pass, desc: LIR.BoxyDescRef) ScalarizeError!void {
@@ -228,6 +338,42 @@ const Pass = struct {
         if (self.struct_builds.getPtr(source)) |build| build.uses += 1;
     }
 
+    fn noteTagRead(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
+        const entry = try self.tag_reads.getOrPut(source);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, stmt);
+        if (self.struct_builds.getPtr(source)) |build| build.uses += 1;
+        if (self.tag_builds.getPtr(source)) |build| build.uses += 1;
+    }
+
+    fn noteTagForward(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
+        const entry = try self.tag_forward_writes.getOrPut(source);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, stmt);
+        if (self.tag_builds.getPtr(source)) |build| build.init_uses += 1;
+    }
+
+    fn noteStructForward(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
+        const entry = try self.struct_forward_writes.getOrPut(source);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, stmt);
+        if (self.struct_builds.getPtr(source)) |build| build.init_uses += 1;
+    }
+
+    fn isSameSingleVariantTag(self: *const Pass, lhs: LIR.LocalId, rhs: LIR.LocalId) bool {
+        const lhs_payload = self.singleVariantPayloadLayout(lhs) orelse return false;
+        const rhs_payload = self.singleVariantPayloadLayout(rhs) orelse return false;
+        return lhs_payload == rhs_payload and self.store.getLocal(lhs).layout_idx == self.store.getLocal(rhs).layout_idx;
+    }
+
+    fn isSameStruct(self: *const Pass, lhs: LIR.LocalId, rhs: LIR.LocalId) bool {
+        const lhs_data = self.store.getLocal(lhs);
+        const rhs_data = self.store.getLocal(rhs);
+        if (lhs_data.boxy_desc != null or rhs_data.boxy_desc != null) return false;
+        if (lhs_data.layout_idx != rhs_data.layout_idx) return false;
+        return self.layouts.getLayout(lhs_data.layout_idx).tag == .struct_;
+    }
+
     fn noteWrite(self: *Pass, target: LIR.LocalId) ScalarizeError!void {
         try self.write_other.put(target, {});
     }
@@ -238,6 +384,19 @@ const Pass = struct {
             entry.value_ptr.* = .{ .builds = .empty, .uses = 0, .init_uses = 0 };
         }
         try entry.value_ptr.builds.append(self.allocator, .{ .stmt = stmt, .fields = fields });
+    }
+
+    fn noteTagBuild(self: *Pass, target: LIR.LocalId, stmt: LIR.CFStmtId, assign: @FieldType(LIR.CFStmt, "assign_tag")) ScalarizeError!void {
+        const entry = try self.tag_builds.getOrPut(target);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .{ .builds = .empty, .uses = 0, .init_uses = 0 };
+        }
+        try entry.value_ptr.builds.append(self.allocator, .{
+            .stmt = stmt,
+            .variant_index = assign.variant_index,
+            .discriminant = assign.discriminant,
+            .payload = assign.payload,
+        });
     }
 
     /// Decide which recorded aliases are transparent: a single-definition
@@ -255,56 +414,50 @@ const Pass = struct {
             if (def.def_count == 1 and
                 !self.join_params.contains(target) and
                 !self.write_other.contains(target) and
-                self.init_writes.get(target) == null)
+                !self.struct_builds.contains(target) and
+                !self.tag_builds.contains(target) and
+                !self.init_writes.contains(target))
             {
                 try self.transparent.put(target, {});
+                if (self.use_other.contains(target)) try self.alias_work.append(self.allocator, target);
+            } else if (def.def_count == 1) {
+                // Seed every initially opaque source before propagation, even
+                // when its alias was excluded because of another definition.
+                try self.noteUse(def.source);
+                try self.alias_work.append(self.allocator, def.source);
             }
         }
-
-        var changed = true;
-        while (changed) {
-            changed = false;
-            var candidates = self.alias_defs.iterator();
-            while (candidates.next()) |entry| {
-                const target = entry.key_ptr.*;
-                if (!self.transparent.contains(target)) continue;
-                if (self.use_other.contains(target)) {
-                    _ = self.transparent.remove(target);
-                    try self.noteUse(entry.value_ptr.source);
-                    changed = true;
-                }
-            }
+        // Each transparent alias can lose transparency once. Its source is
+        // the only new dependency affected by that transition.
+        while (self.alias_work.pop()) |target| {
+            if (self.metrics) |metrics| metrics.alias_edges += 1;
+            if (!self.transparent.remove(target)) continue;
+            const source = self.alias_defs.get(target).?.source;
+            try self.noteUse(source);
+            try self.alias_work.append(self.allocator, source);
         }
 
-        // A multiply-defined alias already counted its sources at collection.
+        try resolveTransparentRoots(self.allocator, &self.alias_defs, &self.transparent, self.metrics);
+
         var settled = self.alias_defs.iterator();
         while (settled.next()) |entry| {
             const target = entry.key_ptr.*;
-            const def = entry.value_ptr.*;
-            if (self.transparent.contains(target)) {
-                // Transparent reads still count toward initializer-build
-                // qualification: a build read through an alias must not be
-                // splatted away, or the alias's reads would dangle.
-                if (self.struct_builds.getPtr(self.transparentRoot(def.source))) |build| {
-                    build.uses += 1;
-                }
-            } else if (def.def_count == 1) {
-                try self.noteUse(def.source);
+            if (!self.transparent.contains(target)) continue;
+            const source = entry.value_ptr.source;
+            entry.value_ptr.next_sibling = self.alias_children.get(source);
+            try self.alias_children.put(source, target);
+            if (self.transparentRoot(source)) |root| {
+                if (self.struct_builds.getPtr(root)) |build| build.uses += 1;
+                if (self.tag_builds.getPtr(root)) |build| build.uses += 1;
             }
         }
     }
 
-    /// Follow a transparent-alias chain to the local whose value it reads.
-    fn transparentRoot(self: *const Pass, source: LIR.LocalId) LIR.LocalId {
-        var root = source;
-        var steps: usize = 0;
-        while (self.transparent.contains(root)) {
-            const def = self.alias_defs.get(root) orelse break;
-            root = def.source;
-            steps += 1;
-            if (steps > self.alias_defs.count()) break;
-        }
-        return root;
+    fn transparentRoot(self: *const Pass, source: LIR.LocalId) ?LIR.LocalId {
+        if (!self.transparent.contains(source)) return source;
+        const def = self.alias_defs.get(source).?;
+        std.debug.assert(def.root_state == .complete);
+        return def.root;
     }
 
     /// The transparent aliases rooted at `param`, in dependency order, plus
@@ -314,24 +467,47 @@ const Pass = struct {
     const AliasClosure = struct {
         stmts: std.ArrayList(LIR.CFStmtId),
         reads: std.ArrayList(LIR.CFStmtId),
+        tag_reads: std.ArrayList(LIR.CFStmtId),
+        tag_forwards: std.ArrayList(LIR.CFStmtId),
+        struct_forwards: std.ArrayList(LIR.CFStmtId),
 
         fn deinit(closure: *AliasClosure, allocator: Allocator) void {
             closure.stmts.deinit(allocator);
             closure.reads.deinit(allocator);
+            closure.tag_reads.deinit(allocator);
+            closure.tag_forwards.deinit(allocator);
+            closure.struct_forwards.deinit(allocator);
         }
     };
 
     fn aliasClosureOf(self: *Pass, param: LIR.LocalId) ScalarizeError!AliasClosure {
-        var closure = AliasClosure{ .stmts = .empty, .reads = .empty };
+        var closure = AliasClosure{
+            .stmts = .empty,
+            .reads = .empty,
+            .tag_reads = .empty,
+            .tag_forwards = .empty,
+            .struct_forwards = .empty,
+        };
         errdefer closure.deinit(self.allocator);
-        var it = self.alias_defs.iterator();
-        while (it.next()) |entry| {
-            const target = entry.key_ptr.*;
-            if (!self.transparent.contains(target)) continue;
-            if (self.transparentRoot(entry.value_ptr.source) != param) continue;
-            try closure.stmts.append(self.allocator, entry.value_ptr.stmt);
+        self.alias_work.clearRetainingCapacity();
+        if (self.alias_children.get(param)) |child| try self.alias_work.append(self.allocator, child);
+        while (self.alias_work.pop()) |target| {
+            if (self.metrics) |metrics| metrics.alias_edges += 1;
+            const def = self.alias_defs.get(target).?;
+            try closure.stmts.append(self.allocator, def.stmt);
+            if (def.next_sibling) |sibling| try self.alias_work.append(self.allocator, sibling);
+            if (self.alias_children.get(target)) |child| try self.alias_work.append(self.allocator, child);
             if (self.field_reads.getPtr(target)) |reads| {
                 try closure.reads.appendSlice(self.allocator, reads.items);
+            }
+            if (self.tag_reads.getPtr(target)) |reads| {
+                try closure.tag_reads.appendSlice(self.allocator, reads.items);
+            }
+            if (self.tag_forward_writes.getPtr(target)) |writes| {
+                try closure.tag_forwards.appendSlice(self.allocator, writes.items);
+            }
+            if (self.struct_forward_writes.getPtr(target)) |writes| {
+                try closure.struct_forwards.appendSlice(self.allocator, writes.items);
             }
         }
         return closure;
@@ -350,59 +526,88 @@ const Pass = struct {
         const proc_args = try GuardedList.dupe(self.allocator, LIR.LocalId, self.store.getLocalSpan(self.store.getProcSpec(proc_id).args));
         defer self.allocator.free(proc_args);
 
-        // Find one scalarizable parameter; the fixpoint loop picks up the
-        // rest on later rounds.
+        // Ordinary constructor candidates have disjoint definitions and
+        // projections. A constructor used as another constructor's operand is
+        // a whole-value use and cannot qualify in this analysis, so these
+        // deletions can be committed together. Join rewrites change edge ABIs
+        // and are considered only against a fresh analysis.
         var changed = false;
 
-        self.visited.clearRetainingCapacity();
-        self.stack.clearRetainingCapacity();
-        try self.stack.append(self.allocator, body);
-        outer: while (self.stack.pop()) |current| {
-            if (self.visited.contains(current)) continue;
-            try self.visited.put(current, {});
-            switch (self.store.getCFStmt(current)) {
-                .join => |join_stmt| {
-                    const params = self.store.getLocalSpan(join_stmt.params);
-                    for (0..params.len) |position| {
-                        const param = GuardedList.at(params, position);
-                        const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
-                        if (try self.tryScalarize(param_is_proc_arg, current, param)) {
-                            changed = true;
-                            break :outer;
+        // Eliminate ordinary constructor/projection temporaries before
+        // considering join parameters. Case fusion exposes these when a tag
+        // payload contains a wrapper struct: the wrapper has one literal
+        // definition and is observed only through field projections, so its
+        // operands can feed those projections directly without changing any
+        // control-flow ABI.
+        var tag_builds = self.tag_builds.iterator();
+        while (tag_builds.next()) |entry| {
+            if (try self.tryEliminateLocalTag(entry.key_ptr.*, entry.value_ptr.*)) {
+                changed = true;
+            }
+        }
+
+        var builds = self.struct_builds.iterator();
+        while (builds.next()) |entry| {
+            if (try self.tryEliminateLocalStruct(entry.key_ptr.*, entry.value_ptr.*)) {
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            self.visited.clearRetainingCapacity();
+            self.stack.clearRetainingCapacity();
+            try self.stack.append(self.allocator, body);
+            outer: while (self.stack.pop()) |current| {
+                if (self.visited.contains(current)) continue;
+                try self.visited.put(current, {});
+                switch (self.store.getCFStmt(current)) {
+                    .join => |join_stmt| {
+                        const params = self.store.getLocalSpan(join_stmt.params);
+                        for (0..params.len) |position| {
+                            const param = GuardedList.at(params, position);
+                            const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
+                            if (try self.tryScalarizeTag(param_is_proc_arg, current, param)) {
+                                changed = true;
+                                break :outer;
+                            }
+                            if (try self.tryScalarize(param_is_proc_arg, current, param)) {
+                                changed = true;
+                                break :outer;
+                            }
                         }
-                    }
-                    try self.stack.append(self.allocator, join_stmt.body);
-                    try self.stack.append(self.allocator, join_stmt.remainder);
-                },
-                .switch_stmt => |s| {
-                    const branches = self.store.getCFSwitchBranches(s.branches);
-                    for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
-                    try self.stack.append(self.allocator, s.default_branch);
-                    if (s.continuation) |continuation| {
-                        try self.stack.append(self.allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |s| {
-                    try self.stack.append(self.allocator, s.initialized_branch);
-                    try self.stack.append(self.allocator, s.uninitialized_branch);
-                },
-                .str_match => |s| {
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                .str_match_set => |s| {
-                    const arms = self.store.getStrMatchArms(s.arms);
-                    for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                .boxy_tag_match => |s| {
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                    try self.stack.append(self.allocator, s.next);
-                },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                        try self.stack.append(self.allocator, join_stmt.body);
+                        try self.stack.append(self.allocator, join_stmt.remainder);
+                    },
+                    .switch_stmt => |s| {
+                        const branches = self.store.getCFSwitchBranches(s.branches);
+                        for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
+                        try self.stack.append(self.allocator, s.default_branch);
+                        if (s.continuation) |continuation| {
+                            try self.stack.append(self.allocator, continuation);
+                        }
+                    },
+                    .switch_initialized_payload => |s| {
+                        try self.stack.append(self.allocator, s.initialized_branch);
+                        try self.stack.append(self.allocator, s.uninitialized_branch);
+                    },
+                    .str_match => |s| {
+                        try self.stack.append(self.allocator, s.on_match);
+                        try self.stack.append(self.allocator, s.on_miss);
+                    },
+                    .str_match_set => |s| {
+                        const arms = self.store.getStrMatchArms(s.arms);
+                        for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
+                        try self.stack.append(self.allocator, s.on_miss);
+                    },
+                    .boxy_tag_match => |s| {
+                        try self.stack.append(self.allocator, s.on_match);
+                        try self.stack.append(self.allocator, s.on_miss);
+                    },
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                        try self.stack.append(self.allocator, s.next);
+                    },
+                    .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                }
             }
         }
 
@@ -411,6 +616,179 @@ const Pass = struct {
             try self.extendFrameLocals(proc_id);
         }
         return changed;
+    }
+
+    fn tryEliminateLocalStruct(self: *Pass, local: LIR.LocalId, build: StructBuild) ScalarizeError!bool {
+        if (self.join_params.contains(local) or self.write_other.contains(local) or self.use_other.contains(local) or self.alias_defs.contains(local)) return false;
+        if (build.builds.items.len != 1) return false;
+        const site = build.builds.items[0];
+        const operands = self.store.getLocalSpan(site.fields);
+        if (operands.len == 0 or operands.len > max_fields) return false;
+
+        var closure = try self.aliasClosureOf(local);
+        defer closure.deinit(self.allocator);
+        const direct_tag_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(local)) |reads| reads.items else &.{};
+        const direct_tag_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(local)) |writes| writes.items else &.{};
+        const direct_struct_forwards: []const LIR.CFStmtId = if (self.struct_forward_writes.getPtr(local)) |writes| writes.items else &.{};
+        if (direct_tag_reads.len != 0 or closure.tag_reads.items.len != 0 or
+            direct_tag_forwards.len != 0 or closure.tag_forwards.items.len != 0 or
+            direct_struct_forwards.len != 0 or closure.struct_forwards.items.len != 0) return false;
+        const direct_reads: []const LIR.CFStmtId = if (self.field_reads.getPtr(local)) |reads| reads.items else &.{};
+        if (direct_reads.len == 0 and closure.reads.items.len == 0) return false;
+
+        for (direct_reads) |read_stmt| {
+            const read = self.store.getCFStmtPtr(read_stmt);
+            const field = read.assign_ref.op.field.field_idx;
+            if (field >= operands.len) return false;
+            read.assign_ref.op = .{ .local = GuardedList.at(operands, field) };
+        }
+        for (closure.reads.items) |read_stmt| {
+            const read = self.store.getCFStmtPtr(read_stmt);
+            const field = read.assign_ref.op.field.field_idx;
+            if (field >= operands.len) return false;
+            read.assign_ref.op = .{ .local = GuardedList.at(operands, field) };
+        }
+        for (closure.stmts.items) |alias_stmt| {
+            const alias = self.store.getCFStmt(alias_stmt).assign_ref;
+            try self.removed.put(alias_stmt, alias.next);
+        }
+        try self.removed.put(site.stmt, self.store.getCFStmt(site.stmt).assign_struct.next);
+        return true;
+    }
+
+    fn singleVariantPayloadLayout(self: *const Pass, local: LIR.LocalId) ?layout_mod.Idx {
+        const local_data = self.store.getLocal(local);
+        if (local_data.boxy_desc != null) return null;
+        const local_layout = self.layouts.getLayout(local_data.layout_idx);
+        if (local_layout.tag != .tag_union) return null;
+        const info = self.layouts.getTagUnionInfo(local_layout);
+        if (info.variants.len != 1 or info.data.discriminant_size != 0) return null;
+        return info.variants.get(0).payload_layout;
+    }
+
+    fn validSingleVariantRead(self: *const Pass, stmt_id: LIR.CFStmtId, payload_layout: layout_mod.Idx) bool {
+        const stmt = self.store.getCFStmt(stmt_id);
+        if (stmt != .assign_ref) return false;
+        const op = stmt.assign_ref.op;
+        if (op == .discriminant) return true;
+        if (op == .tag_payload_struct) {
+            return op.tag_payload_struct.variant_index == 0 and op.tag_payload_struct.tag_discriminant == 0;
+        }
+        if (op != .tag_payload) return false;
+        const tag_payload = op.tag_payload;
+        if (tag_payload.variant_index != 0 or tag_payload.tag_discriminant != 0) return false;
+        const payload = self.layouts.getLayout(payload_layout);
+        if (payload.tag == .struct_) {
+            const info = self.layouts.getStructInfo(payload);
+            var field_count: usize = 0;
+            for (0..info.fields.len) |index| {
+                field_count = @max(field_count, @as(usize, info.fields.get(@intCast(index)).index) + 1);
+            }
+            return tag_payload.payload_idx < field_count;
+        }
+        return tag_payload.payload_idx == 0;
+    }
+
+    fn rewriteSingleVariantRead(self: *Pass, stmt_id: LIR.CFStmtId, payload: LIR.LocalId, payload_layout: layout_mod.Idx) void {
+        const stmt = self.store.getCFStmtPtr(stmt_id);
+        const assign = stmt.assign_ref;
+        if (assign.op == .discriminant) {
+            stmt.* = .{ .assign_literal = .{
+                .target = assign.target,
+                .value = .{ .i64_literal = .{
+                    .value = 0,
+                    .layout_idx = self.store.getLocal(assign.target).layout_idx,
+                } },
+                .next = assign.next,
+            } };
+            return;
+        }
+        if (assign.op == .tag_payload_struct) {
+            stmt.assign_ref.op = .{ .local = payload };
+            return;
+        }
+        std.debug.assert(assign.op == .tag_payload);
+        stmt.assign_ref.op = if (self.layouts.getLayout(payload_layout).tag == .struct_)
+            .{ .field = .{ .source = payload, .field_idx = assign.op.tag_payload.payload_idx } }
+        else
+            .{ .local = payload };
+    }
+
+    fn validateSingleVariantReads(
+        self: *const Pass,
+        direct_reads: []const LIR.CFStmtId,
+        closure_reads: []const LIR.CFStmtId,
+        payload_layout: layout_mod.Idx,
+    ) bool {
+        for (direct_reads) |stmt| if (!self.validSingleVariantRead(stmt, payload_layout)) return false;
+        for (closure_reads) |stmt| if (!self.validSingleVariantRead(stmt, payload_layout)) return false;
+        return true;
+    }
+
+    fn rewriteSingleVariantReads(
+        self: *Pass,
+        direct_reads: []const LIR.CFStmtId,
+        closure_reads: []const LIR.CFStmtId,
+        payload: LIR.LocalId,
+        payload_layout: layout_mod.Idx,
+    ) void {
+        for (direct_reads) |stmt| self.rewriteSingleVariantRead(stmt, payload, payload_layout);
+        for (closure_reads) |stmt| self.rewriteSingleVariantRead(stmt, payload, payload_layout);
+    }
+
+    fn removeAliasClosure(self: *Pass, closure: *const AliasClosure) ScalarizeError!void {
+        for (closure.stmts.items) |alias_stmt| {
+            const alias = self.store.getCFStmt(alias_stmt).assign_ref;
+            try self.removed.put(alias_stmt, alias.next);
+        }
+    }
+
+    /// Claim one statement for one mutation role. A scalarization plan is
+    /// atomic only when every statement it will rewrite has exactly one role;
+    /// otherwise the first rewrite would change the statement union tag or
+    /// operands underneath the second.
+    fn claimMutationSite(
+        _: *Pass,
+        claimed: *collections.DenseMap(LIR.CFStmtId, void),
+        stmt: LIR.CFStmtId,
+    ) ScalarizeError!bool {
+        const entry = try claimed.getOrPut(stmt);
+        return !entry.found_existing;
+    }
+
+    fn claimMutationSites(
+        self: *Pass,
+        claimed: *collections.DenseMap(LIR.CFStmtId, void),
+        stmts: []const LIR.CFStmtId,
+    ) ScalarizeError!bool {
+        for (stmts) |stmt| if (!try self.claimMutationSite(claimed, stmt)) return false;
+        return true;
+    }
+
+    fn tryEliminateLocalTag(self: *Pass, local: LIR.LocalId, build: TagBuild) ScalarizeError!bool {
+        if (self.join_params.contains(local) or self.write_other.contains(local) or self.use_other.contains(local) or self.alias_defs.contains(local)) return false;
+        if (build.builds.items.len != 1) return false;
+        const payload_layout = self.singleVariantPayloadLayout(local) orelse return false;
+        const site = build.builds.items[0];
+        const payload = site.payload orelse return false;
+        if (site.variant_index != 0 or site.discriminant != 0) return false;
+        const assign = self.store.getCFStmt(site.stmt).assign_tag;
+        if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+
+        var closure = try self.aliasClosureOf(local);
+        defer closure.deinit(self.allocator);
+        const direct_fields: []const LIR.CFStmtId = if (self.field_reads.getPtr(local)) |reads| reads.items else &.{};
+        if (direct_fields.len != 0 or closure.reads.items.len != 0) return false;
+        const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(local)) |writes| writes.items else &.{};
+        if (direct_forwards.len != 0 or closure.tag_forwards.items.len != 0) return false;
+        const direct_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(local)) |reads| reads.items else &.{};
+        if (direct_reads.len == 0 and closure.tag_reads.items.len == 0) return false;
+        if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
+
+        self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload, payload_layout);
+        try self.removeAliasClosure(&closure);
+        try self.removed.put(site.stmt, assign.next);
+        return true;
     }
 
     /// Adds the new field-parameter locals to the proc's frame locals so
@@ -441,6 +819,216 @@ const Pass = struct {
     /// argument struct on entry. (Any future shape that entered a parameter
     /// without a write and without a seed would surface as an unbound local in
     /// the ARC borrow certifier, never as a silent miscompile.)
+    fn tryScalarizeTag(
+        self: *Pass,
+        param_is_proc_arg: bool,
+        join_stmt_id: LIR.CFStmtId,
+        param: LIR.LocalId,
+    ) ScalarizeError!bool {
+        const payload_layout = self.singleVariantPayloadLayout(param) orelse return false;
+        // A payload-less singleton is already a zero-sized value. Removing it
+        // would change only the internal join ABI, with no generated-code win.
+        if (self.layouts.getLayout(payload_layout).tag == .zst) return false;
+        if (self.use_other.contains(param) or self.write_other.contains(param)) return false;
+
+        const listing_joins: []const LIR.CFStmtId = if (self.join_params.getPtr(param)) |list| list.items else &.{};
+        if (listing_joins.len == 0) return false;
+        if (param_is_proc_arg and listing_joins.len != 1) return false;
+        for (listing_joins) |listing_id| {
+            const listing = self.store.getCFStmt(listing_id).join;
+            const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
+            for (0..GuardedList.borrowLen(maybe_uninitialized)) |index| {
+                if (GuardedList.at(maybe_uninitialized, index) == param) return false;
+            }
+        }
+
+        var closure = try self.aliasClosureOf(param);
+        defer closure.deinit(self.allocator);
+        const direct_fields: []const LIR.CFStmtId = if (self.field_reads.getPtr(param)) |reads| reads.items else &.{};
+        if (direct_fields.len != 0 or closure.reads.items.len != 0) return false;
+        const direct_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(param)) |reads| reads.items else &.{};
+        const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(param)) |writes| writes.items else &.{};
+        if (direct_reads.len == 0 and closure.tag_reads.items.len == 0 and
+            direct_forwards.len == 0 and closure.tag_forwards.items.len == 0) return false;
+        if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
+
+        const writes: []const LIR.CFStmtId = if (self.init_writes.getPtr(param)) |list| list.items else &.{};
+        const alias_writes: []const LIR.CFStmtId = if (self.alias_init_writes.getPtr(param)) |list| list.items else &.{};
+        const direct_builds: []const TagBuildSite = if (self.tag_builds.getPtr(param)) |builds| builds.builds.items else &.{};
+        if (writes.len == 0 and alias_writes.len == 0 and direct_builds.len == 0) return false;
+
+        for (writes) |write_stmt| {
+            const write = self.store.getCFStmt(write_stmt).set_local;
+            if (write.value == param or self.singleVariantPayloadLayout(write.value) != payload_layout) return false;
+        }
+        for (alias_writes) |write_stmt| {
+            const write = self.store.getCFStmt(write_stmt).assign_ref;
+            if (write.op.local == param or self.singleVariantPayloadLayout(write.op.local) != payload_layout) return false;
+        }
+        for (direct_builds) |site| {
+            const payload = site.payload orelse return false;
+            if (site.variant_index != 0 or site.discriminant != 0) return false;
+            const assign = self.store.getCFStmt(site.stmt).assign_tag;
+            if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+        }
+
+        var claimed = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
+        defer claimed.deinit();
+        if (!try self.claimMutationSites(&claimed, direct_reads) or
+            !try self.claimMutationSites(&claimed, closure.tag_reads.items) or
+            !try self.claimMutationSites(&claimed, direct_forwards) or
+            !try self.claimMutationSites(&claimed, closure.tag_forwards.items) or
+            !try self.claimMutationSites(&claimed, closure.stmts.items) or
+            !try self.claimMutationSites(&claimed, writes) or
+            !try self.claimMutationSites(&claimed, alias_writes)) return false;
+        for (direct_builds) |site| {
+            if (!try self.claimMutationSite(&claimed, site.stmt)) return false;
+        }
+
+        const payload_param = try self.store.addLocal(.{ .layout_idx = payload_layout });
+        try self.new_locals.append(self.allocator, payload_param);
+        for (listing_joins) |listing_id| {
+            const old_params = self.store.getLocalSpan(self.store.getCFStmt(listing_id).join.params);
+            var new_params = std.ArrayList(LIR.LocalId).empty;
+            defer new_params.deinit(self.allocator);
+            for (0..GuardedList.borrowLen(old_params)) |index| {
+                const old_param = GuardedList.at(old_params, index);
+                try new_params.append(self.allocator, if (old_param == param) payload_param else old_param);
+            }
+            const new_param_span = try self.store.addLocalSpan(new_params.items);
+            self.store.getCFStmtPtr(listing_id).join.params = new_param_span;
+        }
+
+        self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload_param, payload_layout);
+        for (direct_forwards) |stmt| try self.rewriteTagForward(stmt, payload_param, payload_layout);
+        for (closure.tag_forwards.items) |stmt| try self.rewriteTagForward(stmt, payload_param, payload_layout);
+        try self.removeAliasClosure(&closure);
+
+        for (writes) |write_stmt| {
+            const write = self.store.getCFStmt(write_stmt).set_local;
+            try self.seedTagWrite(write_stmt, write.value, write.next, payload_param, payload_layout);
+        }
+        for (alias_writes) |write_stmt| {
+            const write = self.store.getCFStmt(write_stmt).assign_ref;
+            try self.seedTagWrite(write_stmt, write.op.local, write.next, payload_param, payload_layout);
+        }
+        for (direct_builds) |site| {
+            const assign = self.store.getCFStmt(site.stmt).assign_tag;
+            self.store.getCFStmtPtr(site.stmt).* = .{ .set_local = .{
+                .target = payload_param,
+                .value = site.payload.?,
+                .mode = .initialize_join_param,
+                .next = assign.next,
+            } };
+        }
+        if (param_is_proc_arg) {
+            try self.seedTagProcArg(join_stmt_id, param, payload_param, payload_layout);
+        }
+        return true;
+    }
+
+    fn rewriteTagForward(
+        self: *Pass,
+        stmt_id: LIR.CFStmtId,
+        payload: LIR.LocalId,
+        payload_layout: layout_mod.Idx,
+    ) ScalarizeError!void {
+        const old = self.store.getCFStmt(stmt_id);
+        const target: LIR.LocalId = if (old == .set_local)
+            old.set_local.target
+        else if (old == .assign_ref)
+            old.assign_ref.target
+        else
+            unreachable;
+        const next_after: LIR.CFStmtId = if (old == .set_local)
+            old.set_local.next
+        else if (old == .assign_ref)
+            old.assign_ref.next
+        else
+            unreachable;
+        const target_layout = self.store.getLocal(target).layout_idx;
+        const rebuilt = try self.store.addLocal(.{ .layout_idx = target_layout });
+        try self.new_locals.append(self.allocator, rebuilt);
+        const forward = if (old == .set_local)
+            try self.store.addCFStmt(.{ .set_local = .{
+                .target = target,
+                .value = rebuilt,
+                .mode = .initialize_join_param,
+                .next = next_after,
+            } })
+        else if (old == .assign_ref)
+            try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .local = rebuilt },
+                .next = next_after,
+            } })
+        else
+            unreachable;
+        self.store.getCFStmtPtr(stmt_id).* = .{ .assign_tag = .{
+            .target = rebuilt,
+            .variant_index = 0,
+            .discriminant = 0,
+            .payload = payload,
+            .next = forward,
+        } };
+        std.debug.assert(self.store.getLocal(payload).layout_idx == payload_layout);
+    }
+
+    fn seedTagWrite(
+        self: *Pass,
+        stmt_id: LIR.CFStmtId,
+        source: LIR.LocalId,
+        next_after: LIR.CFStmtId,
+        payload_param: LIR.LocalId,
+        payload_layout: layout_mod.Idx,
+    ) ScalarizeError!void {
+        const tmp = try self.store.addLocal(.{ .layout_idx = payload_layout });
+        try self.new_locals.append(self.allocator, tmp);
+        const set_stmt = try self.store.addCFStmt(.{ .set_local = .{
+            .target = payload_param,
+            .value = tmp,
+            .mode = .initialize_join_param,
+            .next = next_after,
+        } });
+        self.store.getCFStmtPtr(stmt_id).* = .{ .assign_ref = .{
+            .target = tmp,
+            .op = .{ .tag_payload_struct = .{
+                .source = source,
+                .variant_index = 0,
+                .tag_discriminant = 0,
+            } },
+            .next = set_stmt,
+        } };
+    }
+
+    fn seedTagProcArg(
+        self: *Pass,
+        join_stmt_id: LIR.CFStmtId,
+        arg_tag: LIR.LocalId,
+        payload_param: LIR.LocalId,
+        payload_layout: layout_mod.Idx,
+    ) ScalarizeError!void {
+        const tmp = try self.store.addLocal(.{ .layout_idx = payload_layout });
+        try self.new_locals.append(self.allocator, tmp);
+        const old_remainder = self.store.getCFStmt(join_stmt_id).join.remainder;
+        const set_stmt = try self.store.addCFStmt(.{ .set_local = .{
+            .target = payload_param,
+            .value = tmp,
+            .mode = .initialize_join_param,
+            .next = old_remainder,
+        } });
+        const seeded_remainder = try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = tmp,
+            .op = .{ .tag_payload_struct = .{
+                .source = arg_tag,
+                .variant_index = 0,
+                .tag_discriminant = 0,
+            } },
+            .next = set_stmt,
+        } });
+        self.store.getCFStmtPtr(join_stmt_id).join.remainder = seeded_remainder;
+    }
+
     fn tryScalarize(
         self: *Pass,
         param_is_proc_arg: bool,
@@ -484,9 +1072,15 @@ const Pass = struct {
         }
         var closure = try self.aliasClosureOf(param);
         defer closure.deinit(self.allocator);
+        const direct_tag_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(param)) |list| list.items else &.{};
+        const direct_tag_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(param)) |writes| writes.items else &.{};
+        if (direct_tag_reads.len != 0 or closure.tag_reads.items.len != 0 or
+            direct_tag_forwards.len != 0 or closure.tag_forwards.items.len != 0) return false;
         const empty_reads: []const LIR.CFStmtId = &.{};
         const direct_reads: []const LIR.CFStmtId = if (self.field_reads.getPtr(param)) |list| list.items else empty_reads;
-        if (direct_reads.len == 0 and closure.reads.items.len == 0) return false;
+        const direct_forwards: []const LIR.CFStmtId = if (self.struct_forward_writes.getPtr(param)) |writes| writes.items else &.{};
+        if (direct_reads.len == 0 and closure.reads.items.len == 0 and
+            direct_forwards.len == 0 and closure.struct_forwards.items.len == 0) return false;
         const empty_writes: []const LIR.CFStmtId = &.{};
         const writes: []const LIR.CFStmtId = if (self.init_writes.getPtr(param)) |list| list.items else empty_writes;
         const alias_writes: []const LIR.CFStmtId = if (self.alias_init_writes.getPtr(param)) |list| list.items else empty_writes;
@@ -519,6 +1113,19 @@ const Pass = struct {
         for (closure.reads.items) |read_stmt| {
             const read = self.store.getCFStmt(read_stmt).assign_ref;
             if (read.op.field.field_idx >= field_count) return false;
+        }
+
+        var claimed = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
+        defer claimed.deinit();
+        if (!try self.claimMutationSites(&claimed, direct_reads) or
+            !try self.claimMutationSites(&claimed, closure.reads.items) or
+            !try self.claimMutationSites(&claimed, closure.stmts.items) or
+            !try self.claimMutationSites(&claimed, direct_forwards) or
+            !try self.claimMutationSites(&claimed, closure.struct_forwards.items) or
+            !try self.claimMutationSites(&claimed, writes) or
+            !try self.claimMutationSites(&claimed, alias_writes)) return false;
+        for (direct_builds) |site| {
+            if (!try self.claimMutationSite(&claimed, site.stmt)) return false;
         }
 
         // Create the per-field parameter locals.
@@ -572,6 +1179,9 @@ const Pass = struct {
             const alias_next = alias.assign_ref.next;
             try self.removed.put(alias_stmt, alias_next);
         }
+
+        for (direct_forwards) |stmt| try self.rewriteStructForward(stmt, field_locals);
+        for (closure.struct_forwards.items) |stmt| try self.rewriteStructForward(stmt, field_locals);
 
         // Each jump-site write becomes one snapshotted write per field: a
         // qualifying struct literal supplies its operands and its build is
@@ -627,6 +1237,48 @@ const Pass = struct {
         if (param_is_proc_arg) try self.seedFieldsFromArgStruct(join_id, param, field_locals);
 
         return true;
+    }
+
+    fn rewriteStructForward(
+        self: *Pass,
+        stmt_id: LIR.CFStmtId,
+        fields: []const LIR.LocalId,
+    ) ScalarizeError!void {
+        const old = self.store.getCFStmt(stmt_id);
+        const target: LIR.LocalId = if (old == .set_local)
+            old.set_local.target
+        else if (old == .assign_ref)
+            old.assign_ref.target
+        else
+            unreachable;
+        const next_after: LIR.CFStmtId = if (old == .set_local)
+            old.set_local.next
+        else if (old == .assign_ref)
+            old.assign_ref.next
+        else
+            unreachable;
+        const rebuilt = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(target).layout_idx });
+        try self.new_locals.append(self.allocator, rebuilt);
+        const forward = if (old == .set_local)
+            try self.store.addCFStmt(.{ .set_local = .{
+                .target = target,
+                .value = rebuilt,
+                .mode = .initialize_join_param,
+                .next = next_after,
+            } })
+        else if (old == .assign_ref)
+            try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .local = rebuilt },
+                .next = next_after,
+            } })
+        else
+            unreachable;
+        self.store.getCFStmtPtr(stmt_id).* = .{ .assign_struct = .{
+            .target = rebuilt,
+            .fields = try self.store.addLocalSpan(fields),
+            .next = forward,
+        } };
     }
 
     /// Prepend, to the join's remainder, one `ref.field arg[k]` read plus an
@@ -844,15 +1496,23 @@ const Pass = struct {
         }
     }
 
-    fn resolveRemoved(self: *const Pass, stmt: LIR.CFStmtId) LIR.CFStmtId {
-        var cursor = stmt;
+    fn resolveRemoved(self: *Pass, stmt: LIR.CFStmtId) LIR.CFStmtId {
+        var root = stmt;
         var steps: usize = 0;
-        while (self.removed.get(cursor)) |next| {
-            cursor = next;
+        while (self.removed.get(root)) |next| {
+            root = next;
             steps += 1;
-            if (steps > self.removed.count()) break;
+            std.debug.assert(steps <= self.removed.count());
         }
-        return cursor;
+        // A batch can delete a long shared continuation. Compress its redirects
+        // once, rather than walking the whole chain for every incoming edge.
+        var cursor = stmt;
+        while (self.removed.getPtr(cursor)) |edge| {
+            const next = edge.*;
+            edge.* = root;
+            cursor = next;
+        }
+        return root;
     }
 
     fn collect(self: *Pass, body: LIR.CFStmtId) ScalarizeError!void {
@@ -864,9 +1524,14 @@ const Pass = struct {
         while (self.stack.pop()) |current| {
             if (self.visited.contains(current)) continue;
             try self.visited.put(current, {});
+            if (self.metrics) |metrics| metrics.collected_statements += 1;
             switch (self.store.getCFStmt(current)) {
                 .assign_struct => |assign| {
                     try self.noteStructBuild(assign.target, current, assign.fields);
+                    try self.stack.append(self.allocator, assign.next);
+                },
+                .assign_tag => |assign| {
+                    try self.noteTagBuild(assign.target, current, assign);
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .switch_stmt => |s| {
@@ -904,7 +1569,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
                     try self.stack.append(self.allocator, a.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -917,6 +1582,7 @@ const Pass = struct {
         while (self.stack.pop()) |current| {
             if (self.visited.contains(current)) continue;
             try self.visited.put(current, {});
+            if (self.metrics) |metrics| metrics.collected_statements += 1;
             switch (self.store.getCFStmt(current)) {
                 .assign_ref => |assign| {
                     switch (assign.op) {
@@ -933,7 +1599,13 @@ const Pass = struct {
                                 const entry = try self.alias_init_writes.getOrPut(assign.target);
                                 if (!entry.found_existing) entry.value_ptr.* = .empty;
                                 try entry.value_ptr.append(self.allocator, current);
-                                try self.noteUse(source);
+                                if (self.isSameSingleVariantTag(assign.target, source)) {
+                                    try self.noteTagForward(source, current);
+                                } else if (self.isSameStruct(assign.target, source)) {
+                                    try self.noteStructForward(source, current);
+                                } else {
+                                    try self.noteUse(source);
+                                }
                                 try self.stack.append(self.allocator, assign.next);
                                 continue;
                             } else {
@@ -956,9 +1628,9 @@ const Pass = struct {
                                 continue;
                             }
                         },
-                        .discriminant => |op| try self.noteUse(op.source),
-                        .tag_payload => |op| try self.noteUse(op.source),
-                        .tag_payload_struct => |op| try self.noteUse(op.source),
+                        .discriminant => |op| try self.noteTagRead(op.source, current),
+                        .tag_payload => |op| try self.noteTagRead(op.source, current),
+                        .tag_payload_struct => |op| try self.noteTagRead(op.source, current),
                         .list_reinterpret => |op| try self.noteUse(op.backing_ref),
                         .nominal => |op| try self.noteUse(op.backing_ref),
                     }
@@ -1106,7 +1778,6 @@ const Pass = struct {
                 .assign_tag => |assign| {
                     if (assign.target_desc) |target_desc| try self.noteDescUse(target_desc);
                     if (assign.payload) |payload| try self.noteUse(payload);
-                    try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .store_struct => |assign| {
@@ -1125,9 +1796,15 @@ const Pass = struct {
                         const entry = try self.init_writes.getOrPut(assign.target);
                         if (!entry.found_existing) entry.value_ptr.* = .empty;
                         try entry.value_ptr.append(self.allocator, current);
-                        if (self.struct_builds.getPtr(assign.value)) |build| {
+                        if (self.isSameSingleVariantTag(assign.target, assign.value)) {
+                            try self.noteTagForward(assign.value, current);
+                        } else if (self.isSameStruct(assign.target, assign.value)) {
+                            try self.noteStructForward(assign.value, current);
+                        } else if (self.struct_builds.getPtr(assign.value)) |build| {
                             // Counted separately: a qualifying build's only
                             // use must be this write.
+                            build.init_uses += 1;
+                        } else if (self.tag_builds.getPtr(assign.value)) |build| {
                             build.init_uses += 1;
                         } else {
                             try self.noteUse(assign.value);
@@ -1921,4 +2598,174 @@ test "scalarize splits a parameter shared by two joins" {
     try testing.expectEqual(GuardedList.at(outer_params, 0), new_read_n.op.local);
     const new_read_s = store.getCFStmt(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(inner_params, 1), new_read_s.op.local);
+}
+
+test "scalarize batches independent constructors without recollecting each one" {
+    var fixture = try ScalarizeTest.init(testing.allocator);
+    defer fixture.deinit();
+    const store = &fixture.store;
+    const number = try store.addLocal(.{ .layout_idx = .i64 });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = number } });
+    for (0..500) |_| {
+        const wrapper = try store.addLocal(.{ .layout_idx = fixture.pair });
+        const projected = try store.addLocal(.{ .layout_idx = .i64 });
+        body = try store.addCFStmt(.{ .assign_ref = .{
+            .target = projected,
+            .op = .{ .field = .{ .source = wrapper, .field_idx = 0 } },
+            .next = body,
+        } });
+        body = try store.addCFStmt(.{ .assign_struct = .{
+            .target = wrapper,
+            .fields = try store.addLocalSpan(&.{ number, text }),
+            .next = body,
+        } });
+    }
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{ number, text }),
+        .body = body,
+        .ret_layout = .i64,
+    });
+    var metrics = Metrics{};
+    try runMeasured(store, &fixture.layouts, &metrics);
+    try testing.expect(metrics.collected_statements < 5000);
+}
+
+test "scalarize propagates escaping alias chains in linear work" {
+    var fixture = try ScalarizeTest.init(testing.allocator);
+    defer fixture.deinit();
+    const store = &fixture.store;
+    var aliases: [1001]LIR.LocalId = undefined;
+    for (&aliases) |*alias| alias.* = try store.addLocal(.{ .layout_idx = fixture.pair });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = aliases[1000] } });
+    var index: usize = 1000;
+    while (index != 0) {
+        body = try store.addCFStmt(.{ .assign_ref = .{
+            .target = aliases[index],
+            .op = .{ .local = aliases[index - 1] },
+            .next = body,
+        } });
+        index -= 1;
+    }
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(aliases[0..1]),
+        .body = body,
+        .ret_layout = fixture.pair,
+    });
+    var metrics = Metrics{};
+    try runMeasured(store, &fixture.layouts, &metrics);
+    try testing.expect(metrics.alias_edges <= aliases.len);
+    try testing.expectEqual(body, store.getProcSpec(@enumFromInt(@as(u32, 0))).body.?);
+}
+
+test "scalarize keeps a constructor with an alias definition and its source" {
+    var fixture = try ScalarizeTest.init(testing.allocator);
+    defer fixture.deinit();
+    const store = &fixture.store;
+    const first = try store.addLocal(.{ .layout_idx = .i64 });
+    const second = try store.addLocal(.{ .layout_idx = .i64 });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    const source = try store.addLocal(.{ .layout_idx = fixture.pair });
+    const alias = try store.addLocal(.{ .layout_idx = fixture.pair });
+    const result = try store.addLocal(.{ .layout_idx = .i64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const overwrite = try store.addCFStmt(.{ .assign_struct = .{
+        .target = alias,
+        .fields = try store.addLocalSpan(&.{ second, text }),
+        .next = ret,
+    } });
+    const read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = result,
+        .op = .{ .field = .{ .source = alias, .field_idx = 0 } },
+        .next = overwrite,
+    } });
+    const copy = try store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = source },
+        .next = read,
+    } });
+    const original = try store.addCFStmt(.{ .assign_struct = .{
+        .target = source,
+        .fields = try store.addLocalSpan(&.{ first, text }),
+        .next = copy,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{ first, second, text }),
+        .body = original,
+        .ret_layout = .i64,
+    });
+    try run(store, &fixture.layouts);
+    try testing.expectEqual(original, store.getProcSpec(proc).body.?);
+    try testing.expect(store.getCFStmt(read).assign_ref.op == .field);
+    try testing.expectEqual(alias, store.getCFStmt(read).assign_ref.op.field.source);
+}
+
+test "scalarize propagates an escaping whole value through a long alias chain" {
+    var f = try ScalarizeTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+    const num = try store.addLocal(.{ .layout_idx = .i64 });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    const record = try store.addLocal(.{ .layout_idx = f.pair });
+    const field = try store.addLocal(.{ .layout_idx = .i64 });
+    var locals = std.ArrayList(LIR.LocalId).empty;
+    defer locals.deinit(testing.allocator);
+    try locals.append(testing.allocator, record);
+    for (0..5000) |_| try locals.append(testing.allocator, try store.addLocal(.{ .layout_idx = f.pair }));
+    const result = locals.items[locals.items.len - 1];
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    var body = ret;
+    var index = locals.items.len - 1;
+    while (index > 0) : (index -= 1) {
+        body = try store.addCFStmt(.{ .assign_ref = .{
+            .target = locals.items[index],
+            .op = .{ .local = locals.items[index - 1] },
+            .next = body,
+        } });
+    }
+    body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .{ .field = .{ .source = record, .field_idx = 0 } }, .next = body } });
+    const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ num, text }), .next = body } });
+    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair });
+    try run(store, &f.layouts);
+    // The field read does not justify deleting the constructor: the last
+    // alias returns the entire record, so that use must reach its producer.
+    try testing.expectEqual(build, store.getProcSpec(proc_id).body.?);
+    try testing.expect(store.getCFStmt(build) == .assign_struct);
+    try testing.expectEqual(result, store.getCFStmt(ret).ret.value);
+}
+
+test "scalarize alias roots share resolved tails and identify cycles explicitly" {
+    const allocator = testing.allocator;
+    var aliases = collections.DenseMap(LIR.LocalId, AliasDef).init(allocator);
+    defer aliases.deinit();
+    var transparent = collections.DenseMap(LIR.LocalId, void).init(allocator);
+    defer transparent.deinit();
+    // Root resolution never reads statement IDs; this fixture only supplies alias edges.
+    const unused_stmt: LIR.CFStmtId = undefined;
+    for (0..10_000) |index| {
+        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+        try aliases.put(local, .{ .stmt = unused_stmt, .source = @enumFromInt(@as(u32, @intCast(index + 1))), .def_count = 1 });
+        try transparent.put(local, {});
+    }
+    // A cycle and a separate incoming edge have no constructor/parameter
+    // root. Their exact graph is retained instead of selecting a guessed root.
+    for ([_]u32{ 10_002, 10_001, 10_002 }, 10_001..) |source, index| {
+        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+        try aliases.put(local, .{ .stmt = unused_stmt, .source = @enumFromInt(source), .def_count = 1 });
+        try transparent.put(local, {});
+    }
+    try resolveTransparentRoots(allocator, &aliases, &transparent, null);
+    for (0..10_000) |index| {
+        const def = aliases.get(@enumFromInt(@as(u32, @intCast(index)))).?;
+        try testing.expectEqual(.complete, def.root_state);
+        try testing.expectEqual(@as(LIR.LocalId, @enumFromInt(10_000)), def.root.?);
+    }
+    for (10_001..10_004) |index| {
+        const def = aliases.get(@enumFromInt(@as(u32, @intCast(index)))).?;
+        try testing.expectEqual(.complete, def.root_state);
+        try testing.expectEqual(null, def.root);
+    }
 }

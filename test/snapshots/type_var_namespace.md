@@ -25,16 +25,23 @@ main! = |_| {}
 # EXPECTED
 UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
-── ● unused variable ───────────────────────────────── type_var_namespace.md:7:5
-
-Variable item is defined here and then never used:
-
-item = 42
-^^^^
-
-If you don't need this variable, prefix it with an underscore like _item to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 7 5) (end 7 9))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "item")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_item")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_namespace.md") (start 7 5) (end 7 9) (annotation error) (line-text "    item = 42")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -134,7 +141,7 @@ main! = |_| {}
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 261)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 262)
 						(receiver
 							(e-call (constraint-fn-var 260)
 								(e-lookup-external

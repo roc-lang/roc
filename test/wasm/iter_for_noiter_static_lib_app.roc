@@ -7,27 +7,27 @@ app [main!] { pf: platform "./static-lib-platform/main.roc" }
 # pass exists to drive toward zero).
 main! : U64 => Str
 main! = |_seed| {
-    var append_sum = 0.U64
+    var $append_sum = 0.U64
     for x in [1.U64, 2, 3, 9] {
-        append_sum = append_sum + x
+        $append_sum = $append_sum + x
     }
 
-    var map_sum = 0.U64
+    var $map_sum = 0.U64
     for x in [2.U64, 3, 4] {
-        map_sum = map_sum + x
+        $map_sum = $map_sum + x
     }
 
-    var concat_sum = 0.U64
+    var $concat_sum = 0.U64
     for x in [1.U64, 2, 3, 4] {
-        concat_sum = concat_sum + x
+        $concat_sum = $concat_sum + x
     }
 
-    var chain_sum = 0.U64
+    var $chain_sum = 0.U64
     for x in [11.U64, 21, 100] {
-        chain_sum = chain_sum + x
+        $chain_sum = $chain_sum + x
     }
 
-    if append_sum == 15 and map_sum == 9 and concat_sum == 10 and chain_sum == 132 {
+    if $append_sum == 15 and $map_sum == 9 and $concat_sum == 10 and $chain_sum == 132 {
         "ok"
     } else {
         "bad"

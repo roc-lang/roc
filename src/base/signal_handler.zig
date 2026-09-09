@@ -108,10 +108,13 @@ threadlocal var thread_stack_bounds: ?StackBounds = null;
 threadlocal var thread_alt_stack_storage: [ALT_STACK_SIZE]u8 align(16) = undefined;
 threadlocal var current_thread_installed = false;
 
-// zig 0.16 moved the blocking Thread.Mutex behind std.Io; for this one-time,
+// zig 0.16 moved the blocking Thread.Mutex behind std.Io; for this
 // process-wide install guard we use the io-free std.atomic.Mutex (tryLock spin).
 var install_mutex: if (supports_posix_signals or supports_windows_exceptions) std.atomic.Mutex else void =
     if (supports_posix_signals or supports_windows_exceptions) .unlocked else {};
+// Windows only: its vectored/unhandled filters chain, so registering them more
+// than once would stack duplicates. POSIX actions replace rather than chain, so
+// they are re-asserted on every install (see installPosixProcessHandlers).
 var process_handlers_installed = false;
 
 var stack_overflow_callback: ?StackOverflowCallback = null;
@@ -527,7 +530,17 @@ fn installPosixProcessHandlers(callbacks: Callbacks) bool {
     access_violation_callback = callbacks.access_violation;
     arithmetic_error_callback = callbacks.arithmetic_error;
 
-    if (process_handlers_installed) return true;
+    // Reassert the actions on every call instead of installing them once.
+    // Signal dispositions are process-wide, and LLVM claims SIGSEGV/SIGBUS for
+    // itself (Support/Unix/Signals.inc `RegisterHandlers`) the first time
+    // codegen asks it to clean a file up on a crash, which happens after this
+    // process installed its own. LLVM registers with SA_RESETHAND, so once a
+    // Roc stack overflow reaches its handler the kernel has already reset the
+    // disposition to SIG_DFL; a second thread faulting inside that window
+    // takes the whole process down with an unhandled SIGBUS and no report.
+    // Callers reach this immediately before running Roc code (each parallel
+    // test worker calls it as it starts), so re-asserting here keeps this
+    // process's handlers authoritative for the code that needs them.
 
     const segv_action = posix.Sigaction{
         .handler = .{ .sigaction = handleSegvSignal },
@@ -546,7 +559,6 @@ fn installPosixProcessHandlers(callbacks: Callbacks) bool {
 
     posix.sigaction(posix.SIG.FPE, &fpe_action, null);
 
-    process_handlers_installed = true;
     return true;
 }
 
@@ -826,6 +838,64 @@ test "classifyFault: a stack pointer below reported bounds is not overflow on it
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5000_0000, 0x9000, bounds));
     // Fault adjacent to the sp: a genuine overflow, even with untrustworthy bounds.
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x4040, 0x5000, bounds));
+}
+
+test "installForCurrentThread reasserts handlers another library replaced" {
+    // Regression test: LLVM's Support/Unix/Signals.inc claims SIGSEGV/SIGBUS
+    // for itself during codegen, with SA_RESETHAND. When that registration
+    // stood, a Roc stack overflow in an optimized `roc test` run reached a
+    // SIG_DFL disposition and killed the process outright ("Process crashed
+    // with signal .BUS") instead of being reported as the test's failure.
+    // Installing must therefore reassert this process's actions, not skip the
+    // work because some earlier call already installed them.
+    if (comptime !supports_posix_signals) return error.SkipZigTest;
+
+    const callbacks = Callbacks{
+        .stack_overflow = struct {
+            fn callback() noreturn {
+                std.process.exit(134);
+            }
+        }.callback,
+        .access_violation = struct {
+            fn callback(_: usize, _: AccessViolationContext) noreturn {
+                std.process.exit(139);
+            }
+        }.callback,
+        .arithmetic_error = struct {
+            fn callback() noreturn {
+                std.process.exit(136);
+            }
+        }.callback,
+    };
+
+    try std.testing.expect(installForCurrentThread(callbacks));
+
+    // Stand in for LLVM's registration, flags included.
+    const intruder = posix.Sigaction{
+        .handler = .{ .sigaction = struct {
+            fn handler(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {}
+        }.handler },
+        .mask = posix.sigemptyset(),
+        .flags = posix.SA.SIGINFO | posix.SA.ONSTACK | posix.SA.RESETHAND | posix.SA.NODEFER,
+    };
+    for ([_]posix.SIG{ posix.SIG.SEGV, posix.SIG.BUS, posix.SIG.FPE }) |sig| {
+        posix.sigaction(sig, &intruder, null);
+    }
+
+    try std.testing.expect(installForCurrentThread(callbacks));
+
+    for ([_]posix.SIG{ posix.SIG.SEGV, posix.SIG.BUS }) |sig| {
+        var current: posix.Sigaction = undefined;
+        posix.sigaction(sig, null, &current);
+        try std.testing.expectEqual(
+            @intFromPtr(&handleSegvSignal),
+            @intFromPtr(current.handler.sigaction),
+        );
+    }
+
+    var fpe: posix.Sigaction = undefined;
+    posix.sigaction(posix.SIG.FPE, null, &fpe);
+    try std.testing.expectEqual(@intFromPtr(&handleFpeSignal), @intFromPtr(fpe.handler.sigaction));
 }
 
 test "installForCurrentThread records current stack bounds" {

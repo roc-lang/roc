@@ -26,6 +26,7 @@ const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_certify = @import("arc_certify.zig");
 const arc_dismantle = @import("arc_dismantle.zig");
+const ArcSnapshot = @import("arc_state.zig").Snapshot;
 const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
@@ -37,6 +38,9 @@ pub const ResourceError = std.mem.Allocator.Error;
 /// Debug-only count of join-summary solver work items, for scaling tests
 /// and profiling. Not updated in release builds.
 pub var solver_iterations: u64 = 0;
+
+/// Debug-only count of locals examined by borrow-group liveness queries.
+pub var group_liveness_member_visits: u64 = 0;
 
 /// Options for ARC insertion.
 pub const InsertOptions = struct {
@@ -270,6 +274,76 @@ const ProcArcDomain = struct {
     }
 };
 
+/// Immutable raw-liveness numbering, built once with a source's graph and
+/// shared by its ownership variants. Ownership keeps its original indices
+/// and release order; only raw liveness bits are grouped by solved leader.
+const GroupLivenessIndex = struct {
+    const Range = struct { start: u32 = 0, end: u32 = 0 };
+
+    /// Ownership resource index -> raw liveness bit. Empty means identity,
+    /// which needs no storage when every frame group is a singleton.
+    raw_bits: []const u32 = &.{},
+    /// Indexed by the domain's existing multi-member group ordinal. Groups
+    /// containing only non-resource locals have empty ranges.
+    ranges: []const Range = &.{},
+
+    fn init(allocator: Allocator, domain: *const ProcArcDomain, solution: *const arc_solve.Solution) ResourceError!GroupLivenessIndex {
+        if (domain.group_leaders.len == 0) return .{};
+        const raw_bits = try allocator.alloc(u32, domain.resource_locals.len);
+        const ranges = try allocator.alloc(Range, domain.group_leaders.len);
+        @memset(ranges, .{});
+        var singletons: u32 = 0;
+        for (domain.resource_locals) |local| {
+            if (domain.groupBitOf(solution.leaderOf(local))) |bit| {
+                ranges[bit - raw_bits.len].end += 1;
+            } else {
+                singletons += 1;
+            }
+        }
+        var offset = singletons;
+        for (ranges) |*range| {
+            const count = range.end;
+            range.* = .{ .start = offset, .end = offset };
+            offset += count;
+        }
+        std.debug.assert(offset == raw_bits.len);
+        var singleton_bit: u32 = 0;
+        for (domain.resource_locals, raw_bits) |local, *raw_bit| {
+            if (domain.groupBitOf(solution.leaderOf(local))) |bit| {
+                const range = &ranges[bit - raw_bits.len];
+                raw_bit.* = range.end;
+                range.end += 1;
+            } else {
+                raw_bit.* = singleton_bit;
+                singleton_bit += 1;
+            }
+        }
+        return .{ .raw_bits = raw_bits, .ranges = ranges };
+    }
+
+    fn rawBitOf(self: *const GroupLivenessIndex, domain: *const ProcArcDomain, local: LIR.LocalId) ?usize {
+        const resource_bit = domain.resourceBitOf(local) orelse return null;
+        return if (self.raw_bits.len == 0) resource_bit else self.raw_bits[resource_bit];
+    }
+
+    fn usedExcept(self: *const GroupLivenessIndex, domain: *const ProcArcDomain, reads: *const ExactBitSet, leader: LIR.LocalId, except: LIR.LocalId) bool {
+        const range = if (domain.groupBitOf(leader)) |bit|
+            self.ranges[bit - domain.resource_locals.len]
+        else {
+            if (leader == except) return false;
+            const bit = self.rawBitOf(domain, leader) orelse return false;
+            if (builtin.mode == .Debug) group_liveness_member_visits += 1;
+            return reads.isSet(bit);
+        };
+        if (self.rawBitOf(domain, except)) |bit| {
+            if (range.start <= bit and bit < range.end) {
+                return reads.anySetInRange(range.start, bit) or reads.anySetInRange(bit + 1, range.end);
+            }
+        }
+        return reads.anySetInRange(range.start, range.end);
+    }
+};
+
 /// Public `insert` function.
 pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
     var inserter = Inserter{
@@ -280,13 +354,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const boxy_rc_descs = try computeBoxyRcDescs(store);
     defer store.allocator.free(boxy_rc_descs);
 
-    const local_contains_refcounted = try computeLocalContainsRefcounted(store.allocator, store, layouts, boxy_rc_descs);
-    defer store.allocator.free(local_contains_refcounted);
+    const borrow_anchor_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
+    defer store.allocator.free(borrow_anchor_refcounted);
+    const emission_refcounted = try computeEmissionContainsRefcounted(store.allocator, store, layouts, borrow_anchor_refcounted);
+    defer emission_refcounted.deinit(store.allocator);
+    const local_contains_refcounted = emission_refcounted.slice();
     inserter.local_contains_refcounted = local_contains_refcounted;
     inserter.boxy_rc_descs = boxy_rc_descs;
-
-    const borrow_anchor_refcounted = try computeBorrowAnchorRefcounted(store.allocator, store, layouts, local_contains_refcounted);
-    defer store.allocator.free(borrow_anchor_refcounted);
 
     var solution = try arc_solve.solve(
         store.allocator,
@@ -453,10 +527,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             const param = GuardedList.at(emit_params_for_overrides, position);
             const bit = arc_sig.paramBit(position) orelse break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
-                owned_binding_override.set(param);
+                try owned_binding_override.set(param);
             }
             if ((emit_sig.unique_params & bit) != 0) {
-                unique_param_override.set(param);
+                try unique_param_override.set(param);
             }
         }
         // A recursive tail argument can borrow across frame replacement only
@@ -468,20 +542,28 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             for (0..arc_sig.tracked_param_count) |position| {
                 const carrier = tail_call.carrier(position) orelse continue;
                 if (tail_call.argumentOutlivesScc(position, emit_sig)) continue;
-                owned_binding_override.set(carrier);
+                try owned_binding_override.set(carrier);
             }
         }
         for (domain.frame_locals) |local| {
-            if (dismantles.isTakeBinding(local)) owned_binding_override.set(local);
+            if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
         }
         // A field read solved borrowed in the unconditional base signature
         // becomes an owned binding exactly when the explicit dismantle plan
         // says it takes a field from a parameter overridden to owned. This is
         // part of the mandatory field-take variant, not optional inlining or
         // specialization.
-        for (domain.frame_locals) |local| {
-            const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
-            if (owned_binding_override.contains(root)) owned_binding_override.set(local);
+        var binding_override_changed = true;
+        while (binding_override_changed) {
+            binding_override_changed = false;
+            for (domain.frame_locals) |local| {
+                if (owned_binding_override.contains(local)) continue;
+                const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
+                if (owned_binding_override.contains(root)) {
+                    try owned_binding_override.set(local);
+                    binding_override_changed = true;
+                }
+            }
         }
 
         const join_bodies = solution.joinBodiesOf(source_proc);
@@ -497,7 +579,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         for (0..GuardedList.borrowLen(emit_params_for_owned)) |position| {
             const param = GuardedList.at(emit_params_for_owned, position);
             if (emit_sig.paramMode(position) == .owned) {
-                if (inserter.localContainsRefcounted(param)) owned.set(param);
+                if (inserter.localContainsRefcounted(param)) try owned.set(param);
             }
         }
 
@@ -543,9 +625,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             else
                 variants.sigs.items[proc_index - solution.sigs.len];
         }
-        const certified_boxy_rc_descs = try computeBoxyRcDescs(store);
-        defer store.allocator.free(certified_boxy_rc_descs);
-        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, certified_boxy_rc_descs, .{
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{
             .sigs = all_sigs,
             .outcomes = solution.outcomes,
         }, options.roots);
@@ -568,27 +648,57 @@ fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.Bo
     return descs[index];
 }
 
-fn computeLocalContainsRefcounted(
+/// Emission shares the immutable solver table unless a capture view must be
+/// excluded. Only the owned variant needs to be freed by the emission consumer.
+const EmissionRefcounted = union(enum) {
+    shared: []const bool,
+    owned: []bool,
+
+    fn slice(self: EmissionRefcounted) []const bool {
+        return switch (self) {
+            .shared => |values| values,
+            .owned => |values| values,
+        };
+    }
+
+    fn deinit(self: EmissionRefcounted, allocator: Allocator) void {
+        switch (self) {
+            .shared => {},
+            .owned => |values| allocator.free(values),
+        }
+    }
+
+    fn exclude(self: *EmissionRefcounted, allocator: Allocator, local: LIR.LocalId) Allocator.Error!void {
+        const index = @intFromEnum(local);
+        if (!self.slice()[index]) return;
+        const values = switch (self.*) {
+            .shared => |shared| values: {
+                const owned = try allocator.dupe(bool, shared);
+                self.* = .{ .owned = owned };
+                break :values owned;
+            },
+            .owned => |owned| owned,
+        };
+        values[index] = false;
+    }
+};
+
+/// Derive RC emission eligibility from the solver's representation table.
+/// A capture view anchors borrows but owns no aggregate RC unit.
+fn computeEmissionContainsRefcounted(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
-) ResourceError![]bool {
-    const local_count = store.localCount();
-    if (boxy_rc_descs.len != local_count) arcInvariant("ARC Boxy descriptor table did not cover every local");
-    const contains = try allocator.alloc(bool, local_count);
-    errdefer allocator.free(contains);
-    for (0..local_count) |index| {
-        const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-        const local = store.getLocal(local_id);
-        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
-    }
+    borrow_anchor_refcounted: []const bool,
+) ResourceError!EmissionRefcounted {
+    if (borrow_anchor_refcounted.len != store.localCount()) arcInvariant("ARC resource table did not cover every local");
+    var contains = EmissionRefcounted{ .shared = borrow_anchor_refcounted };
+    errdefer contains.deinit(allocator);
     // An `erased_capture_load` whose aggregate contains descriptor-driven
     // fields is an explicit borrowed view into the executing callable's capture
     // allocation. The view has no aggregate descriptor of its own, so it cannot
     // use a layout-driven concrete helper. Keep it out of emission;
-    // `computeBorrowAnchorRefcounted` adds it back to the solver domain so its
-    // projected fields remain tied to the callable.
+    // the solver table retains it so projected fields remain tied to the callable.
     var visited = std.AutoHashMap(layout_mod.Idx, void).init(allocator);
     defer visited.deinit();
     var stack = std.ArrayList(layout_mod.Idx).empty;
@@ -600,49 +710,7 @@ fn computeLocalContainsRefcounted(
             const target = stmt.assign_low_level.target;
             const target_layout = store.getLocal(target).layout_idx;
             if (try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
-                contains[@intFromEnum(target)] = false;
-            }
-        }
-    }
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_ref) {
-                const assign = stmt.assign_ref;
-                switch (assign.op) {
-                    .local => |source| changed = markLocalRcIfSourceRc(contains, assign.target, source) or changed,
-                    .nominal => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .list_reinterpret => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
-                    .field,
-                    .tag_payload,
-                    .tag_payload_struct,
-                    .discriminant,
-                    => {},
-                }
-            } else if (stmt == .assign_list) {
-                const assign = stmt.assign_list;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed;
-            } else if (stmt == .assign_struct) {
-                const assign = stmt.assign_struct;
-                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed;
-            } else if (stmt == .assign_tag) {
-                const assign = stmt.assign_tag;
-                if (assign.payload) |payload| {
-                    changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
-                }
-                if (assign.target_desc != null) {
-                    changed = markLocalRc(contains, assign.target) or changed;
-                }
-            } else if (stmt == .assign_boxy_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_box.target) or changed;
-            } else if (stmt == .assign_boxy_reuse_box) {
-                changed = markLocalRc(contains, stmt.assign_boxy_reuse_box.target) or changed;
-            } else if (stmt == .assign_boxy_tag) {
-                changed = markLocalRc(contains, stmt.assign_boxy_tag.target) or changed;
+                try contains.exclude(allocator, target);
             }
         }
     }
@@ -650,62 +718,8 @@ fn computeLocalContainsRefcounted(
     return contains;
 }
 
-/// Borrow-anchor refcounted set for the ARC solver. Extends the emission-time
-/// refcounted set with payload-read projections (`.field`, `.tag_payload`,
-/// `.tag_payload_struct`) whose result carries descriptor-driven dynamic
-/// (`erased_box`) content borrowed out of a refcounted source. Such a
-/// projection is an alias into its source's allocation whose extracted boxes
-/// stay live past the projection, so the source's release must land after the
-/// projection's last use. An erased capture load similarly produces a view of
-/// the capture storage owned by the pinned callable frame. These intermediate
-/// views own no RC unit: their dynamic payloads are refcounted by descriptor,
-/// which the layout-only refcount check cannot see, so the views carry no Boxy
-/// descriptor of their own. Marking them refcounted for the solver alone lets
-/// projections join an explicit liveness group. Emission keeps consulting the
-/// narrower `local_contains_refcounted`, so a solver-only anchor is never
-/// forced to carry an RC helper it lacks.
-fn computeBorrowAnchorRefcounted(
-    allocator: Allocator,
-    store: *const LirStore,
-    layouts: *const layout_mod.Store,
-    local_contains_refcounted: []const bool,
-) ResourceError![]bool {
-    const anchor = try allocator.dupe(bool, local_contains_refcounted);
-    errdefer allocator.free(anchor);
-
-    var visited = std.AutoHashMap(layout_mod.Idx, void).init(allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(layout_mod.Idx).empty;
-    defer stack.deinit(allocator);
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_low_level) {
-                const assign = stmt.assign_low_level;
-                if (assign.op != .erased_capture_load) continue;
-                const target_layout = store.getLocal(assign.target).layout_idx;
-                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
-                changed = markLocalRc(anchor, assign.target) or changed;
-            } else if (stmt == .assign_ref) {
-                const assign = stmt.assign_ref;
-                if (assign.op != .field and assign.op != .tag_payload and assign.op != .tag_payload_struct) continue;
-                const source_index = @intFromEnum(refOpSource(assign.op));
-                if (source_index >= anchor.len or !anchor[source_index]) continue;
-                const target_layout = store.getLocal(assign.target).layout_idx;
-                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
-                changed = markLocalRc(anchor, assign.target) or changed;
-            }
-        }
-    }
-    return anchor;
-}
-
 /// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
-/// (`box_of_zst`) content. Recursive tag unions reference themselves through
+/// (`erased_box`) content. Recursive tag unions reference themselves through
 /// their layout indices, so the walk tracks visited indices; `visited` and
 /// `stack` are caller-owned scratch reused across queries.
 fn layoutMayContainBoxyDynamic(
@@ -739,29 +753,6 @@ fn layoutMayContainBoxyDynamic(
             },
             .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
         }
-    }
-    return false;
-}
-
-fn markLocalRc(contains: []bool, local: LIR.LocalId) bool {
-    const index = @intFromEnum(local);
-    if (index >= contains.len or contains[index]) return false;
-    contains[index] = true;
-    return true;
-}
-
-fn markLocalRcIfSourceRc(contains: []bool, target: LIR.LocalId, source: LIR.LocalId) bool {
-    const source_index = @intFromEnum(source);
-    if (source_index >= contains.len or !contains[source_index]) return false;
-    return markLocalRc(contains, target);
-}
-
-fn markLocalRcIfSpanContainsRc(store: *const LirStore, contains: []bool, target: LIR.LocalId, span: LIR.LocalSpan) bool {
-    const locals = store.getLocalSpan(span);
-    for (0..GuardedList.borrowLen(locals)) |span_index| {
-        const local = GuardedList.at(locals, span_index);
-        const local_index = @intFromEnum(local);
-        if (local_index < contains.len and contains[local_index]) return markLocalRc(contains, target);
     }
     return false;
 }
@@ -820,132 +811,148 @@ const LoopLivenessCache = struct {
     dirty: bool = false,
 };
 
-/// One exact finite-lattice bit set. Procedure-local ARC domains commonly fit
-/// in one machine word; those sets stay inline and wider producer-authored
-/// domains allocate exact words. Ownership and liveness use the same
-/// representation so snapshots preserve identical operations and ordering.
+/// One exact finite-lattice bit set. Rows share persistent sparse subtrees;
+/// adding or killing one liveness fact copies one bounded-depth radix path.
 const ExactBitSet = struct {
     bit_len: usize,
-    storage: union(enum) {
-        inline_word: usize,
-        allocated: std.bit_set.DynamicBitSetUnmanaged,
-    },
+    words: ArcSnapshot(u64, 0),
 
     fn initEmpty(allocator: Allocator, bit_len: usize) Allocator.Error!ExactBitSet {
-        if (bit_len <= @bitSizeOf(usize)) {
-            return .{ .bit_len = bit_len, .storage = .{ .inline_word = 0 } };
+        const word_len = std.math.divCeil(usize, bit_len, 64) catch unreachable;
+        if (word_len != 0 and word_len - 1 > std.math.maxInt(u32)) {
+            arcInvariant("ARC liveness bit domain exceeded the snapshot index representation");
         }
-        return .{
-            .bit_len = bit_len,
-            .storage = .{ .allocated = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, bit_len) },
-        };
+        return .{ .bit_len = bit_len, .words = ArcSnapshot(u64, 0).init(allocator, word_len) };
     }
 
-    fn deinit(self: *ExactBitSet, allocator: Allocator) void {
-        switch (self.storage) {
-            .inline_word => {},
-            .allocated => |*bits| bits.deinit(allocator),
-        }
-        self.* = undefined;
-    }
+    fn deinit(_: *ExactBitSet, _: Allocator) void {}
 
     fn clone(self: *const ExactBitSet, allocator: Allocator) Allocator.Error!ExactBitSet {
-        return switch (self.storage) {
-            .inline_word => |bits| .{ .bit_len = self.bit_len, .storage = .{ .inline_word = bits } },
-            .allocated => |bits| .{ .bit_len = self.bit_len, .storage = .{ .allocated = try bits.clone(allocator) } },
-        };
+        var cloned = self.*;
+        cloned.words.allocator = allocator;
+        return cloned;
     }
 
-    fn set(self: *ExactBitSet, bit: usize) void {
+    fn set(self: *ExactBitSet, bit: usize) Allocator.Error!void {
         std.debug.assert(bit < self.bit_len);
-        switch (self.storage) {
-            .inline_word => |*bits| bits.* |= @as(usize, 1) << @intCast(bit),
-            .allocated => |*bits| bits.set(bit),
-        }
+        const word_index: u32 = @intCast(bit / 64);
+        const mask = @as(u64, 1) << @intCast(bit % 64);
+        try self.words.put(word_index, self.words.get(word_index) | mask);
     }
 
-    fn unset(self: *ExactBitSet, bit: usize) void {
+    fn unset(self: *ExactBitSet, bit: usize) Allocator.Error!void {
         std.debug.assert(bit < self.bit_len);
-        switch (self.storage) {
-            .inline_word => |*bits| bits.* &= ~(@as(usize, 1) << @intCast(bit)),
-            .allocated => |*bits| bits.unset(bit),
-        }
+        const word_index: u32 = @intCast(bit / 64);
+        const mask = @as(u64, 1) << @intCast(bit % 64);
+        try self.words.put(word_index, self.words.get(word_index) & ~mask);
     }
 
     fn isSet(self: *const ExactBitSet, bit: usize) bool {
         std.debug.assert(bit < self.bit_len);
-        return switch (self.storage) {
-            .inline_word => |bits| bits & (@as(usize, 1) << @intCast(bit)) != 0,
-            .allocated => |bits| bits.isSet(bit),
-        };
+        const word_index: u32 = @intCast(bit / 64);
+        const mask = @as(u64, 1) << @intCast(bit % 64);
+        return self.words.get(word_index) & mask != 0;
+    }
+
+    /// Exact range existence, without enumerating either members or live bits.
+    fn anySetInRange(self: *const ExactBitSet, start: usize, end: usize) bool {
+        std.debug.assert(start <= end and end <= self.bit_len);
+        if (start == end) return false;
+        const first_word: u32 = @intCast(start / 64);
+        const last_word: u32 = @intCast((end - 1) / 64);
+        const first_mask = @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(start % 64));
+        const last_mask = @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(63 - (end - 1) % 64));
+        if (first_word == last_word) return self.words.get(first_word) & first_mask & last_mask != 0;
+        if (self.words.get(first_word) & first_mask != 0) return true;
+        if (self.words.get(last_word) & last_mask != 0) return true;
+        return self.words.hasNonEmptyInRange(first_word + 1, last_word);
     }
 
     fn unsetAll(self: *ExactBitSet) void {
-        switch (self.storage) {
-            .inline_word => |*bits| bits.* = 0,
-            .allocated => |*bits| bits.unsetAll(),
-        }
+        self.words.clear();
     }
 
-    fn setUnion(self: *ExactBitSet, other: ExactBitSet) void {
+    fn setUnion(self: *ExactBitSet, other: ExactBitSet) Allocator.Error!void {
         std.debug.assert(self.bit_len == other.bit_len);
-        switch (self.storage) {
-            .inline_word => |*bits| bits.* |= other.storage.inline_word,
-            .allocated => |*bits| bits.setUnion(other.storage.allocated),
-        }
+        _ = try self.words.joinWith(&other.words, {}, unionWord);
     }
 
-    fn setIntersection(self: *ExactBitSet, other: ExactBitSet) void {
+    fn setIntersection(self: *ExactBitSet, other: ExactBitSet) Allocator.Error!void {
         std.debug.assert(self.bit_len == other.bit_len);
-        switch (self.storage) {
-            .inline_word => |*bits| bits.* &= other.storage.inline_word,
-            .allocated => |*bits| bits.setIntersection(other.storage.allocated),
-        }
+        _ = try self.words.meetWith(&other.words, {}, intersectWord);
     }
 
     fn count(self: *const ExactBitSet) usize {
-        return switch (self.storage) {
-            .inline_word => |bits| @popCount(bits),
-            .allocated => |bits| bits.count(),
-        };
+        var total: usize = 0;
+        const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
+        for (0..word_len) |word_index| total += @popCount(self.words.get(@intCast(word_index)));
+        return total;
     }
 
     fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
         if (options.kind != .set) @compileError("ARC exact sets iterate only set bits");
-        return union(enum) {
-            inline_word: usize,
-            allocated: std.bit_set.DynamicBitSetUnmanaged.Iterator(options),
+        return struct {
+            set: *const ExactBitSet,
+            word_cursor: usize,
+            word_base: usize = 0,
+            pending: u64 = 0,
 
             fn next(self: *@This()) ?usize {
-                return switch (self.*) {
-                    .inline_word => |*remaining| {
-                        if (remaining.* == 0) return null;
-                        const bit = switch (options.direction) {
-                            .forward => @ctz(remaining.*),
-                            .reverse => @bitSizeOf(usize) - 1 - @clz(remaining.*),
-                        };
-                        remaining.* &= ~(@as(usize, 1) << @intCast(bit));
-                        return bit;
+                return switch (options.direction) {
+                    .forward => {
+                        const word_len = std.math.divCeil(usize, self.set.bit_len, 64) catch unreachable;
+                        while (true) {
+                            if (self.pending != 0) {
+                                const word_bit: usize = @intCast(@ctz(self.pending));
+                                self.pending &= self.pending - 1;
+                                return self.word_base + word_bit;
+                            }
+                            if (self.word_cursor >= word_len) return null;
+                            self.word_base = self.word_cursor * 64;
+                            self.pending = self.set.words.get(@intCast(self.word_cursor));
+                            self.word_cursor += 1;
+                        }
                     },
-                    .allocated => |*iter| iter.next(),
+                    .reverse => {
+                        while (true) {
+                            if (self.pending != 0) {
+                                const word_bit: usize = @intCast(63 - @clz(self.pending));
+                                self.pending &= ~(@as(u64, 1) << @intCast(word_bit));
+                                const bit = self.word_base + word_bit;
+                                if (bit < self.set.bit_len) return bit;
+                            }
+                            if (self.word_cursor == 0) return null;
+                            self.word_cursor -= 1;
+                            self.word_base = self.word_cursor * 64;
+                            self.pending = self.set.words.get(@intCast(self.word_cursor));
+                        }
+                    },
                 };
             }
         };
     }
 
     fn iterator(self: *const ExactBitSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
-        return switch (self.storage) {
-            .inline_word => |bits| .{ .inline_word = bits },
-            .allocated => |*bits| .{ .allocated = bits.iterator(options) },
+        return .{
+            .set = self,
+            .word_cursor = switch (options.direction) {
+                .forward => 0,
+                .reverse => std.math.divCeil(usize, self.bit_len, 64) catch unreachable,
+            },
         };
     }
 
     fn eql(self: *const ExactBitSet, other: ExactBitSet) bool {
         if (self.bit_len != other.bit_len) return false;
-        return switch (self.storage) {
-            .inline_word => |bits| bits == other.storage.inline_word,
-            .allocated => |bits| bits.eql(other.storage.allocated),
-        };
+        return self.words.eql(&other.words);
+    }
+
+    fn unionWord(_: void, lhs: u64, rhs: u64) u64 {
+        return lhs | rhs;
+    }
+
+    fn intersectWord(_: void, lhs: u64, rhs: u64) u64 {
+        return lhs & rhs;
     }
 };
 
@@ -1129,33 +1136,28 @@ const SolveTask = union(enum) {
 };
 
 fn cloneOwnedSetWith(allocator: Allocator, source: *const OwnedSet) ResourceError!OwnedSet {
-    const bits = try source.bits.clone(allocator);
-    const residual_masks = try allocator.dupe(u64, source.residual_masks);
-    return .{ .allocator = allocator, .domain = source.domain, .bits = bits, .residual_masks = residual_masks };
+    @constCast(source).unique = false;
+    var cloned = source.*;
+    cloned.entries.allocator = allocator;
+    cloned.unique = false;
+    return cloned;
 }
 
 fn assignOwnedSet(target: *OwnedSet, source: *const OwnedSet) void {
     target.requireSameDomain(source);
-    target.bits.unsetAll();
-    target.bits.setUnion(source.bits);
-    @memcpy(target.residual_masks, source.residual_masks);
+    @constCast(source).unique = false;
+    target.entries.assignShared(&source.entries);
+    target.unique = false;
 }
 
 /// Intersects `target` with `other` in place, reporting whether any bit
 /// dropped. Intersection never adds bits, so a changed population count is
 /// exactly a changed set.
-fn intersectOwnedSetChanged(target: *OwnedSet, other: *const OwnedSet) bool {
+fn intersectOwnedSetChanged(target: *OwnedSet, other: *const OwnedSet) ResourceError!bool {
     target.requireSameDomain(other);
-    var changed = false;
-    var before = target.bits.iterator(.{});
-    while (before.next()) |bit| {
-        if (!other.bits.isSet(bit) or (target.residual_masks[bit] & ~other.residual_masks[bit]) != 0) {
-            changed = true;
-            break;
-        }
-    }
-    target.intersect(other);
-    return changed;
+    target.unique = false;
+    @constCast(other).unique = false;
+    return target.entries.meetWith(&other.entries, {}, OwnedSet.meetEntry);
 }
 
 /// Sentinel outside the compact plan-index domain.
@@ -1194,8 +1196,9 @@ const ArcPlanStep = struct {
     pre_release_extra: std.ArrayList(ReleaseDecision) = .empty,
     pre_retain: std.ArrayList(LIR.LocalId) = .empty,
     retain_assign_ref_target: bool = true,
+    take_assign_ref_target: bool = false,
     /// Absent committed field places on a same-layout representation-shell
-    /// alias, in the dismantle container's compact field-mask domain.
+    /// alias, indexed by the fields' semantic record positions.
     residual_shell_absent_mask: u64 = 0,
     residual_shell_all_rc_fields_absent: bool = false,
     retain_set_target: bool = true,
@@ -1220,6 +1223,7 @@ const ArcPlanStep = struct {
         self.pre_release_extra.clearRetainingCapacity();
         self.pre_retain.clearRetainingCapacity();
         self.retain_assign_ref_target = true;
+        self.take_assign_ref_target = false;
         self.residual_shell_absent_mask = 0;
         self.residual_shell_all_rc_fields_absent = false;
         self.retain_set_target = true;
@@ -1810,8 +1814,8 @@ const Inserter = struct {
 
         var semantic_fields: [64]u32 = undefined;
         var count: usize = 0;
-        for (container.fields, 0..) |field, index| {
-            const field_mask = @as(u64, 1) << @intCast(index);
+        for (container.fields) |field| {
+            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
             if ((absent_mask & field_mask) == 0) continue;
             semantic_fields[count] = field.field_idx;
             count += 1;
@@ -1847,6 +1851,7 @@ const Inserter = struct {
                 break :blk try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
+                    .take_kind = if (step.take_assign_ref_target) .take else .none,
                     .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
                         assign,
                         step.residual_shell_absent_mask,
@@ -2046,6 +2051,7 @@ const Inserter = struct {
                     .unique_args = step.unique_args,
                     .args = assign.args,
                     .interchangeable = assign.interchangeable,
+                    .simd_concat_count = assign.simd_concat_count,
                     .next = next,
                 } });
             },
@@ -2116,6 +2122,7 @@ const Inserter = struct {
             } }),
             .expect => |expect_stmt| try self.store.addCFStmt(.{ .expect = .{
                 .condition = expect_stmt.condition,
+                .site = expect_stmt.site,
                 .next = next,
             } }),
             .decref_if_initialized => |rc| try self.store.addCFStmt(.{ .decref_if_initialized = .{
@@ -2196,7 +2203,7 @@ const Inserter = struct {
                 const summary = maybe_summary orelse continue;
                 if (summary.body_reachable) continue;
                 var params_only = try OwnedSet.init(self.solve_allocator, self.domain());
-                self.placeSolveJoinParamsInto(summary, &params_only);
+                try self.placeSolveJoinParamsInto(summary, &params_only);
                 if (params_only.eql(&summary.body_keep)) continue;
                 assignOwnedSet(&summary.body_keep, &params_only);
                 try self.refreshJumpPlans(summary);
@@ -2281,6 +2288,7 @@ const Inserter = struct {
                             assign.next,
                         );
                         complete_moved_root = !transfer.retain_target;
+                        step.take_assign_ref_target = complete_moved_root;
                     } else {
                         switch (assign.op) {
                             .local => |source| {
@@ -2296,7 +2304,7 @@ const Inserter = struct {
                             .tag_payload_struct,
                             .list_reinterpret,
                             .nominal,
-                            => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            => transfer.release_old_target = try self.transferForFreshBind(&segment.owned, assign.target),
                         }
                     }
                     // A partial field take consumes the container's stored
@@ -2317,7 +2325,8 @@ const Inserter = struct {
                                 // moves only this stored unit and leaves the
                                 // exact residual shell behind.
                                 transfer.retain_target = false;
-                                segment.owned.takeResidualField(take_root, take.field_mask);
+                                step.take_assign_ref_target = true;
+                                try segment.owned.takeResidualField(take_root, take.field_mask);
                             }
                         }
                     }
@@ -2329,12 +2338,12 @@ const Inserter = struct {
                 },
                 .init_uninitialized => |uninit| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.pre_release = if (self.transferForInit(&segment.owned, uninit.target)) self.releaseDecision(uninit.target) else null;
+                    step.pre_release = if (try self.transferForInit(&segment.owned, uninit.target)) self.releaseDecision(uninit.target) else null;
                     segment.cursor = uninit.next;
                 },
                 .assign_literal => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
@@ -2372,7 +2381,7 @@ const Inserter = struct {
                         if (assign.closure == assign.target) arcInvariant("owned erased call cannot consume and rebind the same local");
                         const reuse_source = assign.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
                         preserve_reuse_source = try self.groupUsedInPath(assign.next, reuse_source, segment.ctx.loop_keep);
-                        if (!preserve_reuse_source) _ = self.takeUnit(&segment.owned, reuse_source);
+                        if (!preserve_reuse_source) _ = try self.takeUnit(&segment.owned, reuse_source);
                     }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.pre_retain.appendSlice(self.solve_allocator, transfer.args.retain_args);
@@ -2405,7 +2414,7 @@ const Inserter = struct {
                         segment.ctx.loop_keep,
                         &step.pre_release_extra,
                     );
-                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     self.death_scratch.clearRetainingCapacity();
                     const desc_local = assign.desc.localOrNull() orelse assign.target;
                     const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign.target else assign.target;
@@ -2416,7 +2425,7 @@ const Inserter = struct {
                 },
                 .assign_boxy_dict_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const dict_local = assign.dict.localOrNull() orelse assign.target;
                     const singles = [_]LIR.LocalId{ dict_local, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
@@ -2429,7 +2438,7 @@ const Inserter = struct {
                     else
                         SingleTransfer{
                             .transfer_single = false,
-                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign.target),
                         };
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
@@ -2457,7 +2466,7 @@ const Inserter = struct {
                     else
                         SingleTransfer{
                             .transfer_single = false,
-                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign.target),
                         };
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
@@ -2476,7 +2485,7 @@ const Inserter = struct {
                     else
                         SingleTransfer{
                             .transfer_single = false,
-                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign.target),
                         };
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
@@ -2494,7 +2503,7 @@ const Inserter = struct {
                     else
                         SingleTransfer{
                             .transfer_single = false,
-                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign.target),
                         };
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
@@ -2511,7 +2520,7 @@ const Inserter = struct {
                         _ = try self.singleTransfer(assign.lhs, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
                         _ = try self.singleTransfer(assign.rhs, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
                     }
-                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
@@ -2523,7 +2532,7 @@ const Inserter = struct {
                     else
                         SingleTransfer{
                             .transfer_single = false,
-                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign.target),
                         };
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
@@ -2541,7 +2550,7 @@ const Inserter = struct {
                     else
                         SingleTransfer{
                             .transfer_single = false,
-                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign.target),
                         };
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
@@ -2563,7 +2572,7 @@ const Inserter = struct {
                 .assign_call_dict => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     step.transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &segment.owned, segment.ctx.loop_keep, .no);
-                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     self.death_scratch.clearRetainingCapacity();
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
@@ -2655,8 +2664,9 @@ const Inserter = struct {
                 },
                 .set_local => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const old_release = self.releaseDecisionFrom(&segment.owned, assign.target);
                     const transfer = try self.transferForSetLocal(&segment.owned, assign.target, assign.value, assign.mode, assign.next, segment.ctx.loop_keep);
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.pre_release = if (transfer.release_old_target) old_release else null;
                     step.retain_set_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
@@ -2676,7 +2686,7 @@ const Inserter = struct {
                 },
                 .decref_if_initialized => |rc| {
                     _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    self.noteEmittedRelease(&segment.owned, rc.value);
+                    try self.noteEmittedRelease(&segment.owned, rc.value);
                     segment.cursor = rc.next;
                 },
                 .incref, .decref, .free => arcInvariant("ARC summary solver received already-reference-counted LIR"),
@@ -2727,7 +2737,7 @@ const Inserter = struct {
                             const branch = GuardedList.at(branches, branch_index);
                             if (restoration) |restored| {
                                 var branch_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                                restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
+                                try restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
                                 try self.pushSolveSegment(tasks, branch.body, &branch_owned, branch_ctx, child_plans.branch_plans[branch_index]);
                             } else {
                                 try self.pushSolveSegment(tasks, branch.body, &segment.owned, branch_ctx, child_plans.branch_plans[branch_index]);
@@ -2735,7 +2745,7 @@ const Inserter = struct {
                         }
                         if (restoration) |restored| {
                             var default_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                            restoreOutcomeResources(&default_owned, restored.default_resources.items);
+                            try restoreOutcomeResources(&default_owned, restored.default_resources.items);
                             try self.pushSolveSegment(tasks, switch_stmt.default_branch, &default_owned, branch_ctx, child_plans.default_plan);
                         } else {
                             try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, branch_ctx, child_plans.default_plan);
@@ -2750,7 +2760,7 @@ const Inserter = struct {
                         const branch = GuardedList.at(branches, branch_index);
                         if (restoration) |restored| {
                             var branch_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                            restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
+                            try restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
                             try self.pushSolveSegment(tasks, branch.body, &branch_owned, segment.ctx, child_plans.branch_plans[branch_index]);
                         } else {
                             try self.pushSolveSegment(tasks, branch.body, &segment.owned, segment.ctx, child_plans.branch_plans[branch_index]);
@@ -2758,7 +2768,7 @@ const Inserter = struct {
                     }
                     if (restoration) |restored| {
                         var default_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                        restoreOutcomeResources(&default_owned, restored.default_resources.items);
+                        try restoreOutcomeResources(&default_owned, restored.default_resources.items);
                         try self.pushSolveSegment(tasks, switch_stmt.default_branch, &default_owned, segment.ctx, child_plans.default_plan);
                     } else {
                         try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, segment.ctx, child_plans.default_plan);
@@ -2774,12 +2784,12 @@ const Inserter = struct {
                     );
                     const child_plans = terminal.initialized_payload_switch;
                     var initialized_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                    self.placeUnit(&initialized_owned, switch_stmt.payload);
+                    try self.placeUnit(&initialized_owned, switch_stmt.payload);
 
                     var uninitialized_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                     // The branch proves the cell uninitialized: the payload
                     // binding ends with nothing to release.
-                    _ = self.transferForInit(&uninitialized_owned, switch_stmt.payload);
+                    _ = try self.transferForInit(&uninitialized_owned, switch_stmt.payload);
 
                     try self.pushSolveSegment(tasks, switch_stmt.initialized_branch, &initialized_owned, segment.ctx, child_plans.initialized_plan);
                     try self.pushSolveSegment(tasks, switch_stmt.uninitialized_branch, &uninitialized_owned, segment.ctx, child_plans.uninitialized_plan);
@@ -2794,7 +2804,7 @@ const Inserter = struct {
                         const step = GuardedList.at(steps, step_index);
                         switch (step.capture) {
                             .discard => {},
-                            .view => |local| self.placeUnit(&match_owned, local),
+                            .view => |local| try self.placeUnit(&match_owned, local),
                         }
                     }
                     try self.pushSolveSegment(tasks, str_match.on_match, &match_owned, segment.ctx, child_plans.match_plan);
@@ -2813,7 +2823,7 @@ const Inserter = struct {
                             const step = GuardedList.at(steps, step_index);
                             switch (step.capture) {
                                 .discard => {},
-                                .view => |local| self.placeUnit(&match_owned, local),
+                                .view => |local| try self.placeUnit(&match_owned, local),
                             }
                         }
                         try self.pushSolveSegment(tasks, arm.on_match, &match_owned, segment.ctx, child_plans.match_plans[arm_index]);
@@ -2835,7 +2845,7 @@ const Inserter = struct {
                 },
                 .crash => |crash_stmt| {
                     const retain_value = if (crash_stmt.msg.localId()) |message|
-                        if (self.consumeAtTerminal(&segment.owned, message)) null else message
+                        if (try self.consumeAtTerminal(&segment.owned, message)) null else message
                     else
                         null;
                     try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
@@ -2853,7 +2863,7 @@ const Inserter = struct {
                     var retain_value: ?LIR.LocalId = null;
                     if (self.current_sig.ret_mode == .borrowed) {
                         // No ownership unit transfers to the caller.
-                    } else if (!self.consumeAtTerminal(&segment.owned, ret_stmt.value)) {
+                    } else if (!try self.consumeAtTerminal(&segment.owned, ret_stmt.value)) {
                         retain_value = ret_stmt.value;
                     }
                     const restitution_mask = if (self.current_sig.outcomes.isEmpty())
@@ -2864,13 +2874,13 @@ const Inserter = struct {
                         try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
                     } else {
                         var keep = try OwnedSet.init(self.solve_allocator, self.domain());
-                        self.addRestitutionKeep(segment.cursor, &segment.owned, &keep);
+                        try self.addRestitutionKeep(segment.cursor, &segment.owned, &keep);
                         try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, &keep, retain_value);
                     }
                     return;
                 },
                 .expect_err => |expect_err_stmt| {
-                    const retain_value = if (self.consumeAtTerminal(&segment.owned, expect_err_stmt.message))
+                    const retain_value = if (try self.consumeAtTerminal(&segment.owned, expect_err_stmt.message))
                         null
                     else
                         expect_err_stmt.message;
@@ -2987,14 +2997,16 @@ const Inserter = struct {
     fn collectReleaseDifferenceInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet, keep: *const OwnedSet) ResourceError!void {
         owned.requireSameDomain(keep);
         releases.clearRetainingCapacity();
-        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        var iter = owned.iterator(.{ .direction = .reverse });
         while (iter.next()) |bit| {
             const local = owned.domain.resourceLocalAt(bit);
-            if (!keep.bits.isSet(bit)) {
+            const owned_entry = owned.entryAt(bit);
+            const keep_entry = keep.entryAt(bit);
+            if (!keep_entry.present) {
                 try releases.append(self.solve_allocator, self.releaseDecisionFrom(owned, local));
                 continue;
             }
-            const residual_difference = owned.residual_masks[bit] & ~keep.residual_masks[bit];
+            const residual_difference = owned_entry.residual_mask & ~keep_entry.residual_mask;
             if (residual_difference != 0) {
                 try releases.append(self.solve_allocator, .{ .residual = .{
                     .value = local,
@@ -3006,7 +3018,7 @@ const Inserter = struct {
 
     fn collectReleaseAllInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet) ResourceError!void {
         releases.clearRetainingCapacity();
-        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        var iter = owned.iterator(.{ .direction = .reverse });
         while (iter.next()) |bit| {
             const local = owned.domain.resourceLocalAt(bit);
             try releases.append(self.solve_allocator, self.releaseDecisionFrom(owned, local));
@@ -3023,16 +3035,15 @@ const Inserter = struct {
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         const result_bit = owned.domain.resourceBitOf(result);
-        const keep_result = if (result_bit) |bit| owned.bits.isSet(bit) else false;
-        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        const result_entry: OwnedEntry = if (result_bit) |bit| owned.entryAt(bit) else .{};
+        var iter = owned.iterator(.{ .direction = .reverse });
         while (iter.next()) |bit| {
             if (result_bit != null and bit == result_bit.?) continue;
             const local = owned.domain.resourceLocalAt(bit);
             try releases.append(self.emission_allocator, self.releaseDecisionFrom(owned, local));
-            owned.residual_masks[bit] = 0;
         }
-        owned.bits.unsetAll();
-        if (keep_result) owned.bits.set(result_bit.?);
+        owned.clear();
+        if (result_entry.present) try owned.putEntry(@intCast(result_bit.?), result_entry);
     }
 
     fn addRestitutionKeep(
@@ -3040,7 +3051,7 @@ const Inserter = struct {
         stmt: LIR.CFStmtId,
         owned: *const OwnedSet,
         keep: *OwnedSet,
-    ) void {
+    ) ResourceError!void {
         if (self.current_sig.outcomes.isEmpty()) return;
         const mask = self.solution.restitutionParamsAt(stmt);
         if (mask == 0) return;
@@ -3055,17 +3066,17 @@ const Inserter = struct {
             if (!owned.contains(param)) {
                 arcInvariant("ARC restitution boundary did not carry its exact entry parameter unit");
             }
-            keep.copyResourceFrom(owned, param);
+            try keep.copyResourceFrom(owned, param);
         }
     }
 
-    fn restoreOutcomeResources(owned: *OwnedSet, resources: []const RestoredResource) void {
+    fn restoreOutcomeResources(owned: *OwnedSet, resources: []const RestoredResource) ResourceError!void {
         for (resources) |resource| switch (resource) {
             .unit => |unit| {
                 if (owned.contains(unit)) arcInvariant("ARC outcome restoration duplicated a live ownership unit");
-                owned.set(unit);
+                try owned.set(unit);
             },
-            .field => |field| owned.restoreResidualField(field.root, field.field_mask),
+            .field => |field| try owned.restoreResidualField(field.root, field.field_mask),
         };
     }
 
@@ -3073,7 +3084,7 @@ const Inserter = struct {
         self: *Inserter,
         reads: *ExactBitSet,
         stmt: LIR.CFStmtId,
-    ) void {
+    ) ResourceError!void {
         if (self.current_sig.outcomes.isEmpty()) return;
         const mask = self.solution.restitutionParamsAt(stmt);
         if (mask == 0) return;
@@ -3081,7 +3092,7 @@ const Inserter = struct {
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             if ((mask & bit) == 0) continue;
-            self.noteLivenessUseLocal(reads, GuardedList.at(params, position));
+            try self.noteLivenessUseLocal(reads, GuardedList.at(params, position));
         }
     }
 
@@ -3093,7 +3104,7 @@ const Inserter = struct {
         body_keep: *const OwnedSet,
     ) ResourceError!void {
         var keep = try cloneOwnedSetWith(self.solve_allocator, body_keep);
-        self.addRestitutionKeep(stmt, owned, &keep);
+        try self.addRestitutionKeep(stmt, owned, &keep);
         try self.collectReleaseDifferenceInto(releases, owned, &keep);
     }
 
@@ -3652,10 +3663,10 @@ const Inserter = struct {
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
         for (self.domain().refcounted_locals) |local| {
-            if (self.groupUsedFromTable(reads, local)) summary.body_keep.set(local);
+            if (self.groupUsedFromTable(reads, local)) try summary.body_keep.set(local);
         }
-        self.placeJoinRetainedInto(summary, null, &summary.body_keep);
-        self.placeSolveJoinParamsInto(summary, &summary.body_keep);
+        try self.placeJoinRetainedInto(summary, null, &summary.body_keep);
+        try self.placeSolveJoinParamsInto(summary, &summary.body_keep);
     }
 
     /// Add the producer-declared ownership environment of a shared body. When
@@ -3666,14 +3677,14 @@ const Inserter = struct {
         summary: *const JoinSummary,
         source: ?*const OwnedSet,
         keep: *OwnedSet,
-    ) void {
+    ) ResourceError!void {
         const retained = self.store.getLocalSpan(summary.retained);
         for (0..GuardedList.borrowLen(retained)) |index| {
             const local = GuardedList.at(retained, index);
             if (source) |owned| {
-                if (owned.contains(local)) keep.copyResourceFrom(owned, local);
+                if (owned.contains(local)) try keep.copyResourceFrom(owned, local);
             } else {
-                self.placeUnit(keep, local);
+                try self.placeUnit(keep, local);
             }
         }
     }
@@ -3690,18 +3701,18 @@ const Inserter = struct {
     /// param set and narrowed by the lattice's exact resource intersection,
     /// so filtering by it keeps this placement monotone and carries residual
     /// field masks through.
-    fn placeSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) void {
+    fn placeSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) ResourceError!void {
         if (!summary.back_edge_seen) {
-            self.placeAllSolveJoinParamsInto(summary, keep);
+            try self.placeAllSolveJoinParamsInto(summary, keep);
             return;
         }
         const params = self.store.getLocalSpan(summary.params);
         for (0..GuardedList.borrowLen(params)) |index| {
-            placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(params, index));
+            try placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(params, index));
         }
         const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
         for (0..GuardedList.borrowLen(maybe_params)) |index| {
-            placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(maybe_params, index));
+            try placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(maybe_params, index));
         }
     }
 
@@ -3709,20 +3720,20 @@ const Inserter = struct {
     /// presence plus its surviving residual field mask. Placing full
     /// ownership here would re-authorize releasing aggregate fields a back
     /// edge already took, so the mask travels with the bit.
-    fn placeSurvivingParam(keep: *OwnedSet, meet: *const OwnedSet, local: LIR.LocalId) void {
+    fn placeSurvivingParam(keep: *OwnedSet, meet: *const OwnedSet, local: LIR.LocalId) ResourceError!void {
         if (!meet.contains(local)) return;
-        keep.setWithResidual(local, meet.residualMask(local));
+        try keep.setWithResidual(local, meet.residualMask(local));
     }
 
     /// Unfiltered param placement: the seed for the back-edge meet.
-    fn placeAllSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) void {
+    fn placeAllSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) ResourceError!void {
         const params = self.store.getLocalSpan(summary.params);
         for (0..GuardedList.borrowLen(params)) |index| {
-            self.placeUnit(keep, GuardedList.at(params, index));
+            try self.placeUnit(keep, GuardedList.at(params, index));
         }
         const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
         for (0..GuardedList.borrowLen(maybe_params)) |index| {
-            self.placeConditionalUnit(keep, GuardedList.at(maybe_params, index));
+            try self.placeConditionalUnit(keep, GuardedList.at(maybe_params, index));
         }
     }
 
@@ -3732,17 +3743,17 @@ const Inserter = struct {
         self: *Inserter,
         summary: *JoinSummary,
         owned: *const OwnedSet,
-    ) bool {
+    ) ResourceError!bool {
         var changed = false;
         if (!summary.back_edge_seen) {
             summary.back_edge_seen = true;
-            self.placeAllSolveJoinParamsInto(summary, &summary.back_edge_params);
+            try self.placeAllSolveJoinParamsInto(summary, &summary.back_edge_params);
             changed = true;
         }
         // The same exact resource meet the rest of the lattice uses: a param
         // survives only with the residual field places every back edge still
         // proves, not merely its presence bit.
-        if (intersectOwnedSetChanged(&summary.back_edge_params, owned)) changed = true;
+        if (try intersectOwnedSetChanged(&summary.back_edge_params, owned)) changed = true;
         return changed;
     }
 
@@ -3761,14 +3772,14 @@ const Inserter = struct {
         var merged = try OwnedSet.init(self.solve_allocator, self.domain());
         assignOwnedSet(&merged, &summary.jump_common);
         var retained = try OwnedSet.init(self.solve_allocator, self.domain());
-        self.placeJoinRetainedInto(summary, &merged, &retained);
+        try self.placeJoinRetainedInto(summary, &merged, &retained);
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
-        var owned_iter = merged.bits.iterator(.{});
+        var owned_iter = merged.iterator(.{});
         while (owned_iter.next()) |index| {
             const local = merged.domain.resourceLocalAt(index);
-            if (!self.groupUsedFromTable(reads, local) and !retained.contains(local)) merged.unset(local);
+            if (!self.groupUsedFromTable(reads, local) and !retained.contains(local)) try merged.unset(local);
         }
-        self.placeSolveJoinParamsInto(summary, &merged);
+        try self.placeSolveJoinParamsInto(summary, &merged);
         if (merged.eql(&summary.body_keep)) return .{ .changed = false, .purged = false };
         assignOwnedSet(&summary.body_keep, &merged);
         try self.refreshJumpPlans(summary);
@@ -3781,11 +3792,11 @@ const Inserter = struct {
     fn recomputeSolveEntryKeep(self: *Inserter, summary: *JoinSummary) ResourceError!bool {
         var keep = try OwnedSet.init(self.solve_allocator, self.domain());
         const remainder_reads = try self.computeReadsBeforeRebind(summary.remainder, null, 0);
-        var entry_iter = summary.entry_state.bits.iterator(.{});
+        var entry_iter = summary.entry_state.iterator(.{});
         while (entry_iter.next()) |index| {
             const local = summary.entry_state.domain.resourceLocalAt(index);
             if (self.groupUsedFromTable(remainder_reads, local) or summary.body_keep.contains(local)) {
-                keep.copyResourceFrom(&summary.entry_state, local);
+                try keep.copyResourceFrom(&summary.entry_state, local);
             }
         }
         if (keep.eql(&summary.entry_keep)) return false;
@@ -3858,7 +3869,7 @@ const Inserter = struct {
             try self.activateLatentSwitchStopPlans(summary);
             changed = true;
         } else {
-            changed = intersectOwnedSetChanged(&summary.common, owned);
+            changed = try intersectOwnedSetChanged(&summary.common, owned);
         }
         if (changed and !summary.resume_queued) {
             try self.refreshSwitchStopPlans(summary);
@@ -3923,7 +3934,7 @@ const Inserter = struct {
             arcInvariant("ARC solver saw one join id with conflicting metadata");
         }
         try self.updateJoinArrivalPlan(summary, segment.plan_index, segment.cursor, &segment.owned);
-        if (intersectOwnedSetChanged(&summary.entry_state, &segment.owned)) {
+        if (try intersectOwnedSetChanged(&summary.entry_state, &segment.owned)) {
             try self.scheduleSolveJoinProcess(tasks, summary);
         }
     }
@@ -3949,7 +3960,7 @@ const Inserter = struct {
                 // the keep—but it does constrain which params the body may
                 // treat as freshly owned, because a param it leaves alone
                 // still holds the value the body already released.
-                if (self.absorbBackEdgeParams(summary, &segment.owned)) {
+                if (try self.absorbBackEdgeParams(summary, &segment.owned)) {
                     try self.applySolveBodyKeepUpdate(tasks, summary);
                 }
                 return;
@@ -3963,7 +3974,7 @@ const Inserter = struct {
             summary.jump_states[site_index] = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
             changed = true;
         } else {
-            changed = intersectOwnedSetChanged(&summary.jump_states[site_index].?, &segment.owned);
+            changed = try intersectOwnedSetChanged(&summary.jump_states[site_index].?, &segment.owned);
         }
         const site = &summary.jump_states[site_index].?;
         const first_reach = !summary.body_reachable;
@@ -3973,7 +3984,7 @@ const Inserter = struct {
             try self.refreshJoinArrivalPlans(summary);
             assignOwnedSet(&summary.jump_common, site);
             break :blk true;
-        } else intersectOwnedSetChanged(&summary.jump_common, site);
+        } else try intersectOwnedSetChanged(&summary.jump_common, site);
         if (!common_changed) return;
         try self.applySolveBodyKeepUpdate(tasks, summary);
         if (first_reach) try self.scheduleSolveBodyWalk(tasks, summary);
@@ -4065,33 +4076,33 @@ const Inserter = struct {
     }
 
     /// Test-and-clear by unit key; returns whether a unit moved.
-    fn takeUnit(self: *const Inserter, owned: *OwnedSet, local: LIR.LocalId) bool {
+    fn takeUnit(self: *const Inserter, owned: *OwnedSet, local: LIR.LocalId) ResourceError!bool {
         const unit = self.unitOf(local);
         if (!owned.contains(unit)) return false;
-        owned.unset(unit);
+        try owned.unset(unit);
         return true;
     }
 
-    fn unsetOwnedUnit(self: *const Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
-        owned.unset(self.unitOf(local));
+    fn unsetOwnedUnit(self: *const Inserter, owned: *OwnedSet, local: LIR.LocalId) ResourceError!void {
+        try owned.unset(self.unitOf(local));
     }
 
     /// Places a fresh ownership unit on the name being bound. Borrowed
     /// bindings carry no unit: the lender's liveness group keeps the value
     /// alive across every use.
-    fn placeUnit(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
+    fn placeUnit(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) ResourceError!void {
         if (!self.localContainsRefcounted(local)) return;
         if (self.isBindingBorrowed(local)) return;
-        owned.set(local);
+        try owned.set(local);
     }
 
     /// Places a conditionally-present unit (maybe-initialized join payload
     /// cells). The overwrite of such a cell is still the lifetime end of the
     /// previous payload, so the unit is placed even on a solved-borrowed
     /// binding.
-    fn placeConditionalUnit(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
+    fn placeConditionalUnit(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) ResourceError!void {
         if (!self.localContainsRefcounted(local)) return;
-        owned.set(local);
+        try owned.set(local);
     }
 
     /// Places the unit a call result carries: an owned return always hands
@@ -4102,12 +4113,12 @@ const Inserter = struct {
         owned: *OwnedSet,
         local: LIR.LocalId,
         ret_mode: arc_sig.Mode,
-    ) void {
+    ) ResourceError!void {
         if (!self.localContainsRefcounted(local)) return;
         if (ret_mode == .owned) {
-            owned.set(local);
+            try owned.set(local);
         } else if (!self.isBindingBorrowed(local)) {
-            owned.set(local);
+            try owned.set(local);
         }
     }
 
@@ -4116,16 +4127,16 @@ const Inserter = struct {
     /// id on purpose: rebinding a name kills only that name's own binding,
     /// never the unit of a value the name merely borrowed (audited for
     /// issue 9703's keying class—see the layer comment above).
-    fn takeRebindTarget(_: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) bool {
+    fn takeRebindTarget(_: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
         if (!owned.contains(target)) return false;
-        owned.unset(target);
+        try owned.unset(target);
         return true;
     }
 
     /// Replays an already-emitted decref/free into the state during a
     /// boundary re-walk. Emitted RC statements name unit locals directly.
-    fn noteEmittedRelease(_: *const Inserter, owned: *OwnedSet, value: LIR.LocalId) void {
-        owned.unset(value);
+    fn noteEmittedRelease(_: *const Inserter, owned: *OwnedSet, value: LIR.LocalId) ResourceError!void {
+        try owned.unset(value);
     }
 
     const AliasBindTransfer = struct {
@@ -4147,18 +4158,18 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         const move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
-        const release_old_target = self.takeRebindTarget(owned, target);
-        if (move_value) _ = self.takeUnit(owned, source);
-        self.placeUnit(owned, target);
+        const release_old_target = try self.takeRebindTarget(owned, target);
+        if (move_value) _ = try self.takeUnit(owned, source);
+        try self.placeUnit(owned, target);
         return .{ .retain_target = !move_value, .release_old_target = release_old_target };
     }
 
     /// A binding whose value is freshly produced by the statement itself
     /// (literals, payload reads): the new binding owns one unit; the old
     /// binding, if any, dies here.
-    fn transferForFreshBind(self: *Inserter, owned: *OwnedSet, target: LIR.LocalId) bool {
-        const release_old_target = self.takeRebindTarget(owned, target);
-        self.placeUnit(owned, target);
+    fn transferForFreshBind(self: *Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
+        const release_old_target = try self.takeRebindTarget(owned, target);
+        try self.placeUnit(owned, target);
         return release_old_target;
     }
 
@@ -4173,7 +4184,7 @@ const Inserter = struct {
         root: LIR.LocalId,
         next: LIR.CFStmtId,
     ) ResourceError!AliasBindTransfer {
-        const release_old_target = self.takeRebindTarget(owned, target);
+        const release_old_target = try self.takeRebindTarget(owned, target);
         const unit = self.unitOf(root);
         // The path query follows loop edges itself and stops at a rebind of
         // this exact place definition. A loop keep-set cannot make that
@@ -4187,8 +4198,8 @@ const Inserter = struct {
             null;
         const move_root = has_unit and (!root_used or restitution != null);
         if (restitution) |claim| try self.setOutcomeRestoration(claim, move_root);
-        if (move_root) owned.unset(unit);
-        self.placeUnit(owned, target);
+        if (move_root) try owned.unset(unit);
+        try self.placeUnit(owned, target);
         return .{
             .retain_target = !move_root,
             .release_old_target = release_old_target,
@@ -4285,7 +4296,7 @@ const Inserter = struct {
 
     /// `init_uninitialized`: the target's previous binding dies and nothing
     /// replaces it.
-    fn transferForInit(self: *Inserter, owned: *OwnedSet, target: LIR.LocalId) bool {
+    fn transferForInit(self: *Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
         return self.takeRebindTarget(owned, target);
     }
 
@@ -4304,11 +4315,11 @@ const Inserter = struct {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
         const move_value = try self.canMoveAliasBindValue(owned, value, target, next, loop_keep);
         const release_old_target = switch (mode) {
-            .replace_existing, .initialize_join_param => self.takeRebindTarget(owned, target),
+            .replace_existing, .initialize_join_param => try self.takeRebindTarget(owned, target),
             .initialize_join_result => false,
         };
-        if (move_value) _ = self.takeUnit(owned, value);
-        self.placeUnit(owned, target);
+        if (move_value) _ = try self.takeUnit(owned, value);
+        try self.placeUnit(owned, target);
         return .{ .retain_target = !move_value, .release_old_target = release_old_target };
     }
 
@@ -4345,8 +4356,8 @@ const Inserter = struct {
         const release_old_target = if (target_feeds_call)
             false
         else
-            self.takeRebindTarget(owned, target);
-        self.placeCallResultUnit(owned, target, arg_ownership.demanded.ret_mode);
+            try self.takeRebindTarget(owned, target);
+        try self.placeCallResultUnit(owned, target, arg_ownership.demanded.ret_mode);
         const retain_call_result = arg_ownership.demanded.ret_mode == .borrowed and
             self.localContainsRefcounted(target) and
             !self.isBindingBorrowed(target);
@@ -4374,8 +4385,8 @@ const Inserter = struct {
         transfer_positions: ?*std.ArrayList(u32),
     ) ResourceError!AggregateTransfer {
         try self.spanTransferPositions(operands, next, target, owned, loop_keep, transfer_positions);
-        const release_old_target = self.takeRebindTarget(owned, target);
-        self.placeUnit(owned, target);
+        const release_old_target = try self.takeRebindTarget(owned, target);
+        try self.placeUnit(owned, target);
         return .{ .release_old_target = release_old_target };
     }
 
@@ -4399,8 +4410,8 @@ const Inserter = struct {
         if (payload) |operand| {
             transfer_single = try self.singleTransfer(operand, next, target, owned, loop_keep);
         }
-        const release_old_target = self.takeRebindTarget(owned, target);
-        self.placeUnit(owned, target);
+        const release_old_target = try self.takeRebindTarget(owned, target);
+        try self.placeUnit(owned, target);
         return .{ .transfer_single = transfer_single, .release_old_target = release_old_target };
     }
 
@@ -4426,7 +4437,7 @@ const Inserter = struct {
             if (assign.capture) |capture| {
                 if (self.solution.leaderOf(capture) == self.solution.leaderOf(reuse)) reuse_unique = false;
             }
-            if (!preserve_reuse) _ = self.takeUnit(owned, reuse);
+            if (!preserve_reuse) _ = try self.takeUnit(owned, reuse);
         }
 
         const transfer = try self.transferForSingle(owned, assign.capture, assign.target, assign.next, loop_keep);
@@ -4499,18 +4510,18 @@ const Inserter = struct {
         const target_consumed = self.maskedArgsContainLocal(args, rc_effect.consume_args, target);
         var release_old_target = false;
         if (target_consumed) {
-            _ = self.takeUnit(owned, target);
+            _ = try self.takeUnit(owned, target);
         } else {
-            release_old_target = self.takeRebindTarget(owned, target);
+            release_old_target = try self.takeRebindTarget(owned, target);
         }
         if (rc_effect.consume_args != 0) {
-            self.unsetMaskedArgsExcept(owned, args, rc_effect.consume_args & ~preserve_consumed_args, target);
+            try self.unsetMaskedArgsExcept(owned, args, rc_effect.consume_args & ~preserve_consumed_args, target);
         }
         var transfer_mask: u64 = 0;
         if (rc_effect.retain_args != 0) {
             transfer_mask = try self.spanTransferMask(args, rc_effect.retain_args, next, target, owned, loop_keep, .yes);
         }
-        self.placeUnit(owned, target);
+        try self.placeUnit(owned, target);
         return .{
             .preserve_consumed_args = preserve_consumed_args,
             .transfer_mask = transfer_mask,
@@ -4522,9 +4533,9 @@ const Inserter = struct {
     /// Terminal consumption (`ret` with an owned return mode, `expect_err`):
     /// returns true when the local's own unit moves out with the terminal,
     /// so no retain is needed.
-    fn consumeAtTerminal(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) bool {
+    fn consumeAtTerminal(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) ResourceError!bool {
         if (!self.ownsUnit(owned, local)) return false;
-        _ = self.takeUnit(owned, local);
+        _ = try self.takeUnit(owned, local);
         return true;
     }
 
@@ -4540,7 +4551,7 @@ const Inserter = struct {
             if (!owned.contains(local)) continue;
             if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
             if (try self.valueUsedInPath(next, local, loop_keep)) continue;
-            if (!self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
+            if (!try self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
             try releases.append(self.solve_allocator, self.releaseDecision(local));
         }
     }
@@ -4586,7 +4597,7 @@ const Inserter = struct {
             if (!self.localContainsRefcounted(local)) continue;
             if (!self.ownsUnit(owned, local)) continue;
             if (try self.groupUsedInPath(next, local, loop_keep)) continue;
-            self.unsetOwnedUnit(owned, local);
+            try self.unsetOwnedUnit(owned, local);
             transfer |= bit;
         }
         return transfer;
@@ -4614,7 +4625,7 @@ const Inserter = struct {
             if (!self.localContainsRefcounted(local)) continue;
             if (!self.ownsUnit(owned, local)) continue;
             if (try self.groupUsedInPath(next, local, loop_keep)) continue;
-            self.unsetOwnedUnit(owned, local);
+            try self.unsetOwnedUnit(owned, local);
             if (transferred_positions) |positions| {
                 try positions.append(self.emission_allocator, @intCast(i));
             }
@@ -4636,7 +4647,7 @@ const Inserter = struct {
         if (!self.localContainsRefcounted(local)) return false;
         if (!self.ownsUnit(owned, local)) return false;
         if (try self.groupUsedInPath(next, local, loop_keep)) return false;
-        self.unsetOwnedUnit(owned, local);
+        try self.unsetOwnedUnit(owned, local);
         return true;
     }
 
@@ -4704,7 +4715,7 @@ const Inserter = struct {
         if (collected) |list| {
             try list.append(self.emission_allocator, self.releaseDecisionFrom(owned, owner));
         }
-        owned.unset(owner);
+        try owned.unset(owner);
     }
 
     fn noteCallResultDeathIfUnused(
@@ -4737,7 +4748,7 @@ const Inserter = struct {
         if (collected) |list| {
             try list.append(self.emission_allocator, self.releaseDecisionFrom(owned, local));
         }
-        owned.unset(local);
+        try owned.unset(local);
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -5144,7 +5155,24 @@ const Inserter = struct {
     /// An owned binding holds its own retained unit and is its own leader,
     /// so its later uses never depend on the place.
     fn localInOwnershipPlace(self: *const Inserter, local: LIR.LocalId, place: LIR.LocalId) bool {
-        return self.solution.leaderOf(local) == place;
+        return self.ownershipPlaceLeader(local) == place;
+    }
+
+    fn ownershipPlaceLeader(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
+        var cursor = local;
+        var steps: usize = 0;
+        while (true) {
+            if (self.owned_binding_override.contains(cursor)) return cursor;
+            if (self.dismantles.projectionAliasRoot(cursor)) |root| {
+                cursor = root;
+            } else if (self.solution.borrowSourceOf(cursor)) |source| {
+                cursor = source;
+            } else {
+                return self.solution.leaderOf(cursor);
+            }
+            steps += 1;
+            if (steps > self.store.localCount()) arcInvariant("ARC ownership-place borrow chain contained a cycle");
+        }
     }
 
     fn spanUsesOwnershipPlace(self: *const Inserter, span: LIR.LocalSpan, place: LIR.LocalId) bool {
@@ -5167,7 +5195,7 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         root: LIR.LocalId,
     ) ResourceError!bool {
-        const place = self.solution.leaderOf(root);
+        const place = self.ownershipPlaceLeader(root);
         const seen = &self.place_query_seen;
         const visited = &self.place_query_visited;
         const stack = &self.place_query_stack;
@@ -5357,7 +5385,12 @@ const Inserter = struct {
                     try stack.append(self.emission_allocator, joins[join_index].body);
                 },
                 .ret => |stmt| if (self.localInOwnershipPlace(stmt.value, place)) return true,
-                .crash, .expect_err => return true,
+                .crash => |stmt| {
+                    if (stmt.msg.localId()) |message| {
+                        if (self.localInOwnershipPlace(message, place)) return true;
+                    }
+                },
+                .expect_err => |stmt| if (self.localInOwnershipPlace(stmt.message, place)) return true,
                 // An implicit loop boundary hands the kept value to either
                 // the next iteration or the code after the loop. A root
                 // rebind encountered earlier stopped this path before it
@@ -5541,8 +5574,11 @@ const Inserter = struct {
                 // schedules, so their variants are mandatory. General return
                 // and born-unique specialization remains opt-in.
                 if (!self.variants.enabled and !enables_field_take and !requires_tail_transfer) continue;
-                const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const owner = self.unitOf(local);
+                const used_after_call = local != target and (if (enables_field_take)
+                    try self.ownershipPlaceUsedInPath(next, owner)
+                else
+                    try self.groupUsedInPath(next, local, loop_keep));
                 const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
                     self.groupSharesOtherOperand(locals, position, local);
                 const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
@@ -5561,7 +5597,7 @@ const Inserter = struct {
                     demanded.unique_params |= bit;
                 }
                 if (can_transfer) {
-                    owned.unset(owner);
+                    try owned.unset(owner);
                 } else {
                     // The original carrier cannot move (for example, two
                     // positions name it). Manufacture the callee's unit, then
@@ -5632,7 +5668,7 @@ const Inserter = struct {
                 {
                     demanded.unique_params |= arc_sig.paramBit(position).?;
                 }
-                owned.unset(owner);
+                try owned.unset(owner);
             } else {
                 try self.retain_arg_scratch.append(self.emission_allocator, local);
             }
@@ -5724,14 +5760,14 @@ const Inserter = struct {
         span: LIR.LocalSpan,
         mask: u64,
         except: LIR.LocalId,
-    ) void {
+    ) ResourceError!void {
         if (mask == 0) return;
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |i| {
             const local = GuardedList.at(locals, i);
             if (i >= 64) break;
             if ((mask & argMaskBit(i)) != 0 and local != except) {
-                self.unsetOwnedUnit(owned, local);
+                try self.unsetOwnedUnit(owned, local);
             }
         }
     }
@@ -5780,6 +5816,7 @@ const Inserter = struct {
 
     const ReadBeforeRebindGraph = struct {
         allocator: Allocator,
+        group_liveness: GroupLivenessIndex,
         nodes: std.ArrayList(ReadBeforeRebindNode),
         /// Node indices, resolved exactly once while each edge is appended.
         successors: std.ArrayList(u32),
@@ -5789,9 +5826,10 @@ const Inserter = struct {
         /// Compact node bits whose forward paths can reach a loop boundary.
         reaches_loop_edge: std.bit_set.DynamicBitSetUnmanaged = .{},
 
-        fn init(allocator: Allocator) ReadBeforeRebindGraph {
+        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution) ResourceError!ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
+                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution),
                 .nodes = .empty,
                 .successors = .empty,
             };
@@ -5849,14 +5887,22 @@ const Inserter = struct {
         graph.nodes.items[node_index].successor_len += 1;
     }
 
-    /// Raw liveness-bit position for a refcounted resource local or one of
-    /// its explicit solved ownership-unit / borrow-group representatives.
-    fn rawLivenessBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
-        return self.domain().resourceBitOf(local);
+    /// Immutable numbering shared by every emission of the source procedure.
+    fn groupLivenessIndex(self: *const Inserter) *const GroupLivenessIndex {
+        const graph = if (self.liveness_graphs[@intFromEnum(self.current_source_proc)]) |*entry|
+            entry
+        else
+            arcInvariant("ARC raw-liveness query lacked its source graph");
+        return &graph.group_liveness;
     }
 
-    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) void {
-        if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
+    /// Raw liveness-bit position for a concrete resource or solved anchor.
+    fn rawLivenessBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
+        return self.groupLivenessIndex().rawBitOf(self.domain(), local);
+    }
+
+    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) ResourceError!void {
+        if (self.rawLivenessBitOf(local)) |bit| try reads.set(bit);
     }
 
     /// Group-bit position of a local's multi-member borrow group, if any.
@@ -5874,34 +5920,34 @@ const Inserter = struct {
     /// group bit, and its value-use bit. Reference-count statements record
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
-    fn noteLivenessUseLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) void {
-        if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
-        if (self.groupBitOf(local)) |bit| reads.set(bit);
-        if (self.valueUseBitOf(local)) |bit| reads.set(bit);
+    fn noteLivenessUseLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) ResourceError!void {
+        if (self.rawLivenessBitOf(local)) |bit| try reads.set(bit);
+        if (self.groupBitOf(local)) |bit| try reads.set(bit);
+        if (self.valueUseBitOf(local)) |bit| try reads.set(bit);
     }
 
-    fn noteLivenessUseSpan(self: *const Inserter, reads: *ExactBitSet, span: LIR.LocalSpan) void {
+    fn noteLivenessUseSpan(self: *const Inserter, reads: *ExactBitSet, span: LIR.LocalSpan) ResourceError!void {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
             const local = GuardedList.at(locals, index);
-            self.noteLivenessUseLocal(reads, local);
+            try self.noteLivenessUseLocal(reads, local);
         }
     }
 
-    fn noteLivenessUseRefOp(self: *const Inserter, reads: *ExactBitSet, op: LIR.RefOp) void {
-        self.noteLivenessUseLocal(reads, refOpSource(op));
+    fn noteLivenessUseRefOp(self: *const Inserter, reads: *ExactBitSet, op: LIR.RefOp) ResourceError!void {
+        try self.noteLivenessUseLocal(reads, refOpSource(op));
     }
 
     /// Records the loop keep-set as reads at a `loop_continue`/`loop_break`:
     /// kept units, groups with any kept member, and kept call-result locals
     /// all stay live across the loop edge.
-    fn noteLivenessLoopKeep(self: *const Inserter, reads: *ExactBitSet, keep: *const OwnedSet) void {
+    fn noteLivenessLoopKeep(self: *const Inserter, reads: *ExactBitSet, keep: *const OwnedSet) ResourceError!void {
         // Every kept unit reads as a value use, which also sets its group
         // and value-use bits, so the loop edge keeps a group alive whenever
         // any member is kept.
-        var keep_iter = keep.bits.iterator(.{});
+        var keep_iter = keep.iterator(.{});
         while (keep_iter.next()) |kept| {
-            self.noteLivenessUseLocal(reads, keep.domain.resourceLocalAt(kept));
+            try self.noteLivenessUseLocal(reads, keep.domain.resourceLocalAt(kept));
         }
     }
 
@@ -6022,7 +6068,7 @@ const Inserter = struct {
         if (source_index >= self.liveness_graphs.len) arcInvariant("ARC liveness source proc exceeded its graph table");
         const graph_slot = &self.liveness_graphs[source_index];
         if (graph_slot.* != null) arcInvariant("ARC keep-free liveness graph existed without its requested row");
-        graph_slot.* = ReadBeforeRebindGraph.init(self.liveness_allocator);
+        graph_slot.* = try ReadBeforeRebindGraph.init(self.liveness_allocator, self.domain(), self.solution);
         var graph = graph_slot.*.?;
         const graph_allocator = graph.allocator;
         var work = std.ArrayList(u32).empty;
@@ -6045,7 +6091,7 @@ const Inserter = struct {
 
             switch (self.store.getCFStmt(stmt)) {
                 .assign_ref => |assign| {
-                    self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
+                    try self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -6058,174 +6104,174 @@ const Inserter = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, init.next);
                 },
                 .assign_call => |assign| {
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
                     if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_call_erased => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.closure);
-                    if (assign.reuse_source) |reuse_source| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse_source);
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.closure);
+                    if (assign.reuse_source) |reuse_source| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse_source);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
                     if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     if (assign.out_desc) |out_desc| setReadBeforeRebindDef(&graph, node_index, out_desc);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
-                    if (assign.capture) |capture| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, capture);
-                    if (assign.reuse) |reuse| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse);
+                    if (assign.capture) |capture| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.reuse) |reuse| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_desc_ref => |assign| {
-                    if (assign.desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.captures);
+                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.captures);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_dict_ref => |assign| {
-                    if (assign.dict.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_box => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.payload);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.payload);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_reuse_box => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_unbox => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_adapt => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_inspect => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_eq => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.lhs);
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.rhs);
-                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.lhs);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.rhs);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_tag => |assign| {
-                    if (assign.target_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.payload) |payload| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.payload) |payload| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_tag_payload => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     if (assign.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_call_dict => |assign| {
-                    if (assign.dict.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
+                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_low_level => |assign| {
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_list => |assign| {
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.elems);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.elems);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_struct => |assign| {
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.fields);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.fields);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_tag => |assign| {
                     if (assign.target_desc) |target_desc| {
-                        if (target_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                        if (target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     }
-                    if (assign.payload) |payload| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
+                    if (assign.payload) |payload| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .store_struct => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.dest);
-                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.fields);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.fields);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .store_tag => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.dest);
-                    if (assign.payload) |payload| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    if (assign.payload) |payload| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .set_local => |assign| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.value);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.value);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .debug => |debug_stmt| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, debug_stmt.message);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, debug_stmt.message);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, debug_stmt.next);
                 },
                 .expect => |expect_stmt| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, expect_stmt.condition);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, expect_stmt.condition);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, expect_stmt.next);
                 },
                 .expect_err => |expect_err_stmt| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, expect_err_stmt.message);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, expect_err_stmt.message);
                 },
                 .incref => |rc| {
-                    self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref => |rc| {
-                    self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref_if_initialized => |rc| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, rc.cond);
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, rc.cond);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .free => |rc| {
-                    self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .switch_stmt => |switch_stmt| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
                     if (switch_stmt.continuation) |continuation| {
                         try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, continuation);
                     }
@@ -6237,19 +6283,19 @@ const Inserter = struct {
                     }
                 },
                 .switch_initialized_payload => |switch_stmt| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.payload);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, switch_stmt.payload);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.initialized_branch);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
                 },
                 .str_match => |str_match| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, str_match.source);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, str_match.source);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_match);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_miss);
                     try self.attachStrMatchEdgeKills(&graph, node_index, str_match.steps, 0);
                 },
                 .str_match_set => |str_match_set| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, str_match_set.source);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, str_match_set.source);
                     const arms = self.store.getStrMatchArms(str_match_set.arms);
                     for (0..GuardedList.borrowLen(arms)) |arm_index| {
                         const arm = GuardedList.at(arms, arm_index);
@@ -6262,8 +6308,8 @@ const Inserter = struct {
                     }
                 },
                 .boxy_tag_match => |tag_match| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, tag_match.source);
-                    if (tag_match.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, tag_match.source);
+                    if (tag_match.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
                 },
@@ -6277,22 +6323,22 @@ const Inserter = struct {
                     // the same retained units through its existing successor
                     // edge, instead of expanding the environment per edge.
                     const body_node = try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
-                    self.noteLivenessUseSpan(&graph.nodes.items[body_node].reads, join_stmt.retained);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[body_node].reads, join_stmt.retained);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
                 },
                 .jump => {
-                    self.noteRestitutionBoundaryReads(&graph.nodes.items[node_index].reads, graph.nodes.items[node_index].stmt);
+                    try self.noteRestitutionBoundaryReads(&graph.nodes.items[node_index].reads, graph.nodes.items[node_index].stmt);
                     const join_index = self.solution.jumpTargetJoinIndexOf(graph.nodes.items[node_index].stmt);
                     if (join_index >= self.join_bodies.len) arcInvariant("ARC liveness jump index exceeded its lifted join table");
                     const target_body = self.join_bodies[join_index].body;
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
                 },
                 .ret => |ret_stmt| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, ret_stmt.value);
-                    self.noteRestitutionBoundaryReads(&graph.nodes.items[node_index].reads, graph.nodes.items[node_index].stmt);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, ret_stmt.value);
+                    try self.noteRestitutionBoundaryReads(&graph.nodes.items[node_index].reads, graph.nodes.items[node_index].stmt);
                 },
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, message);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, message);
                 },
                 .loop_continue,
                 .loop_break,
@@ -6441,7 +6487,7 @@ const Inserter = struct {
                 }
             }
             if (!cyclic) {
-                _ = self.recomputeLivenessNode(graph, members[0], &scratch, &edge_scratch);
+                _ = try self.recomputeLivenessNode(graph, members[0], &scratch, &edge_scratch);
                 continue;
             }
             for (members) |node_index| {
@@ -6451,7 +6497,7 @@ const Inserter = struct {
             }
             while (node_work.pop()) |node_index| {
                 in_work.unset(node_index);
-                if (!self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch)) continue;
+                if (!try self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch)) continue;
                 const pred_start = graph.predecessor_starts[node_index];
                 const pred_end = graph.predecessor_starts[node_index + 1];
                 for (graph.predecessors[pred_start..pred_end]) |predecessor| {
@@ -6469,7 +6515,7 @@ const Inserter = struct {
         node_index: usize,
         scratch: *ExactBitSet,
         edge_scratch: *ExactBitSet,
-    ) bool {
+    ) ResourceError!bool {
         const node = &graph.nodes.items[node_index];
         scratch.unsetAll();
         const successor_end = node.successor_start + @as(usize, node.successor_len);
@@ -6479,22 +6525,22 @@ const Inserter = struct {
                 if (kill.successor_offset != successor_offset) continue;
                 if (!edge_killed) {
                     edge_scratch.unsetAll();
-                    edge_scratch.setUnion(graph.nodes.items[successor].exposed);
+                    try edge_scratch.setUnion(graph.nodes.items[successor].exposed);
                     edge_killed = true;
                 }
-                edge_scratch.unset(kill.bit);
+                try edge_scratch.unset(kill.bit);
             }
-            scratch.setUnion(if (edge_killed) edge_scratch.* else graph.nodes.items[successor].exposed);
+            try scratch.setUnion(if (edge_killed) edge_scratch.* else graph.nodes.items[successor].exposed);
         }
         if (node.def) |local| {
-            if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
-            if (self.groupBitOf(local)) |bit| scratch.unset(bit);
-            if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+            if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
+            if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
+            if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
         }
-        scratch.setUnion(node.reads);
+        try scratch.setUnion(node.reads);
         if (node.exposed.eql(scratch.*)) return false;
         node.exposed.unsetAll();
-        node.exposed.setUnion(scratch.*);
+        try node.exposed.setUnion(scratch.*);
         return true;
     }
 
@@ -6549,7 +6595,7 @@ const Inserter = struct {
         if (!active.isSet(start_node)) arcInvariant("ARC loop liveness query was outside its explicit join regions");
 
         var keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        self.noteLivenessLoopKeep(&keep_reads, keep.set);
+        try self.noteLivenessLoopKeep(&keep_reads, keep.set);
         cache.consumed_keep_bits = keep_reads.count() != 0;
 
         const rows = try allocator.alloc(?ExactBitSet, node_count);
@@ -6559,7 +6605,7 @@ const Inserter = struct {
         for (graph.loop_edges) |loop_node| {
             if (!active.isSet(loop_node)) continue;
             var row = try graph.nodes.items[loop_node].exposed.clone(allocator);
-            row.setUnion(keep_reads);
+            try row.setUnion(keep_reads);
             rows[loop_node] = row;
             const pred_start = graph.predecessor_starts[loop_node];
             const pred_end = graph.predecessor_starts[loop_node + 1];
@@ -6584,24 +6630,24 @@ const Inserter = struct {
                     if (kill.successor_offset != successor_offset) continue;
                     if (!edge_killed) {
                         edge_scratch.unsetAll();
-                        edge_scratch.setUnion(successor_row.*);
+                        try edge_scratch.setUnion(successor_row.*);
                         edge_killed = true;
                     }
-                    edge_scratch.unset(kill.bit);
+                    try edge_scratch.unset(kill.bit);
                 }
-                scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
+                try scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
             }
             if (node.def) |local| {
-                if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
-                if (self.groupBitOf(local)) |bit| scratch.unset(bit);
-                if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+                if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
+                if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
+                if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
             }
-            scratch.setUnion(node.reads);
+            try scratch.setUnion(node.reads);
             const previous = if (rows[node_index]) |*row| row else &node.exposed;
             if (previous.eql(scratch)) continue;
             if (rows[node_index]) |*row| {
                 row.unsetAll();
-                row.setUnion(scratch);
+                try row.setUnion(scratch);
             } else {
                 rows[node_index] = try scratch.clone(allocator);
             }
@@ -6650,7 +6696,7 @@ const Inserter = struct {
 
         const allocator = self.emission_allocator;
         var new_keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
-        self.noteLivenessLoopKeep(&new_keep_reads, keep.set);
+        try self.noteLivenessLoopKeep(&new_keep_reads, keep.set);
         var new_iter = new_keep_reads.iterator(.{});
         while (new_iter.next()) |bit| {
             if (!old_keep_reads.isSet(bit)) arcInvariant("ARC loop boundary facts grew after their monotone keep-set shrank");
@@ -6670,12 +6716,12 @@ const Inserter = struct {
         for (graph.loop_edges) |loop_node| {
             if (!active.isSet(loop_node)) continue;
             scratch.unsetAll();
-            scratch.setUnion(graph.nodes.items[loop_node].exposed);
-            scratch.setUnion(new_keep_reads);
+            try scratch.setUnion(graph.nodes.items[loop_node].exposed);
+            try scratch.setUnion(new_keep_reads);
             const row = if (cache.rows[loop_node]) |*existing| existing else arcInvariant("ARC active loop edge lacked its cached row");
             if (row.eql(scratch)) continue;
             row.unsetAll();
-            row.setUnion(scratch);
+            try row.setUnion(scratch);
             const pred_start = graph.predecessor_starts[loop_node];
             const pred_end = graph.predecessor_starts[loop_node + 1];
             for (graph.predecessors[pred_start..pred_end]) |predecessor| {
@@ -6697,23 +6743,23 @@ const Inserter = struct {
                     if (kill.successor_offset != successor_offset) continue;
                     if (!edge_killed) {
                         edge_scratch.unsetAll();
-                        edge_scratch.setUnion(successor_row.*);
+                        try edge_scratch.setUnion(successor_row.*);
                         edge_killed = true;
                     }
-                    edge_scratch.unset(kill.bit);
+                    try edge_scratch.unset(kill.bit);
                 }
-                scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
+                try scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
             }
             if (node.def) |local| {
-                if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
-                if (self.groupBitOf(local)) |bit| scratch.unset(bit);
-                if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+                if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
+                if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
+                if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
             }
-            scratch.setUnion(node.reads);
+            try scratch.setUnion(node.reads);
             const row = if (cache.rows[node_index]) |*existing| existing else arcInvariant("ARC active loop node lacked its cached row");
             if (row.eql(scratch)) continue;
             row.unsetAll();
-            row.setUnion(scratch);
+            try row.setUnion(scratch);
             const pred_start = graph.predecessor_starts[node_index];
             const pred_end = graph.predecessor_starts[node_index + 1];
             for (graph.predecessors[pred_start..pred_end]) |predecessor| {
@@ -6724,7 +6770,7 @@ const Inserter = struct {
         }
 
         old_keep_reads.unsetAll();
-        old_keep_reads.setUnion(new_keep_reads);
+        try old_keep_reads.setUnion(new_keep_reads);
         cache.consumed_keep_bits = new_keep_reads.count() != 0;
         cache.dirty = false;
         if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
@@ -6763,7 +6809,7 @@ const Inserter = struct {
         for (graph.loop_edges) |loop_node| {
             if (!active.isSet(loop_node)) continue;
             is_loop_edge.set(loop_node);
-            expected[loop_node].?.setUnion(keep_reads.*);
+            try expected[loop_node].?.setUnion(keep_reads.*);
         }
 
         var in_work = try active.clone(allocator);
@@ -6777,8 +6823,8 @@ const Inserter = struct {
             const node = graph.nodes.items[node_index];
             scratch.unsetAll();
             if (is_loop_edge.isSet(node_index)) {
-                scratch.setUnion(node.exposed);
-                scratch.setUnion(keep_reads.*);
+                try scratch.setUnion(node.exposed);
+                try scratch.setUnion(keep_reads.*);
             } else {
                 const successor_end = node.successor_start + @as(usize, node.successor_len);
                 for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
@@ -6791,19 +6837,19 @@ const Inserter = struct {
                         if (kill.successor_offset != successor_offset) continue;
                         if (!edge_killed) {
                             edge_scratch.unsetAll();
-                            edge_scratch.setUnion(successor_row.*);
+                            try edge_scratch.setUnion(successor_row.*);
                             edge_killed = true;
                         }
-                        edge_scratch.unset(kill.bit);
+                        try edge_scratch.unset(kill.bit);
                     }
-                    scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
+                    try scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
                 }
                 if (node.def) |local| {
-                    if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
-                    if (self.groupBitOf(local)) |bit| scratch.unset(bit);
-                    if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+                    if (self.rawLivenessBitOf(local)) |bit| try scratch.unset(bit);
+                    if (self.groupBitOf(local)) |bit| try scratch.unset(bit);
+                    if (self.valueUseBitOf(local)) |bit| try scratch.unset(bit);
                 }
-                scratch.setUnion(node.reads);
+                try scratch.setUnion(node.reads);
             }
             const row = if (expected[node_index]) |*entry|
                 entry
@@ -6811,7 +6857,7 @@ const Inserter = struct {
                 arcInvariant("ARC loop-liveness certifier omitted an active row");
             if (row.eql(scratch)) continue;
             row.unsetAll();
-            row.setUnion(scratch);
+            try row.setUnion(scratch);
             const pred_start = graph.predecessor_starts[node_index];
             const pred_end = graph.predecessor_starts[node_index + 1];
             for (graph.predecessors[pred_start..pred_end]) |predecessor| {
@@ -6834,16 +6880,16 @@ const Inserter = struct {
 
     /// Value liveness for one raw local (no group extension). Borrowed call
     /// results have a dedicated value-use bit; other resources use their raw
-    /// ownership bit.
+    /// liveness bit.
     fn valueUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
         loop_keep: ?LoopKeep,
     ) ResourceError!bool {
+        const reads = try self.livenessRow(start, loop_keep);
         const bit = self.valueUseBitOf(needle) orelse self.rawLivenessBitOf(needle) orelse
             arcInvariant("ARC value-use query for a local without a value-use bit");
-        const reads = try self.livenessRow(start, loop_keep);
         return reads.isSet(bit);
     }
 
@@ -6905,18 +6951,7 @@ const Inserter = struct {
     ) ResourceError!bool {
         const reads = try self.livenessRow(start, loop_keep);
         const leader = self.solution.leaderOf(local);
-        // Resource locals include concrete RC values plus the solver-authored
-        // ownership-unit and borrow-group representatives. Those synthetic
-        // anchors have liveness bits even though they need no concrete RC
-        // helper of their own, and must participate in lender-death checks.
-        for (self.domain().resource_locals) |member_local| {
-            if (self.solution.leaderOf(member_local) != leader) continue;
-            if (member_local == except) continue;
-            const bit = self.rawLivenessBitOf(member_local) orelse
-                arcInvariant("ARC refcounted borrow-group member missing its raw liveness bit");
-            if (reads.isSet(bit)) return true;
-        }
-        return false;
+        return self.groupLivenessIndex().usedExcept(self.domain(), reads, leader, except);
     }
 
     fn retainSpanExceptPositions(
@@ -7111,6 +7146,7 @@ const Inserter = struct {
                     .source = fields_source,
                     .field_idx = @intCast(field.field_idx),
                 } },
+                .take_kind = .take,
                 .next = tail,
             } });
         }
@@ -7188,34 +7224,6 @@ const Inserter = struct {
         return .{ .op = op, .layout_idx = layout_idx };
     }
 
-    fn layoutMayContainBoxyDynamic(self: *const Inserter, layout_idx: layout_mod.Idx) bool {
-        const layout_val = self.layouts.getLayout(layout_idx);
-        return switch (layout_val.tag) {
-            .box_of_zst => true,
-            .box => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
-            .list => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
-            .list_of_zst => false,
-            .struct_ => blk: {
-                const info = self.layouts.getStructInfo(layout_val);
-                for (0..info.fields.len) |index| {
-                    const field = info.fields.get(@intCast(index));
-                    if (self.layoutMayContainBoxyDynamic(field.layout)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => blk: {
-                const info = self.layouts.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |index| {
-                    const payload_layout = info.variants.get(@intCast(index)).payload_layout;
-                    if (self.layoutMayContainBoxyDynamic(payload_layout)) break :blk true;
-                }
-                break :blk false;
-            },
-            .closure => self.layoutMayContainBoxyDynamic(layout_val.getClosure().captures_layout_idx),
-            .zst, .scalar, .erased_callable, .ptr => false,
-        };
-    }
-
     fn nestedDropOp(op: layout_mod.RcOp) layout_mod.RcOp {
         return switch (op) {
             .incref => .incref,
@@ -7246,84 +7254,71 @@ fn localSpanEql(a: LIR.LocalSpan, b: LIR.LocalSpan) bool {
     return a.start == b.start and a.len == b.len;
 }
 
+const OwnedEntry = struct {
+    present: bool = false,
+    residual_mask: u64 = 0,
+};
+
 const OwnedSet = struct {
-    allocator: std.mem.Allocator,
     domain: *const ProcArcDomain,
-    bits: ExactBitSet,
-    /// Exact committed aggregate field places still stored in each resource.
-    /// Ordinary resources have a zero full domain and ignore this row.
-    residual_masks: []u64,
+    /// Fresh sets update their one-owner tree in place until it is copied or
+    /// combined with another state.
+    unique: bool = true,
+    /// Logically one exact entry per resource. Absent resources consume no
+    /// tree storage, and control-flow forks share every unchanged subtree.
+    entries: ArcSnapshot(OwnedEntry, .{}),
 
     fn init(allocator: std.mem.Allocator, domain: *const ProcArcDomain) ResourceError!OwnedSet {
-        const bits = try ExactBitSet.initEmpty(allocator, domain.resource_locals.len);
-        const residual_masks = try allocator.alloc(u64, domain.resource_locals.len);
-        @memset(residual_masks, 0);
-        return .{ .allocator = allocator, .domain = domain, .bits = bits, .residual_masks = residual_masks };
+        return .{ .domain = domain, .entries = ArcSnapshot(OwnedEntry, .{}).init(allocator, domain.resource_locals.len) };
     }
 
-    fn deinit(self: *OwnedSet) void {
-        self.bits.deinit(self.allocator);
-        self.allocator.free(self.residual_masks);
-    }
+    /// Nodes have the surrounding proc arena's exact lifetime and may be
+    /// shared by any number of snapshots.
+    fn deinit(_: *OwnedSet) void {}
 
-    fn clone(self: *const OwnedSet) ResourceError!OwnedSet {
-        const bits = try self.bits.clone(self.allocator);
-        const residual_masks = try self.allocator.dupe(u64, self.residual_masks);
-        return .{ .allocator = self.allocator, .domain = self.domain, .bits = bits, .residual_masks = residual_masks };
-    }
-
-    fn set(self: *OwnedSet, local: LIR.LocalId) void {
+    fn set(self: *OwnedSet, local: LIR.LocalId) ResourceError!void {
         const bit = self.domain.requiredResourceBitOf(local);
-        self.bits.set(bit);
-        self.residual_masks[bit] = self.domain.fullResidualMaskAt(bit);
+        try self.putEntry(@intCast(bit), .{
+            .present = true,
+            .residual_mask = self.domain.fullResidualMaskAt(bit),
+        });
     }
 
-    fn unset(self: *OwnedSet, local: LIR.LocalId) void {
+    fn unset(self: *OwnedSet, local: LIR.LocalId) ResourceError!void {
         // Scalars are outside the ownership lattice, so removing one is the
         // same empty-set operation the former zeroed global bit performed.
-        if (self.domain.resourceBitOf(local)) |bit| {
-            self.bits.unset(bit);
-            self.residual_masks[bit] = 0;
-        }
+        if (self.domain.resourceBitOf(local)) |bit| try self.putEntry(@intCast(bit), .{});
     }
 
     fn contains(self: *const OwnedSet, local: LIR.LocalId) bool {
         const bit = self.domain.resourceBitOf(local) orelse return false;
-        return self.bits.isSet(bit);
+        return self.entryAt(bit).present;
     }
 
     fn eql(self: *const OwnedSet, other: *const OwnedSet) bool {
         self.requireSameDomain(other);
-        return self.bits.eql(other.bits) and std.mem.eql(u64, self.residual_masks, other.residual_masks);
+        return self.entries.eql(&other.entries);
     }
 
-    fn intersect(self: *OwnedSet, other: *const OwnedSet) void {
-        self.requireSameDomain(other);
-        self.bits.setIntersection(other.bits);
-        for (self.residual_masks, 0..) |*mask, bit| {
-            if (!self.bits.isSet(bit)) {
-                mask.* = 0;
-            } else {
-                mask.* &= other.residual_masks[bit];
-            }
-        }
+    fn meetEntry(_: void, lhs: OwnedEntry, rhs: OwnedEntry) OwnedEntry {
+        if (!lhs.present or !rhs.present) return .{};
+        return .{ .present = true, .residual_mask = lhs.residual_mask & rhs.residual_mask };
     }
 
     /// Places `local` carrying exactly `mask` of its committed field places,
     /// rather than the full ownership `set` grants. Used to copy a resource
     /// out of a meet that may have narrowed it.
-    fn setWithResidual(self: *OwnedSet, local: LIR.LocalId, mask: u64) void {
+    fn setWithResidual(self: *OwnedSet, local: LIR.LocalId, mask: u64) ResourceError!void {
         const bit = self.domain.requiredResourceBitOf(local);
         if ((mask & ~self.domain.fullResidualMaskAt(bit)) != 0) {
             arcInvariant("ARC residual placement exceeded the committed field places");
         }
-        self.bits.set(bit);
-        self.residual_masks[bit] = mask;
+        try self.putEntry(@intCast(bit), .{ .present = true, .residual_mask = mask });
     }
 
     fn residualMask(self: *const OwnedSet, local: LIR.LocalId) u64 {
         const bit = self.domain.resourceBitOf(local) orelse return 0;
-        return self.residual_masks[bit];
+        return self.entryAt(bit).residual_mask;
     }
 
     fn fullResidualMask(self: *const OwnedSet, local: LIR.LocalId) u64 {
@@ -7331,28 +7326,84 @@ const OwnedSet = struct {
         return self.domain.fullResidualMaskAt(bit);
     }
 
-    fn takeResidualField(self: *OwnedSet, local: LIR.LocalId, field_mask: u64) void {
+    fn takeResidualField(self: *OwnedSet, local: LIR.LocalId, field_mask: u64) ResourceError!void {
         const bit = self.domain.requiredResourceBitOf(local);
-        if (!self.bits.isSet(bit)) arcInvariant("ARC field take reached an absent aggregate resource");
-        if ((self.residual_masks[bit] & field_mask) != field_mask) arcInvariant("ARC field take consumed an absent committed field place");
-        self.residual_masks[bit] &= ~field_mask;
+        const entry = self.entryAt(bit);
+        if (!entry.present) arcInvariant("ARC field take reached an absent aggregate resource");
+        if ((entry.residual_mask & field_mask) != field_mask) arcInvariant("ARC field take consumed an absent committed field place");
+        try self.putEntry(@intCast(bit), .{ .present = true, .residual_mask = entry.residual_mask & ~field_mask });
     }
 
-    fn restoreResidualField(self: *OwnedSet, local: LIR.LocalId, field_mask: u64) void {
+    fn restoreResidualField(self: *OwnedSet, local: LIR.LocalId, field_mask: u64) ResourceError!void {
         const bit = self.domain.requiredResourceBitOf(local);
-        if (!self.bits.isSet(bit)) arcInvariant("ARC field restitution reached an absent aggregate resource");
+        const entry = self.entryAt(bit);
+        if (!entry.present) arcInvariant("ARC field restitution reached an absent aggregate resource");
         const full = self.domain.fullResidualMaskAt(bit);
         if ((field_mask & ~full) != 0) arcInvariant("ARC field restitution exceeded its committed aggregate field domain");
-        if ((self.residual_masks[bit] & field_mask) != 0) arcInvariant("ARC field restitution duplicated a live committed field place");
-        self.residual_masks[bit] |= field_mask;
+        if ((entry.residual_mask & field_mask) != 0) arcInvariant("ARC field restitution duplicated a live committed field place");
+        try self.putEntry(@intCast(bit), .{ .present = true, .residual_mask = entry.residual_mask | field_mask });
     }
 
-    fn copyResourceFrom(self: *OwnedSet, source: *const OwnedSet, local: LIR.LocalId) void {
+    fn copyResourceFrom(self: *OwnedSet, source: *const OwnedSet, local: LIR.LocalId) ResourceError!void {
         self.requireSameDomain(source);
         const bit = self.domain.requiredResourceBitOf(local);
-        if (!source.bits.isSet(bit)) arcInvariant("ARC copied an absent ownership resource");
-        self.bits.set(bit);
-        self.residual_masks[bit] = source.residual_masks[bit];
+        const entry = source.entryAt(bit);
+        if (!entry.present) arcInvariant("ARC copied an absent ownership resource");
+        try self.putEntry(@intCast(bit), entry);
+    }
+
+    fn putEntry(self: *OwnedSet, bit: u32, entry: OwnedEntry) ResourceError!void {
+        if (self.unique) {
+            try self.entries.putUnique(bit, entry);
+        } else {
+            try self.entries.put(bit, entry);
+        }
+    }
+
+    fn clear(self: *OwnedSet) void {
+        self.entries.clear();
+    }
+
+    fn entryAt(self: *const OwnedSet, bit: usize) OwnedEntry {
+        return self.entries.get(@intCast(bit));
+    }
+
+    fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
+        if (options.kind != .set) @compileError("ARC ownership sets iterate only present resources");
+        return struct {
+            set: *const OwnedSet,
+            cursor: usize,
+
+            fn next(self: *@This()) ?usize {
+                return switch (options.direction) {
+                    .forward => {
+                        while (self.cursor < self.set.domain.resource_locals.len) {
+                            const bit = self.cursor;
+                            self.cursor += 1;
+                            if (self.set.entryAt(bit).present) return bit;
+                        }
+                        return null;
+                    },
+                    .reverse => {
+                        while (self.cursor > 0) {
+                            self.cursor -= 1;
+                            if (self.set.entryAt(self.cursor).present) return self.cursor;
+                        }
+                        return null;
+                    },
+                };
+            }
+        };
+    }
+
+    fn iterator(self: *const OwnedSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
+        return .{
+            .set = self,
+            .cursor = switch (options.direction) {
+                .forward => 0,
+                .reverse => self.domain.resource_locals.len,
+            },
+        };
     }
 
     fn requireSameDomain(self: *const OwnedSet, other: *const OwnedSet) void {
@@ -7429,23 +7480,22 @@ fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
 }
 
-test "exact ARC sets preserve operations at the inline boundary" {
+test "exact ARC sets preserve operations across persistent forks" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
     const word_bits = @bitSizeOf(usize);
     for ([_]usize{ word_bits, word_bits + 1 }) |bit_len| {
-        var left = try ExactBitSet.initEmpty(testing.allocator, bit_len);
-        defer left.deinit(testing.allocator);
-        var right = try ExactBitSet.initEmpty(testing.allocator, bit_len);
-        defer right.deinit(testing.allocator);
+        var left = try ExactBitSet.initEmpty(arena.allocator(), bit_len);
+        var right = try ExactBitSet.initEmpty(arena.allocator(), bit_len);
 
-        left.set(0);
-        left.set(bit_len - 1);
-        right.set(bit_len - 1);
-        left.setIntersection(right);
+        try left.set(0);
+        try left.set(bit_len - 1);
+        try right.set(bit_len - 1);
+        try left.setIntersection(right);
         try testing.expectEqual(@as(usize, 1), left.count());
         try testing.expect(left.isSet(bit_len - 1));
 
-        var cloned = try left.clone(testing.allocator);
-        defer cloned.deinit(testing.allocator);
+        var cloned = try left.clone(arena.allocator());
         try testing.expect(cloned.eql(left));
         var iter = cloned.iterator(.{ .direction = .reverse });
         try testing.expectEqual(bit_len - 1, iter.next().?);
@@ -8329,6 +8379,50 @@ const ArcTest = struct {
     }
 };
 
+test "ARC emission shares solver resources without allocating when no capture is excluded" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    _ = try f.local(f.list_str);
+    const result = try f.local(.i64);
+    _ = try f.ret(result);
+    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
+    defer f.allocator.free(borrow_anchors);
+
+    const emission = try computeEmissionContainsRefcounted(testing.failing_allocator, &f.store, &f.layouts, borrow_anchors);
+    defer emission.deinit(testing.failing_allocator);
+    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
+    try testing.expectEqualSlices(bool, &.{ true, false }, emission.slice());
+}
+
+test "ARC emission exclusions copy once and preserve solver resources on allocation failure" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const first_list = try f.local(f.list_str);
+    const scalar = try f.local(.i64);
+    const second_list = try f.local(f.list_str);
+    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
+    defer f.allocator.free(borrow_anchors);
+
+    var emission = EmissionRefcounted{ .shared = borrow_anchors };
+    defer emission.deinit(testing.allocator);
+
+    // Already ineligible locals need no copy, even with an allocator that fails.
+    try emission.exclude(testing.failing_allocator, scalar);
+    try testing.expectError(error.OutOfMemory, emission.exclude(testing.failing_allocator, first_list));
+    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
+    try testing.expectEqualSlices(bool, &.{ true, false, true }, emission.slice());
+
+    try emission.exclude(testing.allocator, first_list);
+    const owned = emission.slice().ptr;
+    try testing.expect(owned != borrow_anchors.ptr);
+    try emission.exclude(testing.failing_allocator, second_list);
+    try testing.expect(emission.slice().ptr == owned);
+    try testing.expectEqualSlices(bool, &.{ false, false, false }, emission.slice());
+    try testing.expectEqualSlices(bool, &.{ true, false, true }, borrow_anchors);
+}
+
 test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -8355,25 +8449,22 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
         .next = field_read,
     } });
 
-    const boxy_descs = try computeBoxyRcDescs(&f.store);
-    defer f.allocator.free(boxy_descs);
-    const local_contains_refcounted = try computeLocalContainsRefcounted(
+    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(
         f.allocator,
         &f.store,
         &f.layouts,
-        boxy_descs,
-    );
-    defer f.allocator.free(local_contains_refcounted);
-    const borrow_anchors = try computeBorrowAnchorRefcounted(
-        f.allocator,
-        &f.store,
-        &f.layouts,
-        local_contains_refcounted,
     );
     defer f.allocator.free(borrow_anchors);
+    const local_contains_refcounted = try computeEmissionContainsRefcounted(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        borrow_anchors,
+    );
+    defer local_contains_refcounted.deinit(f.allocator);
 
-    try testing.expect(!local_contains_refcounted[@intFromEnum(capture_view)]);
-    try testing.expect(local_contains_refcounted[@intFromEnum(captured_value)]);
+    try testing.expect(!local_contains_refcounted.slice()[@intFromEnum(capture_view)]);
+    try testing.expect(local_contains_refcounted.slice()[@intFromEnum(captured_value)]);
     try testing.expect(borrow_anchors[@intFromEnum(capture_view)]);
     try testing.expect(borrow_anchors[@intFromEnum(captured_value)]);
 }
@@ -9045,11 +9136,11 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         try testing.expectEqual(@as(usize, 1), domain.livenessBitLen());
         try testing.expectEqual(resource, domain.resourceLocalAt(0));
 
-        var owned = try OwnedSet.init(testing.allocator, &domain);
+        var owned = try OwnedSet.init(arena.allocator(), &domain);
         defer owned.deinit();
         try testing.expect(!owned.contains(scalar));
-        owned.unset(scalar);
-        owned.set(resource);
+        try owned.unset(scalar);
+        try owned.set(resource);
         try testing.expect(owned.contains(resource));
     }
 
@@ -9196,6 +9287,86 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     // Scanning `refcounted_locals` here incorrectly reports the lender dead;
     // scanning the exact `resource_locals` domain reports it live.
     try testing.expect(try inserter.groupUsedInPathExcept(use_anchor, concrete, concrete, null));
+}
+
+test "ARC grouped raw liveness agrees with exhaustive resource queries" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    var locals: [513]LIR.LocalId = undefined;
+    for (&locals) |*local| local.* = try f.local(.str);
+    const scalar = try f.local(.i64);
+    var body = try f.ret(scalar);
+    body = try f.assignI64(scalar, 0, body);
+    var index = locals.len;
+    while (index > 0) {
+        index -= 1;
+        const use = try f.expectStmt(locals[index], body);
+        body = if (index < 3)
+            try f.assignStr(locals[index], "root", use)
+        else
+            try f.assignRefLocal(locals[index], locals[index % 3], use);
+    }
+    const proc = try f.addProc(&.{}, body, .i64);
+    var rc = [_]bool{true} ** (locals.len + 1);
+    rc[locals.len] = false;
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    for (locals, 0..) |local, i| try testing.expectEqual(locals[i % 3], solution.leaderOf(local));
+    var indices = [_]u32{no_proc_local_index} ** rc.len;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
+    defer domain.clearGlobalIndices();
+    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution);
+    var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
+    var expected = [_]bool{false} ** locals.len;
+    var prng = std.Random.DefaultPrng.init(11127);
+    const random = prng.random();
+    for (0..20) |round| {
+        // Include empty rows, one-member rows, dense rows, and shared unions.
+        var next = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
+        for (locals, 0..) |local, i| {
+            const live = if (round == 0) false else if (round == 1) i == 64 else random.boolean();
+            if (live) try next.set(grouped.rawBitOf(&domain, local).?);
+            expected[i] = if (round % 3 == 0) expected[i] or live else live;
+        }
+        if (round % 3 == 0) try reads.setUnion(next) else reads = next;
+        for (locals, 0..) |local, i| {
+            try testing.expectEqual(local, domain.resourceLocalAt(i));
+            try testing.expectEqual(expected[i], reads.isSet(grouped.rawBitOf(&domain, local).?));
+        }
+        for (0..3) |group| {
+            for (0..locals.len + 1) |excluded| {
+                const except = if (excluded == locals.len) scalar else locals[excluded];
+                var used = false;
+                for (locals, 0..) |local, i| {
+                    if (i % 3 == group and local != except and expected[i]) used = true;
+                }
+                try testing.expectEqual(used, grouped.usedExcept(&domain, &reads, locals[group], except));
+            }
+        }
+    }
+}
+
+test "ARC raw-liveness ranges exclude boundary bits without scanning wide empty groups" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var reads = try ExactBitSet.initEmpty(arena.allocator(), 1_000_001);
+    for ([_]usize{ 0, 63, 64, 511, 512, 999999, 1000000 }) |bit| try reads.set(bit);
+    const boundaries = [_]usize{ 0, 1, 63, 64, 65, 511, 512, 513, 999999, 1000000, 1000001 };
+    for (boundaries) |start| {
+        for (boundaries) |end| {
+            if (end < start) continue;
+            var expected = false;
+            for ([_]usize{ 0, 63, 64, 511, 512, 999999, 1000000 }) |bit| {
+                if (start <= bit and bit < end) expected = true;
+            }
+            try testing.expectEqual(expected, reads.anySetInRange(start, end));
+        }
+    }
+    const before = @import("arc_state.zig").range_query_node_visits;
+    try testing.expect(!reads.anySetInRange(513, 999999));
+    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").range_query_node_visits - before <= 2 * 8 * 11);
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
@@ -9725,6 +9896,32 @@ test "RC tag_payload_access: complete payload moves parent unit into return" {
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
 }
 
+test "RC complete payload transfer with retained aliases" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const root = try f.local(f.tag_str);
+    const owned_alias = try f.local(f.tag_str);
+    const borrowed_alias = try f.local(f.tag_str);
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const stored = try f.local(try f.layouts.insertList(f.tag_str));
+    const ignored = try f.local(.i64);
+    const ret = try f.ret(pair);
+    const consume = try f.assignCall(ignored, &.{stored}, ret);
+    const result = try f.assignStruct(pair, &.{ first, second }, consume);
+    const extract_second = try f.assignTagPayload(second, borrowed_alias, result);
+    const borrow = try f.assignRefLocal(borrowed_alias, owned_alias, extract_second);
+    const extract_first = try f.assignTagPayload(first, root, borrow);
+    const store = try f.assignList(stored, &.{owned_alias}, extract_first);
+    const own = try f.assignRefLocal(owned_alias, root, store);
+    const tag = try f.assignTag(root, 1, payload, own);
+    const body = try f.assignStr(payload, "extract", tag);
+    _ = try f.addProc(&.{}, body, f.pair_str);
+    try f.run();
+}
+
 test "RC tag_payload_access: complete payload retains when parent remains live" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -9857,6 +10054,48 @@ test "RC complete payload moves while parent representation has a later scalar f
     // manufacturing another unit, while the certifier keeps the shell read
     // distinct from any later RC-bearing use.
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
+}
+
+test "RC residual shell metadata uses semantic field indices" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .i64 },
+        .{ .index = 2, .layout = .str },
+    });
+    const first_scalar = try f.local(.i64);
+    const second_scalar = try f.local(.i64);
+    const payload = try f.local(.str);
+    const record = try f.local(record_layout);
+    const taken = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const shell = try f.local(record_layout);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const read_scalar = try f.assignRefField(result, shell, 0, ret);
+    const alias_shell = try f.assignRefLocal(shell, record, read_scalar);
+    const consume_payload = try f.assignCall(call_result, &.{taken}, alias_shell);
+    const take_payload = try f.assignRefField(taken, record, 2, consume_payload);
+    const make_record = try f.assignStruct(record, &.{ first_scalar, second_scalar, payload }, take_payload);
+    const make_payload = try f.assignStr(payload, "payload", make_record);
+    const make_second_scalar = try f.assignI64(second_scalar, 2, make_payload);
+    const body = try f.assignI64(first_scalar, 1, make_second_scalar);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    var found = false;
+    for (0..f.store.cfStmtCount()) |stmt_index| {
+        const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_ref or stmt.assign_ref.target != shell) continue;
+        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        if (absent.len == 0) continue;
+        try testing.expectEqual(@as(usize, 1), absent.len);
+        try testing.expectEqual(@as(u32, 2), GuardedList.at(absent, 0));
+        found = true;
+    }
+    try testing.expect(found);
 }
 
 test "RC early_return emits correct number of decrefs for multi-use symbol" {
@@ -10056,6 +10295,93 @@ test "RC join remainder starts from join entry ownership" {
     // release of the pair remains.
     try f.expectRc(pair, 0, 0, 0);
     try f.expectRc(extracted, 0, 0, 0);
+}
+
+test "RC single-incoming join parameter dismantles its fields" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const state = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const result = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const reverse = try f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const take = try f.assignRefField(field, state, 1, reverse);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize = try f.setLocal(state, pair, .initialize_join_param, jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = take,
+        .remainder = initialize,
+    } });
+    const make_pair = try f.assignStruct(pair, &.{ first, second }, join);
+    const make_second = try f.assignList(second, &.{}, make_pair);
+    const body = try f.assignList(first, &.{}, make_second);
+    _ = try f.addProc(&.{}, body, f.list_i64);
+
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countRc(field, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(state, .decref));
+}
+
+test "RC loop join reinitialization supplies fresh field units" {
+    try testLoopJoinFieldUnits(true);
+}
+
+test "RC loop join without reinitialization preserves repeated field reads" {
+    try testLoopJoinFieldUnits(false);
+}
+
+fn testLoopJoinFieldUnits(reinitialize: bool) (Allocator.Error || ArcTest.ExpectError)!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_list);
+    const cond = try f.local(.bool);
+    const state = try f.local(f.pair_list);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const changed = try f.local(f.list_i64);
+    const next_pair = try f.local(f.pair_list);
+    const early_field = try f.local(f.list_i64);
+    const early_result = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(state);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const next = if (reinitialize)
+        try f.setLocal(state, next_pair, .initialize_join_param, jump)
+    else
+        jump;
+    const make_pair = try f.assignStruct(next_pair, &.{ first, changed }, next);
+    const reverse = try f.assignLowLevel(changed, &.{second}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), make_pair);
+    const read_second = try f.assignRefField(second, state, 1, reverse);
+    const read_first = try f.assignRefField(first, state, 0, read_second);
+    const early_use = try f.assignLowLevel(early_result, &.{early_field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_first);
+    const early_read = try f.assignRefField(early_field, state, 0, early_use);
+    const branch = try f.switchStmt(cond, early_read, ret, null);
+    const initialize = try f.setLocal(state, pair, .initialize_join_param, jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = branch,
+        .remainder = initialize,
+    } });
+    _ = try f.addProc(&.{ pair, cond }, join, f.pair_list);
+
+    try f.run();
+    try testing.expect(f.countRc(early_field, .incref) != 0);
+    if (reinitialize) {
+        try testing.expectEqual(@as(usize, 0), f.countRc(first, .incref));
+        try testing.expectEqual(@as(usize, 0), f.countRc(second, .incref));
+    } else {
+        try testing.expect(f.countRc(first, .incref) != 0);
+        try testing.expect(f.countRc(second, .incref) != 0);
+    }
 }
 
 test "RC join body keeps local born in remainder" {
@@ -10493,6 +10819,53 @@ test "RC join summary solver work grows linearly with chained joins" {
     const large = try chainedJoinSolveWork(16);
     // Doubling the join count must stay near double the solver work;
     // per-join region re-walks would grow it quadratically.
+    try testing.expect(large <= small * 3);
+}
+
+/// Chained string concats from https://github.com/roc-lang/roc/issues/11127.
+fn strConcatChainGroupLivenessWork(chain_len: usize) Allocator.Error!u64 {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const seed = try f.local(.str);
+    const literals = try testing.allocator.alloc(LIR.LocalId, chain_len);
+    defer testing.allocator.free(literals);
+    const results = try testing.allocator.alloc(LIR.LocalId, chain_len);
+    defer testing.allocator.free(results);
+    for (literals, results) |*literal, *result| {
+        literal.* = try f.local(.str);
+        result.* = try f.local(.str);
+    }
+    var current = try f.ret(results[chain_len - 1]);
+    var index = chain_len;
+    while (index > 0) {
+        index -= 1;
+        const source = if (index == 0) seed else results[index - 1];
+        current = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = results[index],
+            .op = .str_concat,
+            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .args = try f.span(&.{ source, literals[index] }),
+            .next = current,
+        } });
+        current = try f.assignStr(literals[index], "x", current);
+    }
+    const body = try f.assignStr(seed, "seed", current);
+    _ = try f.addProc(&.{}, body, .str);
+    const before = group_liveness_member_visits;
+    try f.run();
+    return group_liveness_member_visits - before;
+}
+
+test "RC borrow-group liveness work grows linearly with chained string concats" {
+    if (builtin.mode != .Debug) return;
+    const small = try strConcatChainGroupLivenessWork(32);
+    const large = try strConcatChainGroupLivenessWork(64);
+    if (large > small * 3) {
+        std.debug.print(
+            "borrow-group liveness work grew nonlinearly: {d} member visits at 32 concats, {d} at 64\n",
+            .{ small, large },
+        );
+    }
     try testing.expect(large <= small * 3);
 }
 
@@ -12716,6 +13089,62 @@ test "RC outcome restitution solves sixteen independent conditional arguments po
     try testing.expect(work <= count * f.store.cfStmtCount() * 2);
 }
 
+fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedEqual})!u64 {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outcome_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), f.list_i64 });
+    for (0..proc_count) |_| {
+        const param = try f.local(f.list_i64);
+        const choose = try f.local(.i64);
+        const changed = try f.local(f.list_i64);
+        const result = try f.local(outcome_layout);
+        const ret = try f.ret(result);
+        const success = try f.assignTag(result, 1, changed, ret);
+        const consume = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = changed,
+            .op = .list_reverse,
+            .rc_effect = LIR.LowLevel.list_reverse.rcEffect(),
+            .args = try f.span(&.{param}),
+            .next = success,
+        } });
+        const failure = try f.assignTag(result, 0, null, ret);
+        const body = try f.switchStmt(choose, consume, failure, null);
+        // Explicit disjoint frames, unlike ArcTest's all-locals convenience.
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.span(&.{ param, choose }),
+            .body = body,
+            .frame_locals = try f.span(&.{ param, choose, changed, result }),
+            .ret_layout = outcome_layout,
+        });
+    }
+    const rc = try testing.allocator.alloc(bool, f.store.localCount());
+    defer testing.allocator.free(rc);
+    for (rc, 0..) |*value, i| value.* = i % 4 != 1;
+    const before = arc_solve.outcome_scratch_entries;
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    for (0..proc_count) |i| {
+        const span = solution.availableOutcomeSpanOf(@enumFromInt(@as(u32, @intCast(i))));
+        try testing.expectEqual(@as(u32, 2), span.len);
+        const failure = solution.outcomes[span.start];
+        const success = solution.outcomes[span.start + 1];
+        try testing.expectEqual(@as(u16, 0), failure.discriminant);
+        try testing.expectEqual(@as(arc_sig.ParamMask, 1), failure.restituted_params);
+        try testing.expectEqual(@as(u16, 1), success.discriminant);
+        try testing.expectEqual(@as(arc_sig.ParamMask, 0), success.restituted_params);
+    }
+    return arc_solve.outcome_scratch_entries - before;
+}
+
+test "RC restitution scratch work scales with disjoint procedure statements" {
+    if (builtin.mode != .Debug) return;
+    const small = try outcomeScratchWork(16);
+    const large = try outcomeScratchWork(32);
+    try testing.expect(small > 0);
+    try testing.expectEqual(small * 2, large);
+}
+
 test "RC outcome restitution follows an exact result through a terminal join" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -12882,6 +13311,63 @@ test "RC specialization: owned-only field take demands an owned variant" {
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try f.expectRc(pair, 0, 0, 0);
     try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
+}
+
+test "RC field takes through repeated dominating complete projections" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const wrapper_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.pair_list },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const scalar = try f.local(.i64);
+    const wrapper = try f.local(wrapper_layout);
+    const first_view = try f.local(f.pair_list);
+    const second_view = try f.local(f.pair_list);
+    const extracted_second = try f.local(f.list_i64);
+    const changed_second = try f.local(f.list_i64);
+    const extracted_first = try f.local(f.list_i64);
+    const result = try f.local(f.pair_list);
+    const cond = try f.local(.bool);
+    const view_alias = try f.local(f.pair_list);
+    const view_alias_again = try f.local(f.pair_list);
+
+    const ret = try f.ret(result);
+    const make_result = try f.assignStruct(result, &.{ extracted_first, changed_second }, ret);
+    const read_first = try f.assignRefField(extracted_first, second_view, 0, make_result);
+    const project_again = try f.assignRefField(second_view, wrapper, 0, read_first);
+    const reverse = try f.assignLowLevel(
+        changed_second,
+        &.{extracted_second},
+        LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        project_again,
+    );
+    const read_second = try f.assignRefField(extracted_second, view_alias_again, 1, reverse);
+    const branch = try f.switchStmt(cond, read_second, try f.crash("stop"), null);
+    const alias_again = try f.assignRefLocal(view_alias_again, view_alias, branch);
+    const alias = try f.assignRefLocal(view_alias, first_view, alias_again);
+    const project_first = try f.assignRefField(first_view, wrapper, 0, alias);
+    const make_wrapper = try f.assignStruct(wrapper, &.{ pair, scalar }, project_first);
+    const assign_scalar = try f.assignI64(scalar, 0, make_wrapper);
+    const make_pair = try f.assignStruct(pair, &.{ first, second }, assign_scalar);
+    const make_second = try f.assignList(second, &.{}, make_pair);
+    const body = try f.assignList(first, &.{}, make_second);
+    _ = try f.addProc(&.{cond}, body, f.pair_list);
+
+    try f.run();
+
+    // The later projection is materialized as an explicit alias of the first.
+    // Both list fields move from that projected container without retains.
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_view, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_first, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_second, .incref));
+    const second_projection_stmt = f.store.getCFStmt(project_again);
+    try testing.expect(second_projection_stmt == .assign_ref);
+    try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.local);
 }
 
 test "RC field take restores the exact aggregate field on checked failure without optional specialization" {
@@ -13751,6 +14237,77 @@ test "RC borrow survives the lender moving into an aggregate" {
     try testing.expect(f.countRc(payload, .incref) >= 1);
 }
 
+test "RC recursive tail carrier stops at an owned alias" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(.str);
+    const original = try f.local(.str);
+    const owned_alias = try f.local(.str);
+    const borrowed_alias = try f.local(.str);
+    const stored = try f.local(f.pair_str);
+    const result = try f.local(.str);
+    const ignored = try f.local(.i64);
+    const proc = try f.addProcPendingBody(&.{param}, .str);
+    const tail = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = proc,
+        .args = try f.span(&.{borrowed_alias}),
+        .next = try f.ret(result),
+    } });
+    // Storing the alias demands an owned binding. The later original use
+    // keeps its independent unit alive; the tail argument borrows the alias.
+    const use_original = try f.expectStmt(original, tail);
+    const borrow = try f.assignRefLocal(borrowed_alias, owned_alias, use_original);
+    const consume_stored = try f.assignCall(ignored, &.{stored}, borrow);
+    const store = try f.assignStruct(stored, &.{ owned_alias, owned_alias }, consume_stored);
+    const own = try f.assignRefLocal(owned_alias, original, store);
+    f.store.setProcSpecBody(proc, try f.assignStr(original, "still live", own));
+    const rc = [_]bool{ true, true, true, true, true, true, false };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try testing.expect(!solution.isBorrowed(owned_alias));
+    try testing.expect(solution.isBorrowed(borrowed_alias));
+    try testing.expectEqual(owned_alias, solution.tailCallAt(proc, tail).?.carrier(0).?);
+    try f.run();
+}
+
+test "RC borrowed alias transfers its nearest owned carrier" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(.str);
+    const identity = try f.addProc(&.{param}, try f.ret(param), .str);
+    const original = try f.local(.str);
+    const owned_alias = try f.local(.str);
+    const borrowed_alias = try f.local(.str);
+    const stored = try f.local(f.pair_str);
+    const result = try f.local(.str);
+    const ignored = try f.local(.i64);
+
+    const ret = try f.ret(original);
+    const use_result = try f.expectStmt(result, ret);
+    const consume_stored = try f.assignCall(ignored, &.{stored}, use_result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = identity,
+        .args = try f.span(&.{borrowed_alias}),
+        .next = consume_stored,
+    } });
+    // The aggregate gives owned_alias an owned binding, while the identity
+    // call's argument remains borrowed. The original is still returned later.
+    const borrow = try f.assignRefLocal(borrowed_alias, owned_alias, call);
+    const store = try f.assignStruct(stored, &.{ owned_alias, owned_alias }, borrow);
+    const own = try f.assignRefLocal(owned_alias, original, store);
+    const body = try f.assignStr(original, "still live", own);
+    _ = try f.addProc(&.{}, body, .str);
+    const rc = [_]bool{ true, true, true, true, true, true, false };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try testing.expect(!solution.isBorrowed(owned_alias));
+    try testing.expect(solution.isBorrowed(borrowed_alias));
+    try testing.expectEqual(owned_alias, solution.unitLocalOf(borrowed_alias));
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+}
+
 test "RC alias chain into a consuming call moves the unit through" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -13950,6 +14507,43 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     try f.run();
     try f.expectRc(source, 1, 1, 0);
     try f.expectRc(adapted, 0, 1, 0);
+}
+
+test "RC descriptor-bearing tag aliases and aggregates follow their committed layout" {
+    for ([_]layout_mod.Idx{ .i64, .str }) |payload_layout| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+
+        const tag_layout = try f.layouts.putTagUnion(&.{ .zst, payload_layout });
+        const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = tag_layout }});
+        const payload = try f.local(payload_layout);
+        const tag = try f.local(tag_layout);
+        const alias = try f.local(tag_layout);
+        const record = try f.local(record_layout);
+        const result = try f.local(.i64);
+        const ret = try f.ret(result);
+        const result_stmt = try f.assignI64(result, 0, ret);
+        const record_stmt = try f.assignStruct(record, &.{alias}, result_stmt);
+        const alias_stmt = try f.assignRefLocal(alias, tag, record_stmt);
+        const tag_stmt = try f.store.addCFStmt(.{ .assign_tag = .{
+            .target = tag,
+            .target_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+            .variant_index = 1,
+            .discriminant = 1,
+            .payload = payload,
+            .next = alias_stmt,
+        } });
+        _ = try f.addProc(&.{payload}, tag_stmt, .i64);
+
+        // Certification checks the owning side too: a descriptor must neither
+        // invent a scalar resource nor hide the string stored in the record.
+        try f.run();
+        if (payload_layout == .i64) {
+            try testing.expectEqual(@as(usize, 0), f.countAllRc());
+        } else {
+            try testing.expect(f.countAllRc() > 0);
+        }
+    }
 }
 
 test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {

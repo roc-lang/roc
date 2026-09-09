@@ -642,6 +642,7 @@ const Lifter = struct {
             },
             .tag => |tag| try self.rewriteExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.rewriteExpr(candidate.runtime_expr),
+            .typed_boundary => |boundary| try self.rewriteExpr(boundary.value),
             .nominal,
             .dbg,
             .expect,
@@ -1338,6 +1339,7 @@ const CaptureSet = struct {
                 for (0..payloads.len) |payload_index| try self.collectExpr(GuardedList.at(payloads, payload_index), bound);
             },
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, bound),
+            .typed_boundary => |boundary| try self.collectExpr(boundary.value, bound),
             .nominal,
             .dbg,
             .expect,
@@ -2185,6 +2187,7 @@ const CaptureGraphBuilder = struct {
             },
             .tag => |tag| try self.collectExprSpan(tag.payloads, node),
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, node),
+            .typed_boundary => |boundary| try self.collectExpr(boundary.value, node),
             .nominal,
             .dbg,
             .expect,

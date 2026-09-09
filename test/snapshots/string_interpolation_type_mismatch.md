@@ -13,21 +13,34 @@ y = "value: ${x}"
 # EXPECTED
 TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 # PROBLEMS
-── ✗ type mismatch ────────────────── string_interpolation_type_mismatch.md:4:15
-
-This expression is used in an unexpected way.
-
-y = "value: ${x}"
-              ^
-
-It has the type:
-
-    U8
-
-But you are trying to use it as:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 15) (end 4 16))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "string_interpolation_type_mismatch.md") (start 4 15) (end 4 16) (annotation error) (line-text "y = \"value: ${x}\""))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U8")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

@@ -51,102 +51,155 @@ NAME NOT IN SCOPE - can_import_comprehensive.md:17:15:17:18
 NAME NOT IN SCOPE - can_import_comprehensive.md:18:15:18:19
 NAME NOT IN SCOPE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
-── ● duplicate definition ────────────────────── can_import_comprehensive.md:1:1
-
-The name Json is being redeclared here:
-
-import json.Json
-^^^^^^^^^^^^^^^^
-
-In this scope, Json was already defined in can_import_comprehensive.md:1:1:
-
-import json.Json
-^
-
-── ● duplicate definition ────────────────────── can_import_comprehensive.md:3:1
-
-The name Str is being redeclared here:
-
-import utils.String as Str
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-In this scope, Str was already defined in can_import_comprehensive.md:1:1:
-
-import json.Json
-^
-
-── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:6:14
-
-Nothing is named get in this scope.
-
-client = Http.get
-         ^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:7:14
-
-Nothing is named utf8 in this scope.
-
-parser = Json.utf8
-         ^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:8:14
-
-Nothing is named trim in this scope.
-
-helper = Str.trim
-         ^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:11:15
-
-Nothing is named parse in this scope.
-
-result1 = Json.parse
-          ^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:14:15
-
-Nothing is named post in this scope.
-
-result2 = Http.post
-          ^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:17:15
-
-Nothing is named get in this scope.
-
-result3 = get
-          ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:18:15
-
-Nothing is named post in this scope.
-
-result4 = post
-          ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:21:16
-
-Nothing is named concat in this scope.
-
-combined = Str.concat
-           ^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 1 1) (end 1 17))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Json")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_import_comprehensive.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Json")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_import_comprehensive.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 3 1) (end 3 27))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Str")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_import_comprehensive.md") (start 3 1) (end 3 27) (annotation error) (line-text "import utils.String as Str"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Str")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_import_comprehensive.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 6 14) (end 6 22))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "get")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 6 14) (end 6 22) (annotation error) (line-text "    client = Http.get"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 7 14) (end 7 23))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "utf8")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 7 14) (end 7 23) (annotation error) (line-text "    parser = Json.utf8"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 8 14) (end 8 22))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "trim")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 8 14) (end 8 22) (annotation error) (line-text "    helper = Str.trim"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 11 15) (end 11 25))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "parse")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 11 15) (end 11 25) (annotation error) (line-text "    result1 = Json.parse"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 14 15) (end 14 24))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "post")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 14 15) (end 14 24) (annotation error) (line-text "    result2 = Http.post"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 17 15) (end 17 18))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "get")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 17 15) (end 17 18) (annotation error) (line-text "    result3 = get"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 18 15) (end 18 19))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "post")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 18 15) (end 18 19) (annotation error) (line-text "    result4 = post"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 21 16) (end 21 26))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "concat")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_comprehensive.md") (start 21 16) (end 21 26) (annotation error) (line-text "    combined = Str.concat")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

@@ -401,7 +401,7 @@ pub const Scratch = struct {
 
     stack: MkSafeList(Frame),
     seen: MkSafeList(SeenEntry),
-    visited: MkSafeList(DescStoreIdx),
+    visited: std.AutoHashMapUnmanaged(DescStoreIdx, void),
 
     /// The var to report when a cycle is detected: the deepest var on the seen
     /// stack (the parent of the cycle-closing edge). Null until a cycle is found.
@@ -414,11 +414,14 @@ pub const Scratch = struct {
         // - seen: 32 - typical type depth is much shallower
         // - visited: 64 - covers most type traversals without reallocation
         // Future optimization: profile real codebases to tune these values.
+        var visited: std.AutoHashMapUnmanaged(DescStoreIdx, void) = .empty;
+        errdefer visited.deinit(gpa);
+        try visited.ensureTotalCapacity(gpa, 64);
         return .{
             .gpa = gpa,
             .stack = try MkSafeList(Frame).initCapacity(gpa, 32),
             .seen = try MkSafeList(SeenEntry).initCapacity(gpa, 32),
-            .visited = try MkSafeList(DescStoreIdx).initCapacity(gpa, 64),
+            .visited = visited,
         };
     }
 
@@ -431,7 +434,7 @@ pub const Scratch = struct {
     pub fn reset(self: *Self) void {
         self.stack.items.clearRetainingCapacity();
         self.seen.items.clearRetainingCapacity();
-        self.visited.items.clearRetainingCapacity();
+        self.visited.clearRetainingCapacity();
         self.err_var = null;
     }
 
@@ -445,10 +448,7 @@ pub const Scratch = struct {
     }
 
     fn hasVisited(self: *const Self, desc_idx: DescStoreIdx) bool {
-        for (self.visited.items.items) |visited_idx| {
-            if (visited_idx == desc_idx) return true;
-        }
-        return false;
+        return self.visited.contains(desc_idx);
     }
 
     fn pushSeen(self: *Self, var_: Var, edge: Edge) std.mem.Allocator.Error!void {
@@ -460,7 +460,7 @@ pub const Scratch = struct {
     }
 
     fn appendVisited(self: *Self, desc_idx: DescStoreIdx) std.mem.Allocator.Error!void {
-        _ = try self.visited.append(self.gpa, desc_idx);
+        try self.visited.put(self.gpa, desc_idx, {});
     }
 };
 
@@ -543,7 +543,7 @@ test "occurs: tuple not recursive (v = Tuple(Str, Str))" {
     const result = occurs(&types_store, &scratch, v);
     try std.testing.expectEqual(.valid, result);
 
-    try std.testing.expectEqual(2, scratch.visited.len());
+    try std.testing.expectEqual(2, scratch.visited.count());
 }
 
 test "occurs: recursive alias (v = Alias(List v))" {

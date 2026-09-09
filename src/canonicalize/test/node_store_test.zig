@@ -441,9 +441,6 @@ test "NodeStore round trip - Expressions" {
         .e_unary_minus = CIR.Expr.UnaryMinus.init(rand_idx(CIR.Expr.Idx)),
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_unary_not = CIR.Expr.UnaryNot.init(rand_idx(CIR.Expr.Idx)),
-    });
-    try expressions.append(gpa, CIR.Expr{
         .e_field_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .segments = .{
@@ -1286,6 +1283,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .trailing_try_suffix = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .return_outside_fn = .{
             .region = rand_region(),
             .context = .return_statement,
@@ -1339,6 +1342,21 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .range_op_chained = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .mutable,
+            .region = rand_region(),
+        },
+    });
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .immutable,
             .region = rand_region(),
         },
     });
@@ -1545,6 +1563,11 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(gpa, CIR.Pattern{
+        .var_assign = .{
+            .ident = rand_ident_idx(),
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
         .as = .{
             .pattern = rand_idx(CIR.Pattern.Idx),
             .ident = rand_ident_idx(),
@@ -1667,7 +1690,7 @@ test "NodeStore round trip - Pattern" {
 test "SurfaceOrigin encode/decode round-trips" {
     const SurfaceOrigin = CIR.Expr.SurfaceOrigin;
     // Every unit form.
-    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus, .unary_not };
+    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus };
     for (unit_origins) |origin| {
         try testing.expectEqual(
             origin,
@@ -1705,33 +1728,41 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     const outer_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = outer_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = item,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = item,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(outer_method);
     const item_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = item_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = outer_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = outer_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(item_method);
     const detached_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = detached,
         .method_name = method_name,
-        .args = no_args,
-        .ret = detached_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = detached_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(detached_method);
     const enclosing_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = enclosing_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = outer_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = outer_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(enclosing_method);
 

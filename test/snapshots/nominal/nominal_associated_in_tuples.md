@@ -22,24 +22,35 @@ boxed = Container(X)
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
 # PROBLEMS
-── ✗ undeclared type variable ───────────── nominal_associated_in_tuples.md:9:13
-
-The type variable a is not declared in this scope.
-
-Container : a -> [Container(a)]
-            ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ undeclared type variable ───────────── nominal_associated_in_tuples.md:9:29
-
-The type variable a is not declared in this scope.
-
-Container : a -> [Container(a)]
-                            ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 9 13) (end 9 14))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "a")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "nominal_associated_in_tuples.md") (start 9 13) (end 9 14) (annotation error) (line-text "Container : a -> [Container(a)]"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 9 29) (end 9 30))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "a")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "nominal_associated_in_tuples.md") (start 9 29) (end 9 30) (annotation error) (line-text "Container : a -> [Container(a)]")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

@@ -268,6 +268,6 @@ functions' release output is unaffected (the `invariantFailed` shape at
   the same philosophy (a hand-written claim that nothing checks becomes a
   silent miscompile) applied to the ownership table; this doc is the
   control-flow instance.
-- [one-report-renderer.md](one-report-renderer.md)—shares the
+- One report renderer (completed; plan removed)—shares the
   enforcement pattern of a comptime/CI gate that a new variant fails until
   covered.

@@ -19,18 +19,33 @@ test = |{}| {
 # EXPECTED
 MISSING METHOD - nominal_local.md:9:5:9:15
 # PROBLEMS
-── ✗ missing method ─────────────────────────────────────── nominal_local.md:9:5
-
-This encode_str method is being called on a value whose type doesn't have that
-method.
-
-Str.encode("hi", fmt)
-^^^^^^^^^^
-
-The value's type, which does not have a method named encode_str, is:
-
-    [Utf8Format, ..]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 9 5) (end 9 15))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "encode_str")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "nominal_local.md") (start 9 5) (end 9 15) (annotation error) (line-text "    Str.encode(\"hi\", fmt)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "encode_str")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Utf8Format, ..]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,

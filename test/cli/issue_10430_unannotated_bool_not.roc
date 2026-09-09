@@ -1,5 +1,5 @@
-# Repro for https://github.com/roc-lang/roc/issues/10430: this should report
-# MISSING METHOD for `not` without panicking in post-check lowering.
+# Repro for https://github.com/roc-lang/roc/issues/10430: logical negation
+# infers Bool for an unannotated tag without requiring a `not` method.
 go : U64 -> U64
 go = |n| {
 	done = False

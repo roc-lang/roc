@@ -1294,6 +1294,9 @@ const Formatter = struct {
     const ExprFormatContext = struct {
         behavior: ExprFormatBehavior = .normal,
         question_suffix_follows: bool = false,
+        // Follow only the leading callee/receiver until emitted parentheses
+        // establish an ordinary expression context. Arguments start fresh.
+        starts_pipe_target: bool = false,
     };
 
     fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) FormatAstError!void {
@@ -1361,11 +1364,24 @@ const Formatter = struct {
         }
     }
 
-    fn continuePipeReceiverPostfix(fmt: *Formatter, token: Token.Idx, format_behavior: ExprFormatBehavior) error{WriteFailed}!void {
-        const already_broke = try fmt.flushCommentsBefore(token);
-        fmt.adjustMultilineAccessIndent(format_behavior);
-        if (!already_broke) try fmt.ensureNewline();
-        try fmt.pushIndent();
+    const PostfixLayout = enum {
+        compact,
+        source,
+        continuation,
+    };
+
+    /// Owns the trivia before a postfix, including when its receiver gained
+    /// parentheses. Compact boundaries discard bare newlines, never comments.
+    fn formatPostfixBoundary(fmt: *Formatter, token: Token.Idx, layout: PostfixLayout, format_behavior: ExprFormatBehavior) error{WriteFailed}!void {
+        const already_broke = if (layout != .compact or fmt.hasCommentBefore(token))
+            try fmt.flushCommentsBefore(token)
+        else
+            false;
+        if (already_broke or layout == .continuation) {
+            fmt.adjustMultilineAccessIndent(format_behavior);
+            if (!already_broke) try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
     }
 
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!AST.TokenizedRegion {
@@ -1385,8 +1401,8 @@ const Formatter = struct {
         Formatter.discardRegion(formatted.region);
     }
 
-    fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!void {
-        const formatted = try fmt.formatExprInner(ei, .{ .behavior = format_behavior });
+    fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_context: ExprFormatContext) FormatAstError!void {
+        const formatted = try fmt.formatExprInner(ei, format_context);
         Formatter.discardRegion(formatted.region);
     }
 
@@ -1493,7 +1509,7 @@ const Formatter = struct {
         }
         switch (expr) {
             .apply => |a| {
-                try fmt.formatExprDiscard(a.@"fn");
+                try fmt.formatExprInnerDiscard(a.@"fn", .{ .starts_pipe_target = format_context.starts_pipe_target });
                 const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
                 try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ei), fmt.ast.store.exprSlice(a.args));
@@ -1589,9 +1605,16 @@ const Formatter = struct {
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
+                if (s.type_ident) |type_ident| {
+                    try fmt.push('.');
+                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                }
             },
             .ident => |i| {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
+                const needs_parens = format_context.starts_pipe_target and qualifier_tokens.len == 0 and
+                    fmt.ast.tokens.tokens.items(.tag)[i.token] == .NamedUnderscore;
+                if (needs_parens) try fmt.push('(');
 
                 for (qualifier_tokens) |tok_idx| {
                     const tok = @as(Token.Idx, @intCast(tok_idx));
@@ -1600,17 +1623,18 @@ const Formatter = struct {
                 }
 
                 try fmt.pushTokenText(i.token);
+                if (needs_parens) try fmt.push(')');
             },
             .field_access => |fa| {
                 const receiver_expr = fmt.ast.store.getExpr(fa.receiver);
                 const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
-                const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(fa.receiver);
+                const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.postfixReceiverNeedsParens(fa.receiver);
                 const expand_parenthesized_receiver = receiver_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.receiver);
                 const receiver = if (parenthesize_receiver)
                     try fmt.formatParenthesizedExpr(null, fa.receiver, expand_parenthesized_receiver)
                 else
-                    try fmt.formatExprWithInfo(fa.receiver);
+                    try fmt.formatExprInner(fa.receiver, .{ .starts_pipe_target = format_context.starts_pipe_target });
 
                 const access_indent = fmt.curr_indent;
                 const segments = fmt.ast.store.fieldAccessSegmentSlice(fa.segments);
@@ -1621,22 +1645,20 @@ const Formatter = struct {
                     // every segment. Keep that behavior now that a path is flat.
                     fmt.curr_indent = access_indent;
 
-                    if (i == 0 and flatten_pipe_receiver) {
-                        // A multiline pipe receiver keeps its postfix chain on
-                        // continuation lines rather than parenthesizing the
-                        // pipe (issue 10517).
-                        try fmt.continuePipeReceiverPostfix(segment.field_token, format_behavior);
-                    } else if (!parenthesize_receiver or i > 0) {
-                        const continued = i == 0 and try fmt.continueAfterMultilineStringLine(receiver);
-                        if (!continued and multiline and try fmt.flushCommentsBefore(segment.field_token)) {
-                            // Only the chain's final segment sits in the caller's
-                            // context; interior segments always indent as .normal
-                            // (they were nested nodes formatted as .normal when
-                            // access paths were binary trees).
-                            fmt.adjustMultilineAccessIndent(if (i == segments.len - 1) format_behavior else .normal);
-                            try fmt.pushIndent();
-                        }
-                    }
+                    const follows_string_line = i == 0 and !parenthesize_receiver and receiver.ends_with_multiline_string_line;
+                    const layout: PostfixLayout = if ((i == 0 and flatten_pipe_receiver) or follows_string_line)
+                        .continuation
+                    else if (multiline and (!parenthesize_receiver or i > 0))
+                        .source
+                    else
+                        .compact;
+                    // Only the chain's final segment sits in the caller's
+                    // context; interior segments retain their own indentation.
+                    const access_behavior = if (follows_string_line or (i < segments.len - 1 and !(i == 0 and flatten_pipe_receiver)))
+                        .normal
+                    else
+                        format_behavior;
+                    if (multiline) try fmt.formatPostfixBoundary(segment.field_token, layout, access_behavior);
 
                     switch (segment.mode) {
                         .required => try fmt.push('.'),
@@ -1648,22 +1670,21 @@ const Formatter = struct {
             .method_call => |mc| {
                 const left_expr = fmt.ast.store.getExpr(mc.receiver);
                 const flatten_pipe_receiver = left_expr == .arrow_call and multiline;
-                const parenthesize_receiver = (left_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(mc.receiver);
+                const parenthesize_receiver = (left_expr == .arrow_call and !flatten_pipe_receiver) or fmt.postfixReceiverNeedsParens(mc.receiver);
                 const expand_parenthesized_receiver = left_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, mc.receiver);
                 const receiver = if (parenthesize_receiver)
                     try fmt.formatParenthesizedExpr(null, mc.receiver, expand_parenthesized_receiver)
                 else
-                    try fmt.formatExprWithInfo(mc.receiver);
-                if (flatten_pipe_receiver) {
-                    try fmt.continuePipeReceiverPostfix(mc.method_token, format_behavior);
-                } else if (!parenthesize_receiver) {
-                    const continued = try fmt.continueAfterMultilineStringLine(receiver);
-                    if (!continued and multiline and try fmt.flushCommentsBefore(mc.method_token)) {
-                        fmt.adjustMultilineAccessIndent(format_behavior);
-                        try fmt.pushIndent();
-                    }
-                }
+                    try fmt.formatExprInner(mc.receiver, .{ .starts_pipe_target = format_context.starts_pipe_target });
+                const follows_string_line = !parenthesize_receiver and receiver.ends_with_multiline_string_line;
+                const layout: PostfixLayout = if (flatten_pipe_receiver or follows_string_line)
+                    .continuation
+                else if (multiline and !parenthesize_receiver)
+                    .source
+                else
+                    .compact;
+                if (multiline) try fmt.formatPostfixBoundary(mc.method_token, layout, if (follows_string_line) .normal else format_behavior);
                 try fmt.push('.');
                 try fmt.pushTokenText(mc.method_token);
                 // Only the argument list (from the method token onwards) should
@@ -1696,14 +1717,18 @@ const Formatter = struct {
                 }
 
                 const right_expr = fmt.ast.store.getExpr(ld.right);
+                const target_context: ExprFormatContext = .{ .behavior = .no_indent_on_access, .starts_pipe_target = true };
                 switch (right_expr) {
                     .ident, .tag => {
-                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                        try fmt.formatExprInnerDiscard(ld.right, target_context);
                     },
                     .apply => |apply| {
                         const apply_fn_idx = apply.@"fn";
                         const apply_fn = fmt.ast.store.getExpr(apply_fn_idx);
                         const args = fmt.ast.store.exprSlice(apply.args);
+                        const fn_is_call = apply_fn == .apply or
+                            apply_fn == .method_call or
+                            apply_fn == .nominal_apply;
 
                         // A direct empty argument list contributes no arguments
                         // beyond the piped value. Remove it unless a following
@@ -1711,22 +1736,22 @@ const Formatter = struct {
                         // doing so would expose another application as the RHS.
                         // (`value |> make()()` must remain distinct from
                         // `value |> make()`.)
-                        if (args.len == 0 and apply_fn != .apply and !format_context.question_suffix_follows) {
+                        if (args.len == 0 and !fn_is_call and !format_context.question_suffix_follows) {
                             const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
                             const closing_token = right_region.end - 1;
                             if (fmt.hasCommentBefore(closing_token) and try fmt.flushCommentsBefore(closing_token)) {
                                 try fmt.pushIndent();
                             }
-                            const target_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
+                            const target_needs_parens = fmt.pipeTargetNeedsParens(apply_fn_idx);
                             if (target_needs_parens) {
                                 try fmt.formatPipeTargetParens(apply_fn_idx, apply_fn == .multiline_string or apply_fn == .typed_multiline_string);
                             } else {
-                                try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
+                                try fmt.formatExprInnerDiscard(apply_fn_idx, target_context);
                             }
                         } else {
                             // Parenthesize a non-atomic callee before printing its
                             // argument list, preserving chains such as `fn()()`.
-                            const fn_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
+                            const fn_needs_parens = fmt.pipeTargetNeedsParens(apply_fn_idx);
                             if (fn_needs_parens) {
                                 try fmt.formatPipeTargetParens(apply_fn_idx, apply_fn == .multiline_string or apply_fn == .typed_multiline_string);
                                 const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
@@ -1734,7 +1759,7 @@ const Formatter = struct {
                                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
                                 try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ld.right), args);
                             } else {
-                                try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                                try fmt.formatExprInnerDiscard(ld.right, target_context);
                             }
                         }
                     },
@@ -1775,15 +1800,18 @@ const Formatter = struct {
                     .for_expr,
                     .malformed,
                     => {
-                        // A pipe target can start with a name or grouping
-                        // parenthesis. Postfix chains rooted in a name are
-                        // therefore safe without grouping; all other ASTs need
-                        // parentheses so migrating `->` preserves valid syntax.
-                        const needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(ld.right);
+                        // Method-insertion syntax is intentionally ungrouped.
+                        // Ordinary complete method calls stay grouped so they
+                        // continue to mean "call the method result." Other ASTs
+                        // follow the general pipe-target grammar.
+                        const needs_parens = switch (ld.target_kind) {
+                            .method_call => false,
+                            .ordinary => right_expr == .method_call or fmt.pipeTargetNeedsParens(ld.right),
+                        };
                         if (needs_parens) {
                             try fmt.formatPipeTargetParens(ld.right, right_expr == .multiline_string or right_expr == .typed_multiline_string);
                         } else {
-                            try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                            try fmt.formatExprInnerDiscard(ld.right, target_context);
                         }
                     },
                 }
@@ -1811,7 +1839,7 @@ const Formatter = struct {
                 const items = fmt.ast.store.exprSlice(t.items);
                 const layout = fmt.ast.store.getCollectionLayout(ei);
                 if (items.len == 1 and layout == .compact) {
-                    const group_multiline = fmt.regionHasInteriorComment(t.region) or fmt.groupedExprWillBeMultiline(items[0]);
+                    const group_multiline = fmt.tupleWillBeMultiline(ei, t);
                     _ = try fmt.formatParenthesizedExpr(t.region, items[0], group_multiline);
                 } else {
                     try fmt.formatCollection(region, layout, .round, AST.Expr.Idx, items, Formatter.formatExpr);
@@ -1820,14 +1848,14 @@ const Formatter = struct {
             .tuple_access => |ta| {
                 const receiver_expr = fmt.ast.store.getExpr(ta.expr);
                 const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
-                const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(ta.expr);
+                const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.postfixReceiverNeedsParens(ta.expr);
                 if (parenthesize_receiver) try fmt.push('(');
-                const target = try fmt.formatExprWithInfo(ta.expr);
-                _ = try fmt.continueAfterMultilineStringLine(target);
+                const target = try fmt.formatExprInner(ta.expr, .{
+                    .starts_pipe_target = !parenthesize_receiver and format_context.starts_pipe_target,
+                });
                 if (parenthesize_receiver) try fmt.push(')');
-                if (flatten_pipe_receiver) {
-                    try fmt.continuePipeReceiverPostfix(ta.elem_token, format_behavior);
-                }
+                const layout: PostfixLayout = if (flatten_pipe_receiver or target.ends_with_multiline_string_line) .continuation else .compact;
+                if (multiline) try fmt.formatPostfixBoundary(ta.elem_token, layout, if (target.ends_with_multiline_string_line) .normal else format_behavior);
                 // Get the element index from the token
                 const token_text = fmt.ast.resolve(ta.elem_token);
                 // Token includes leading dot (e.g., ".0")
@@ -2000,6 +2028,7 @@ const Formatter = struct {
                     try fmt.formatExprInner(s.expr, .{
                         .behavior = child_behavior,
                         .question_suffix_follows = child_expr == .arrow_call,
+                        .starts_pipe_target = format_context.starts_pipe_target,
                     });
                 _ = try fmt.continueAfterMultilineStringLine(body);
                 try fmt.push('?');
@@ -2427,6 +2456,10 @@ const Formatter = struct {
             .single_quote => |sq| {
                 region = sq.region;
                 try fmt.formatIdent(sq.token, null);
+                if (sq.type_ident) |type_ident| {
+                    try fmt.push('.');
+                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                }
             },
             .int => |n| {
                 region = n.region;
@@ -2809,6 +2842,64 @@ const Formatter = struct {
         return .{ .field = field_idx, .version = current };
     }
 
+    fn formatPackageDependencyRecord(
+        fmt: *Formatter,
+        packages_idx: AST.Collection.Idx,
+        platform_idx: ?AST.RecordField.Idx,
+    ) FormatAstError!void {
+        const packages = fmt.ast.store.getCollection(packages_idx);
+        const packages_multiline = fmt.collectionWillBeMultiline(AST.RecordField.Idx, packages_idx);
+        const packages_empty = packages.span.len == 0;
+        try fmt.push('{');
+        if (packages_multiline) {
+            fmt.curr_indent += 1;
+        } else if (!packages_empty) {
+            try fmt.push(' ');
+        }
+
+        // Visit fields in source order so comment flushing preserves their attachment.
+        const package_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
+        for (package_slice, 0..) |field_idx, i| {
+            const item_region = fmt.nodeRegion(@intFromEnum(field_idx));
+            if (packages_multiline) {
+                try fmt.flushCommentsBeforeDiscard(item_region.start);
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+            }
+            var ends_with_multiline_string_line = false;
+            if (platform_idx != null and field_idx == platform_idx.?) {
+                const field = fmt.ast.store.getRecordField(field_idx);
+                try fmt.pushTokenText(field.name);
+                if (field.value == .supplied) {
+                    try fmt.pushAll(": platform ");
+                    try fmt.formatExprDiscard(field.value.supplied);
+                }
+            } else {
+                const formatted_field = try fmt.formatRecordFieldWithInfo(field_idx);
+                Formatter.discardRegion(formatted_field.region);
+                ends_with_multiline_string_line = formatted_field.ends_with_multiline_string_line;
+            }
+            if (packages_multiline) {
+                if (ends_with_multiline_string_line or fmt.has_multiline_string) {
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+                try fmt.push(',');
+            } else if (i < package_slice.len - 1) {
+                try fmt.pushAll(", ");
+            }
+        }
+        if (packages_multiline) {
+            try fmt.flushCommentsBeforeDiscard(packages.region.end - 1);
+            fmt.curr_indent -= 1;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        } else if (!packages_empty) {
+            try fmt.push(' ');
+        }
+        try fmt.push('}');
+    }
+
     fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) FormatAstError!void {
         const header = fmt.ast.store.getHeader(hi);
         const start_indent = fmt.curr_indent;
@@ -2988,16 +3079,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                const packages = fmt.ast.store.getCollection(p.packages);
-                const packagesItems = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
-                try fmt.formatCollection(
-                    packages.region,
-                    packages.layout,
-                    .curly,
-                    AST.RecordField.Idx,
-                    packagesItems,
-                    Formatter.formatRecordField,
-                );
+                try fmt.formatPackageDependencyRecord(p.packages, p.platform_idx);
             },
             .platform => |p| {
                 try fmt.pushAll("platform");
@@ -3273,53 +3355,15 @@ const Formatter = struct {
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
                 try fmt.pushAll(" :");
-                const args_coll = fmt.ast.store.getCollection(c.args);
-                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
-
+                const anno_region = fmt.nodeRegion(@intFromEnum(c.anno));
                 fmt.curr_indent = start_indent;
-                if (args_coll.span.len > 0) {
-                    if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
-                    // Format function arguments without parentheses (like regular function types)
-                    for (args, 0..) |arg_idx, i| {
-                        const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
-                        if (multiline and i > 0) {
-                            try fmt.flushCommentsBeforeDiscard(arg_region.start);
-                            try fmt.ensureNewline();
-                            try fmt.pushIndent();
-                        }
-                        try fmt.formatTypeAnnoDiscard(arg_idx);
-                        if (i < args.len - 1) {
-                            if (multiline) {
-                                try fmt.push(',');
-                            } else {
-                                try fmt.pushAll(", ");
-                            }
-                        } else {
-                            if (multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                                try fmt.pushAll(if (c.effectful) "=>" else "->");
-                            } else {
-                                try fmt.pushAll(if (c.effectful) " =>" else " ->");
-                            }
-                        }
-                    }
-                } else if (c.effectful) {
-                    try fmt.pushAll(" () =>");
-                }
-                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
+                if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
-                try fmt.formatTypeAnnoDiscard(c.ret_anno);
+                try fmt.formatTypeAnnoDiscard(c.anno);
             },
             .mod_alias => |c| {
                 // Format as: a.WhereAlias
@@ -3599,7 +3643,7 @@ const Formatter = struct {
                         try fmt.newline();
                     }
                 } else if (!fmt.has_newline) {
-                    try fmt.push(' ');
+                    fmt.setInlineCommentSeparator();
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
@@ -3610,6 +3654,8 @@ const Formatter = struct {
                 try fmt.pushAll(comment_text);
                 newline_count_to_apply = 1; // reset count to allow an additional newline after a comment
                 i = comment_end + 1;
+                // The comment's line ending was already counted, including both bytes of CRLF.
+                if (i < between_text.len and between_text[comment_end] == '\r' and between_text[i] == '\n') i += 1;
             } else if (between_text[i] == '\n') {
                 newline_count_to_apply += 1;
                 i += 1;
@@ -3675,7 +3721,7 @@ const Formatter = struct {
                 if (newline_count > 0 or fmt.has_newline) {
                     try fmt.pushIndent();
                 } else {
-                    try fmt.push(' ');
+                    fmt.setInlineCommentSeparator();
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
@@ -3688,6 +3734,8 @@ const Formatter = struct {
                 newline_count = 1; // reset count to allow an additional newline after a comment
                 prev_was_comment = true;
                 i = comment_end + 1;
+                // The comment's line ending was already emitted, including both bytes of CRLF.
+                if (i < between_text.len and between_text[comment_end] == '\r' and between_text[i] == '\n') i += 1;
             } else if (between_text[i] == '\n') {
                 if (newline_count < 2) {
                     try fmt.newline();
@@ -3718,6 +3766,11 @@ const Formatter = struct {
 
         // Return true if there was a newline, whether or not there was a comment
         return newline_count > 0;
+    }
+
+    inline fn setInlineCommentSeparator(fmt: *Formatter) void {
+        std.debug.assert(!fmt.has_newline);
+        fmt.pending_spaces = 1;
     }
 
     fn push(fmt: *Formatter, c: u8) error{WriteFailed}!void {
@@ -3844,23 +3897,68 @@ const Formatter = struct {
         try fmt.pushVerbatim(text);
     }
 
-    fn exprIsNumericAccessReceiver(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
-        const expr = fmt.ast.store.getExpr(expr_idx);
-        const tag = std.meta.activeTag(expr);
-        if (tag == .int or tag == .frac or tag == .typed_int or tag == .typed_frac) return true;
-        if (tag == .unary_op) return fmt.exprIsNumericAccessReceiver(expr.unary_op.expr);
-        return false;
+    // Pipe-target grouping is not stored as a tuple node. Restore parentheses
+    // when attaching a postfix to an expression whose grammar would otherwise
+    // absorb that postfix into its operand or body. Numeric receivers also need
+    // parentheses to keep the dot from becoming part of the numeric token.
+    // Pipe receivers have their own continuation/grouping rule at the call sites.
+    fn postfixReceiverNeedsParens(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
+        return switch (fmt.ast.store.getExpr(expr_idx)) {
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .bin_op,
+            .unary_op,
+            .lambda,
+            .if_then_else,
+            .if_without_else,
+            .dbg,
+            .crash,
+            .@"return",
+            .for_expr,
+            => true,
+            .ident,
+            .tag,
+            .single_quote,
+            .string_part,
+            .string,
+            .typed_string,
+            .multiline_string,
+            .typed_multiline_string,
+            .list,
+            .tuple,
+            .record,
+            .record_builder,
+            .nominal_record,
+            .apply,
+            .nominal_apply,
+            .record_updater,
+            .field_access,
+            .method_call,
+            .tuple_access,
+            .suffix_single_question,
+            .arrow_call,
+            .match,
+            .block,
+            .ellipsis,
+            .@"break",
+            .malformed,
+            => false,
+        };
     }
 
-    fn exprCanStartPipeTargetUnparenthesized(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
+    // Whether the complete target/callee needs grouping. Named-underscore
+    // heads are grouped during emission, leaving their postfix chain outside.
+    fn pipeTargetNeedsParens(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
         return switch (fmt.ast.store.getExpr(expr_idx)) {
-            .ident, .tag => true,
-            .apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.@"fn"),
-            .field_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.receiver),
-            .method_call => |call| fmt.exprCanStartPipeTargetUnparenthesized(call.receiver),
-            .tuple_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.expr),
-            .nominal_apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.mapper),
-            .suffix_single_question => |suffix| fmt.exprCanStartPipeTargetUnparenthesized(suffix.expr),
+            .ident, .tag => false,
+            .apply => |apply| fmt.pipeTargetNeedsParens(apply.@"fn"),
+            .field_access => |access| fmt.pipeTargetNeedsParens(access.receiver),
+            .method_call => |call| fmt.pipeTargetNeedsParens(call.receiver),
+            .tuple_access => |access| fmt.pipeTargetNeedsParens(access.expr),
+            .nominal_apply => |apply| fmt.pipeTargetNeedsParens(apply.mapper),
+            .suffix_single_question => |suffix| fmt.pipeTargetNeedsParens(suffix.expr),
             .int,
             .frac,
             .typed_int,
@@ -3892,8 +3990,20 @@ const Formatter = struct {
             .@"break",
             .@"return",
             .malformed,
-            => false,
+            => true,
         };
+    }
+
+    // Compact singleton tuples are grouping parentheses. Predict their emitted
+    // layout, which discards source-only line breaks inside the grouped expression.
+    fn tupleWillBeMultiline(fmt: *Formatter, idx: AST.Expr.Idx, tuple: @FieldType(AST.Expr, "tuple")) bool {
+        const items = fmt.ast.store.exprSlice(tuple.items);
+        const layout = fmt.ast.store.getCollectionLayout(idx);
+        if (items.len == 1 and layout == .compact) {
+            return fmt.regionHasInteriorComment(tuple.region) or fmt.groupedExprWillBeMultiline(items[0]);
+        }
+        return layout == .expanded or fmt.regionHasInteriorComment(tuple.region) or
+            fmt.nodesWillBeMultiline(AST.Expr.Idx, items);
     }
 
     fn groupedExprWillBeMultiline(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
@@ -3901,7 +4011,11 @@ const Formatter = struct {
         if (expr == .method_call) {
             const method = expr.method_call;
             const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
-            if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 })) {
+            // Inserted receiver parentheses normalize bare boundary newlines.
+            // Interior comments still require expansion below.
+            if (!fmt.postfixReceiverNeedsParens(method.receiver) and
+                fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 }))
+            {
                 return true;
             }
         }
@@ -3916,8 +4030,7 @@ const Formatter = struct {
             .block, .multiline_string, .typed_multiline_string => true,
             .list => |l| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(l.items)),
-            .tuple => |t| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
-                fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(t.items)),
+            .tuple => |t| fmt.tupleWillBeMultiline(expr_idx, t),
             .apply => |a| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 fmt.groupedExprWillBeMultiline(a.@"fn") or
                 fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(a.args)),
@@ -3981,7 +4094,9 @@ const Formatter = struct {
             if (expr == .method_call) {
                 const method = expr.method_call;
                 const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
-                if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 })) {
+                if (!fmt.postfixReceiverNeedsParens(method.receiver) and
+                    fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 }))
+                {
                     return true;
                 }
             }
@@ -4002,8 +4117,7 @@ const Formatter = struct {
                         fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(l.items));
                 },
                 .tuple => |t| {
-                    return fmt.ast.store.getCollectionLayout(item) == .expanded or
-                        fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(t.items));
+                    return fmt.tupleWillBeMultiline(item, t);
                 },
                 .apply => |a| {
                     if (fmt.ast.store.getCollectionLayout(item) == .expanded) return true;
@@ -4426,6 +4540,52 @@ test "issue 10480: package qualifier preserved in exposed aliased imports" {
     try std.testing.expectEqualStrings("module [o as n, F.s as I]\n", result);
 }
 
+test "package platform dependency formatting is stable" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "package[Wrapper]{pf:platform \"../platform/main.roc\",util:\"../util/main.roc\",roc:\"nightly-2026-08-05-24f0b47\"}",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "package [Wrapper] { pf: platform \"../platform/main.roc\", util: \"../util/main.roc\", roc: \"nightly-2026-08-05-24f0b47\" }\n",
+        result,
+    );
+}
+
+test "package platform dependency preserves source order and comments" {
+    const input = "package [Wrapper] {\n" ++
+        "\t# Utility dependency\n" ++
+        "\tutil: \"../util/main.roc\",\n" ++
+        "\t# Platform dependency\n" ++
+        "\tpf: platform \"../platform/main.roc\",\n" ++
+        "\t# Another dependency\n" ++
+        "\textra: \"../extra/main.roc\",\n" ++
+        "\t# End of dependencies\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("package\n" ++
+        "\t[Wrapper]\n" ++
+        "\t{\n" ++
+        "\t\t# Utility dependency\n" ++
+        "\t\tutil: \"../util/main.roc\",\n" ++
+        "\t\t# Platform dependency\n" ++
+        "\t\tpf: platform \"../platform/main.roc\",\n" ++
+        "\t\t# Another dependency\n" ++
+        "\t\textra: \"../extra/main.roc\",\n" ++
+        "\t\t# End of dependencies\n" ++
+        "\t}\n", result);
+}
+
+test "package platform dependency preserves inline source order" {
+    const input = "package [Wrapper] { util: \"../util/main.roc\", pf: platform \"../platform/main.roc\" }\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
 test "issue 10431: wrapped declaration has no trailing whitespace" {
     // Repro for https://github.com/roc-lang/roc/issues/10431
     const result = try moduleFmtsStable(std.testing.allocator,
@@ -4846,6 +5006,101 @@ test "integer field receiver separated by carriage return is idempotent" {
     try std.testing.expectEqualStrings("a = ((0).e)\n", result);
 }
 
+test "issue 11244: comment between a tuple receiver and its field access is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/11244
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=((0#
+        \\.0))
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = (\n\t(\n\t\t(0) #\n\t\t\t.0\n\t)\n)\n",
+        result,
+    );
+}
+
+test "postfix boundaries preserve comments with inserted and existing receiver parentheses" {
+    const gpa = std.testing.allocator;
+    const receivers = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "0", .expected = "(0)" },
+        .{ .source = "1.2", .expected = "(1.2)" },
+        .{ .source = "0.U8", .expected = "(0.U8)" },
+        .{ .source = "x", .expected = "x" },
+        .{ .source = "(x)", .expected = "(x)" },
+    };
+    for (receivers) |receiver| {
+        for ([_][]const u8{ ".0", ".field", ".?field", ".method()" }) |postfix| {
+            for ([_][]const u8{ "\n", "\r\n", "\r" }) |line_ending| {
+                const source = try std.fmt.allocPrint(gpa, "a=(({s}# keep{s}{s}))", .{ receiver.source, line_ending, postfix });
+                defer gpa.free(source);
+                const expected = try std.fmt.allocPrint(gpa, "a = (\n\t(\n\t\t{s} # keep\n\t\t\t{s}\n\t)\n)\n", .{ receiver.expected, postfix });
+                defer gpa.free(expected);
+
+                const result = try moduleFmtsStable(gpa, source, false);
+                defer gpa.free(result);
+                try std.testing.expectEqualStrings(expected, result);
+            }
+        }
+    }
+}
+
+test "mixed postfix chain preserves each boundary comment once" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a = (0 # tuple
+        \\.0 # field
+        \\.field # optional
+        \\.?field # method
+        \\.method() # tuple again
+        \\.1)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = (\n" ++
+            "\t(0) # tuple\n" ++
+            "\t\t.0 # field\n" ++
+            "\t\t.field # optional\n" ++
+            "\t\t.?field # method\n" ++
+            "\t\t.method() # tuple again\n" ++
+            "\t\t.1\n" ++
+            ")\n",
+        result,
+    );
+}
+
+test "inserted postfix receiver parentheses normalize whitespace-only boundaries" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ ".0", ".field", ".?field", ".method()" }) |postfix| {
+        for ([_][]const u8{ " ", "\n", "\r\n", "\r" }) |gap| {
+            const source = try std.fmt.allocPrint(gpa, "a=((0{s}{s}))", .{ gap, postfix });
+            defer gpa.free(source);
+            const expected = try std.fmt.allocPrint(gpa, "a = (((0){s}))\n", .{postfix});
+            defer gpa.free(expected);
+            const result = try moduleFmtsStable(gpa, source, false);
+            defer gpa.free(result);
+            try std.testing.expectEqualStrings(expected, result);
+        }
+    }
+}
+
+test "postfix after multiline string preserves standalone comments" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ ".0", ".field", ".method()" }) |postfix| {
+        const source = try std.fmt.allocPrint(gpa, "a = \\\\text\n# keep\n{s}\n", .{postfix});
+        defer gpa.free(source);
+        const expected = try std.fmt.allocPrint(gpa, "a = \\\\text\n# keep\n\t{s}\n", .{postfix});
+        defer gpa.free(expected);
+        const result = try moduleFmtsStable(gpa, source, false);
+        defer gpa.free(result);
+        try std.testing.expectEqualStrings(expected, result);
+    }
+}
+
+test "trailing comments count CRLF as one line ending" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0 # first\r\n# second\r\n", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0 # first\n# second\n", result);
+}
+
 test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
     // ()->b()()() from issue comment 2
     const result = try moduleFmtsStable(std.testing.allocator, "a=()->b()()()", false);
@@ -4913,6 +5168,123 @@ test "pipe owns the postfix chain on its right" {
     try std.testing.expectEqualStrings("a = foo |> bar(baz).blah()\n", result);
 }
 
+test "literal method pipe targets and grouped result calls format stably" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=[1,2,3]|>[1].concat()
+        \\b=1|>1.plus()
+        \\c="roc "|>"and roll".with_prefix()
+        \\d=x|>(receiver.method())
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = [1, 2, 3] |> [1].concat()\n" ++
+            "\n" ++
+            "b = 1 |> (1).plus()\n" ++
+            "\n" ++
+            "c = \"roc \" |> \"and roll\".with_prefix()\n" ++
+            "\n" ++
+            "d = x |> (receiver.method())\n",
+        result,
+    );
+}
+
+test "issue 11160: pipe method receivers preserve expression grouping" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "t=0|>(0%0).y()", .expected = "t = 0 |> (0 % 0).y()\n" },
+        .{ .input = "t=x|>(a+b).y()", .expected = "t = x |> (a + b).y()\n" },
+        .{ .input = "t=x|>(-a).y()", .expected = "t = x |> (-a).y()\n" },
+        .{ .input = "t=x|>(|v|v).y()", .expected = "t = x |> (|v| v).y()\n" },
+        .{ .input = "t=x|>(if a b else c).y()", .expected = "t = x |> (if a b else c).y()\n" },
+        .{ .input = "t=x|>(dbg a).y()", .expected = "t = x |> (dbg a).y()\n" },
+        .{ .input = "t=x|>(crash \"failed\").y()", .expected = "t = x |> (crash \"failed\").y()\n" },
+        .{ .input = "t=x|>((a+b).y())", .expected = "t = x |> ((a + b).y())\n" },
+        .{ .input = "t=x|>(a+b).field.y()", .expected = "t = x |> (a + b).field.y()\n" },
+        .{ .input = "t=x|>(a+b).0.y()", .expected = "t = x |> (a + b).0.y()\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 11208: named underscore pipe target keeps its grouping parens" {
+    // https://github.com/roc-lang/roc/issues/11208
+    // A named underscore is not a valid bare pipe target, so the parens around
+    // it have to survive formatting for the output to reparse.
+    const result = try moduleFmtsStable(std.testing.allocator, "t=0|>(_0).0", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("t = 0 |> (_0).0\n", result);
+}
+
+test "issue 11208: pipe start grouping follows callees and receivers only" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "t=x|>(_0)", .expected = "t = x |> (_0)\n" },
+        .{ .input = "t=x|>(_name)", .expected = "t = x |> (_name)\n" },
+        .{ .input = "t=x|>(_0)()", .expected = "t = x |> (_0)\n" },
+        .{ .input = "t=x|>(_0)(1)", .expected = "t = x |> (_0)(1)\n" },
+        .{ .input = "t=x|>(_0)(1)()", .expected = "t = x |> (_0)(1)()\n" },
+        .{ .input = "t=x|>(_0)(1).0", .expected = "t = x |> (_0)(1).0\n" },
+        .{ .input = "t=x|>(_0).field", .expected = "t = x |> (_0).field\n" },
+        .{ .input = "t=x|>(_0).?field", .expected = "t = x |> (_0).?field\n" },
+        .{ .input = "t=x|>(_0).field.0.field", .expected = "t = x |> (_0).field.0.field\n" },
+        .{ .input = "t=x|>(_0.0)", .expected = "t = x |> (_0).0\n" },
+        .{ .input = "t=x|>(_0)?", .expected = "t = x |> (_0)?\n" },
+        .{ .input = "t=x|>(_0)()?", .expected = "t = x |> (_0)()?\n" },
+        .{ .input = "t=x|>(_0)|>(_1)", .expected = "t = x |> (_0) |> (_1)\n" },
+        .{ .input = "t=x|>(_0)(_1)", .expected = "t = x |> (_0)(_1)\n" },
+        .{ .input = "t=x|>(_0).method(_1)", .expected = "t = x |> (_0).method(_1)\n" },
+        .{ .input = "t=x|>(_0+_1).method()", .expected = "t = x |> (_0 + _1).method()\n" },
+        .{ .input = "t=x|>(f).0", .expected = "t = x |> f.0\n" },
+        .{ .input = "t=x|>Mod.f(_0)", .expected = "t = x |> Mod.f(_0)\n" },
+        .{ .input = "t=x|>Box.(_0)", .expected = "t = x |> Box.(_0)\n" },
+        .{ .input = "t=_0.field.0.method(_1)", .expected = "t = _0.field.0.method(_1)\n" },
+        .{ .input = "t=x|>(\n_0\n).0", .expected = "t = x\n\t|> (_0).0\n" },
+        .{ .input = "t=x|> # target\n(_0).0", .expected = "t = x\n\t|> # target\n\t(_0).0\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 11208: pipe grouping preserves method insertion and result calls" {
+    const cases = [_]struct {
+        input: []const u8,
+        expected: []const u8,
+        target_kind: AST.PipeTargetKind,
+        target_tag: std.meta.Tag(AST.Expr),
+    }{
+        .{ .input = "t=x|>(_0).method()", .expected = "t = x |> (_0).method()\n", .target_kind = .method_call, .target_tag = .method_call },
+        .{ .input = "t=x|>(_0.method())", .expected = "t = x |> (_0.method())\n", .target_kind = .ordinary, .target_tag = .method_call },
+        .{ .input = "t=x|>(_0).0.method()", .expected = "t = x |> (_0).0.method()\n", .target_kind = .method_call, .target_tag = .method_call },
+        .{ .input = "t=x|>(_0).method()()", .expected = "t = x |> (_0).method()()\n", .target_kind = .ordinary, .target_tag = .apply },
+        .{ .input = "t=x|>(_0).method().0", .expected = "t = x |> (_0).method().0\n", .target_kind = .ordinary, .target_tag = .tuple_access },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+
+        // Valid, stable output could still change which call receives the
+        // piped argument. Pin the parser's interpretation on both sides.
+        for ([_][]const u8{ case.input, result }) |source| {
+            var env = try ModuleEnv.init(std.testing.allocator, source);
+            defer env.deinit();
+            const ast = try parse.file(std.testing.allocator, &env.common);
+            defer ast.deinit();
+            try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+            const statements = ast.store.statementSlice(ast.store.getFile().statements);
+            try std.testing.expectEqual(@as(usize, 1), statements.len);
+            const stmt = ast.store.getStatement(statements[0]);
+            const pipe = ast.store.getExpr(stmt.decl.body).arrow_call;
+            try std.testing.expectEqual(case.target_kind, pipe.target_kind);
+            try std.testing.expectEqual(case.target_tag, std.meta.activeTag(ast.store.getExpr(pipe.right)));
+        }
+    }
+}
+
 test "formatter preserves an old arrow's postfix grouping during migration" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=foo->bar(baz).blah()", false);
     defer std.testing.allocator.free(result);
@@ -4923,6 +5295,26 @@ test "pipe drops direct empty target argument lists" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=(x|>foo(),x|>Ok(),x|>(|v|v)())", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = (x |> foo, x |> Ok, x |> (|v| v))\n", result);
+}
+
+test "issue 11045: pipe keeps empty argument lists on method targets" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\my_const = []
+        \\
+        \\_ = [1, 2, 3] |> my_const.concat()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "my_const = []\n\n" ++
+            "_ = [1, 2, 3] |> my_const.concat()\n",
+        result,
+    );
+}
+
+test "pipe keeps an empty target application after a method call" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=x|>receiver.method()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = x |> receiver.method()()\n", result);
 }
 
 test "pipe keeps comments from removed empty argument lists" {
@@ -4948,6 +5340,15 @@ test "pipe keeps comments from removed empty argument lists" {
             "\tfoo\n",
         result,
     );
+}
+
+test "issue 11043: parenthesized pipe target with a comment-only argument list is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/11043
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\t=0|>(0)(#
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
 }
 
 test "multiline pipes start indented lines" {
@@ -5345,6 +5746,22 @@ test "trailing commas explicitly control collection layout" {
         },
     };
 
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 11176: grouped expression layout follows formatted children" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "a=(||||||(0\n.0))", .expected = "a = (|| || || ((0).0))\n" },
+        .{ .input = "a=((0\n.0))", .expected = "a = (((0).0))\n" },
+        .{ .input = "a=[(0\n.0)]", .expected = "a = [((0).0)]\n" },
+        .{ .input = "a=f((0\n.0))", .expected = "a = f(((0).0))\n" },
+        .{ .input = "a=((# comment\n0))", .expected = "a = (\n\t( # comment\n\t\t0\n\t)\n)\n" },
+        .{ .input = "a=((0,))", .expected = "a = (\n\t(\n\t\t0,\n\t)\n)\n" },
+    };
     for (cases) |case| {
         const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
         defer std.testing.allocator.free(result);
@@ -5823,4 +6240,15 @@ test "fmt spaces out a #! that is not on the first line" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("x = 1\n# !/usr/bin/env roc\n", result);
+}
+
+test "where method annotations preserve whole holes parentheses and nullary arrows" {
+    const source =
+        \\helper : a -> Str where [a.hole : _, a.parenthesized : (_ -> _), a.nullary : () -> _, a.effect! : () => _]
+        \\helper = |_| "ok"
+        \\
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(source, result);
 }

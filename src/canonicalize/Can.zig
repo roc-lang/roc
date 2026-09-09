@@ -76,6 +76,28 @@ pub const ModuleInitContext = struct {
     compiler_version: ?[]const u8 = null,
     /// How this module's compile-time roots are established. See `Validation`.
     validation: Validation = .checking,
+    /// Whether this file is the build's entry module: the file the compiler was
+    /// pointed at, rather than a module discovered inside some package.
+    ///
+    /// Only an entry module may be classified `default_app`, because that
+    /// classification is what injects the synthetic `echo!` hosted lambda. The
+    /// classification is otherwise purely file-local, so without this gate any
+    /// package could ship a headerless module with a valid `main!`, or a
+    /// module carrying a platformless `app` header, and thereby hand itself a
+    /// real host-bound effect: the exact thing the package/platform boundary
+    /// exists to prevent.
+    ///
+    /// Defaults to false so that omitting it fails closed. This is a privilege
+    /// gate, and the cost of the two failure directions is not symmetric: a
+    /// caller that should have said true loses `echo!` and hears about it
+    /// immediately as `Nothing is named echo! in this scope`, whereas a caller
+    /// that should have said false hands out a host-bound effect and says
+    /// nothing at all. Callers that canonicalize the one file they were
+    /// pointed at -- the REPL, the snapshot tool, the language server, the
+    /// playground, direct-canonicalization tests -- set it true explicitly.
+    /// The coordinator is the component that knows a module is *not* the entry
+    /// module, and it is the one that says so.
+    is_entry_module: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -188,6 +210,12 @@ const ParserTypeDeclState = union(enum) {
     rejected,
 };
 
+const ForwardTypeScopeStep = union(enum) {
+    done,
+    parent: AST.DeclIndex.ScopeIdx,
+    ineligible,
+};
+
 const TypeDeclRegistration = union(enum) {
     registered: Statement.Idx,
     redeclared: Statement.Idx,
@@ -212,6 +240,8 @@ const PendingProvidesEntry = struct {
     ffi_symbol: StringLiteral.Idx,
     region: Region,
 };
+
+const TopLevelValueDefMap = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx);
 
 const MethodRegistrationKind = enum {
     declaration_owner,
@@ -285,6 +315,10 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 compiler_version: ?[]const u8 = null,
 /// How this module's compile-time roots are established. See `Validation`.
 validation: Validation = .checking,
+/// Whether this file is the build's entry module. Defaults to false so an
+/// omission withholds the capability rather than granting it. See
+/// `ModuleInitContext.is_entry_module`.
+is_entry_module: bool = false,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
@@ -292,12 +326,6 @@ pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
 /// owner and name. Declaration-owned methods take precedence over receiver
 /// extensions independently of source order.
 method_registrations: std.AutoHashMapUnmanaged(ModuleEnv.MethodKey, MethodRegistration) = .{},
-/// Stack of function regions for tracking var reassignment across function boundaries
-function_regions: std.array_list.Managed(Region),
-/// Maps var patterns to the function region they were declared in
-var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
-/// Set of pattern indices that are vars
-var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Patterns for values that resolve from module-global storage rather than
@@ -313,6 +341,9 @@ import_indices: std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx),
 parser_type_decl_states: std.AutoHashMapUnmanaged(AST.Statement.Idx, ParserTypeDeclState) = .{},
 /// Type declarations whose CIR statements were prepared by a forward reference.
 forward_prepared_type_decls: std.ArrayListUnmanaged(Statement.Idx) = .empty,
+/// Whether an associated parser scope belongs to the selected occurrence of each
+/// enclosing type declaration. Populated only by nested forward type lookup.
+forward_type_scope_eligibility: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, bool) = .{},
 /// All canonical type-declaration statements produced by this module.
 type_decl_statements: std.ArrayListUnmanaged(Statement.Idx) = .empty,
 /// Parser alias-cycle members keyed by the AST alias statement, with the member
@@ -484,6 +515,7 @@ const TypeAnno = CIR.TypeAnno;
 const Annotation = CIR.Annotation;
 const WhereClause = CIR.WhereClause;
 const Diagnostic = CIR.Diagnostic;
+const DependencyGraph = @import("DependencyGraph.zig");
 const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
@@ -672,15 +704,12 @@ pub fn deinit(
     self.active_decl_import_aliases.deinit(gpa);
     self.active_decl_import_alias_entries.deinit(gpa);
     self.forward_prepared_import_aliases.deinit(gpa);
-    self.function_regions.deinit();
-
-    self.var_function_regions.deinit(gpa);
-    self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
     self.globally_resolvable_patterns.deinit(gpa);
     self.builtin_auto_imported_types.deinit(gpa);
     self.parser_type_decl_states.deinit(gpa);
     self.forward_prepared_type_decls.deinit(gpa);
+    self.forward_type_scope_eligibility.deinit(gpa);
     self.type_decl_statements.deinit(gpa);
     self.alias_cycle_references.deinit(gpa);
     self.alias_cycle_scopes.deinit(gpa);
@@ -753,15 +782,15 @@ fn initInternal(
         .env = env,
         .parse_ir = parse_ir,
         .scopes = .empty,
-        .function_regions = std.array_list.Managed(Region).init(gpa),
-        .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
-        .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
         .skip_file_import_contents = if (maybe_context) |context| context.skip_file_import_contents else false,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
+        // `initBuiltin` passes no context. A builtin module is never a default
+        // app, and the fail-closed answer is the correct one for it anyway.
+        .is_entry_module = if (maybe_context) |context| context.is_entry_module else false,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
@@ -954,7 +983,7 @@ fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Err
 
 fn topLevelDefIsSelected(
     self: *const Self,
-    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    selected_by_ident: *const TopLevelValueDefMap,
     def_idx: CIR.Def.Idx,
 ) bool {
     const def = self.env.store.getDef(def_idx);
@@ -965,7 +994,7 @@ fn topLevelDefIsSelected(
 
 fn globalDefIntroducesValueBinding(
     self: *const Self,
-    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    selected_by_ident: *const TopLevelValueDefMap,
     def_idx: CIR.Def.Idx,
 ) bool {
     const def = self.env.store.getDef(def_idx);
@@ -1558,6 +1587,71 @@ fn firstUsableParserTypeDecl(self: *const Self, bucket: AST.DeclIndex.NameBucket
         if (self.parserTypeDeclCanPrepare(decl)) return decl_idx;
     }
     return null;
+}
+
+fn parserTypeDeclIsSelected(self: *const Self, decl_idx: AST.DeclIndex.DeclIdx) bool {
+    const decl_index = &self.parse_ir.decl_index;
+    const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+    const path = decl.type_path orelse return false;
+    const selected = self.firstUsableParserTypeDecl(decl_index.typeDeclsForPath(path)) orelse return false;
+    return selected == decl_idx;
+}
+
+fn forwardTypeScopeStep(
+    self: *const Self,
+    scope_idx: AST.DeclIndex.ScopeIdx,
+) ForwardTypeScopeStep {
+    const decl_index = &self.parse_ir.decl_index;
+    const scope = decl_index.scopes.items[@intFromEnum(scope_idx)];
+    switch (scope.kind) {
+        .module, .block => return .done,
+        .associated => {},
+    }
+    const owner_statement = switch (scope.owner) {
+        .associated_type_decl => |statement| statement,
+        .none, .file, .expr => return .ineligible,
+    };
+    const owner_decl_idx = decl_index.declForStatement(owner_statement) orelse return .ineligible;
+    if (!self.parserTypeDeclIsSelected(owner_decl_idx)) return .ineligible;
+    const owner_decl = decl_index.decls.items[@intFromEnum(owner_decl_idx)];
+    return .{ .parent = owner_decl.scope };
+}
+
+fn parserScopeCanSupplyForwardTypeDecl(
+    self: *Self,
+    start_scope: AST.DeclIndex.ScopeIdx,
+) std.mem.Allocator.Error!bool {
+    switch (self.parse_ir.decl_index.scopes.items[@intFromEnum(start_scope)].kind) {
+        .module, .block => return true,
+        .associated => {},
+    }
+
+    var scope_idx = start_scope;
+    const eligible = while (true) {
+        if (self.forward_type_scope_eligibility.get(scope_idx)) |cached| break cached;
+        switch (self.forwardTypeScopeStep(scope_idx)) {
+            .done => break true,
+            .parent => |parent| scope_idx = parent,
+            .ineligible => break false,
+        }
+    };
+
+    scope_idx = start_scope;
+    while (!self.forward_type_scope_eligibility.contains(scope_idx)) {
+        switch (self.forwardTypeScopeStep(scope_idx)) {
+            .done => break,
+            .parent => |parent| {
+                try self.forward_type_scope_eligibility.put(self.env.gpa, scope_idx, eligible);
+                scope_idx = parent;
+            },
+            .ineligible => {
+                try self.forward_type_scope_eligibility.put(self.env.gpa, scope_idx, false);
+                break;
+            },
+        }
+    }
+
+    return eligible;
 }
 
 fn activeWholeScopeBindingForDeclScope(
@@ -2870,6 +2964,8 @@ fn ensureParserTypeDeclBinding(
     const decl_index = &self.parse_ir.decl_index;
     const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
     if (!self.parserTypeDeclCanPrepare(decl)) return null;
+    if (!self.parserTypeDeclIsSelected(decl_idx)) return null;
+    if (!try self.parserScopeCanSupplyForwardTypeDecl(decl.scope)) return null;
     const kind = declIndexTypeKind(decl.kind) orelse return null;
     const name_ident = decl.name_ident orelse return null;
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
@@ -3250,7 +3346,7 @@ fn findOrCreateAssocPattern(
 
     const ident_pattern = Pattern{ .assign = .{ .ident = qualified_ident } };
     const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, true);
     try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
     if (globally_resolvable) {
         try self.markGloballyResolvablePattern(new_pattern_idx);
@@ -3480,6 +3576,7 @@ fn prepareAssociatedDeclBody(
     type_var_scope: ?TypeVarScopeIdx,
 ) std.mem.Allocator.Error!AssociatedDeclBodyWork {
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+    try self.warnAboutBindingName(decl_ident, pattern_region, .immutable);
     const pattern_idx = try self.findOrCreateAssocPattern(
         qualified_ident,
         decl_ident,
@@ -4084,10 +4181,11 @@ fn canonicalizeAssociatedItems(
                         break :blk_adopt null;
                     };
 
+                    const source_name_region = self.parse_ir.tokens.resolve(ta.name);
                     const def_idx = if (adopted_pattern_idx) |adopted|
-                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region)
+                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, name_ident, source_name_region, type_anno_idx, annotation_expr_kind, where_clauses, region)
                     else
-                        try self.createAnnotationDef(qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region, null);
+                        try self.createAnnotationDef(qualified_idx, name_ident, source_name_region, type_anno_idx, annotation_expr_kind, where_clauses, region, null);
 
                     if (owner_is_module_visible) {
                         try self.env.setExposedValueNodeIndexById(qualified_idx, @intFromEnum(def_idx));
@@ -4313,7 +4411,14 @@ pub fn canonicalizeFile(
             // An app that names no platform gets the built-in Echo platform,
             // the same one a headerless app gets, so it canonicalizes as a
             // default app: `echo!` is in scope and no platform is required.
-            self.env.module_kind = if (h.platform_idx == null) .default_app else .app;
+            //
+            // Gated on the entry module for the same reason the `type_module`
+            // branch below is: `default_app` is what injects the synthetic
+            // `echo!` hosted lambda, so a module shipped inside a package must
+            // not reach the host merely by carrying a platformless `app`
+            // header. Outside the entry module such a file stays an ordinary
+            // `app`, which names no platform and so cannot check.
+            self.env.module_kind = if (h.platform_idx == null and self.is_entry_module) .default_app else .app;
             try self.checkRocVersionPin(h.roc_version);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
@@ -4322,10 +4427,21 @@ pub fn canonicalizeFile(
             try self.createExposedScope(h.provides);
         },
         .type_module => {
-            // Check if file has a main! function, making it a default app
+            // A headerless file with a valid `main!` is a default app, but
+            // only when it is the file the compiler was pointed at. That
+            // classification grants the synthetic `echo!` hosted lambda
+            // below, so a module living inside some package must not earn it
+            // merely by defining `main!`: that would hand any dependency a
+            // real host-bound effect.
+            //
+            // Such a module stays an ordinary type module, and its `main!` an
+            // ordinary top-level definition. Deliberately with no diagnostic:
+            // outside an entry module `main!` is just a name, and an author
+            // who meant it as an entrypoint hears about it through the errors
+            // on whatever effects that module was reaching for.
             // Don't report errors here - validation will handle that
             const main_status = try self.checkMainFunction(false);
-            if (main_status == .valid) {
+            if (main_status == .valid and self.is_entry_module) {
                 self.env.module_kind = .default_app;
             } else {
                 // Set to undefined placeholder - will be properly set during validation
@@ -4559,7 +4675,12 @@ pub fn canonicalizeFile(
                                     break :blk name_ident.eql(decl_ident);
                                 }
                                 break :blk false;
-                            } else false;
+                            } else
+                                // A destructured literal splits into a def per
+                                // name, and the annotation attaches to the def
+                                // of the name it annotates.
+                                self.destructuredLiteralShapesMatch(decl.pattern, decl.body) and
+                                try self.destructuredLiteralPatternBindsName(decl.pattern, name_ident);
 
                             if (names_match) {
                                 i = next_i;
@@ -4576,7 +4697,7 @@ pub fn canonicalizeFile(
                                 // Names don't match - create an anno-only def for this annotation
                                 // and let the next iteration handle the decl normally
                                 const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
+                                const def_idx = try self.createAnnotationDef(name_ident, name_ident, self.parse_ir.tokens.resolve(ta.name), type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                                 try self.env.store.addScratchDef(def_idx);
                                 try self.recordGlobalValueDef(def_idx);
 
@@ -4592,7 +4713,7 @@ pub fn canonicalizeFile(
                             // If the next non-malformed stmt is not a decl,
                             // create a Def with an e_anno_only body
                             const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
+                            const def_idx = try self.createAnnotationDef(name_ident, name_ident, self.parse_ir.tokens.resolve(ta.name), type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                             try self.env.store.addScratchDef(def_idx);
                             try self.recordGlobalValueDef(def_idx);
 
@@ -4612,7 +4733,7 @@ pub fn canonicalizeFile(
                 // (This handles the case where the type annotation is the last statement in the file)
                 if (next_i >= ast_stmt_idxs.len) {
                     const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
+                    const def_idx = try self.createAnnotationDef(name_ident, name_ident, self.parse_ir.tokens.resolve(ta.name), type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                     try self.env.store.addScratchDef(def_idx);
                     try self.recordGlobalValueDef(def_idx);
 
@@ -4633,8 +4754,30 @@ pub fn canonicalizeFile(
         }
     }
 
-    try self.resolvePlatformProvides();
-    try self.resolvePlatformHosted();
+    // Associated forward-reference adoption can rewrite a placeholder's ident
+    // while canonicalization is in progress. Select source-visible values only
+    // after those rewrites are complete, so every name-sensitive output below
+    // consumes the same final definition identity.
+    var top_level_value_defs_by_ident = TopLevelValueDefMap{};
+    defer top_level_value_defs_by_ident.deinit(self.env.gpa);
+    for (self.scratch_global_value_defs.items) |def_idx| {
+        const def = self.env.store.getDef(def_idx);
+        const pattern = self.env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+
+        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.assign.ident);
+        if (!selected.found_existing) {
+            selected.value_ptr.* = def_idx;
+        } else {
+            const prior = self.env.store.getDef(selected.value_ptr.*);
+            if (self.env.store.getExpr(prior.expr) == .e_anno_only and self.env.store.getExpr(def.expr) != .e_anno_only) {
+                selected.value_ptr.* = def_idx;
+            }
+        }
+    }
+
+    try self.resolvePlatformProvides(&top_level_value_defs_by_ident);
+    try self.resolvePlatformHosted(&top_level_value_defs_by_ident);
     try self.resolveQualifiedExposedTypes();
 
     // Check for exposed but not implemented items
@@ -4667,28 +4810,6 @@ pub fn canonicalizeFile(
         try self.env.store.addScratchDef(def_idx);
     }
     self.env.global_value_defs = try self.env.store.defSpanFrom(global_value_defs_start);
-
-    // Associated forward-reference adoption can rewrite a placeholder's ident
-    // while canonicalization is in progress. Select source-visible values only
-    // after those rewrites are complete, so the retained identifiers and
-    // definition identities are final.
-    var top_level_value_defs_by_ident = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx){};
-    defer top_level_value_defs_by_ident.deinit(self.env.gpa);
-    for (self.scratch_global_value_defs.items) |def_idx| {
-        const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-
-        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.assign.ident);
-        if (!selected.found_existing) {
-            selected.value_ptr.* = def_idx;
-        } else {
-            const prior = self.env.store.getDef(selected.value_ptr.*);
-            if (self.env.store.getExpr(prior.expr) == .e_anno_only and self.env.store.getExpr(def.expr) != .e_anno_only) {
-                selected.value_ptr.* = def_idx;
-            }
-        }
-    }
 
     var value_binding_defs_match_global = true;
     var top_level_value_defs_match_global = true;
@@ -4740,7 +4861,6 @@ pub fn canonicalizeFile(
     try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
 
     // Compute dependency-based evaluation order using SCC analysis
-    const DependencyGraph = @import("DependencyGraph.zig");
     var graph = try DependencyGraph.buildDependencyGraph(
         self.env,
         self.env.all_defs,
@@ -4785,7 +4905,6 @@ fn poisonRecursiveNonFunctionDefs(
         region: Region,
     };
 
-    const DependencyGraph = @import("DependencyGraph.zig");
     var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer binders.deinit(self.env.gpa);
     var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
@@ -5027,12 +5146,16 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
 fn createAnnotationDef(
     self: *Self,
     ident: base.Ident.Idx,
+    source_binding_ident: base.Ident.Idx,
+    source_binding_region: Region,
     type_anno_idx: TypeAnno.Idx,
     annotation_expr_kind: AnnotationExprKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
     parser_decl_idx: ?AST.DeclIndex.DeclIdx,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
+    try self.warnAboutBindingName(source_binding_ident, source_binding_region, .immutable);
+
     // If a placeholder pattern was previously registered for this ident in a
     // parent scope (e.g. by builtin hierarchical name registration), reuse it
     // instead of introducing a fresh one.
@@ -5127,7 +5250,7 @@ fn createAnnotationPattern(
         const new_pattern_idx = try self.env.addPattern(pattern, region);
 
         // Introduce the identifier to scope so it can be referenced
-        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, new_pattern_idx, false, true)) {
+        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, new_pattern_idx, true)) {
             .success => {},
             .shadowing_warning => |shadowed_pattern_idx| {
                 const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -5150,11 +5273,14 @@ fn createAnnotationDefWithPattern(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     ident: base.Ident.Idx,
+    source_binding_ident: base.Ident.Idx,
+    source_binding_region: Region,
     type_anno_idx: TypeAnno.Idx,
     annotation_expr_kind: AnnotationExprKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
+    try self.warnAboutBindingName(source_binding_ident, source_binding_region, .immutable);
     try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
 
     const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
@@ -5199,6 +5325,8 @@ fn canonicalizeStmtDecl(
 
     const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(ast_stmt_idx));
 
+    if (mb_validated_anno == null and try self.canonicalizeDestructuredLiteralDecl(decl, parser_decl_idx, mb_last_anno)) return;
+
     // Canonicalize the decl (with the validated anno)
     const def_idx = try self.canonicalizeDeclWithAnnotation(
         decl,
@@ -5212,21 +5340,395 @@ fn canonicalizeStmtDecl(
     // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
     // and add the node index to exposed_items
     const pattern = self.parse_ir.store.getPattern(decl.pattern);
+    if (pattern != .ident) {
+        try self.recordExposedDestructuredNames(def_idx);
+    }
     if (pattern == .ident) {
         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
         const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-
-        // Top-level associated items (identifiers ending with '!') are automatically exposed
-        const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
         const idx = try self.env.insertIdent(base.Ident.for_text(ident_text));
+        try self.recordExposedNamedDef(idx, ident_text, def_idx);
+    }
+}
 
-        // If this identifier is exposed (or is an associated item), add it to exposed_items
-        if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
-            // Store the def index as u16 in exposed_items
-            const def_idx_u32: u32 = @intFromEnum(def_idx);
-            try self.env.setExposedValueNodeIndexById(idx, def_idx_u32);
+/// Bookkeep a plainly named top-level def against the module's exposed items:
+/// an exposed name (or an associated `!` item) becomes an exposed item pointing
+/// at the def, and leaves the pending exposed set.
+fn recordExposedNamedDef(self: *Self, ident: Ident.Idx, ident_text: []const u8, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    // Top-level associated items (identifiers ending with '!') are automatically exposed
+    const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
+    if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
+        try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(def_idx));
+    }
+    _ = self.exposed_ident_texts.remove(ident_text);
+}
+
+/// A top-level destructure of a record or tuple literal whose shape matches
+/// the pattern field for field binds each name to that field's expression and
+/// nothing else: `{ a, b } = { a: E1, b: E2 }` means `a = E1` and `b = E2`,
+/// and `(a, b) = (E1, E2)` likewise. It canonicalizes as exactly those defs,
+/// so each name is a plain top-level def (a function among them generalizes
+/// like any function def), and a nested matching literal splits the same way.
+/// A pending annotation naming one of the fields annotates that field's def.
+/// Returns false, leaving the declaration to `canonicalizeDeclWithAnnotation`,
+/// when the shapes do not match.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn canonicalizeDestructuredLiteralDecl(
+    self: *Self,
+    decl: AST.Statement.Decl,
+    parser_decl_idx: ?AST.DeclIndex.DeclIdx,
+    mb_anno: ?TypeAnnoIdent,
+) std.mem.Allocator.Error!bool {
+    if (!self.destructuredLiteralShapesMatch(decl.pattern, decl.body)) return false;
+
+    const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+    var pending: std.ArrayList(PendingDestructuredLiteralPart) = .empty;
+    defer pending.deinit(self.env.gpa);
+    try self.pushDestructuredLiteralParts(&pending, decl.pattern, decl.body);
+    while (pending.pop()) |item| {
+        if (item.part == .pattern and self.destructuredLiteralShapesMatch(item.part.pattern, item.value_expr)) {
+            try self.pushDestructuredLiteralParts(&pending, item.part.pattern, item.value_expr);
+            continue;
         }
+        try self.canonicalizeDestructuredLiteralDef(item, parser_decl_idx, mb_anno, region);
+    }
+    return true;
+}
 
+/// Whether `pattern` is a record or tuple pattern and `expr` a literal of the
+/// same kind with exactly the pattern's fields: the same labels once each with
+/// a supplied value and no extension for a record, the same arity for a tuple,
+/// and every field pattern a name or a nested record or tuple pattern. An
+/// empty pattern, or one with a refutable field pattern, keeps the ordinary
+/// path and its own diagnostics.
+fn destructuredLiteralShapesMatch(self: *const Self, pattern_idx: AST.Pattern.Idx, expr_idx: AST.Expr.Idx) bool {
+    const store = &self.parse_ir.store;
+    switch (store.getPattern(pattern_idx)) {
+        .record => |pattern_record| {
+            const expr = store.getExpr(expr_idx);
+            if (expr != .record) return false;
+            if (expr.record.ext != null) return false;
+            const pattern_fields = store.patternRecordFieldSlice(pattern_record.fields);
+            const expr_fields = store.recordFieldSlice(expr.record.fields);
+            if (pattern_fields.len == 0 or pattern_fields.len != expr_fields.len) return false;
+            for (pattern_fields, 0..) |pattern_field_idx, pattern_index| {
+                const pattern_field = store.getPatternRecordField(pattern_field_idx);
+                if (pattern_field.rest) return false;
+                const name_tok = pattern_field.name orelse return false;
+                const name = self.parse_ir.tokens.resolveIdentifier(name_tok) orelse return false;
+                if (pattern_field.value) |sub_pattern| {
+                    if (!self.destructuredLiteralFieldPatternIsBinding(sub_pattern)) return false;
+                }
+                for (pattern_fields[0..pattern_index]) |earlier_idx| {
+                    const earlier = store.getPatternRecordField(earlier_idx);
+                    const earlier_tok = earlier.name orelse return false;
+                    const earlier_name = self.parse_ir.tokens.resolveIdentifier(earlier_tok) orelse return false;
+                    if (earlier_name.eql(name)) return false;
+                }
+                if (self.literalFieldSupplyingName(expr_fields, name) == null) return false;
+            }
+            return true;
+        },
+        .tuple => |pattern_tuple| {
+            const expr = store.getExpr(expr_idx);
+            if (expr != .tuple) return false;
+            const item_patterns = store.patternSlice(pattern_tuple.patterns);
+            if (item_patterns.len == 0 or item_patterns.len != store.exprSlice(expr.tuple.items).len) return false;
+            for (item_patterns) |item_pattern| {
+                if (!self.destructuredLiteralFieldPatternIsBinding(item_pattern)) return false;
+            }
+            return true;
+        },
+        .ident,
+        .var_ident,
+        .tag,
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .string,
+        .single_quote,
+        .list,
+        .list_rest,
+        .underscore,
+        .alternatives,
+        .as,
+        .malformed,
+        => return false,
+    }
+}
+
+/// Whether a field's pattern is a name, or a record or tuple pattern that
+/// either splits further or becomes a destructuring def of its own.
+fn destructuredLiteralFieldPatternIsBinding(self: *const Self, pattern_idx: AST.Pattern.Idx) bool {
+    return switch (self.parse_ir.store.getPattern(pattern_idx)) {
+        .ident, .record, .tuple => true,
+        .var_ident,
+        .tag,
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .string,
+        .single_quote,
+        .list,
+        .list_rest,
+        .underscore,
+        .alternatives,
+        .as,
+        .malformed,
+        => false,
+    };
+}
+
+/// The expression a record literal supplies for the field `name`, if the
+/// literal has exactly one such field and it is written out.
+fn literalFieldSupplyingName(self: *const Self, expr_fields: []const AST.RecordField.Idx, name: Ident.Idx) ?AST.Expr.Idx {
+    var found: ?AST.Expr.Idx = null;
+    for (expr_fields) |field_idx| {
+        const field = self.parse_ir.store.getRecordField(field_idx);
+        const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse return null;
+        if (!field_name.eql(name)) continue;
+        if (found != null) return null;
+        found = switch (field.value) {
+            .supplied => |value| value,
+            .punned, .unset => return null,
+        };
+    }
+    return found;
+}
+
+const DestructuredLiteralPart = union(enum) {
+    /// The field's own sub-pattern, or a tuple item's pattern.
+    pattern: AST.Pattern.Idx,
+    /// A punned record field, which binds the field's name itself.
+    name: struct { ident: Ident.Idx, region: Region },
+};
+
+const PendingDestructuredLiteralPart = struct {
+    part: DestructuredLiteralPart,
+    value_expr: AST.Expr.Idx,
+};
+
+/// Push a matching literal's parts so that popping them yields pattern order.
+fn pushDestructuredLiteralParts(
+    self: *Self,
+    pending: *std.ArrayList(PendingDestructuredLiteralPart),
+    pattern_idx: AST.Pattern.Idx,
+    expr_idx: AST.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    const store = &self.parse_ir.store;
+    switch (store.getPattern(pattern_idx)) {
+        .record => |pattern_record| {
+            const expr_fields = store.recordFieldSlice(store.getExpr(expr_idx).record.fields);
+            const pattern_fields = store.patternRecordFieldSlice(pattern_record.fields);
+            var index = pattern_fields.len;
+            while (index > 0) {
+                index -= 1;
+                const pattern_field = store.getPatternRecordField(pattern_fields[index]);
+                const name = self.parse_ir.tokens.resolveIdentifier(pattern_field.name.?).?;
+                const value_expr = self.literalFieldSupplyingName(expr_fields, name).?;
+                const part: DestructuredLiteralPart = if (pattern_field.value) |sub_pattern|
+                    .{ .pattern = sub_pattern }
+                else
+                    .{ .name = .{ .ident = name, .region = self.parse_ir.tokenizedRegionToRegion(pattern_field.region) } };
+                try pending.append(self.env.gpa, .{ .part = part, .value_expr = value_expr });
+            }
+        },
+        .tuple => |pattern_tuple| {
+            const item_patterns = store.patternSlice(pattern_tuple.patterns);
+            const items = store.exprSlice(store.getExpr(expr_idx).tuple.items);
+            var index = item_patterns.len;
+            while (index > 0) {
+                index -= 1;
+                try pending.append(self.env.gpa, .{ .part = .{ .pattern = item_patterns[index] }, .value_expr = items[index] });
+            }
+        },
+        .ident,
+        .var_ident,
+        .tag,
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .string,
+        .single_quote,
+        .list,
+        .list_rest,
+        .underscore,
+        .alternatives,
+        .as,
+        .malformed,
+        => unreachable,
+    }
+}
+
+/// One field of a destructured literal as its own top-level def.
+fn canonicalizeDestructuredLiteralDef(
+    self: *Self,
+    item: PendingDestructuredLiteralPart,
+    parser_decl_idx: ?AST.DeclIndex.DeclIdx,
+    mb_anno: ?TypeAnnoIdent,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    const reassign_targets_start = self.scratch_reassign_targets.top();
+    // Only the binder adopts a placeholder created for a reference ahead of
+    // the declaration; a binder nested in the field's value is a different
+    // name.
+    const pattern_idx = blk: {
+        const saved_adopting_forward_decl = self.adopting_forward_decl;
+        self.adopting_forward_decl = parser_decl_idx;
+        defer self.adopting_forward_decl = saved_adopting_forward_decl;
+        break :blk switch (item.part) {
+            .pattern => |sub_pattern| try self.canonicalizePatternOrMalformed(sub_pattern),
+            .name => |name| try self.bindDestructuredName(name.ident, name.region),
+        };
+    };
+    if (self.currentScopeIdx() == 0) {
+        try self.markBoundPatternsGloballyResolvable(pattern_idx);
+    }
+
+    const pattern = self.env.store.getPattern(pattern_idx);
+    const mb_anno_idx: ?Annotation.Idx = if (mb_anno) |anno_info| anno: {
+        if (pattern != .assign or !pattern.assign.ident.eql(anno_info.name)) break :anno null;
+        break :anno try self.createAnnotationFromTypeAnno(
+            anno_info.anno_idx,
+            anno_info.where,
+            self.env.store.getPatternRegion(pattern_idx),
+            anno_info.name_region,
+        );
+    } else null;
+
+    // Track the def's bound binders so a reference to one of them on the RHS
+    // is reported as a self-referential definition, as for any def.
+    const is_lambda = self.parse_ir.store.getExpr(item.value_expr) == .lambda;
+    const saved_defining_bound_vars = self.defining_bound_vars;
+    if (!is_lambda) {
+        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx, reassign_targets_start);
+    }
+    self.scratch_reassign_targets.clearFrom(reassign_targets_start);
+
+    const can_expr = try self.canonicalizeExprOrMalformed(item.value_expr);
+
+    self.endDefiningBoundVars(saved_defining_bound_vars);
+
+    const def_idx = try self.env.addDef(.{
+        .pattern = pattern_idx,
+        .expr = can_expr.idx,
+        .annotation = mb_anno_idx,
+        .kind = .let,
+    }, region);
+    try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
+    if (pattern == .assign) {
+        try self.recordExposedNamedDef(pattern.assign.ident, self.env.getIdent(pattern.assign.ident), def_idx);
+    } else {
+        try self.recordExposedDestructuredNames(def_idx);
+    }
+}
+
+/// Whether a declaration pattern binds `name` directly as a field name or an
+/// identifier sub-pattern, at any nesting of record and tuple patterns.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn destructuredLiteralPatternBindsName(self: *Self, root: AST.Pattern.Idx, name: Ident.Idx) std.mem.Allocator.Error!bool {
+    const store = &self.parse_ir.store;
+    var pending: std.ArrayList(AST.Pattern.Idx) = .empty;
+    defer pending.deinit(self.env.gpa);
+    try pending.append(self.env.gpa, root);
+    while (pending.pop()) |pattern_idx| {
+        switch (store.getPattern(pattern_idx)) {
+            .ident => |ident| {
+                const bound = self.parse_ir.tokens.resolveIdentifier(ident.ident_tok) orelse continue;
+                if (bound.eql(name)) return true;
+            },
+            .record => |record| {
+                for (store.patternRecordFieldSlice(record.fields)) |field_idx| {
+                    const field = store.getPatternRecordField(field_idx);
+                    if (field.value) |sub_pattern| {
+                        try pending.append(self.env.gpa, sub_pattern);
+                    } else if (field.name) |name_tok| {
+                        const bound = self.parse_ir.tokens.resolveIdentifier(name_tok) orelse continue;
+                        if (bound.eql(name)) return true;
+                    }
+                }
+            },
+            .tuple => |tuple| {
+                for (store.patternSlice(tuple.patterns)) |item| try pending.append(self.env.gpa, item);
+            },
+            .var_ident,
+            .tag,
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .string,
+            .single_quote,
+            .list,
+            .list_rest,
+            .underscore,
+            .alternatives,
+            .as,
+            .malformed,
+            => {},
+        }
+    }
+    return false;
+}
+
+/// Bind a name a top-level destructured literal introduces: the placeholder
+/// of a reference ahead of the declaration when there is one, otherwise a new
+/// binder introduced into scope like a punned record field's.
+fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    if (self.adoptForwardBinder(ident, region)) |placeholder| {
+        try self.warnAboutBindingName(ident, region, .immutable);
+        return placeholder;
+    }
+    const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = ident } }, region);
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, true)) {
+        .success => try self.warnAboutBindingName(ident, region, .immutable),
+        .shadowing_warning => |shadowed_pattern_idx| {
+            try self.warnAboutBindingName(ident, region, .immutable);
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident,
+                .region = region,
+                .original_region = self.env.store.getPatternRegion(shadowed_pattern_idx),
+            } });
+        },
+        // is_var=false
+        .top_level_var_error => unreachable,
+        // is_declaration=true
+        .var_across_function_boundary, .var_reassignment_ok => unreachable,
+    }
+    return pattern_idx;
+}
+
+/// Whether a module's exposed items may name values bound by top-level
+/// destructures. A plain module's exposed values are reached only through
+/// value lookups, which accept a binder pattern as the target; an app's
+/// provided entrypoints and a platform's provided and hosted entries are
+/// consumed as defs.
+fn destructuredNamesAreExposable(self: *const Self) bool {
+    return self.env.module_kind == .module;
+}
+
+/// Bookkeep each exposed name a destructuring def binds the way a plainly
+/// named def is: it becomes an exposed item pointing at the name's binder
+/// pattern and leaves the pending exposed set.
+fn recordExposedDestructuredNames(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    if (!self.destructuredNamesAreExposable()) return;
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+    const def = self.env.store.getDef(def_idx);
+    try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+    for (binders.items) |binder| {
+        const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+        const ident_text = self.env.getIdent(ident);
+        if (!self.exposed_ident_texts.contains(ident_text)) continue;
+        try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
         _ = self.exposed_ident_texts.remove(ident_text);
     }
 }
@@ -5260,7 +5762,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
     while (pending.pop()) |current_idx| {
         const pattern = self.env.store.getPattern(current_idx);
         switch (pattern) {
-            .assign => {
+            .assign, .var_assign => {
                 try target.append(current_idx);
             },
             .record_destructure => |destructure| {
@@ -5405,7 +5907,7 @@ fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allo
     while (pending.pop()) |current_idx| {
         const pattern = self.env.store.getPattern(current_idx);
         switch (pattern) {
-            .assign => {
+            .assign, .var_assign => {
                 if (!self.scratch_bound_vars.contains(current_idx)) {
                     try self.scratch_bound_vars.append(current_idx);
                 }
@@ -5492,6 +5994,7 @@ fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allo
 fn boundPatternIdent(self: *Self, pattern_idx: Pattern.Idx) ?base.Ident.Idx {
     const pattern = self.env.store.getPattern(pattern_idx);
     if (pattern == .assign) return pattern.assign.ident;
+    if (pattern == .var_assign) return pattern.var_assign.ident;
     if (pattern == .as) return pattern.as.ident;
     return null;
 }
@@ -5527,7 +6030,7 @@ fn introduceExistingPatternBindingsIntoScope(
 ) std.mem.Allocator.Error!void {
     for (pattern_bindings) |pattern_idx| {
         const ident_idx = self.boundPatternIdent(pattern_idx) orelse continue;
-        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true);
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, true);
     }
 }
 
@@ -5734,22 +6237,10 @@ fn addPlatformHostedItems(
 /// Resolve hosted mappings once imports and exposed definitions are known.
 /// The resulting target is the same explicit external-definition identity
 /// used by ordinary qualified value lookups.
-/// This module's own top-level definition of `ident`, for a hosted entry that
-/// named no module. A later definition wins, the way a duplicate top-level
-/// value's later definition does.
-fn platformOwnDefForIdent(self: *const Self, ident: Ident.Idx) ?CIR.Def.Idx {
-    var found: ?CIR.Def.Idx = null;
-    for (self.scratch_global_value_defs.items) |def_idx| {
-        const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-        if (!pattern.assign.ident.eql(ident)) continue;
-        found = def_idx;
-    }
-    return found;
-}
-
-fn resolvePlatformHosted(self: *Self) std.mem.Allocator.Error!void {
+fn resolvePlatformHosted(
+    self: *Self,
+    selected_by_ident: *const TopLevelValueDefMap,
+) std.mem.Allocator.Error!void {
     if (self.env.module_kind != .platform) return;
 
     for (self.env.hosted_entries.items.items) |*entry| {
@@ -5758,7 +6249,7 @@ fn resolvePlatformHosted(self: *Self) std.mem.Allocator.Error!void {
             // platform module. Such a target has no import, so a resolved entry
             // with no `target_import` is how later stages read "the platform's
             // own definition".
-            const own_def = self.platformOwnDefForIdent(entry.func_ident) orelse {
+            const own_def = selected_by_ident.get(entry.func_ident) orelse {
                 entry.target_status = .missing_value;
                 continue;
             };
@@ -5870,12 +6361,12 @@ fn addPlatformProvidesItems(
 
 /// Resolve `provides` declarations once all platform top-level definitions are
 /// known. Only platform-local definitions are published to later stages.
-fn resolvePlatformProvides(self: *Self) std.mem.Allocator.Error!void {
+fn resolvePlatformProvides(
+    self: *Self,
+    selected_by_ident: *const TopLevelValueDefMap,
+) std.mem.Allocator.Error!void {
     for (self.pending_provides_entries.items) |entry| {
-        const local_def: ?CIR.Def.Idx = if (self.env.getExposedValueNodeIndexById(entry.ident)) |node_idx|
-            @enumFromInt(@as(u32, @intCast(node_idx)))
-        else
-            null;
+        const local_def = selected_by_ident.get(entry.ident);
         _ = try self.env.provides_entries.append(self.env.gpa, .{
             .ident = entry.ident,
             .ffi_symbol = entry.ffi_symbol,
@@ -6092,19 +6583,50 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     const scratch_exports_start = self.env.store.scratchDefTop();
 
     const defs_slice = self.env.store.sliceDefs(self.env.top_level_value_defs);
+    const file = self.parse_ir.store.getFile();
+    const header = self.parse_ir.store.getHeader(file.header);
+    const has_implicit_default_app_main = self.env.module_kind == .default_app and switch (header) {
+        .type_module, .default_app => true,
+        .app, .module, .package, .platform, .hosted, .malformed => false,
+    };
 
     // Check each definition to see if it corresponds to an exposed item.
     // We check exposed_idents which only contains items from the exposing clause,
     // not associated items like "Color.as_str" which are registered separately.
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
-            // Check if this identifier was explicitly exposed in the module header
-            if (self.exposed_idents.contains(pattern.assign.ident)) {
+            // Headerless default apps have an implicit `provides [main!]`.
+            // Record it in the same exact export-definition inventory that
+            // explicit app headers produce, so checked root construction
+            // consumes this inventory instead of the broader exposed-item map.
+            const is_implicit_main = has_implicit_default_app_main and
+                pattern.assign.ident.eql(self.env.idents.main_bang);
+            if (self.exposed_idents.contains(pattern.assign.ident) or is_implicit_main) {
                 try self.env.store.addScratchDef(def_idx);
                 try self.env.setExposedValueNodeIndexById(pattern.assign.ident, @intFromEnum(def_idx));
+            }
+            continue;
+        }
+
+        // A destructuring def in a plain module exposes each exposed name it
+        // binds. The exposed item points at the name's binder pattern: its var
+        // is the name's type, and the checked artifact publishes the name's
+        // extraction root under it.
+        if (!self.destructuredNamesAreExposable()) continue;
+        binders.clearRetainingCapacity();
+        try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+        for (binders.items) |binder| {
+            const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+            if (self.exposed_idents.contains(ident)) {
+                try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
             }
         }
     }
@@ -6883,6 +7405,7 @@ fn convertNestedImportExposesToCIR(
 /// Canonicalize a file import statement: `import "path" as name : Type`
 fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined).file_import)) std.mem.Allocator.Error!void {
     const region = self.parse_ir.tokenizedRegionToRegion(fi.region);
+    const name_region = self.parse_ir.tokens.resolve(fi.name_tok);
     const name_ident = self.parse_ir.tokens.resolveIdentifier(fi.name_tok) orelse return;
 
     // Resolve the file path from the StringPart token text
@@ -6893,7 +7416,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
             .path = path_string,
             .region = region,
         } });
-        try self.createFileImportDef(name_ident, err_expr, region);
+        try self.createFileImportDef(name_ident, err_expr, region, name_region);
         return;
     }
 
@@ -6912,7 +7435,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
             .path = path_string,
             .region = region,
         } });
-        try self.createFileImportDef(name_ident, err_expr, region);
+        try self.createFileImportDef(name_ident, err_expr, region, name_region);
         return;
     }
 
@@ -6924,7 +7447,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
             .path = path_string,
             .region = region,
         } });
-        try self.createFileImportDef(name_ident, err_expr, region);
+        try self.createFileImportDef(name_ident, err_expr, region, name_region);
         return;
     }
 
@@ -6968,7 +7491,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         };
         // Create a runtime error expression for the def (this also pushes the diagnostic)
         const err_expr = try self.env.pushMalformed(Expr.Idx, diag);
-        try self.createFileImportDef(name_ident, err_expr, region);
+        try self.createFileImportDef(name_ident, err_expr, region, name_region);
         return;
     };
     defer self.env.gpa.free(file_contents);
@@ -6997,7 +7520,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         } }, region);
     };
 
-    try self.createFileImportDef(name_ident, expr_idx, region);
+    try self.createFileImportDef(name_ident, expr_idx, region, name_region);
 }
 
 fn isAbsoluteFileImportPath(path: []const u8) bool {
@@ -7022,7 +7545,15 @@ fn sha256Bytes(bytes: []const u8) [32]u8 {
 }
 
 /// Helper to create a def for a file import binding
-fn createFileImportDef(self: *Self, name_ident: base.Ident.Idx, expr_idx: Expr.Idx, region: Region) std.mem.Allocator.Error!void {
+fn createFileImportDef(
+    self: *Self,
+    name_ident: base.Ident.Idx,
+    expr_idx: Expr.Idx,
+    region: Region,
+    name_region: Region,
+) std.mem.Allocator.Error!void {
+    try self.warnAboutBindingName(name_ident, name_region, .immutable);
+
     // If a forward-reference placeholder for this name was already introduced
     // (because an earlier statement referenced it), reuse that pattern.
     const pattern_idx = if (self.scopeContains(.ident, name_ident)) |existing|
@@ -7033,7 +7564,7 @@ fn createFileImportDef(self: *Self, name_ident: base.Ident.Idx, expr_idx: Expr.I
             .assign = .{ .ident = name_ident },
         };
         const new_pattern_idx = try self.env.addPattern(pattern, region);
-        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, false, true)) {
+        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, true)) {
             .success => {},
             .shadowing_warning => |shadowed_pattern_idx| {
                 const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -7557,9 +8088,20 @@ fn canonicalizeSingleQuote(
     self: *Self,
     token_region: AST.TokenizedRegion,
     token: Token.Idx,
+    type_ident: ?Ident.Idx,
     comptime Idx: type,
 ) std.mem.Allocator.Error!?Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(token_region);
+
+    const suffix_target = if (type_ident) |ident|
+        (try self.resolveNumericSuffixTarget(ident)) orelse {
+            return try self.env.pushMalformed(Idx, Diagnostic{ .undeclared_type = .{
+                .name = ident,
+                .region = region,
+            } });
+        }
+    else
+        null;
 
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
@@ -7588,13 +8130,21 @@ fn canonicalizeSingleQuote(
     }
 
     if (comptime Idx == Expr.Idx) {
-        const expr_idx = try self.env.addExpr(CIR.Expr{
-            .e_num = .{
+        const expr = if (type_ident) |ident|
+            CIR.Expr{ .e_typed_int = .{
+                .value = value_content,
+                .type_name = ident,
+            } }
+        else
+            CIR.Expr{ .e_num = .{
                 .value = value_content,
                 .kind = .int_unbound,
-            },
-        }, region);
+            } };
+        const expr_idx = try self.env.addExpr(expr, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
+        if (suffix_target) |target| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), target);
+        }
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
         const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
@@ -7602,6 +8152,9 @@ fn canonicalizeSingleQuote(
             .kind = .int_unbound,
         } }, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(pat_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
+        if (suffix_target) |target| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pat_idx), target);
+        }
         return pat_idx;
     } else {
         @compileError("Unsupported Idx type");
@@ -8515,7 +9068,7 @@ fn appendTryOkPassthroughBranch(
         .assign = .{ .ident = self.env.idents.question_ok },
     }, region);
 
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, self.env.idents.question_ok, ok_assign_pattern_idx, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, self.env.idents.question_ok, ok_assign_pattern_idx, true);
 
     const ok_patterns_start = self.env.store.scratchPatternTop();
     try self.env.store.addScratchPattern(ok_assign_pattern_idx);
@@ -8551,7 +9104,7 @@ fn addTryErrAssignPatternInCurrentScope(
     const err_assign_pattern_idx = try self.env.addPattern(Pattern{
         .assign = .{ .ident = self.env.idents.question_err },
     }, region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, self.env.idents.question_err, err_assign_pattern_idx, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, self.env.idents.question_err, err_assign_pattern_idx, true);
     return err_assign_pattern_idx;
 }
 
@@ -8577,6 +9130,104 @@ fn addTryReturnErr(
             .region = region,
             .context = .try_suffix,
         } });
+}
+
+/// Warn about every `?` that produces the value a function returns. `expr_idx`
+/// is a function body or a `return` operand; its tail positions are followed
+/// through blocks and through `if` and `match` branches, and each `?` reached
+/// that way applies to the function's return value.
+fn warnTrailingTrySuffix(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!void {
+    switch (self.env.store.getExpr(expr_idx)) {
+        .e_block => |block| try self.warnTrailingTrySuffix(block.final_expr),
+        .e_if => |if_expr| {
+            for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                try self.warnTrailingTrySuffix(self.env.store.getIfBranch(branch_idx).body);
+            }
+            try self.warnTrailingTrySuffix(if_expr.final_else);
+        },
+        .e_match => |match_expr| {
+            if (match_expr.is_try_suffix) {
+                try self.env.pushDiagnostic(Diagnostic{ .trailing_try_suffix = .{
+                    .region = self.trySuffixOperatorRegion(expr_idx),
+                } });
+            } else {
+                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    try self.warnTrailingTrySuffix(self.env.store.getMatchBranch(branch_idx).value);
+                }
+            }
+        },
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => {},
+    }
+}
+
+/// The region to highlight for a `?` desugared into `expr_idx`: just the `?`
+/// itself when the expression's source ends with it (the suffix form), and the
+/// whole expression otherwise (the `lhs ? handler` form).
+fn trySuffixOperatorRegion(self: *const Self, expr_idx: Expr.Idx) Region {
+    const region = self.env.store.getExprRegion(expr_idx);
+    const source = self.env.getSource(region);
+    if (source.len > 0 and source[source.len - 1] == '?') {
+        return Region{
+            .start = .{ .offset = region.end.offset - 1 },
+            .end = region.end,
+        };
+    }
+    return region;
 }
 
 fn addTryMatch(
@@ -9121,7 +9772,6 @@ const DefiniteInitAnalyzer = struct {
                 break :blk try self.analyzeExpr(binop.rhs, state, breaks);
             },
             .e_unary_minus => |unary| try self.analyzeExpr(unary.expr, state, breaks),
-            .e_unary_not => |unary| try self.analyzeExpr(unary.expr, state, breaks),
             .e_field_access => |field| try self.analyzeExpr(field.receiver, state, breaks),
             .e_method_call => |call| blk: {
                 if (!try self.analyzeExpr(call.receiver, state, breaks)) break :blk false;
@@ -9282,7 +9932,7 @@ const DefiniteInitAnalyzer = struct {
         while (pending.pop()) |current_idx| {
             const pattern = self.can.env.store.getPattern(current_idx);
             switch (pattern) {
-                .assign => state.markInitialized(current_idx),
+                .assign, .var_assign => state.markInitialized(current_idx),
                 .as => |as| {
                     state.markInitialized(current_idx);
                     try pending.append(stack_allocator, as.pattern);
@@ -9343,8 +9993,9 @@ fn createBlockAnnoOnlyStatement(
     type_anno_idx: TypeAnno.Idx,
     where_clauses: ?WhereClause.Span,
     region: Region,
+    name_region: Region,
 ) std.mem.Allocator.Error!CanonicalizedStatement {
-    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, .ordinary, where_clauses, region, null);
+    const def_idx = try self.createAnnotationDef(ident, ident, name_region, type_anno_idx, .ordinary, where_clauses, region, null);
     try self.env.store.addScratchDef(def_idx);
 
     const def = self.env.store.getDef(def_idx);
@@ -9384,9 +10035,10 @@ fn scheduleBlockDeclContinuation(
         const ident_tok = pattern_ident.ident_tok;
 
         if (self.parse_ir.tokens.resolveIdentifier(ident_tok)) |ident_idx| {
-            switch (self.scopeLookup(.ident, ident_idx)) {
-                .found => |existing_pattern_idx| {
-                    if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
+            if (self.scopeFindBinding(.ident, ident_idx)) |existing_binding| {
+                const existing_pattern_idx = existing_binding.pattern_idx;
+                if (self.isVarPattern(existing_pattern_idx)) {
+                    if (existing_binding.crosses_function_boundary) {
                         if (type_var_scope) |scope_idx| {
                             self.scopeExitTypeVar(scope_idx);
                         }
@@ -9402,20 +10054,17 @@ fn scheduleBlockDeclContinuation(
                         return;
                     }
 
-                    if (self.isVarPattern(existing_pattern_idx)) {
-                        try stacks.pushFinishBlockReassignStmt(frame_allocator, .{
-                            .block = block,
-                            .next = next,
-                            .region = ident_region,
-                            .pattern_idx = existing_pattern_idx,
-                            .ast_expr = d.body,
-                            .type_var_scope = type_var_scope,
-                        });
-                        try stacks.pushParse(frame_allocator, .{ .idx = d.body, .target = .scratch });
-                        return;
-                    }
-                },
-                .not_found => {},
+                    try stacks.pushFinishBlockReassignStmt(frame_allocator, .{
+                        .block = block,
+                        .next = next,
+                        .region = ident_region,
+                        .pattern_idx = existing_pattern_idx,
+                        .ast_expr = d.body,
+                        .type_var_scope = type_var_scope,
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = d.body, .target = .scratch });
+                    return;
+                }
             }
         }
     }
@@ -9760,6 +10409,7 @@ fn canonicalizeStandaloneBlockStatement(
         .@"return" => |return_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
             const expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+            try self.warnTrailingTrySuffix(expr.idx);
             const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addStatement(Statement{ .s_return = .{
                     .expr = expr.idx,
@@ -9844,9 +10494,10 @@ fn canonicalizeStandaloneBlockDecl(
         const ident_tok = pattern_ident.ident_tok;
 
         if (self.parse_ir.tokens.resolveIdentifier(ident_tok)) |ident_idx| {
-            switch (self.scopeLookup(.ident, ident_idx)) {
-                .found => |existing_pattern_idx| {
-                    if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
+            if (self.scopeFindBinding(.ident, ident_idx)) |existing_binding| {
+                const existing_pattern_idx = existing_binding.pattern_idx;
+                if (self.isVarPattern(existing_pattern_idx)) {
+                    if (existing_binding.crosses_function_boundary) {
                         const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .var_across_function_boundary = .{
                             .region = ident_region,
                         } });
@@ -9857,16 +10508,13 @@ fn canonicalizeStandaloneBlockDecl(
                         return CanonicalizedStatement{ .idx = reassign_idx, .free_vars = DataSpan.empty() };
                     }
 
-                    if (self.isVarPattern(existing_pattern_idx)) {
-                        const expr = try self.canonicalizeExprOrMalformed(decl.body);
-                        const reassign_idx = try self.env.addStatement(Statement{ .s_reassign = .{
-                            .pattern_idx = existing_pattern_idx,
-                            .expr = expr.idx,
-                        } }, ident_region);
-                        return CanonicalizedStatement{ .idx = reassign_idx, .free_vars = expr.free_vars };
-                    }
-                },
-                .not_found => {},
+                    const expr = try self.canonicalizeExprOrMalformed(decl.body);
+                    const reassign_idx = try self.env.addStatement(Statement{ .s_reassign = .{
+                        .pattern_idx = existing_pattern_idx,
+                        .expr = expr.idx,
+                    } }, ident_region);
+                    return CanonicalizedStatement{ .idx = reassign_idx, .free_vars = expr.free_vars };
+                }
             }
         }
     }
@@ -9953,6 +10601,7 @@ fn canonicalizeStandaloneVarStatement(
     annotation: ?Annotation.Idx,
 ) std.mem.Allocator.Error!CanonicalizedStatement {
     const region = self.parse_ir.tokenizedRegionToRegion(var_stmt.region);
+    const name_region = self.parse_ir.tokens.resolve(var_stmt.name);
     const var_name = self.parse_ir.tokens.resolveIdentifier(var_stmt.name) orelse {
         const feature = try self.env.insertString("resolve var name");
         return CanonicalizedStatement{
@@ -9964,10 +10613,11 @@ fn canonicalizeStandaloneVarStatement(
         };
     };
 
-    const body = var_stmt.body orelse return try self.createUninitializedVarStatement(var_name, annotation, region);
+    const body = var_stmt.body orelse return try self.createUninitializedVarStatement(var_name, annotation, region, name_region);
     const expr = try self.canonicalizeExprOrMalformed(body);
-    const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = var_name } }, region);
-    _ = try self.scopeIntroduceVar(var_name, pattern_idx, region, true, Pattern.Idx);
+    const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{ .ident = var_name } }, name_region);
+    const introduced = try self.scopeIntroduceVar(var_name, pattern_idx, name_region, true, Pattern.Idx);
+    if (introduced == pattern_idx) try self.warnAboutBindingName(var_name, name_region, .mutable);
     const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
         .pattern_idx = pattern_idx,
         .expr = expr.idx,
@@ -9981,9 +10631,11 @@ fn createUninitializedVarStatement(
     var_name: Ident.Idx,
     annotation: ?Annotation.Idx,
     region: Region,
+    name_region: Region,
 ) std.mem.Allocator.Error!CanonicalizedStatement {
-    const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = var_name } }, region);
-    _ = try self.scopeIntroduceVar(var_name, pattern_idx, region, true, Pattern.Idx);
+    const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{ .ident = var_name } }, name_region);
+    const introduced = try self.scopeIntroduceVar(var_name, pattern_idx, name_region, true, Pattern.Idx);
+    if (introduced == pattern_idx) try self.warnAboutBindingName(var_name, name_region, .mutable);
     const stmt_idx = try self.env.addStatement(Statement{ .s_var_uninitialized = .{
         .pattern_idx = pattern_idx,
         .anno = annotation,
@@ -10053,10 +10705,10 @@ fn canonicalizeStandaloneTypeAnnoStatement(
             .where = where_clauses,
             .name_region = self.parse_ir.tokens.resolve(@intCast(type_anno.name)),
         }, region);
-        return try self.createUninitializedVarStatement(name_ident, annotation_idx, region);
+        return try self.createUninitializedVarStatement(name_ident, annotation_idx, region, self.parse_ir.tokens.resolve(type_anno.name));
     }
 
-    return try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region);
+    return try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region, self.parse_ir.tokens.resolve(type_anno.name));
 }
 
 fn canonicalizeStandaloneWhileStatement(
@@ -10240,7 +10892,6 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
                     .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_unary_not => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
                     .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
                     .e_method_call => |call| {
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
@@ -10645,7 +11296,7 @@ fn runExprKernel(
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
-                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, Expr.Idx) orelse {
+                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Expr.Idx) orelse {
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
                         continue :expr_kernel_loop .dispatch;
                     };
@@ -11064,9 +11715,6 @@ fn runExprKernel(
                 .lambda => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-                    try self.enterFunction(region);
-                    errdefer self.exitFunction();
-
                     try self.scopeEnter(self.env.gpa, true);
                     errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
@@ -11365,6 +12013,40 @@ fn runExprKernel(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const free_vars_start = self.scratch_free_vars.top();
                     const right_expr = self.parse_ir.store.getExpr(e.right);
+                    if (e.target_kind == .method_call) {
+                        if (right_expr != .method_call) unreachable;
+                        const method = right_expr.method_call;
+                        const method_name = self.parse_ir.tokens.resolveIdentifier(method.method_token) orelse {
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                                .region = region,
+                            } });
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        };
+
+                        const raw_method_region = self.parse_ir.tokens.resolve(method.method_token);
+                        const method_name_region = if (raw_method_region.end.offset > raw_method_region.start.offset)
+                            Region{ .start = .{ .offset = raw_method_region.start.offset + 1 }, .end = raw_method_region.end }
+                        else
+                            raw_method_region;
+
+                        const args_slice = self.parse_ir.store.exprSlice(method.args);
+                        try stacks.pushFinishMethodCall(frame_allocator, .{
+                            .region = region,
+                            .free_vars_start = free_vars_start,
+                            .method_name = method_name,
+                            .method_name_region = method_name_region,
+                            .arg_count = args_slice.len + 1,
+                        });
+                        var i = args_slice.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
+                        }
+                        try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
+                        try stacks.pushParse(frame_allocator, .{ .idx = method.receiver, .target = .scratch });
+                        continue :expr_kernel_loop .dispatch;
+                    }
                     if (right_expr == .apply) {
                         const apply = right_expr.apply;
                         const ast_fn = self.parse_ir.store.getExpr(apply.@"fn");
@@ -11635,7 +12317,7 @@ fn runExprKernel(
                     };
 
                     const ast_expr = v.body orelse {
-                        const stmt = try self.createUninitializedVarStatement(var_name, null, region);
+                        const stmt = try self.createUninitializedVarStatement(var_name, null, region, self.parse_ir.tokens.resolve(v.name));
                         try self.addBlockStatement(blockContextFromState(work), stmt);
                         try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
                         break :blk;
@@ -11645,6 +12327,7 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = region,
+                        .name_region = self.parse_ir.tokens.resolve(v.name),
                         .var_name = var_name,
                         .annotation = null,
                         .ast_expr = ast_expr,
@@ -11789,7 +12472,7 @@ fn runExprKernel(
                                     keep_type_var_scope_for_body = true;
                                     const ast_expr = var_stmt.body orelse {
                                         defer self.scopeExitTypeVar(type_var_scope);
-                                        const stmt = try self.createUninitializedVarStatement(name_ident, annotation_idx, var_region);
+                                        const stmt = try self.createUninitializedVarStatement(name_ident, annotation_idx, var_region, self.parse_ir.tokens.resolve(var_stmt.name));
                                         try self.addBlockStatement(blockContextFromState(work), stmt);
                                         try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next_i + 1 });
                                         break :type_anno_blk;
@@ -11798,6 +12481,7 @@ fn runExprKernel(
                                         .block = work,
                                         .next = next_i + 1,
                                         .region = var_region,
+                                        .name_region = self.parse_ir.tokens.resolve(var_stmt.name),
                                         .var_name = name_ident,
                                         .annotation = annotation_idx,
                                         .ast_expr = ast_expr,
@@ -11830,8 +12514,8 @@ fn runExprKernel(
                             .where = where_clauses,
                             .name_region = self.parse_ir.tokens.resolve(@intCast(ta.name)),
                         }, region);
-                        break :blk try self.createUninitializedVarStatement(name_ident, annotation_idx, region);
-                    } else try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region);
+                        break :blk try self.createUninitializedVarStatement(name_ident, annotation_idx, region, self.parse_ir.tokens.resolve(ta.name));
+                    } else try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region, self.parse_ir.tokens.resolve(ta.name));
                     try self.addBlockStatement(blockContextFromState(work), stmt);
                     try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
                 },
@@ -12001,6 +12685,7 @@ fn runExprKernel(
             const result_start = child_slots.items.len - 1;
             const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
             child_slots.shrinkRetainingCapacity(state.block.result_start);
+            try self.warnTrailingTrySuffix(expr.idx);
             if (state.final_expr) {
                 const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
                     try self.env.addExpr(Expr{ .e_return = .{
@@ -12037,8 +12722,9 @@ fn runExprKernel(
             defer if (state.type_var_scope) |scope_idx| self.scopeExitTypeVar(scope_idx);
             const result_start = child_slots.items.len - 1;
             const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
-            const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = state.var_name } }, state.region);
-            _ = try self.scopeIntroduceVar(state.var_name, pattern_idx, state.region, true, Pattern.Idx);
+            const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{ .ident = state.var_name } }, state.name_region);
+            const introduced = try self.scopeIntroduceVar(state.var_name, pattern_idx, state.name_region, true, Pattern.Idx);
+            if (introduced == pattern_idx) try self.warnAboutBindingName(state.var_name, state.name_region, .mutable);
             const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
                 .pattern_idx = pattern_idx,
                 .expr = expr.idx,
@@ -12450,6 +13136,7 @@ fn runExprKernel(
                 continue :expr_kernel_loop .dispatch;
             };
 
+            try self.warnTrailingTrySuffix(can_inner.idx);
             const return_expr = if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addExpr(Expr{ .e_return = .{
                     .expr = can_inner.idx,
@@ -12560,9 +13247,7 @@ fn runExprKernel(
                     .e_unary_minus = Expr.UnaryMinus.init(can_operand.idx),
                 }, state.region)
             else if (operator_token.tag == .OpBang)
-                try self.env.addExpr(Expr{
-                    .e_unary_not = Expr.UnaryNot.init(can_operand.idx),
-                }, state.region)
+                try self.addBoolNotCall(can_operand.idx, state.region)
             else
                 unreachable;
 
@@ -13188,7 +13873,6 @@ fn runExprKernel(
         },
         .finish_lambda => {
             const state = stacks.takeFinishLambda();
-            defer self.exitFunction();
             defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.enclosing_lambda = state.saved_enclosing_lambda;
             defer self.in_expect = state.saved_in_expect;
@@ -13230,6 +13914,7 @@ fn runExprKernel(
             }
 
             self.scratch_free_vars.clearFrom(state.body_free_vars_start);
+            try self.warnTrailingTrySuffix(can_body.idx);
             self.env.store.updateLambdaBody(state.lambda_idx, can_body.idx);
 
             const captures_slice = self.scratch_captures.sliceFromStart(state.captures_top);
@@ -13242,9 +13927,7 @@ fn runExprKernel(
             const capture_info: Expr.Capture.Span = blk: {
                 const scratch_start = self.env.store.scratch.?.captures.top();
                 for (captures_slice) |pattern_idx| {
-                    const pattern = self.env.store.getPattern(pattern_idx);
-                    if (pattern != .assign and pattern != .as) unreachable;
-                    const name = if (pattern == .assign) pattern.assign.ident else pattern.as.ident;
+                    const name = self.boundPatternIdent(pattern_idx) orelse unreachable;
                     const capture = Expr.Capture{
                         .name = name,
                         .pattern_idx = pattern_idx,
@@ -13806,6 +14489,38 @@ fn runExprKernel(
     return last_expr;
 }
 
+/// Logical negation always calls the compiler-owned Bool.not, independent of
+/// the operand's type and any source declarations shadowing Bool.
+fn addBoolNotCall(self: *Self, operand: Expr.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const callee = if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| blk: {
+        const bool_stmt = bool_info.statement_idx orelse unreachable;
+        const type_node = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt) orelse unreachable;
+        break :blk try self.canonicalizedExternalAssociatedLookup(
+            try self.getOrCreateCompilerBuiltinAutoImport(),
+            type_node,
+            self.env.idents.bool,
+            self.env.idents.not,
+            region,
+        );
+    } else blk: {
+        // Builtin.roc refers to its own Bool declaration, including forward
+        // references from definitions that precede Bool.not.
+        const builtin_ident = try self.env.insertIdent(Ident.for_text("Builtin"));
+        const owner_path = self.moduleParserTypePathForSegments(&.{ builtin_ident, self.env.idents.bool }) orelse unreachable;
+        const qualified = try self.insertQualifiedIdent("Builtin.Bool", "not");
+        const pattern = (try self.lookupOrCreateAssocValuePattern(owner_path, self.env.idents.not, qualified, region)) orelse unreachable;
+        break :blk try self.canonicalizedAssociatedLookup(owner_path, self.env.idents.not, pattern, region);
+    };
+    const args_start = self.env.store.scratchExprTop();
+    try self.env.store.addScratchExpr(operand);
+    const args = try self.env.store.exprSpanFrom(args_start);
+    return self.env.addExpr(.{ .e_call = .{
+        .func = callee.idx,
+        .args = args,
+        .called_via = .unary_op,
+    } }, region);
+}
+
 fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
     const tag_expr_idx = try self.env.addExpr(CIR.Expr{
         .e_tag = .{
@@ -14084,8 +14799,6 @@ fn buildInnerMap2WithTuple(
     name2: Ident.Idx,
 ) std.mem.Allocator.Error!Expr.Idx {
     // Create lambda |a, b| (a, b)
-    try self.enterFunction(region);
-    defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
     defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
@@ -14093,11 +14806,11 @@ fn buildInnerMap2WithTuple(
     const patterns_start = self.env.store.scratch.?.patterns.top();
 
     const p1 = try self.env.addPattern(Pattern{ .assign = .{ .ident = name1 } }, region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name1, p1, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name1, p1, true);
     try self.env.store.scratch.?.patterns.append(p1);
 
     const p2 = try self.env.addPattern(Pattern{ .assign = .{ .ident = name2 } }, region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name2, p2, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name2, p2, true);
     try self.env.store.scratch.?.patterns.append(p2);
 
     const args_span = try self.env.store.patternSpanFrom(patterns_start);
@@ -14136,8 +14849,6 @@ fn buildIntermediateMap2(
     tuple_names: []const Ident.Idx,
 ) std.mem.Allocator.Error!Expr.Idx {
     // Create lambda |a, (b, c, ...)| (a, b, c, ...)
-    try self.enterFunction(region);
-    defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
     defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
@@ -14145,7 +14856,7 @@ fn buildIntermediateMap2(
 
     // First parameter: simple assign pattern
     const p_new = try self.env.addPattern(Pattern{ .assign = .{ .ident = new_name } }, region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, new_name, p_new, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, new_name, p_new, true);
     try self.env.store.scratch.?.patterns.append(p_new);
     try self.used_patterns.put(self.env.gpa, p_new, {});
 
@@ -14187,7 +14898,7 @@ fn buildTuplePattern(self: *Self, region: base.Region, names: []const Ident.Idx)
 
     for (names) |name| {
         const elem_pattern = try self.env.addPattern(Pattern{ .assign = .{ .ident = name } }, region);
-        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, elem_pattern, false, true);
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, elem_pattern, true);
         try self.env.store.scratch.?.patterns.append(elem_pattern);
     }
 
@@ -14198,8 +14909,6 @@ fn buildTuplePattern(self: *Self, region: base.Region, names: []const Ident.Idx)
 /// Build the final lambda that produces the record:
 /// |a, b| { a, b } (for 2 fields, no tuple destructure needed)
 fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const Ident.Idx) std.mem.Allocator.Error!Expr.Idx {
-    try self.enterFunction(region);
-    defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
     defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
@@ -14210,7 +14919,7 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
 
     for (field_names) |name| {
         const p = try self.env.addPattern(Pattern{ .assign = .{ .ident = name } }, region);
-        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, p, false, true);
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, p, true);
         try self.env.store.scratch.?.patterns.append(p);
         try self.scratch_pattern_ids.append(p);
         try self.used_patterns.put(self.env.gpa, p, {});
@@ -14239,8 +14948,6 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
 /// Build the final lambda with tuple destructure:
 /// |a, (b, c, ...)| { a, b, c, ... }
 fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_names: []const Ident.Idx) std.mem.Allocator.Error!Expr.Idx {
-    try self.enterFunction(region);
-    defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
     defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
@@ -14248,7 +14955,7 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
 
     // First parameter: simple assign pattern for first field
     const p_first = try self.env.addPattern(Pattern{ .assign = .{ .ident = field_names[0] } }, region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, field_names[0], p_first, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, field_names[0], p_first, true);
     try self.env.store.scratch.?.patterns.append(p_first);
     try self.used_patterns.put(self.env.gpa, p_first, {});
 
@@ -15191,9 +15898,10 @@ fn introduceStringPatternCapture(
         .ident = ident_idx,
     } }, region);
 
-    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
-        .success => {},
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, true)) {
+        .success => try self.warnAboutBindingName(ident_idx, self.parse_ir.tokens.resolve(token), .immutable),
         .shadowing_warning => |shadowed_pattern_idx| {
+            try self.warnAboutBindingName(ident_idx, self.parse_ir.tokens.resolve(token), .immutable);
             const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
             try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
                 .ident = ident_idx,
@@ -16139,6 +16847,7 @@ const ExprFinishBlockVarStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
+    name_region: Region,
     var_name: Ident.Idx,
     annotation: ?Annotation.Idx,
     ast_expr: AST.Expr.Idx,
@@ -17389,6 +18098,7 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
                         if (self.adoptForwardBinder(ident_idx, region)) |placeholder| {
+                            try self.warnAboutBindingName(ident_idx, region, .immutable);
                             last_pattern = placeholder;
                             continue :patternkernel_loop .dispatch;
                         }
@@ -17405,12 +18115,14 @@ pub fn canonicalizePattern(
                         if (placeholder_exists) {
                             // Replace the placeholder in the current scope
                             try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
+                            try self.warnAboutBindingName(ident_idx, region, .immutable);
                         } else {
                             // Introduce the identifier into scope mapping to this pattern node
                             // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
-                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, false)) {
-                                .success => {},
+                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false)) {
+                                .success => try self.warnAboutBindingName(ident_idx, region, .immutable),
                                 .shadowing_warning => |shadowed_pattern_idx| {
+                                    try self.warnAboutBindingName(ident_idx, region, .immutable);
                                     const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
                                     try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
                                         .ident = ident_idx,
@@ -17474,23 +18186,25 @@ pub fn canonicalizePattern(
                 .var_ident => |e| {
                     // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+                    const name_region = self.parse_ir.tokens.resolve(e.ident_tok);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
                         // Create a Pattern node for our mutable identifier
-                        const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+                        const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{
                             .ident = ident_idx,
-                        } }, region);
+                        } }, name_region);
 
-                        // In ordinary pattern positions `$name` introduces a fresh mutable
-                        // binder. In block declaration patterns we explicitly allow reuse
-                        // of an existing mutable binder so mixed structural reassignments
-                        // become `s_reassign` instead of pretending to be declarations.
+                        // In ordinary pattern positions an explicit `var` introduces a
+                        // fresh mutable binder. In block declaration patterns we allow
+                        // reuse of an existing mutable binder so mixed structural
+                        // reassignments become `s_reassign` instead of declarations.
                         const result = try self.scopeIntroduceVar(
                             ident_idx,
                             pattern_idx,
-                            region,
+                            name_region,
                             !self.allow_pattern_var_reuse,
                             Pattern.Idx,
                         );
+                        if (result == pattern_idx) try self.warnAboutBindingName(ident_idx, name_region, .mutable);
                         if (self.allow_pattern_var_reuse and result == pattern_idx and self.isVarPattern(pattern_idx)) {
                             // Fresh mutable binder in a mixed declaration pattern; no-op.
                         } else if (result != pattern_idx) {
@@ -17531,7 +18245,7 @@ pub fn canonicalizePattern(
                     last_pattern = try self.canonicalizeStringPattern(e);
                 },
                 .single_quote => |e| {
-                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
+                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Pattern.Idx);
                 },
                 .tag => |e| {
                     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse {
@@ -17775,6 +18489,9 @@ pub fn canonicalizePattern(
                 const adopted_binder = self.adoptForwardBinder(field_name_ident, field_region);
                 const assign_pattern_idx = adopted_binder orelse
                     try self.env.addPattern(Pattern{ .assign = .{ .ident = field_name_ident } }, field_region);
+                if (adopted_binder != null) {
+                    try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable);
+                }
 
                 const record_destruct = CIR.Pattern.RecordDestruct{
                     .label = field_name_ident,
@@ -17791,9 +18508,10 @@ pub fn canonicalizePattern(
                 // Introduce the identifier into scope (an adopted binder is
                 // already there)
                 if (adopted_binder == null) {
-                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, false, true)) {
-                        .success => {},
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, true)) {
+                        .success => try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable),
                         .shadowing_warning => |shadowed_pattern_idx| {
+                            try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable);
                             const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
                             try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
                                 .ident = field_name_ident,
@@ -17948,7 +18666,7 @@ pub fn canonicalizePattern(
                     if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| {
                         // Create an assign pattern for the rest variable
                         // Use the region of just the identifier token, not the full rest pattern
-                        const name_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = name_tok, .end = name_tok });
+                        const name_region = self.parse_ir.tokens.resolve(name_tok);
                         const adopted_binder = self.adoptForwardBinder(ident_idx, name_region);
                         const assign_idx = adopted_binder orelse try self.env.addPattern(Pattern{ .assign = .{
                             .ident = ident_idx,
@@ -17956,10 +18674,13 @@ pub fn canonicalizePattern(
 
                         // Introduce the identifier into scope (an adopted
                         // binder is already there)
-                        if (adopted_binder == null) {
-                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, assign_idx, false, true)) {
-                                .success => {},
+                        if (adopted_binder) |_| {
+                            try self.warnAboutBindingName(ident_idx, name_region, .immutable);
+                        } else {
+                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, assign_idx, true)) {
+                                .success => try self.warnAboutBindingName(ident_idx, name_region, .immutable),
                                 .shadowing_warning => |shadowed_pattern_idx| {
+                                    try self.warnAboutBindingName(ident_idx, name_region, .immutable);
                                     const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
                                     try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
                                         .ident = ident_idx,
@@ -18055,6 +18776,7 @@ pub fn canonicalizePattern(
 
             // Resolve the identifier name
             if (self.parse_ir.tokens.resolveIdentifier(state.name)) |ident_idx| {
+                const name_region = self.parse_ir.tokens.resolve(state.name);
                 // Create the as pattern
                 const adopted_binder = self.adoptForwardAsBinder(ident_idx, inner_pattern, state.region);
                 const pattern_idx = adopted_binder orelse try self.env.addPattern(Pattern{
@@ -18066,10 +18788,13 @@ pub fn canonicalizePattern(
 
                 // Introduce the identifier into scope (an adopted binder is
                 // already there)
-                if (adopted_binder == null) {
-                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
-                        .success => {},
+                if (adopted_binder) |_| {
+                    try self.warnAboutBindingName(ident_idx, name_region, .immutable);
+                } else {
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, true)) {
+                        .success => try self.warnAboutBindingName(ident_idx, name_region, .immutable),
                         .shadowing_warning => |shadowed_pattern_idx| {
+                            try self.warnAboutBindingName(ident_idx, name_region, .immutable);
                             const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
                             try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
                                 .ident = ident_idx,
@@ -18113,52 +18838,33 @@ pub fn canonicalizePattern(
     return last_pattern;
 }
 
-/// Enter a function boundary by pushing its region onto the stack
-fn enterFunction(self: *Self, region: Region) std.mem.Allocator.Error!void {
-    try self.function_regions.append(region);
-}
-
-/// Exit a function boundary by popping from the stack
-fn exitFunction(self: *Self) void {
-    _ = self.function_regions.pop();
-}
-
-/// Get the current function region (the function we're currently in)
-fn getCurrentFunctionRegion(self: *const Self) ?Region {
-    if (self.function_regions.items.len > 0) {
-        return self.function_regions.items[self.function_regions.items.len - 1];
-    }
-    return null;
-}
-
-/// Record which function a var pattern was declared in
-fn recordVarFunction(self: *Self, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
-    // Mark this pattern as a var
-    try self.var_patterns.put(self.env.gpa, pattern_idx, {});
-
-    if (self.getCurrentFunctionRegion()) |function_region| {
-        try self.var_function_regions.put(self.env.gpa, pattern_idx, function_region);
-    }
-}
-
 /// Check if a pattern is a var
 fn isVarPattern(self: *const Self, pattern_idx: Pattern.Idx) bool {
-    return self.var_patterns.contains(pattern_idx);
+    return self.env.store.getPattern(pattern_idx) == .var_assign;
 }
 
-/// Check if a var reassignment crosses function boundaries
-fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: Pattern.Idx) bool {
-    if (self.var_function_regions.get(pattern_idx)) |var_function_region| {
-        if (self.getCurrentFunctionRegion()) |current_function_region| {
-            return !var_function_region.eq(current_function_region);
-        }
-    }
-    return false;
+/// Report a source-binding naming mismatch without allowing spelling to affect
+/// the binding's semantic mutability.
+fn warnAboutBindingName(
+    self: *Self,
+    ident: Ident.Idx,
+    region: Region,
+    mutability: Diagnostic.BindingMutability,
+) std.mem.Allocator.Error!void {
+    const name = self.env.getIdent(ident);
+    const starts_with_dollar = std.mem.startsWith(u8, name, "$");
+    if (starts_with_dollar == (mutability == .mutable)) return;
+
+    try self.env.pushDiagnostic(.{ .binding_name_does_not_match_mutability = .{
+        .ident = ident,
+        .mutability = mutability,
+        .region = region,
+    } });
 }
 
 // Result type for parsing fractional literals into small, Dec, or f64
 
-/// Introduce a var identifier to the current scope with function boundary tracking
+/// Introduce a var identifier to the current scope.
 fn scopeIntroduceVar(
     self: *Self,
     ident_idx: Ident.Idx,
@@ -18167,13 +18873,10 @@ fn scopeIntroduceVar(
     is_declaration: bool,
     comptime T: type,
 ) std.mem.Allocator.Error!T {
-    const result = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, true, is_declaration);
+    const result = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, is_declaration);
 
     switch (result) {
-        .success => {
-            // recordVarFunction is called inside scopeIntroduceInternal
-            return pattern_idx;
-        },
+        .success => return pattern_idx,
         .shadowing_warning => |shadowed_pattern_idx| {
             const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
             try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
@@ -18181,7 +18884,6 @@ fn scopeIntroduceVar(
                 .region = region,
                 .original_region = original_region,
             } });
-            // recordVarFunction is called inside scopeIntroduceInternal
             return pattern_idx;
         },
         .top_level_var_error => {
@@ -19724,7 +20426,7 @@ fn canonicalizeTypeAnnoBasicType(
         // Check if this is a module alias
         const module_info = (try self.scopeLookupOrPrepareModule(module_alias)) orelse {
             // Module is not in current scope - but check if it's a type name first
-            if (try self.scopeLookupTypeBinding(module_alias)) |_| {
+            if (try self.scopeLookupOrPrepareTypeBinding(module_alias)) |_| {
                 // This is in scope as a type/value, but doesn't expose the nested type being requested
                 if (self.internalBuiltinTypeKind(module_alias, self.env.getIdent(qualified_name_ident))) |kind| {
                     return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
@@ -19901,14 +20603,25 @@ fn recordTypeHeaderParameter(
     return false;
 }
 
-/// The declarations whose parameters may not be underscore-prefixed, and how to
-/// name them in that diagnostic. Nominal and opaque declarations allow them
-/// because their parameters can be phantom.
-fn declaredTypeKindRejectingUnderscores(type_kind: AST.TypeDeclKind) ?CIR.DeclaredTypeKind {
+/// The declarations whose parameters may not have underscore-prefixed names.
+/// Nominal and opaque declarations allow them because their parameters can be
+/// phantom.
+fn declaredTypeKindRejectingNamedUnderscores(type_kind: AST.TypeDeclKind) ?CIR.DeclaredTypeKind {
     return switch (type_kind) {
         .alias => .alias,
         .where_alias => .where_alias,
         .nominal, .@"opaque" => null,
+    };
+}
+
+/// The user-facing declaration kind for diagnostics that apply to every type
+/// declaration kind.
+fn declaredTypeKind(type_kind: AST.TypeDeclKind) CIR.DeclaredTypeKind {
+    return switch (type_kind) {
+        .alias => .alias,
+        .where_alias => .where_alias,
+        .nominal => .nominal,
+        .@"opaque" => .@"opaque",
     };
 }
 
@@ -19989,7 +20702,7 @@ fn canonicalizeTypeHeader(
                 // Only reject underscore-prefixed names for type aliases, not nominal/opaque types
                 const param_name = self.parse_ir.env.getIdent(param_ident);
                 if (param_name.len > 0 and param_name[0] == '_') {
-                    if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                    if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                         try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                             .declared = declared,
                             .region = param_region,
@@ -20016,7 +20729,7 @@ fn canonicalizeTypeHeader(
                 if (try self.recordTypeHeaderParameter(&seen_type_parameters, name_ident, param_ident, param_region)) continue;
 
                 // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .declared = declared,
                         .region = param_region,
@@ -20030,21 +20743,17 @@ fn canonicalizeTypeHeader(
                 try self.env.store.addScratchTypeAnno(param_anno);
             },
             .underscore => |underscore_param| {
-                // Handle underscore type parameters
                 const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_param.region);
 
-                // Push underscore diagnostic for underscore type parameters
-                // Only reject for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
-                    try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                        .declared = declared,
-                        .region = param_region,
-                    } });
-                }
-
-                // Create underscore type annotation
-                const underscore_anno = try self.env.addTypeAnno(.{ .underscore = {} }, param_region);
-                try self.env.store.addScratchTypeAnno(underscore_anno);
+                // A bare underscore is an inferred annotation, not a binder.
+                // Declaration headers require named rigid variables so every
+                // formal has a stable identity throughout checking and
+                // checked-artifact publication.
+                const malformed_anno = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .underscore_in_type_declaration = .{
+                    .declared = declaredTypeKind(type_kind),
+                    .region = param_region,
+                } });
+                try self.env.store.addScratchTypeAnno(malformed_anno);
             },
             .malformed => |malformed_param| {
                 // Handle malformed underscore type parameters
@@ -20052,7 +20761,7 @@ fn canonicalizeTypeHeader(
 
                 // Push underscore diagnostic for malformed underscore type parameters
                 // Only reject for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .declared = declared,
                         .region = param_region,
@@ -20401,12 +21110,19 @@ fn currentScopeIdx(self: *Self) usize {
     return self.scopes.items.len - 1;
 }
 
-/// Check if an identifier is in scope
-fn scopeContains(
+const ScopeBindingLookup = struct {
+    pattern_idx: Pattern.Idx,
+    crosses_function_boundary: bool,
+};
+
+/// Find an identifier and report whether reaching its declaration crossed a
+/// function boundary. The scope stack is the single source of truth for both.
+fn scopeFindBinding(
     self: *Self,
     comptime item_kind: Scope.ItemKind,
     name: base.Ident.Idx,
-) ?Pattern.Idx {
+) ?ScopeBindingLookup {
+    var crosses_function_boundary = false;
     var scope_idx = self.scopes.items.len;
     while (scope_idx > 0) {
         scope_idx -= 1;
@@ -20414,10 +21130,25 @@ fn scopeContains(
         const map = scope.itemsConst(item_kind);
 
         if (map.get(name)) |pattern_idx| {
-            return pattern_idx;
+            return .{
+                .pattern_idx = pattern_idx,
+                .crosses_function_boundary = crosses_function_boundary,
+            };
         }
+
+        crosses_function_boundary = crosses_function_boundary or scope.is_function_boundary;
     }
     return null;
+}
+
+/// Check if an identifier is in scope.
+fn scopeContains(
+    self: *Self,
+    comptime item_kind: Scope.ItemKind,
+    name: base.Ident.Idx,
+) ?Pattern.Idx {
+    const found = self.scopeFindBinding(item_kind, name) orelse return null;
+    return found.pattern_idx;
 }
 
 /// Look up an identifier in the scope
@@ -20426,8 +21157,8 @@ pub fn scopeLookup(
     comptime item_kind: Scope.ItemKind,
     name: base.Ident.Idx,
 ) Scope.LookupResult {
-    if (self.scopeContains(item_kind, name)) |found| {
-        return Scope.LookupResult{ .found = found };
+    if (self.scopeFindBinding(item_kind, name)) |found| {
+        return Scope.LookupResult{ .found = found.pattern_idx };
     }
     return Scope.LookupResult{ .not_found = {} };
 }
@@ -20461,9 +21192,10 @@ pub fn scopeIntroduceInternal(
     comptime item_kind: Scope.ItemKind,
     ident_idx: base.Ident.Idx,
     pattern_idx: Pattern.Idx,
-    is_var: bool,
     is_declaration: bool,
 ) std.mem.Allocator.Error!Scope.IntroduceResult {
+    const is_var = item_kind == .ident and self.isVarPattern(pattern_idx);
+
     // Check if var is being used at top-level
     if (is_var and self.scopes.items.len == 1) {
         return Scope.IntroduceResult{ .top_level_var_error = {} };
@@ -20475,87 +21207,30 @@ pub fn scopeIntroduceInternal(
     // ownership from identifier text.
 
     // Check for existing identifier in any scope level for shadowing detection
-    if (self.scopeContains(item_kind, ident_idx)) |existing| {
+    if (self.scopeFindBinding(item_kind, ident_idx)) |existing_binding| {
+        const existing = existing_binding.pattern_idx;
+
         // Check if this is a var reassignment: the existing pattern must have been
         // declared with `var` (source of truth), and we're not declaring a new var
         if (!is_declaration and self.isVarPattern(existing)) {
-            // Find the scope where the var was declared and check for function boundaries
-            var declaration_scope_idx: ?usize = null;
-            var scope_idx = self.scopes.items.len;
-
-            // First, find where the identifier was declared
-            while (scope_idx > 0) {
-                scope_idx -= 1;
-                const scope = &self.scopes.items[scope_idx];
-                const map = scope.itemsConst(item_kind);
-
-                if (map.get(ident_idx) != null) {
-                    declaration_scope_idx = scope_idx;
-                    break;
-                }
+            if (existing_binding.crosses_function_boundary) {
+                return Scope.IntroduceResult{ .var_across_function_boundary = existing };
             }
 
-            // Now check if there are function boundaries between declaration and current scope
-            if (declaration_scope_idx) |decl_idx| {
-                var current_idx = decl_idx + 1;
-                var found_function_boundary = false;
-
-                while (current_idx < self.scopes.items.len) {
-                    const scope = &self.scopes.items[current_idx];
-                    if (scope.is_function_boundary) {
-                        found_function_boundary = true;
-                        break;
-                    }
-                    current_idx += 1;
-                }
-
-                if (found_function_boundary) {
-                    // Different function, return error
-                    return Scope.IntroduceResult{ .var_across_function_boundary = existing };
-                } else {
-                    // Same function, allow reassignment - return the existing pattern
-                    // so all references use the same pattern_idx for upsertBinding to work
-                    return Scope.IntroduceResult{ .var_reassignment_ok = existing };
-                }
-            } else {
-                // scopeContains found the identifier, so it must be in some scope
-                unreachable;
-            }
+            // Reuse the declaration's pattern so all references identify the
+            // same mutable binding.
+            return Scope.IntroduceResult{ .var_reassignment_ok = existing };
         }
 
         // For non-var declarations, we should still report shadowing
         // Regular shadowing case - produce warning but still introduce
         try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
 
-        // If this is a var declaration, record it in var_patterns
-        if (is_var and is_declaration) {
-            try self.recordVarFunction(pattern_idx);
-        }
-
-        return Scope.IntroduceResult{ .shadowing_warning = existing };
-    }
-
-    // Check the current level for duplicates
-    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    const map = current_scope.itemsConst(item_kind);
-
-    if (map.get(ident_idx)) |existing| {
-        try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
-
-        if (is_var and is_declaration) {
-            try self.recordVarFunction(pattern_idx);
-        }
-
         return Scope.IntroduceResult{ .shadowing_warning = existing };
     }
 
     // No conflicts, introduce successfully
     try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
-
-    // If this is a var declaration, record it in var_patterns
-    if (is_var and is_declaration) {
-        try self.recordVarFunction(pattern_idx);
-    }
 
     return Scope.IntroduceResult{ .success = {} };
 }
@@ -21301,26 +21976,13 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 break :blk try self.env.insertIdent(Ident.for_text(method_name_clean));
             };
 
-            // Canonicalize argument types
-            const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
-            const args_start = self.env.store.scratchTypeAnnoTop();
-            for (args_slice) |arg_idx| {
-                var arg_ctx = TypeAnnoCtx.init(type_anno_ctx);
-                const canonicalized_arg = try self.runTypeAnnoKernel(arg_idx, &arg_ctx);
-                try self.env.store.addScratchTypeAnno(canonicalized_arg);
-            }
-            const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
-
-            // Canonicalize return type
-            var ret_ctx = TypeAnnoCtx.init(type_anno_ctx);
-            const ret = try self.runTypeAnnoKernel(mm.ret_anno, &ret_ctx);
+            var anno_ctx = TypeAnnoCtx.init(type_anno_ctx);
+            const anno = try self.runTypeAnnoKernel(mm.anno, &anno_ctx);
 
             return try self.env.addWhereClause(WhereClause{ .w_method = .{
                 .var_ = var_anno_idx,
                 .method_name = method_ident,
-                .args = args_span,
-                .ret = ret,
-                .effectful = mm.effectful,
+                .anno = anno,
             } }, region);
         },
         .mod_alias => |ma| {
@@ -21526,7 +22188,7 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
     try self.recordGlobalValueDef(def_idx);
 
     // Introduce echo! into scope so the body can reference it
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, echo_ident, pattern_idx, false, true);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, echo_ident, pattern_idx, true);
 }
 
 /// Build the type annotation `Str => {}` for the echo! hosted function.

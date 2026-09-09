@@ -30,14 +30,13 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
         }
     }
 
-    // Iterate through all defs and replace ordinary anno-only defs with hosted implementations.
-    // Copy the def indices locally first: sliceDefs returns a slice backed by
-    // store.index_data, which patternSpanFrom appends to inside the loop. A reallocation
-    // there would invalidate a directly-held slice.
-    const defs_slice = env.store.sliceDefs(env.all_defs);
-    const all_defs = try gpa.dupe(CIR.Def.Idx, defs_slice);
-    defer gpa.free(all_defs);
-    for (all_defs) |def_idx| {
+    // Only annotation-only defs selected as value bindings become hosted. A
+    // superseded annotation remains in all_defs for checking diagnostics, but
+    // has no value and therefore must not become a host obligation. Fetch each
+    // def by span offset because patternSpanFrom below can reallocate the shared
+    // index_data backing without invalidating the span itself.
+    for (0..env.value_binding_defs.span.len) |def_offset| {
+        const def_idx = env.store.defAt(env.value_binding_defs, def_offset);
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);
 

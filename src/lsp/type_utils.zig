@@ -209,9 +209,9 @@ test "RecordFieldsIterator" {
     defer type_store.deinit();
 
     const names = [_]Ident.Idx{
-        .{ .idx = 1, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } },
-        .{ .idx = 2, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } },
-        .{ .idx = 3, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } },
+        .{ .idx = 1, .attributes = .{ .effectful = false, .ignored = false, .reserved = false } },
+        .{ .idx = 2, .attributes = .{ .effectful = false, .ignored = false, .reserved = false } },
+        .{ .idx = 3, .attributes = .{ .effectful = false, .ignored = false, .reserved = false } },
     };
     const first_var = try type_store.freshFromContent(.err);
     const second_var = try type_store.freshFromContent(.err);

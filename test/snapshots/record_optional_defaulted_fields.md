@@ -17,21 +17,31 @@ bad_direct_access : Config -> U16
 bad_direct_access = |c| c.port
 ~~~
 # EXPECTED
-TYPE MISMATCH - record_optional_defaulted_fields.md:10:25:10:26
+TYPE MISMATCH - record_optional_defaulted_fields.md:10:26:10:31
 # PROBLEMS
-── ✗ type mismatch ─────────────────── record_optional_defaulted_fields.md:10:25
-
-This is not a record, so it does not have any fields to access.
-
-bad_direct_access = |c| c.port
-                        ^
-
-It is:
-
-    Config
-
-But I need a record with a port field.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 10 26) (end 10 31))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "port")
+			(reflow " ")
+			(reflow "field is optional, but it is being accessed as if it is always present."))
+		(document
+			(source-region (file "record_optional_defaulted_fields.md") (start 10 26) (end 10 31) (annotation error) (line-text "bad_direct_access = |c| c.port"))
+			(line-break)
+			(reflow "An optional field may be missing from the record. Use ")
+			(annotated code ".?")
+			(reflow " to access it—that produces a ")
+			(annotated code "Try")
+			(reflow " you can match on or default with ")
+			(annotated code "??")
+			(text "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpQuestion,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,

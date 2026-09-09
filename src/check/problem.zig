@@ -22,6 +22,7 @@ pub const MissingPatternsRange = types.MissingPatternsRange;
 
 // Type mismatch types
 pub const TypeMismatch = types.TypeMismatch;
+pub const TypeMismatchEvidence = types.TypeMismatchEvidence;
 pub const TypePair = types.TypePair;
 pub const IncompatiblePlatformRequirement = types.IncompatiblePlatformRequirement;
 pub const CrossModuleImport = types.CrossModuleImport;

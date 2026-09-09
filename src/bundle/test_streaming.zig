@@ -309,7 +309,7 @@ test "large file streaming extraction" {
     var iter = test_util.FilePathIterator{ .paths = &paths };
 
     var allocator_copy = allocator;
-    const filename = try bundle.bundle(
+    const filename = (try bundle.bundle(
         &iter,
         3,
         &allocator_copy,
@@ -317,8 +317,7 @@ test "large file streaming extraction" {
         &bundle_writer.writer,
         tmp.dir,
         null,
-        null,
-    );
+    )).filename;
     defer allocator.free(filename);
 
     // Just verify we successfully bundled a large file

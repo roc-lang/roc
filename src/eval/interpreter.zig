@@ -309,6 +309,11 @@ pub const Interpreter = struct {
     const max_debug_value_visits: usize = 16;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
+    pub const ExpectObserver = struct {
+        context: *anyopaque,
+        observe: *const fn (*anyopaque, LIR.ExpectSiteId, bool) void,
+    };
+
     const ErasedCallableCaptureDrop = enum(u8) {
         none,
         rc_helper,
@@ -344,6 +349,7 @@ pub const Interpreter = struct {
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
     hosted_call_handler: ?HostedCallHandler,
+    expect_observer: ?ExpectObserver = null,
     static_strings: backend.StaticStringData.Table,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
@@ -683,6 +689,15 @@ pub const Interpreter = struct {
             allocator.destroy(self);
         }
 
+        fn currentThreadId() std.Thread.Id {
+            // Linux default-platform executables have no TLS startup. Zig's
+            // std.Thread caches gettid in TLS, so query the kernel directly.
+            if (comptime builtin.os.tag == .linux and !builtin.link_libc) {
+                return @intCast(std.os.linux.gettid());
+            }
+            return std.Thread.getCurrentId();
+        }
+
         pub fn enter(self: *Retained) void {
             // Freestanding targets have no OS threads, and std.Thread cannot
             // produce an identity for them. Their only possible nesting is
@@ -693,7 +708,7 @@ pub const Interpreter = struct {
                 return;
             }
 
-            const thread_id = std.Thread.getCurrentId();
+            const thread_id = currentThreadId();
             if (self.execution_owner.load(.acquire) == thread_id) {
                 self.execution_depth += 1;
                 return;
@@ -713,9 +728,8 @@ pub const Interpreter = struct {
                 return;
             }
 
-            const thread_id = std.Thread.getCurrentId();
             if (builtin.mode == .Debug) {
-                std.debug.assert(self.execution_owner.load(.acquire) == thread_id);
+                std.debug.assert(self.execution_owner.load(.acquire) == currentThreadId());
                 std.debug.assert(self.execution_depth > 0);
             }
             self.execution_depth -= 1;
@@ -841,6 +855,7 @@ pub const Interpreter = struct {
                 .hosted_fns = caller_roc_ops.hosted_fns,
             },
             .hosted_call_handler = hosted_call_handler,
+            .expect_observer = null,
             .static_strings = static_strings,
             .static_data = &.{},
             .static_erased_callables = &.{},
@@ -913,6 +928,11 @@ pub const Interpreter = struct {
     ) void {
         self.static_data = addresses;
         self.static_erased_callables = erased_callables;
+    }
+
+    /// Install the test runner's per-site observation sink.
+    pub fn setExpectObserver(self: *LirInterpreter, observer: ?ExpectObserver) void {
+        self.expect_observer = observer;
     }
 
     /// Function address stored in static erased-callable payloads interpreted
@@ -3099,7 +3119,7 @@ pub const Interpreter = struct {
                         const payload_desc = payload_read.desc orelse {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: boxy tag payload {d} for tag {s} had no descriptor to bind",
-                                .{ assign.payload_index, self.store.getString(assign.tag_name) },
+                                .{ assign.payload_index, self.store.getBoxyName(assign.tag_name) },
                             );
                         };
                         try self.setLocalChecked(frame, current, target_desc, try self.evalBoxyDescRefValue(frame, payload_desc), false);
@@ -3272,7 +3292,11 @@ pub const Interpreter = struct {
                         try self.getLocalChecked(frame, cond_local),
                         self.store.getLocal(cond_local).layout_idx,
                     );
-                    if (cond_value == 0) {
+                    if (expect_stmt.site) |site| {
+                        const observer = self.expect_observer orelse
+                            self.invariantFailed("test expect reached the interpreter without an observer", .{});
+                        observer.observe(observer.context, site, cond_value != 0);
+                    } else if (cond_value == 0) {
                         try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current), self.store.stmtLoc(current));
                         self.roc_ops.expectFailed("expect failed");
                     }
@@ -9564,8 +9588,8 @@ pub const Interpreter = struct {
     fn findLocalBoxyTagVariant(
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
-    ) ?*const LirProgram.BoxyTagVariant {
+        tag_name: LIR.BoxyNameId,
+    ) ?LirProgram.BoxyTagVariant {
         return self.boxy_runtime.findLocalBoxyTagVariant(desc, tag_name);
     }
 
@@ -9581,7 +9605,7 @@ pub const Interpreter = struct {
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
         discriminant: u16,
-    ) *const LirProgram.BoxyTagVariant {
+    ) LirProgram.BoxyTagVariant {
         return self.boxy_runtime.requireBoxyTagVariantByDiscriminant(desc, discriminant);
     }
 
@@ -9589,7 +9613,7 @@ pub const Interpreter = struct {
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
         discriminant: u16,
-    ) ?*const LirProgram.BoxyTagVariant {
+    ) ?LirProgram.BoxyTagVariant {
         return self.boxy_runtime.findBoxyTagVariantByDiscriminant(desc, discriminant);
     }
 
@@ -9617,7 +9641,7 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         frame: *const Frame,
         desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
+        tag_name: LIR.BoxyNameId,
         payload: ?Value,
         payload_layout: layout_mod.Idx,
         payload_desc: ?*const LirProgram.BoxyTypeDesc,
@@ -9644,7 +9668,7 @@ pub const Interpreter = struct {
         source_value: Value,
         source_layout: layout_mod.Idx,
         source_desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
+        tag_name: LIR.BoxyNameId,
         payload_index: u32,
         target_layout: layout_mod.Idx,
         source_mode: LIR.BoxyTransferMode,
@@ -9658,14 +9682,14 @@ pub const Interpreter = struct {
         source_value: Value,
         source_layout: layout_mod.Idx,
         source_desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: base.StringLiteral.Idx,
+        tag_name: LIR.BoxyNameId,
     ) Error!bool {
         return try self.boxy_runtime.boxyTagMatches(self.boxyFrameHooks(frame), source_value, source_layout, source_desc, tag_name);
     }
 
     fn findBoxyPayloadDesc(
         self: *const LirInterpreter,
-        variant: *const LirProgram.BoxyTagVariant,
+        variant: LirProgram.BoxyTagVariant,
         payload_index: u32,
     ) ?LIR.BoxyDescRef {
         return self.boxy_runtime.findBoxyPayloadDesc(variant, payload_index);

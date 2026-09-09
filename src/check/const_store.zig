@@ -249,6 +249,32 @@ pub const ConstFnCallableInstantiation = struct {
     callable_ty: checked_ids.CheckedTypeId,
 };
 
+/// Exact checked structural edge retained by a stored function. Codec
+/// derivations need the generated-contract identity when their runtime
+/// function is restored after compile-time evaluation.
+pub const ConstFnStructuralEvidence = struct {
+    derivation: static_dispatch.StructuralDerivation,
+    checked: ?struct {
+        view: names.CheckedModuleDigest,
+        dispatcher_key: names.CanonicalTypeKey,
+        dispatcher_ty: checked_ids.CheckedTypeId,
+        callable_key: names.CanonicalTypeKey,
+        callable_ty: checked_ids.CheckedTypeId,
+        generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+        generated_codec_identity: ?static_dispatch.GeneratedCodecDerivationId,
+    } = null,
+
+    pub fn identityEql(left: ConstFnStructuralEvidence, right: ConstFnStructuralEvidence) bool {
+        if (!std.meta.eql(left.derivation, right.derivation) or (left.checked == null) != (right.checked == null)) return false;
+        const a = left.checked orelse return true;
+        const b = right.checked.?;
+        return std.meta.eql(a.view, b.view) and
+            std.meta.eql(a.dispatcher_key, b.dispatcher_key) and
+            std.meta.eql(a.callable_key, b.callable_key) and
+            a.generated_codec_identity == b.generated_codec_identity;
+    }
+};
+
 /// Dispatch evidence selected for a stored compile-time function value. Target
 /// module identities make every checked id explicitly relative to its owning
 /// checked module when the function is restored in another compilation.
@@ -261,12 +287,15 @@ pub const ConstFnEvidence = union(enum(u8)) {
         instantiation: ?ConstFnCallableInstantiation,
         nested: ConstFnNestedEvidence,
     },
-    structural: static_dispatch.StructuralDerivation,
-    constraint_callable: struct {
-        view: names.CheckedModuleDigest,
-        callable_key: names.CanonicalTypeKey,
-        source: static_dispatch.ConstraintCallableEvidence,
+    structural: ConstFnStructuralEvidence,
+    /// A callable-reachable requirement that must be resolved from the
+    /// concrete function type when this stored function is restored.
+    from_callable: struct {
+        index: u32,
+        independent_callable: bool = false,
     },
+    /// Abstract local scheme parameter, supplied by the checked use edge.
+    from_scheme: u32,
     unreachable_value,
     checked_error,
 };
@@ -881,7 +910,7 @@ pub const ConstStore = struct {
                         .from_callable => {},
                     }
                 },
-                .constraint_callable, .structural, .unreachable_value, .checked_error => {},
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
         }
         return cursor;
@@ -1240,12 +1269,14 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
             },
             .nested = .{ .resolved = .{ .count = 1, .subtree_len = 1 } },
         } },
-        .{ .structural = .equality },
+        .{ .structural = .{ .derivation = .equality } },
         .checked_error,
+        .{ .from_callable = .{ .index = 2, .independent_callable = true } },
+        .{ .from_scheme = 3 },
     };
     const evidence_frames = [_]ConstFnEvidenceFrame{
         ConstFnEvidenceFrame.init(.root, null, 0, 1),
-        ConstFnEvidenceFrame.init(.{ .generalized = 9 }, 0, 2, 1),
+        ConstFnEvidenceFrame.init(.{ .generalized = 9 }, 0, 2, 3),
     };
     const fn_id = try store.appendFn(.{
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
@@ -1313,8 +1344,10 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const loaded_nested = loaded_target.nested.resolved;
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.count);
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.subtree_len);
-    try std.testing.expectEqual(ConstFnEvidence{ .structural = .equality }, loaded_fn.evidence[1]);
+    try std.testing.expectEqual(ConstFnEvidence{ .structural = .{ .derivation = .equality } }, loaded_fn.evidence[1]);
     try std.testing.expectEqual(ConstFnEvidence.checked_error, loaded_fn.evidence[2]);
+    try std.testing.expectEqual(ConstFnEvidence{ .from_callable = .{ .index = 2, .independent_callable = true } }, loaded_fn.evidence[3]);
+    try std.testing.expectEqual(ConstFnEvidence{ .from_scheme = 3 }, loaded_fn.evidence[4]);
     try std.testing.expectEqualSlices(ConstFnEvidenceFrame, &evidence_frames, loaded_fn.evidence_frames);
     try std.testing.expectEqual(@as(?u32, 1), loaded_fn.evidence_frame_head);
     try std.testing.expectEqual(ConstFnEvidenceScope{ .generalized = 9 }, loaded_fn.evidence_frames[1].scope());

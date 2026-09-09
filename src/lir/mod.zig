@@ -28,6 +28,9 @@ pub const StrAppend = @import("str_append.zig");
 pub const BodyClone = @import("body_clone.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
+pub const SingleUseInline = @import("single_use_inline.zig");
+pub const ForwardingJoinInline = @import("forwarding_join_inline.zig");
+pub const TagCaseFusion = @import("tag_case_fusion.zig");
 pub const LoopAppendPromote = @import("loop_append_promote.zig");
 /// Always-safe check elision from proven unsigned value-range facts.
 pub const RangeProve = @import("range_prove.zig");
@@ -39,6 +42,8 @@ pub const ReachableProcs = @import("reachable_procs.zig");
 pub const Arc = @import("arc.zig");
 /// Tail recursion modulo constructor + plain tail-call elimination.
 pub const Trmc = @import("trmc.zig");
+/// Producer-owned self-tail continuation proofs for LIR construction.
+pub const TailCallBuilder = core.TailCallBuilder;
 /// Compact textual LIR dumps for golden tests and debug flags.
 pub const DebugPrint = @import("debug_print.zig");
 /// Checked integer arithmetic metadata shared by LIR producers and consumers.
@@ -56,6 +61,10 @@ pub const ArcCertify = @import("arc_certify.zig");
 pub const ArcDismantle = @import("arc_dismantle.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
+
+test "LIR image tests" {
+    @import("std").testing.refAllDecls(LirImage);
+}
 
 pub const ImmortalLocals = @import("immortal_locals.zig");
 

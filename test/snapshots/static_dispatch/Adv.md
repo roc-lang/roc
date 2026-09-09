@@ -48,47 +48,91 @@ TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────────────────────────── Adv.md:17:28
-
-This number is being used where a non-number type is needed.
-
-next_val = val.update_str(100)
-                          ^^^
-
-Other code expects this to have the type:
-
-    Str
-
-── ✗ missing method ─────────────────────────────────────────────── Adv.md:23:17
-
-This update_strr method is being called on a value whose type doesn't have that
-method.
-
-next_val = val.update_strr(100)
-               ^^^^^^^^^^^
-
-The value's type, which does not have a method named update_strr, is:
-
-    Adv
-
-Hint: For this to work, the type would need to have a method named update_strr
-associated with it in the type's declaration.
-
-── ✗ missing method ─────────────────────────────────────────────── Adv.md:28:21
-
-This update method is being called on a value whose type doesn't have that
-method.
-
-next_val = "Hello".update(100)
-                   ^^^^^^
-
-The value's type, which does not have a method named update, is:
-
-    Str
-
-Hint: For this to work, the type would need to have a method named update
-associated with it in the type's declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 17 28) (end 17 31))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "Adv.md") (start 17 28) (end 17 31) (annotation error) (line-text "\tnext_val = val.update_str(100)"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 23 17) (end 23 28))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "update_strr")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Adv.md") (start 23 17) (end 23 28) (annotation error) (line-text "\tnext_val = val.update_strr(100)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "update_strr")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Adv")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "update_strr")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 28 21) (end 28 27))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Adv.md") (start 28 21) (end 28 27) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "update")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -402,7 +446,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_str") (constraint-fn-var 488)
+				(e-dispatch-call (method "update_str") (constraint-fn-var 482)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -430,7 +474,11 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-runtime-error (tag "erroneous_value_expr")))
+				(e-dispatch-call (method "update") (constraint-fn-var 549)
+					(receiver
+						(e-runtime-error (tag "erroneous_value_expr")))
+					(args
+						(e-num (value "100")))))
 			(e-lookup-local
 				(p-assign (ident "next_val")))))
 	(d-let
@@ -446,9 +494,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 604)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 601)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 595)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 590)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -459,12 +507,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 616)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 620)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 618)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 622)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

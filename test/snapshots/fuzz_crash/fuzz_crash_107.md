@@ -11,17 +11,24 @@ e={{e:\\
 # EXPECTED
 NOT IMPLEMENTED - fuzz_crash_107.md:1:4:2:4
 # PROBLEMS
-── ✗ not implemented ───────────────────────────────────── fuzz_crash_107.md:1:4
-
-This feature is not yet implemented: single-field record builder (minimum 2
-fields required).
-
-e={{e:\\
-}.U{}}
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
+~~~clojure
+(reports
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 1 4) (end 2 4))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "single-field record builder (minimum 2 fields required)")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_107.md") (start 1 4) (end 2 4) (annotation error) (line-text "e={{e:\\\\\n}.U{}}"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,OpenCurly,LowerIdent,OpColon,MultilineStringStart,StringPart,

@@ -3,6 +3,128 @@
 const std = @import("std");
 const testing = std.testing;
 
+const document = @import("document.zig");
+
+/// Allocation-free source layout consumed by every rendering style.
+pub const Layout = struct {
+    display: document.SourceCodeDisplayRegion,
+    underlines: []const document.UnderlineRegion,
+    highlight_source: bool,
+    line_number_width: u32,
+    /// Build the source layout from explicit coordinates.
+    pub fn init(display: document.SourceCodeDisplayRegion, underlines: []const document.UnderlineRegion, highlight_source: bool) Layout {
+        return .{ .display = display, .underlines = underlines, .highlight_source = highlight_source, .line_number_width = calculateLineNumberWidth(display.end_line) };
+    }
+    /// Iterate source rows without allocating.
+    pub fn lines(self: Layout) Lines {
+        return .{ .text = std.mem.splitScalar(u8, self.display.line_text, '\n'), .number = self.display.start_line, .underlines = self.underlines };
+    }
+};
+/// Iterator over numbered source rows.
+pub const Lines = struct {
+    text: std.mem.SplitIterator(u8, .scalar),
+    number: u32,
+    underlines: []const document.UnderlineRegion,
+    /// Return the next computed item, or null at the end.
+    pub fn next(self: *Lines) ?Line {
+        const text = self.text.next() orelse return null;
+        const line = Line{ .text = text, .number = self.number, .underlines = self.underlines };
+        self.number += 1;
+        return line;
+    }
+};
+/// A source row and its explicit underline regions.
+pub const Line = struct {
+    text: []const u8,
+    number: u32,
+    underlines: []const document.UnderlineRegion,
+    /// Iterate caret spans belonging to this row.
+    pub fn spans(self: Line) Spans {
+        return .{ .remaining = self.underlines, .line_number = self.number };
+    }
+    /// Whether this row has a single-line underline.
+    pub fn hasCarets(self: Line) bool {
+        var iter = self.spans();
+        return iter.next() != null;
+    }
+};
+/// Computed caret run and the preceding cursor position.
+pub const Span = struct { previous_column: u32, start_column: u32, length: u32, annotation: document.Annotation };
+/// Iterator selecting single-line underline regions in document order.
+pub const Spans = struct {
+    remaining: []const document.UnderlineRegion,
+    line_number: u32,
+    column: u32 = 1,
+    /// Return the next computed item, or null at the end.
+    pub fn next(self: *Spans) ?Span {
+        while (self.remaining.len > 0) {
+            const region = self.remaining[0];
+            self.remaining = self.remaining[1..];
+            if (!underlineAppliesToLine(region.start_line, region.end_line, self.line_number)) continue;
+            const span = Span{ .previous_column = self.column, .start_column = region.start_column, .length = calculateUnderlineLength(region.start_column, region.end_column), .annotation = region.annotation };
+            self.column = region.end_column;
+            return span;
+        }
+        return null;
+    }
+};
+
+/// Report snippets expand leading tabs, dedent all rows equally, and transform
+/// underline coordinates alongside source text.
+pub const Snippet = struct {
+    rows: std.array_list.Managed([]u8),
+    common: usize,
+    start_column: u32,
+    end_column: u32,
+    /// Build the source layout from explicit coordinates.
+    pub fn init(gpa: std.mem.Allocator, text: []const u8, start_column: u32, end_column: u32) std.mem.Allocator.Error!Snippet {
+        var rows = std.array_list.Managed([]u8).init(gpa);
+        errdefer {
+            for (rows.items) |row| gpa.free(row);
+            rows.deinit();
+        }
+        var common: usize = std.math.maxInt(usize);
+        var first_expanded: usize = 0;
+        var first_original: usize = 0;
+        var iter = std.mem.splitScalar(u8, text, '\n');
+        while (iter.next()) |source_line| {
+            var original: usize = 0;
+            var expanded: usize = 0;
+            while (original < source_line.len and (source_line[original] == ' ' or source_line[original] == '\t')) : (original += 1) {
+                expanded += if (source_line[original] == '\t') 4 else 1;
+            }
+            if (rows.items.len == 0) {
+                first_expanded = expanded;
+                first_original = original;
+            }
+            if (original < source_line.len) common = @min(common, expanded);
+            const row = try gpa.alloc(u8, expanded + source_line.len - original);
+            errdefer gpa.free(row);
+            @memset(row[0..expanded], ' ');
+            @memcpy(row[expanded..], source_line[original..]);
+            try rows.append(row);
+        }
+        if (common == std.math.maxInt(usize)) common = 0;
+        const delta = @as(i64, @intCast(first_expanded)) - @as(i64, @intCast(common)) - @as(i64, @intCast(first_original));
+        return .{ .rows = rows, .common = common, .start_column = @intCast(@max(@as(i64, start_column) + delta, 1)), .end_column = @intCast(@max(@as(i64, end_column) + delta, 1)) };
+    }
+    /// Release the prepared source rows.
+    pub fn deinit(self: *Snippet) void {
+        for (self.rows.items) |row| self.rows.allocator.free(row);
+        self.rows.deinit();
+    }
+    /// Return a row with the common indentation removed.
+    pub fn line(self: Snippet, row: []const u8) []const u8 {
+        return row[@min(self.common, row.len)..];
+    }
+    /// Map byte coordinates to displayed columns, retaining one caret for empty spans.
+    pub fn caret(self: Snippet, text: []const u8) struct { padding: u32, length: usize } {
+        const start = @min(@as(usize, self.start_column -| 1), text.len);
+        const end = @max(@min(@as(usize, self.end_column -| 1), text.len), start);
+        return .{ .padding = @intCast(displayWidth(text[0..start])), .length = @max(displayWidth(text[start..end]), 1) };
+    }
+};
+
 /// Calculate the width needed to display a line number
 pub fn calculateLineNumberWidth(max_line: u32) u32 {
     if (max_line == 0) return 1;
@@ -236,4 +358,44 @@ test "printSpaces" {
     writer.clearRetainingCapacity();
     try printSpaces(&writer.writer, 5);
     try testing.expectEqualStrings("     ", writer.written());
+}
+
+test "report snippet transforms tabs and Unicode underline columns together" {
+    var snippet = try Snippet.init(testing.allocator, "\t  café\n\t    next", 4, 9);
+    defer snippet.deinit();
+    try testing.expectEqualStrings("café", snippet.line(snippet.rows.items[0]));
+    try testing.expectEqualStrings("  next", snippet.line(snippet.rows.items[1]));
+    const caret = snippet.caret(snippet.line(snippet.rows.items[0]));
+    try testing.expectEqual(@as(u32, 0), caret.padding);
+    try testing.expectEqual(@as(usize, 4), caret.length);
+    snippet.start_column = 20;
+    snippet.end_column = 2;
+    const reversed = snippet.caret(snippet.line(snippet.rows.items[0]));
+    try testing.expectEqual(@as(u32, 4), reversed.padding);
+    try testing.expectEqual(@as(usize, 1), reversed.length);
+}
+
+test "layout selects single-line caret spans and advances source rows" {
+    const regions = [_]document.UnderlineRegion{
+        .{ .start_line = 8, .end_line = 8, .start_column = 2, .end_column = 4, .annotation = .error_highlight },
+        .{ .start_line = 8, .end_line = 8, .start_column = 6, .end_column = 6, .annotation = .warning_highlight },
+        .{ .start_line = 8, .end_line = 9, .start_column = 1, .end_column = 5, .annotation = .error_highlight },
+    };
+    const layout = Layout.init(.{ .filename = null, .start_line = 8, .end_line = 9, .start_column = 1, .end_column = 5, .line_text = "\tvalue\nnext", .region_annotation = .source_region }, &regions, false);
+    var lines = layout.lines();
+    const first = lines.next().?;
+    try testing.expectEqual(@as(u32, 8), first.number);
+    var spans = first.spans();
+    const a = spans.next().?;
+    try testing.expectEqual(@as(u32, 1), a.previous_column);
+    try testing.expectEqual(@as(u32, 2), a.length);
+    const b = spans.next().?;
+    try testing.expectEqual(@as(u32, 4), b.previous_column);
+    try testing.expectEqual(@as(u32, 1), b.length);
+    try testing.expectEqual(document.Annotation.warning_highlight, b.annotation);
+    try testing.expect(spans.next() == null);
+    const second = lines.next().?;
+    try testing.expectEqual(@as(u32, 9), second.number);
+    try testing.expect(!second.hasCarets());
+    try testing.expect(lines.next() == null);
 }

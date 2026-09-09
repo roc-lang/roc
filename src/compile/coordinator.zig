@@ -85,9 +85,10 @@ const PlatformRequirementSurface = messages.PlatformRequirementSurface;
 const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
 
-const WorkerFailureError = Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong } || compile_package.TypeCheckModuleError;
+/// Operational errors returned before the frontend can be considered complete.
+pub const CoordinatorError = messages.WorkerOperationError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
 const TypeCheckWorkerError = Allocator.Error || compile_package.TypeCheckModuleError;
-const CheckedModuleCacheRunError = eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || compile_package.PublishError || PatternExtractionRegionStatsError || error{
+const CheckedModuleCacheRunError = CoordinatorError || eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || compile_package.PublishError || PatternExtractionRegionStatsError || error{
     UnsupportedBuiltinAnnotationOnly,
     BuiltinLowLevelAnnotationMustBeFunction,
     LowLevelOperationsNotFound,
@@ -97,7 +98,6 @@ const OverwriteFilesUnderDirError = Allocator.Error || std.Io.Dir.OpenError || s
 const CorruptCheckedModuleCacheError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{FileNotFound};
 const TypeCheckedResult = messages.TypeCheckedResult;
 const DeferredPublicationState = messages.DeferredPublicationState;
-const CompileFailure = messages.CompileFailure;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
 
@@ -1098,6 +1098,11 @@ pub const Coordinator = struct {
     /// True when the build's root is not an app, recorded explicitly so the
     /// hosted transform never has to guess whether an app exists.
     app_package_absent: bool,
+    /// The package holding the file the compiler was pointed at, when that file
+    /// is not its package's root module. See `markTargetedModule`.
+    targeted_module_package: ?[]const u8,
+    /// The module for that file, paired with the package name above.
+    targeted_module_id: ?ModuleId,
 
     /// Shared read-only builtin modules
     builtin_modules: *const BuiltinModules,
@@ -1212,6 +1217,8 @@ pub const Coordinator = struct {
             .total_remaining = 0,
             .app_package_name = null,
             .app_package_absent = false,
+            .targeted_module_package = null,
+            .targeted_module_id = null,
             .builtin_modules = builtin_modules,
             .roc_ctx = roc_ctx,
             .compiler_version = compiler_version,
@@ -1247,6 +1254,34 @@ pub const Coordinator = struct {
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
+        }
+
+        // A successful frontend consumed every task/result. Only aborted
+        // compilations need to drain channels; the normal path takes no locks.
+        if (!self.frontend_complete) {
+            const payload_alloc = self.getWorkerAllocator();
+            while (self.task_channel.tryRecv()) |task| {
+                switch (task) {
+                    .parse, .post_check => {},
+                    .canonicalize => |t| {
+                        t.cached_ast.deinit();
+                        payload_alloc.free(t.imported_modules);
+                    },
+                    .type_check => |t| {
+                        payload_alloc.free(t.imported_envs);
+                        payload_alloc.free(t.imported_artifacts);
+                        payload_alloc.free(t.available_artifacts);
+                        payload_alloc.free(t.explicit_roots);
+                        if (t.platform_requirements) |surface| {
+                            if (surface.owner_modules.len > 0) payload_alloc.free(surface.owner_modules);
+                        }
+                    },
+                }
+            }
+            while (self.result_channel.tryRecv()) |result| {
+                var discarded = result;
+                discarded.discard(payload_alloc);
+            }
         }
 
         // Free packages
@@ -1314,6 +1349,19 @@ pub const Coordinator = struct {
 
     pub fn markAppPackage(self: *Coordinator, package_name: []const u8) void {
         self.app_package_name = package_name;
+    }
+
+    /// Record the module for the file the compiler was pointed at, for builds
+    /// where that file is not the root of its package: `roc test --main`, and
+    /// a checked file whose owning `main.roc` supplied the dependency graph.
+    ///
+    /// The build's root is then the `main.roc` that names the packages, while
+    /// this is the file the user asked about. Both are the user's own files
+    /// rather than anything a dependency ships, so both count as entry modules
+    /// for `isEntryModule`.
+    pub fn markTargetedModule(self: *Coordinator, package_name: []const u8, module_id: ModuleId) void {
+        self.targeted_module_package = package_name;
+        self.targeted_module_id = module_id;
     }
 
     /// Record that this build has no app package (its root is a platform,
@@ -2774,7 +2822,8 @@ pub const Coordinator = struct {
     }
 
     /// Main coordinator loop - unified for single and multi-threaded modes
-    pub fn coordinatorLoop(self: *Coordinator) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
+    pub fn coordinatorLoop(self: *Coordinator) CoordinatorError!void {
+        errdefer self.shutdown();
         var inline_worker_allocs = WorkerAllocators.init(self.gpa);
         defer inline_worker_allocs.deinit();
         var iterations_without_progress: u32 = 0;
@@ -2999,8 +3048,7 @@ pub const Coordinator = struct {
                 .parsed,
                 .canonicalized,
                 .type_checked,
-                .parse_failed,
-                .compile_failed,
+                .operation_failed,
                 .cycle_detected,
                 .worker_oom,
                 => unreachable,
@@ -3046,38 +3094,6 @@ pub const Coordinator = struct {
             error.FileNotFound => .missing,
             error.AccessDenied, error.IoError, error.StreamTooLong => .unreadable,
         };
-    }
-
-    fn appendWorkerFailureReport(
-        self: *Coordinator,
-        allocator: Allocator,
-        reports: *std.ArrayList(Report),
-        title: []const u8,
-        path: []const u8,
-        err: WorkerFailureError,
-    ) void {
-        const msg = std.fmt.allocPrint(allocator, "{s}: {s}.", .{ path, @errorName(err) }) catch null;
-        defer if (msg) |owned| allocator.free(owned);
-        var rep = Report.init(allocator, title, msg orelse "A compilation worker failed.", .fatal) catch |headline_err| {
-            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(headline_err) });
-            return;
-        };
-        reports.append(allocator, rep) catch |append_err| {
-            rep.deinit();
-            self.bugReport("BUG: failed to append worker failure report for {s}: {s}\n", .{ path, @errorName(append_err) });
-        };
-    }
-
-    fn workerFailureReports(
-        self: *Coordinator,
-        allocator: Allocator,
-        title: []const u8,
-        path: []const u8,
-        err: WorkerFailureError,
-    ) std.ArrayList(Report) {
-        var reports = std.ArrayList(Report).empty;
-        self.appendWorkerFailureReport(allocator, &reports, title, path, err);
-        return reports;
     }
 
     /// Serialize `value` into `writer`, allocating all scratch from `arena_alloc`.
@@ -3306,7 +3322,7 @@ pub const Coordinator = struct {
             @intFromPtr(buffer.ptr),
             module_alloc,
             source,
-            mod.name,
+            current_env.module_name,
         ) catch {
             manager.stats.recordInvalidation();
             return false;
@@ -3658,7 +3674,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a result from a worker
-    fn handleResult(self: *Coordinator, result: WorkerResult) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
+    fn handleResult(self: *Coordinator, result: WorkerResult) CoordinatorError!void {
         // Make a mutable copy so we can deinit after handling
         var res = result;
         // Use worker allocator to match what workers used for allocation
@@ -3669,8 +3685,7 @@ pub const Coordinator = struct {
             .parsed => |*r| try self.handleParsed(r),
             .canonicalized => |*r| try self.handleCanonicalized(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
-            .parse_failed => |*r| try self.handleParseFailed(r),
-            .compile_failed => |*r| try self.handleCompileFailed(r),
+            .operation_failed => |r| return self.handleOperationFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
             .worker_oom => return error.OutOfMemory,
             .post_check => unreachable,
@@ -3974,7 +3989,6 @@ pub const Coordinator = struct {
 
         // Take ownership of module env
         mod.replaceModuleEnv(result.module_env);
-        mod.cached_ast = null; // AST was consumed during canonicalization
 
         if (mod.moduleEnv()) |env| {
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
@@ -4360,76 +4374,30 @@ pub const Coordinator = struct {
         try self.completeModuleSuccessfully(pkg, result.module_id);
     }
 
-    /// Handle a parse failure
-    fn handleParseFailed(self: *Coordinator, result: *messages.ParseFailure) Allocator.Error!void {
-        if (comptime trace_build) {
-            std.debug.print("[COORD] PARSE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
-        }
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for parse_failed result (module={s}, id={})\n", .{
-                result.package_name, result.module_name, result.module_id,
-            });
-            unreachable;
+    /// Preserve the operational failure for reporting and watch mode, then
+    /// unwind the operation. No dependent module is scheduled or marked failed.
+    fn handleOperationFailed(self: *Coordinator, failure: messages.WorkerOperationFailure) messages.WorkerOperationError!void {
+        const pkg = self.packages.get(failure.package_name) orelse
+            coordinatorInvariant("operational failure named missing package '{s}'", .{failure.package_name});
+        const mod = pkg.getModule(failure.module_id) orelse
+            coordinatorInvariant("operational failure named missing module {d}", .{failure.module_id});
+        if (failure.source_file_state) |state| mod.source_file_state = state;
+        const operation_error: messages.WorkerOperationError = switch (failure.cause) {
+            .read_source => |err| err,
+            .type_check => |err| err,
         };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for parse_failed result (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
+        const title = switch (failure.cause) {
+            .read_source => |err| switch (err) {
+                error.FileNotFound => "File Not Found",
+                else => "Parsing Failed",
+            },
+            .type_check => "Type Checking Failed",
         };
-
-        mod.source_file_state = result.source_file_state;
-
-        // Store partial env if available
-        if (result.partial_env) |env| {
-            mod.replaceModuleEnv(env);
-        }
-
-        // Append reports - we take ownership, so clear result.reports after copying
-        for (result.reports.items) |rep| {
-            try mod.reports.append(self.gpa, rep);
-        }
-        // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
-        result.reports.clearRetainingCapacity();
-
-        try self.completeModulesWithFailure(&.{.{
-            .pkg_name = pkg.name,
-            .module_id = result.module_id,
-        }});
-    }
-
-    /// Handle a non-parsing compilation failure.
-    fn handleCompileFailed(self: *Coordinator, result: *CompileFailure) Allocator.Error!void {
-        if (comptime trace_build) {
-            std.debug.print("[COORD] COMPILE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
-        }
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for compile_failed result (module={s}, id={})\n", .{
-                result.package_name, result.module_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for compile_failed result (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
-
-        if (result.partial_env) |env| {
-            mod.replaceModuleEnv(env);
-        }
-        mod.cached_ast = null;
-
-        for (result.reports.items) |rep| {
-            try mod.reports.append(self.gpa, rep);
-        }
-        result.reports.clearRetainingCapacity();
-
-        try self.completeModulesWithFailure(&.{.{
-            .pkg_name = pkg.name,
-            .module_id = result.module_id,
-        }});
+        const headline = try std.fmt.allocPrint(self.gpa, "{s}: {s}.", .{ mod.path, @errorName(operation_error) });
+        defer self.gpa.free(headline);
+        const report = try Report.init(self.gpa, title, headline, .fatal);
+        try appendReportOwned(self.gpa, &mod.reports, report);
+        return operation_error;
     }
 
     /// Handle cycle detection
@@ -4793,8 +4761,40 @@ pub const Coordinator = struct {
                 .depth = mod.depth,
                 .imported_modules = imported_modules,
                 .validation = mod.validation,
+                .is_entry_module = self.isEntryModule(pkg, module_id),
             },
         });
+        mod.cached_ast = null; // The queued task now owns the AST.
+    }
+
+    /// Whether this module is one of the build's entry modules: a file the
+    /// compiler was pointed at, rather than one it reached by following
+    /// imports.
+    ///
+    /// That is the root module of the app package, and—when the two differ—the
+    /// file explicitly targeted while some owning `main.roc` supplied the
+    /// dependency graph (`markTargetedModule`).
+    ///
+    /// Only those modules may be classified `default_app`, and so only they
+    /// receive the synthetic `echo!` hosted lambda. Any other headerless
+    /// module with a valid `main!` is an ordinary type module, whichever
+    /// package it lives in.
+    ///
+    /// This is the same shape as the `is_platform_pkg` gate on the hosted
+    /// transform in `handleCanonicalized`, and for the same reason: a
+    /// host-reaching capability must stay tied to the one package entitled to
+    /// it instead of falling out of a file-local property that any dependency
+    /// can satisfy.
+    fn isEntryModule(self: *const Coordinator, pkg: *const PackageState, module_id: ModuleId) bool {
+        if (self.targeted_module_package) |targeted_package| {
+            if (std.mem.eql(u8, pkg.name, targeted_package) and self.targeted_module_id == module_id) {
+                return true;
+            }
+        }
+        const app_package_name = self.app_package_name orelse return false;
+        if (!std.mem.eql(u8, pkg.name, app_package_name)) return false;
+        const root_module_id = pkg.root_module_id orelse return false;
+        return root_module_id == module_id;
     }
 
     /// Schedule an external import in its owning package
@@ -5015,28 +5015,13 @@ pub const Coordinator = struct {
             error.FileNotFound,
             error.IoError,
             error.StreamTooLong,
-            => |e| blk: {
-                const title = switch (e) {
-                    error.FileNotFound => "File Not Found",
-                    error.AccessDenied,
-                    error.IoError,
-                    error.StreamTooLong,
-                    => "Parsing Failed",
-                };
-                const source_file_state = if (self.track_watch_inputs)
-                    sourceFileStateForParseReadError(e)
-                else
-                    null;
-                break :blk WorkerResult{ .parse_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .source_file_state = source_file_state,
-                    .reports = self.workerFailureReports(allocators.result, title, task.path, e),
-                    .partial_env = null,
-                } };
-            },
+            => |e| WorkerResult{ .operation_failed = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+                .cause = .{ .read_source = e },
+                .source_file_state = if (self.track_watch_inputs) sourceFileStateForParseReadError(e) else null,
+            } },
         };
     }
 
@@ -5217,6 +5202,7 @@ pub const Coordinator = struct {
             known_modules.items,
             task.imported_modules,
             task.validation,
+            task.is_entry_module,
         );
 
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
@@ -5269,13 +5255,11 @@ pub const Coordinator = struct {
             error.UnwindRegistrationFailed,
             error.VirtualAllocFailed,
             error.VirtualProtectFailed,
-            => |e| WorkerResult{ .compile_failed = .{
+            => |e| WorkerResult{ .operation_failed = .{
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,
-                .path = task.path,
-                .reports = self.workerFailureReports(allocators.result, "Type Checking Failed", task.path, e),
-                .partial_env = task.module_env,
+                .cause = .{ .type_check = e },
             } },
         };
     }
@@ -5316,6 +5300,17 @@ pub const Coordinator = struct {
             task.defer_publication,
         );
         defer typecheck_output.deinit();
+        // On error the coordinator still owns the input environment. Transfer
+        // it only when the coordinator accepts the successful publication.
+        errdefer {
+            if (typecheck_output.publication_owned) {
+                switch (typecheck_output.publication) {
+                    .published => |*artifact| artifact.deinitRetainingModuleEnv(result_alloc),
+                    .deferred => {},
+                }
+                typecheck_output.publication_owned = false;
+            }
+        }
 
         const check_and_publish_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
         const local_ctfe = if (task.defer_publication) eval.CompileTimeFinalization.TimingSnapshot{} else local_ctfe_timing.snapshot();
@@ -5367,7 +5362,7 @@ pub const Coordinator = struct {
         } else .{ .published = typecheck_output.takeCheckedArtifact() };
         var publication_owned = true;
         errdefer if (publication_owned) switch (publication) {
-            .published => |*artifact| artifact.deinit(artifact.canonical_names.allocator),
+            .published => |*artifact| artifact.deinitRetainingModuleEnv(artifact.canonical_names.allocator),
             .deferred => |state| state.deinit(),
         };
 
@@ -5479,7 +5474,11 @@ pub const Coordinator = struct {
             worker_allocs.resetArena();
 
             // Send result
-            self.result_channel.send(result) catch break;
+            self.result_channel.send(result) catch {
+                var discarded = result;
+                discarded.discard(worker_allocs.taskAllocators().result);
+                break;
+            };
         }
     }
 };
@@ -6553,7 +6552,7 @@ fn hashPatternExtractionRegionsForView(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
-            .pattern_validation => continue,
+            .pattern_validation, .pattern_error => continue,
         };
         count.* += 1;
 
@@ -7730,14 +7729,8 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
     try std.testing.expect(coord.isComplete());
 }
 
-test "Coordinator handleParseFailed advances module to Done" {
-    // Verifies that handleParseFailed (which previously had orelse return)
-    // correctly transitions a module to Done and decrements counters.
-    // If the package/module lookup silently returned, the module would
-    // stay in Parsing forever—exactly the bug from CI.
+test "Coordinator operational failure aborts without completing dependents" {
     const allocator = std.testing.allocator;
-    const app_identity = package_identity.synthetic_app_identity;
-
     var coord = try Coordinator.init(
         allocator,
         .single_threaded,
@@ -7745,45 +7738,196 @@ test "Coordinator handleParseFailed advances module to Done" {
         roc_target.RocTarget.detectNative(),
         undefined,
         "test",
-        null, // cache_manager
-        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        null,
+        CoreCtx.os(allocator, allocator, std.testing.io),
     );
     defer coord.deinit();
+    const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
+    const missing_id = try pkg.ensureModule(allocator, "Missing", "/test/app/Missing.roc");
+    const app_id = try pkg.ensureModule(allocator, "App", "/test/app/App.roc");
+    const missing = pkg.getModule(missing_id).?;
+    const app = pkg.getModule(app_id).?;
+    missing.phase = .Parsing;
+    app.phase = .WaitingOnImports;
+    try missing.dependents.append(allocator, app_id);
+    pkg.remaining_modules = 2;
+    coord.total_remaining = 2;
 
-    // Create package and module
-    const pkg = try coord.ensurePackage(app_identity, "/test/app");
-    const module_id = try pkg.ensureModule(allocator, "Builder", "/test/app/Builder.roc");
-    pkg.remaining_modules = 1;
-    coord.total_remaining = 1;
+    try std.testing.expectError(error.FileNotFound, coord.handleResult(.{ .operation_failed = .{
+        .package_name = pkg.name,
+        .module_id = missing_id,
+        .module_name = missing.name,
+        .cause = .{ .read_source = error.FileNotFound },
+        .source_file_state = .missing,
+    } }));
+    try std.testing.expectEqual(.missing, missing.source_file_state.?);
+    try std.testing.expectEqual(@as(usize, 1), missing.reports.items.len);
+    try std.testing.expectEqualStrings("File Not Found", missing.reports.items[0].title);
+    try std.testing.expectEqual(.pending, missing.completion);
+    try std.testing.expectEqual(.pending, app.completion);
+    try std.testing.expectEqual(@as(usize, 2), coord.total_remaining);
+    try std.testing.expect(!coord.frontend_complete);
+}
 
-    // Set module to Parsing (as enqueueParseTask would do)
-    const mod = pkg.getModule(module_id).?;
-    mod.phase = .Parsing;
-
-    // Feed a parse_failed result through handleResult.
-    // This exercises the package/module lookup that previously used orelse return.
-    const result: WorkerResult = .{
-        .parse_failed = .{
-            .package_name = app_identity,
-            .module_id = module_id,
-            .module_name = "Builder",
-            .path = "/test/app/Builder.roc",
-            .source_file_state = .missing,
-            .reports = std.ArrayList(reporting.Report).empty,
-            .partial_env = null,
-        },
+test "Coordinator read errors abort single and multi-worker loops" {
+    const allocator = std.testing.allocator;
+    const ReadFailure = struct {
+        err: messages.SourceReadError,
+        fn read(raw: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.ReadError![]u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return self.err;
+        }
     };
-    try coord.handleResult(result);
+    for ([_]messages.SourceReadError{ error.FileNotFound, error.AccessDenied, error.IoError, error.StreamTooLong }) |read_error| {
+        for ([_]Mode{ .single_threaded, .multi_threaded }) |mode| {
+            if (is_freestanding and mode == .multi_threaded) continue;
+            var failure = ReadFailure{ .err = read_error };
+            var ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+            ctx.ctx = &failure;
+            ctx.vtable.readFile = ReadFailure.read;
+            var coord = try Coordinator.init(
+                allocator,
+                mode,
+                2,
+                roc_target.RocTarget.detectNative(),
+                undefined,
+                "test",
+                null,
+                ctx,
+            );
+            defer coord.deinit();
+            coord.setWatchInputTracking(true);
+            const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
+            const module_id = try pkg.ensureModule(allocator, "Missing", "/test/app/Missing.roc");
+            pkg.remaining_modules = 1;
+            coord.total_remaining = 1;
+            try coord.enqueueParseTask(pkg.name, module_id);
+            try coord.start();
+            try std.testing.expectError(read_error, coord.coordinatorLoop());
+            const mod = pkg.getModule(module_id).?;
+            const expected_state: watch_inputs.State = switch (read_error) {
+                error.FileNotFound => .missing,
+                else => .unreadable,
+            };
+            try std.testing.expectEqual(expected_state, mod.source_file_state.?);
+            try std.testing.expectEqual(@as(usize, 1), mod.reports.items.len);
+            try std.testing.expect(!coord.frontend_complete);
+            try std.testing.expectEqual(@as(usize, 0), coord.workers.items.len);
+        }
+    }
+}
 
-    // Verify module advanced to Done (not stuck in Parsing)
-    const mod_after = pkg.getModule(module_id).?;
-    try std.testing.expect(mod_after.phase == .Done);
-    try std.testing.expect(mod_after.completion == .failed);
+test "Coordinator shutdown releases unconsumed stage results and tasks" {
+    const allocator = std.testing.allocator;
+    const builtins = try sharedBuiltinModules();
+    // Exercise each ownership boundary, both buffered results and results whose
+    // delivery fails after shutdown, with the leak-checking allocator.
+    for ([_]std.meta.Tag(WorkerResult){ .parsed, .canonicalized, .type_checked }) |stop_after| {
+        for ([_]bool{ false, true }) |discard_delivery| {
+            var source = CoreCtx.ReadFileOverride{
+                .path = "/test/app/Main.roc",
+                .content = "module [identity]\nidentity = |x| x\n",
+                .base = CoreCtx.os(allocator, allocator, std.testing.io),
+            };
+            var coord = try Coordinator.init(
+                allocator,
+                .single_threaded,
+                1,
+                roc_target.RocTarget.detectNative(),
+                builtins,
+                "test",
+                null,
+                source.io(),
+            );
+            defer coord.deinit();
+            coord.markNoAppPackage();
+            const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
+            const module_id = try pkg.ensureModule(allocator, "Main", source.path);
+            pkg.remaining_modules = 1;
+            coord.total_remaining = 1;
+            try coord.enqueueParseTask(pkg.name, module_id);
+            var allocs = WorkerAllocators.init(allocator);
+            defer allocs.deinit();
+            while (coord.task_channel.tryRecv()) |task| {
+                var result = try coord.executeTaskInline(task, allocs.taskAllocators());
+                allocs.resetArena();
+                if (std.meta.activeTag(result) == stop_after) {
+                    if (discard_delivery) {
+                        coord.shutdown();
+                        try std.testing.expectError(error.Closed, coord.result_channel.send(result));
+                        result.discard(allocator);
+                    } else {
+                        try coord.result_channel.send(result);
+                    }
+                    break;
+                }
+                try coord.handleResult(result);
+            } else return error.TestUnexpectedResult;
+            try std.testing.expect(!coord.frontend_complete);
+        }
+    }
 
-    // Verify counters decremented
-    try std.testing.expectEqual(@as(usize, 0), pkg.remaining_modules);
-    try std.testing.expectEqual(@as(usize, 0), coord.total_remaining);
-    try std.testing.expect(coord.isComplete());
+    // Leave the actual canonicalize/type-check task queued at each boundary.
+    for ([_]std.meta.Tag(WorkerResult){ .parsed, .canonicalized }) |stop_after| {
+        var source = CoreCtx.ReadFileOverride{
+            .path = "/test/app/Main.roc",
+            .content = "module [identity]\nidentity = |x| x\n",
+            .base = CoreCtx.os(allocator, allocator, std.testing.io),
+        };
+        var coord = try Coordinator.init(
+            allocator,
+            .single_threaded,
+            1,
+            roc_target.RocTarget.detectNative(),
+            builtins,
+            "test",
+            null,
+            source.io(),
+        );
+        defer coord.deinit();
+        coord.markNoAppPackage();
+        const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
+        const module_id = try pkg.ensureModule(allocator, "Main", source.path);
+        pkg.remaining_modules = 1;
+        coord.total_remaining = 1;
+        try coord.enqueueParseTask(pkg.name, module_id);
+        var allocs = WorkerAllocators.init(allocator);
+        defer allocs.deinit();
+        while (coord.task_channel.tryRecv()) |task| {
+            const result = try coord.executeTaskInline(task, allocs.taskAllocators());
+            allocs.resetArena();
+            const tag = std.meta.activeTag(result);
+            try coord.handleResult(result);
+            if (tag == stop_after) break;
+        } else return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
+        try std.testing.expect(pkg.getModule(module_id).?.cached_ast == null);
+    }
+}
+
+test "Coordinator type-check operational errors remain operation errors" {
+    const allocator = std.testing.allocator;
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(allocator, allocator, std.testing.io),
+    );
+    defer coord.deinit();
+    const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
+    const module_id = try pkg.ensureModule(allocator, "App", "/test/app/App.roc");
+    try std.testing.expectError(error.UnsupportedPlatform, coord.handleResult(.{ .operation_failed = .{
+        .package_name = pkg.name,
+        .module_id = module_id,
+        .module_name = "App",
+        .cause = .{ .type_check = error.UnsupportedPlatform },
+    } }));
+    try std.testing.expectEqual(@as(usize, 1), pkg.getModule(module_id).?.reports.items.len);
+    try std.testing.expect(!coord.frontend_complete);
 }
 
 test "PackageState keeps public names separate from logical module identity" {

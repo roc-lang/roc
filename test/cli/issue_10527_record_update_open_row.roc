@@ -40,7 +40,7 @@ dimensions_of : Layout(output) -> Size
 dimensions_of = |Layout.(node)| node.dimensions
 
 place_layout : Layout(output), Placement -> output
-	where [output.default : output, output.plus : output, output -> output]
+	where [output.default : () -> output, output.plus : output, output -> output]
 place_layout = |Layout.(node), placement| {
 	Output : output
 	var $output = Output.default()

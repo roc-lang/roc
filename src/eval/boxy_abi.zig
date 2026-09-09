@@ -25,7 +25,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const base = @import("base");
 const backend = @import("backend");
 const layout_mod = @import("layout");
 const lir = @import("lir");
@@ -391,7 +390,7 @@ pub fn createRuntimeFromSidecarView(
         .erased_arg_desc_params = view.tables.erased_arg_desc_params,
     };
     const g = try createRuntime(gpa, undefined, &view.layouts, tables, roc_ops);
-    g.store_shell.strings = view.strings;
+    g.store_shell.boxy_names = view.names;
     g.runtime.store = &g.store_shell;
     return g;
 }
@@ -2124,7 +2123,7 @@ pub fn roc_boxy_tag_payload_desc(
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    const name: base.StringLiteral.Idx = @enumFromInt(tag_name);
+    const name: LIR.BoxyNameId = @enumFromInt(tag_name);
     const variant = g.runtime.findLocalBoxyTagVariant(desc, name) orelse abiCrash(g, "tag-payload descriptor variant navigation");
     const payload_desc = g.runtime.findBoxyPayloadDesc(variant, payload_index) orelse abiCrash(g, "tag-payload descriptor navigation");
     return hooks(g).resolveDescRef(payload_desc) catch abiCrash(g, "tag-payload descriptor resolution");
