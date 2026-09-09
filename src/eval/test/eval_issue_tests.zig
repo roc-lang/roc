@@ -203,6 +203,52 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11235: shared error tails preserve disjoint payloads and the success path",
+        .source_kind = .module,
+        .source =
+        \\f : Try({}, [..a]) -> Try({}, [A(Str), ..a])
+        \\f = |x| {
+        \\    x?
+        \\    Err(A("new"))
+        \\}
+        \\main = List.map([Err(B("a disjoint payload longer than the inline string capacity")), Ok({})], f)
+        ,
+        .expected = .{ .inspect_str = "[Err(B(\"a disjoint payload longer than the inline string capacity\")), Err(A(\"new\"))]" },
+    },
+    .{
+        .name = "issue 11235: normalized overlapping error tags retain their runtime payload",
+        .source_kind = .module,
+        .source =
+        \\f : Try({}, [..a]) -> Try({}, [A(Str), ..a])
+        \\f = |x| {
+        \\    x?
+        \\    Err(A("new"))
+        \\}
+        \\main = match f(Err(A("an overlapping payload longer than the inline string capacity"))) {
+        \\    Err(A(text)) => text
+        \\    Ok({}) => "unexpected success"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"an overlapping payload longer than the inline string capacity\"" },
+    },
+    .{
+        .name = "issue 11235: composed return boundaries preserve wrapped error payloads",
+        .source_kind = .module,
+        .source =
+        \\f : Try({}, [..a]) -> Try({}, [A, ..a])
+        \\f = |x| {
+        \\    x?
+        \\    Err(A)
+        \\}
+        \\wrap = |x| {
+        \\    _ = f(x) ? Wrapped
+        \\    Ok({})
+        \\}
+        \\main = wrap(Err(B("propagated")))
+        ,
+        .expected = .{ .inspect_str = "Err(Wrapped(B(\"propagated\")))" },
+    },
+    .{
         .name = "issue 10703: loop var aliasing an argument leaves argument reads loop-invariant",
         .source = issue10703LineLayoutSource,
         .expected = .{ .allocations_at_most = .{ .output = "820", .max_allocations = 32, .optimized = true } },
