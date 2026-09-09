@@ -57,6 +57,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("requirement_solution.zig"));
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
+    std.testing.refAllDecls(@import("codec_identity.zig"));
     std.testing.refAllDecls(@import("const_store.zig"));
     std.testing.refAllDecls(@import("artifact_serialize.zig"));
     std.testing.refAllDecls(@import("checked_artifact.zig"));
@@ -102,6 +103,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11057_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11128_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11229_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11214_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
 
     // Cross-module monomorphization tests

@@ -6611,7 +6611,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated record encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated encode_record call did not have three arguments");
 
@@ -6737,7 +6737,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated sequence encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated sequence encoder call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
@@ -17100,7 +17100,7 @@ const ProcBodyBuilder = struct {
         module: ProcedureModuleView,
         ref_id: checked.ResolvedValueRefId,
     ) ?Plan.WorkerSource {
-        const record = resolvedValueRecordInModule(module, ref_id);
+        const record = module.resolved_value_refs.callableTarget(ref_id);
         return switch (record.ref) {
             .local_proc => |local| if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
                 .{ .procedure_binding = binding }
@@ -17982,7 +17982,10 @@ const ProcBodyBuilder = struct {
         defer descriptor_snapshot.deinit(self.parent.allocator);
         defer self.restoreDescriptorBindings(descriptor_snapshot);
 
-        const match = self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
+        const match: DictionaryMethodMatch = if (planned.scheme_requirement) |requirement| .{
+            .requirement = requirement,
+            .slot = self.parent.plan.dictionaries.items[@intFromEnum(requirement)].slot,
+        } else self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a matching dictionary requirement");
         const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a bound dictionary local");
@@ -22054,7 +22057,7 @@ const ProcBodyBuilder = struct {
         for (statements) |statement_id| {
             const statement = self.module.checked_bodies.statement(statement_id);
             switch (statement.data) {
-                .decl => |decl| if (!self.declBindsUncapturedNestedProc(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
+                .decl => |decl| if (!self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
                 .var_ => |decl| try self.reservePatternBindings(decl.pattern),
                 .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
@@ -22075,7 +22078,7 @@ const ProcBodyBuilder = struct {
         expr_id: checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (self.declBindsUncapturedNestedProc(pattern_id, expr_id)) return next;
+        if (self.declOmitsRuntimeBinding(pattern_id, expr_id)) return next;
 
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const source = switch (pattern.data) {
@@ -22111,7 +22114,7 @@ const ProcBodyBuilder = struct {
         return try self.lowerExprInto(source, expr_id, bound);
     }
 
-    fn declBindsUncapturedNestedProc(
+    fn declOmitsRuntimeBinding(
         self: *ProcBodyBuilder,
         pattern_id: checked.CheckedPatternId,
         expr_id: checked.CheckedExprId,
@@ -22121,18 +22124,14 @@ const ProcBodyBuilder = struct {
             .assign => |binder| binder,
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return false,
         };
-        const callable_expr = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return false;
-        if (!self.nestedCallableExprHasNoCaptures(callable_expr)) return false;
+        if (self.module.checked_bodies.patternBinder(binder).is_scheme_alias) return true;
+        _ = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return false;
+        // Procedure lookups construct the callable at the instantiated use,
+        // including its source captures. Only another closure's capture of
+        // this binder reads the declaration's runtime local. Materializing an
+        // otherwise unread declaration would require descriptors for scheme
+        // parameters before any use has instantiated them.
         return !self.binderCapturedByNestedCallable(binder);
-    }
-
-    fn nestedCallableExprHasNoCaptures(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) bool {
-        const expr = self.module.checked_bodies.expr(expr_id);
-        return switch (expr.data) {
-            .lambda => true,
-            .closure => |closure| closure.captures.len == 0,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable capture check did not reference a lambda or closure"),
-        };
     }
 
     fn binderCapturedByNestedCallable(self: *ProcBodyBuilder, binder: checked.PatternBinderId) bool {

@@ -131,6 +131,17 @@ const Allocator = std.mem.Allocator;
 /// clean return means every emitted RC schedule was checked.
 pub const CertifyError = error{ OutOfMemory, Certification };
 
+/// Deterministic balance reads for scaling tests through the compilation
+/// pipeline. Sparse enumeration and constraint work are counted separately;
+/// direct LIR tests can also observe work items through CertifierWorkStats.
+pub var balance_queries_certified: u64 = 0;
+
+/// Sparse ownership entries visited by settlement and boundary checks.
+pub var ownership_entries_certified: u64 = 0;
+
+/// Constraints constructed or updated while attributing join ownership.
+pub var join_constraint_steps: u64 = 0;
+
 /// Holds the first violation message for test inspection.
 pub const Diagnostic = struct {
     buffer: [512]u8 = undefined,
@@ -179,7 +190,7 @@ pub fn certifyStore(
 }
 
 /// Deterministic work counters used by certifier complexity regression tests.
-/// Production certification passes no observer and performs no counter work.
+/// Optional per-invocation counts for direct LIR certification tests.
 const CertifierWorkStats = struct {
     work_items: usize = 0,
     conditional_payload_splits: usize = 0,
@@ -205,26 +216,7 @@ fn certifyStoreWithWorkStats(
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
     try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
 
-    var certifier = Certifier{
-        .allocator = allocator,
-        .store = store,
-        .layouts = layouts,
-        .sigs = sigs,
-        .rc_local = rc_local,
-        .maybe_uninitialized = &maybe_uninitialized,
-        .lender_arena = std.heap.ArenaAllocator.init(allocator),
-        .state_arena = std.heap.ArenaAllocator.init(allocator),
-        .claim_arena = std.heap.ArenaAllocator.init(allocator),
-        .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
-        .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
-        .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
-        .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
-        .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
-        .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
-        .seen_outcomes = std.AutoHashMap(u16, void).init(allocator),
-        .diag = diag,
-        .work_stats = work_stats,
-    };
+    var certifier = Certifier.initStore(allocator, store, layouts, sigs, rc_local, &maybe_uninitialized, diag, work_stats);
     defer certifier.deinit();
 
     for (0..store.procSpecCount()) |index| {
@@ -1275,9 +1267,10 @@ const State = struct {
     /// producer-authored conditional join clears it, and another guarded read
     /// before either transition is a possible double release.
     maybe_uninitialized_released: ArcSnapshot(bool, false),
-    /// Some value on this path has a negative balance: an aggregate move
-    /// consumed a field read whose take has not settled yet.
-    any_negative: bool = false,
+    /// Exact sign index, changed only when a balance crosses zero. Each bit
+    /// names a deferred ownership debt; empty subtrees require no scanning.
+    /// It shares path roots like balance, and is private to certification.
+    negative_balance: ArcSnapshot(u64, 0),
 
     const ConditionalEntry = struct {
         condition: u32 = no_dense,
@@ -1296,7 +1289,7 @@ const State = struct {
             .result_discriminant = no_dense,
             .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
             .maybe_uninitialized_released = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .any_negative = false,
+            .negative_balance = ArcSnapshot(u64, 0).init(allocator, (proc_local_count + 63) / 64),
         };
     }
 
@@ -1362,6 +1355,7 @@ const State = struct {
     }
 
     fn balanceOf(self: *const State, value: ValueId) i32 {
+        balance_queries_certified += 1;
         return self.balance.get(value);
     }
 
@@ -1376,9 +1370,15 @@ const State = struct {
     }
 
     fn addBalance(self: *State, value: ValueId, delta: i32) Allocator.Error!void {
-        const next = self.balanceOf(value) + delta;
+        const previous = self.balanceOf(value);
+        const next = previous + delta;
         try self.put(&self.balance, value, next);
-        if (next < 0) self.any_negative = true;
+        if ((previous < 0) != (next < 0)) {
+            const word_index = value / 64;
+            const bit = @as(u64, 1) << @as(u6, @intCast(value % 64));
+            const word = self.negative_balance.get(word_index);
+            try self.put(&self.negative_balance, word_index, if (next < 0) word | bit else word & ~bit);
+        }
     }
 
     fn setHolder(self: *State, value: ValueId, holder_value: ValueId) Allocator.Error!void {
@@ -1442,6 +1442,91 @@ test "forked state shares unchanged maybe-uninitialized facts" {
     try testing.expect(source.maybeUninitializedMayBeReleased(2));
     try testing.expect(forked.maybeUninitializedIsUnresolved(0));
     try testing.expect(!forked.maybeUninitializedMayBeReleased(2));
+}
+
+test "certifier debt index follows sign changes and isolates branches" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var state = try State.init(arena.allocator(), &.{}, 0);
+    try state.addBalance(7, -2);
+    try state.addBalance(99999, 1);
+    var fork = try state.clone();
+    try fork.addBalance(7, 1);
+    try testing.expect(fork.negative_balance.get(0) != 0);
+    try fork.addBalance(7, 1);
+    try testing.expect(fork.negative_balance.root == null);
+    try fork.addBalance(99999, -3);
+    var debts = fork.negative_balance.iterator();
+    const entry = debts.next().?;
+    try testing.expectEqual(@as(u32, 99999 / 64), entry.index);
+    try testing.expectEqual(@as(u64, 1) << (99999 % 64), entry.value);
+    try testing.expectEqual(null, debts.next());
+    try testing.expectEqual(@as(i32, -2), state.balanceOf(7));
+    try testing.expectEqual(@as(i32, 1), state.balanceOf(99999));
+    try testing.expectEqual(@as(u64, 1) << 7, state.negative_balance.get(0));
+}
+
+fn joinAttributionChainWork(count: usize) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!u64 {
+    const allocator = testing.allocator;
+    const left = try allocator.alloc(LocalSummary, count);
+    defer allocator.free(left);
+    const right = try allocator.alloc(LocalSummary, count);
+    defer allocator.free(right);
+    // Interleaved pairs form a path. Its endpoints force one variable,
+    // whose solution propagates along the whole path one edge at a time.
+    for (left, right, 0..) |*a, *b, i| {
+        const left_repr = i - i % 2;
+        const right_repr = if (i == 0) 0 else i - (i - 1) % 2;
+        a.* = .{
+            .class = .owned,
+            .repr = @intCast(left_repr),
+            .balance = if (left_repr + 1 < count) 2 else 1,
+            .condition = no_dense,
+            .condition_mask = 0,
+        };
+        b.* = .{
+            .class = .owned,
+            .repr = @intCast(right_repr),
+            .balance = if (i == 0 or right_repr + 1 == count) 1 else 2,
+            .condition = no_dense,
+            .condition_mask = 0,
+        };
+    }
+    var scratch = JoinMeetScratch{};
+    defer scratch.deinit(allocator);
+    const before = join_constraint_steps;
+    try testing.expect(try scratch.solve(allocator, left, right));
+    for (scratch.units.items) |units| try testing.expectEqual(@as(u64, 1), units);
+    return join_constraint_steps - before;
+}
+
+test "certifier join attribution visits each constraint edge once" {
+    const narrow = try joinAttributionChainWork(32);
+    const wide = try joinAttributionChainWork(128);
+    try testing.expectEqual(@as(u64, 4 * 32), narrow);
+    try testing.expectEqual(narrow * 4, wide);
+}
+
+test "certifier join attribution rejects inconsistent and undetermined intersections" {
+    var left = [_]LocalSummary{.{ .class = .owned, .repr = 0, .balance = 2, .condition = no_dense, .condition_mask = 0 }} ** 4;
+    var right = left;
+    // Two crossing two-element classes have no forcing equation.
+    left[2].repr = 2;
+    left[3].repr = 2;
+    right[1].repr = 1;
+    right[3].repr = 1;
+    var scratch = JoinMeetScratch{};
+    defer scratch.deinit(testing.allocator);
+    try testing.expect(!try scratch.solve(testing.allocator, &left, &right));
+    // Singleton right-hand classes force units which disagree with the
+    // left-hand totals. Reuse the scratch to also check reset discipline.
+    for (&right, 0..) |*entry, i| {
+        entry.repr = @intCast(i);
+        entry.balance = 2;
+    }
+    try testing.expect(!try scratch.solve(testing.allocator, &left, &right));
+    for (&right) |*entry| entry.balance = 1;
+    try testing.expect(try scratch.solve(testing.allocator, &left, &right));
 }
 
 /// Sparse lifetime provenance for one alias-class representative. Ownership
@@ -1625,6 +1710,140 @@ const JoinWalk = struct {
     group: usize,
 };
 
+/// Finish pending paths before walking their joined state. Components are
+/// ordered by actual control-flow dependencies; loop components converge
+/// before downstream continuations run. FIFO order within a component lets
+/// already pending arrivals refine a queued group before its next walk.
+const WorkQueue = struct {
+    const PendingJoin = struct { walk: JoinWalk, component: u32, sequence: usize };
+    const Joins = std.PriorityQueue(PendingJoin, void, order);
+
+    segments: std.ArrayList(Segment) = .empty,
+    joins: Joins,
+    components: *const collections.DenseMap(LIR.JoinPointId, u32),
+    sequence: usize = 0,
+
+    fn order(_: void, a: PendingJoin, b: PendingJoin) std.math.Order {
+        const component_order = std.math.order(a.component, b.component);
+        return if (component_order == .eq) std.math.order(a.sequence, b.sequence) else component_order;
+    }
+
+    fn init(components: *const collections.DenseMap(LIR.JoinPointId, u32)) WorkQueue {
+        return .{ .joins = .empty, .components = components };
+    }
+
+    fn deinit(self: *WorkQueue, allocator: Allocator) void {
+        self.segments.deinit(allocator);
+        self.joins.deinit(allocator);
+    }
+
+    fn append(self: *WorkQueue, allocator: Allocator, item: WorkItem) Allocator.Error!void {
+        switch (item) {
+            .segment => |segment| try self.segments.append(allocator, segment),
+            .join_body => |walk| {
+                try self.joins.push(allocator, .{
+                    .walk = walk,
+                    .component = self.components.get(walk.join) orelse unreachable,
+                    .sequence = self.sequence,
+                });
+                self.sequence += 1;
+            },
+        }
+    }
+
+    fn pop(self: *WorkQueue) ?WorkItem {
+        if (self.segments.pop()) |segment| return .{ .segment = segment };
+        if (self.joins.pop()) |pending| return .{ .join_body = pending.walk };
+        return null;
+    }
+};
+
+/// Each fine alias class is the intersection of exactly one class from each
+/// incoming partition, so its ownership variable occurs in exactly two sum
+/// constraints. Keep those two edges explicit and propagate each solution
+/// once, rather than rebuilding member lists or rescanning every equation.
+const JoinMeetScratch = struct {
+    const Constraint = struct { remaining: u64 = 0, unknown: u32 = 0, unknown_xor: u32 = 0 };
+    pairs: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+    reprs: std.ArrayList(u32) = .empty,
+    units: std.ArrayList(u64) = .empty,
+    constraints: std.ArrayList(Constraint) = .empty,
+    work: std.ArrayList(usize) = .empty,
+
+    fn deinit(self: *JoinMeetScratch, allocator: Allocator) void {
+        self.pairs.deinit(allocator);
+        self.reprs.deinit(allocator);
+        self.units.deinit(allocator);
+        self.constraints.deinit(allocator);
+        self.work.deinit(allocator);
+    }
+
+    fn solve(self: *JoinMeetScratch, allocator: Allocator, left: []const LocalSummary, right: []const LocalSummary) Allocator.Error!bool {
+        const n = left.len;
+        std.debug.assert(right.len == n);
+        try self.reprs.resize(allocator, n);
+        try self.units.resize(allocator, n);
+        @memset(self.units.items, 0);
+        try self.constraints.resize(allocator, 2 * n);
+        @memset(self.constraints.items, .{});
+        self.pairs.clearRetainingCapacity();
+        self.work.clearRetainingCapacity();
+        try self.work.ensureTotalCapacity(allocator, 2 * n);
+
+        var unknown_count: usize = 0;
+        for (left, right, 0..) |a, b, dense| {
+            if (a.class == .unbound) {
+                self.reprs.items[dense] = no_dense;
+                continue;
+            }
+            const pair = (@as(u64, a.repr) << 32) | b.repr;
+            const entry = try self.pairs.getOrPut(allocator, pair);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
+            self.reprs.items[dense] = entry.value_ptr.*;
+            // Only the first name of a fine class contributes a variable.
+            if (entry.found_existing or (a.class != .owned and a.class != .conditional_owned)) continue;
+            unknown_count += 1;
+            for ([_]usize{ a.repr, n + b.repr }, [_]u64{ a.balance, b.balance }) |index, total| {
+                const constraint = &self.constraints.items[index];
+                constraint.remaining = total;
+                constraint.unknown += 1;
+                constraint.unknown_xor ^= @intCast(dense);
+                join_constraint_steps += 1;
+            }
+        }
+        for (self.constraints.items, 0..) |constraint, index| {
+            if (constraint.unknown == 1) self.work.appendAssumeCapacity(index);
+        }
+        while (self.work.pop()) |index| {
+            const constraint = self.constraints.items[index];
+            if (constraint.unknown == 0) continue;
+            std.debug.assert(constraint.unknown == 1);
+            // An owned fine class must receive a strictly positive unit count.
+            if (constraint.remaining == 0) return false;
+            const repr = constraint.unknown_xor;
+            const units = constraint.remaining;
+            std.debug.assert(self.units.items[repr] == 0);
+            self.units.items[repr] = units;
+            unknown_count -= 1;
+            for ([_]usize{ left[repr].repr, n + right[repr].repr }) |incident| {
+                const affected = &self.constraints.items[incident];
+                join_constraint_steps += 1;
+                if (units > affected.remaining) return false;
+                affected.remaining -= units;
+                affected.unknown -= 1;
+                affected.unknown_xor ^= repr;
+                if (affected.unknown == 0) {
+                    if (affected.remaining != 0) return false;
+                } else if (affected.unknown == 1) {
+                    self.work.appendAssumeCapacity(incident);
+                }
+            }
+        }
+        // Underdetermined intersections require separate exact entry groups.
+        return unknown_count == 0;
+    }
+};
+
 const Segment = struct {
     cursor: LIR.CFStmtId,
     state: State,
@@ -1666,6 +1885,7 @@ const Certifier = struct {
     /// these need quotient-state memoization.
     memo_points: std.bit_set.DynamicBitSetUnmanaged = .{},
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
+    join_meet_scratch: JoinMeetScratch = .{},
     repr_scratch: collections.DenseMap(ValueId, u32),
     /// Hash-conses sparse descriptors within one proc so join comparisons
     /// usually reduce to pointer equality and repeated walks retain no copies.
@@ -1682,6 +1902,8 @@ const Certifier = struct {
     proc_locals: std.ArrayList(LIR.LocalId) = .empty,
     /// Join bodies of the proc being certified, for jump-following scans.
     join_bodies: collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId),
+    /// Forward topological component per join in the final-LIR control graph.
+    join_components: collections.DenseMap(LIR.JoinPointId, u32),
     /// Per-proc cache for join-body read-before-rebind sets. These bitsets use
     /// dense proc-local positions, so the cache is cleared at each proc boundary.
     reads_before_rebind_cache: collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
@@ -1715,6 +1937,39 @@ const Certifier = struct {
     /// Join whose body the current segment certifies, for diagnostics.
     current_origin_join: ?LIR.JoinPointId = null,
 
+    fn initStore(
+        allocator: Allocator,
+        store: *const LirStore,
+        layouts: *const layout_mod.Store,
+        sigs: arc_sig.SigTable,
+        rc_local: []const bool,
+        maybe_uninitialized: *const MaybeUninitializedConditions,
+        diag: *Diagnostic,
+        work_stats: ?*CertifierWorkStats,
+    ) Certifier {
+        return .{
+            .allocator = allocator,
+            .store = store,
+            .layouts = layouts,
+            .sigs = sigs,
+            .rc_local = rc_local,
+            .maybe_uninitialized = maybe_uninitialized,
+            .lender_arena = std.heap.ArenaAllocator.init(allocator),
+            .state_arena = std.heap.ArenaAllocator.init(allocator),
+            .claim_arena = std.heap.ArenaAllocator.init(allocator),
+            .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
+            .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
+            .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+            .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
+            .join_components = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
+            .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
+            .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
+            .seen_outcomes = std.AutoHashMap(u16, void).init(allocator),
+            .diag = diag,
+            .work_stats = work_stats,
+        };
+    }
+
     fn deinit(self: *Certifier) void {
         self.values.deinit(self.allocator);
         self.lender_arena.deinit();
@@ -1726,6 +1981,7 @@ const Certifier = struct {
         self.memo.deinit();
         self.memo_points.deinit(self.allocator);
         self.summary_scratch.deinit(self.allocator);
+        self.join_meet_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
         self.provenance_interner.deinit(self.allocator);
         self.provenance_value_scratch.deinit(self.allocator);
@@ -1736,6 +1992,7 @@ const Certifier = struct {
         self.proc_locals.deinit(self.allocator);
         self.join_bodies.deinit();
         self.clearReadsBeforeRebindCache();
+        self.join_components.deinit();
         self.seen_outcomes.clearRetainingCapacity();
         self.reads_before_rebind_cache.deinit();
         self.erased_owner_states.deinit();
@@ -1757,6 +2014,7 @@ const Certifier = struct {
     }
 
     fn clearReadsBeforeRebindCache(self: *Certifier) void {
+        self.join_components.clearRetainingCapacity();
         var iter = self.reads_before_rebind_cache.valueIterator();
         while (iter.next()) |bitset| bitset.deinit(self.allocator);
         self.reads_before_rebind_cache.clearRetainingCapacity();
@@ -2205,23 +2463,56 @@ const Certifier = struct {
     /// emissions never reach a settlement point negative, so this only
     /// rescues balances that were already failures before field takes.
     fn settleNegativeClaims(self: *Certifier, state: *State) Allocator.Error!void {
-        var remaining = false;
-        for (0..self.values.items.len) |value_index| {
-            while (state.balanceOf(@intCast(value_index)) < 0) {
-                if (!try self.tryClaim(state, @intCast(value_index))) break;
-                try state.addBalance(@intCast(value_index), 1);
+        if (state.negative_balance.root == null) return;
+        // Freeze the sign index while claims change balances. A claim can
+        // only increase a container's balance or spend an intact surplus
+        // (at least two units), so it cannot introduce a new negative entry.
+        // Ascending iteration preserves the original settlement order.
+        state.unique = false;
+        var pending = state.negative_balance.iterator();
+        while (pending.next()) |entry| {
+            var bits = entry.value;
+            while (bits != 0) {
+                const value = entry.index * 64 + @as(u32, @intCast(@ctz(bits)));
+                bits &= bits - 1;
+                ownership_entries_certified += 1;
+                while (state.balanceOf(value) < 0) {
+                    if (!try self.tryClaim(state, value)) break;
+                    try state.addBalance(value, 1);
+                }
             }
-            if (state.balanceOf(@intCast(value_index)) < 0) remaining = true;
         }
-        state.any_negative = remaining;
     }
 
     fn checkLeaks(self: *Certifier, state: *State) CertifyError!void {
         try self.settleNegativeClaims(state);
 
-        for (0..self.values.items.len) |value_index| {
-            const units = state.balanceOf(@intCast(value_index));
-            const claims = state.claimsOf(@intCast(value_index));
+        // Claims remain obligations even at zero balance and after the last
+        // local name is rebound. Merge both sparse inventories in value order.
+        var balances = state.balance.iterator();
+        var claimed = state.claims.iterator();
+        var balance_entry = balances.next();
+        var claim_entry = claimed.next();
+        while (balance_entry != null or claim_entry != null) {
+            const value_index = @min(
+                if (balance_entry) |entry| entry.index else no_value,
+                if (claim_entry) |entry| entry.index else no_value,
+            );
+            var units: i32 = 0;
+            var claims: ClaimSet = .{};
+            if (balance_entry) |entry| {
+                if (entry.index == value_index) {
+                    units = entry.value;
+                    balance_entry = balances.next();
+                }
+            }
+            if (claim_entry) |entry| {
+                if (entry.index == value_index) {
+                    claims = entry.value;
+                    claim_entry = claimed.next();
+                }
+            }
+            ownership_entries_certified += 1;
             if (!claims.isEmpty()) {
                 // A dismantled value's own unit must still be in hand, and
                 // every refcounted field's stored unit must have been spent
@@ -2968,115 +3259,32 @@ const Certifier = struct {
     /// place; anything else is a conflict.
     fn meetGroupSummary(self: *Certifier, group: *JoinGroup, summary: []const LocalSummary) CertifyError!MeetOutcome {
         const g = group.summary;
-        const n = g.len;
-
-        // Meet partition: representative per dense position, keyed by the
-        // (group repr, summary repr) pair; the representative is the first
-        // member, so `repr[dense] <= dense` with equality exactly at class
-        // leaders—the shape `stateFromSummary` expects.
-        var meet_repr = try self.allocator.alloc(u32, n);
-        defer self.allocator.free(meet_repr);
-        var pair_repr = std.AutoHashMap(u64, u32).init(self.allocator);
-        defer pair_repr.deinit();
-        for (g, summary, 0..) |ge, se, dense| {
-            if (ge.class == .unbound) {
-                meet_repr[dense] = no_dense;
-                continue;
-            }
-            const key = (@as(u64, ge.repr) << 32) | @as(u64, se.repr);
-            const entry = try pair_repr.getOrPut(key);
-            if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
-            meet_repr[dense] = entry.value_ptr.*;
+        // Identical partitions already state every constraint's solution.
+        // Validate balances directly and avoid allocating or hashing a meet
+        // graph for unchanged arrivals (the usual case for field parsers).
+        var same_partition = true;
+        var same_balances = true;
+        for (g, summary) |a, b| {
+            if (a.class == .unbound) continue;
+            if (a.repr != b.repr) same_partition = false;
+            if ((a.class == .owned or a.class == .conditional_owned) and a.balance != b.balance) same_balances = false;
         }
-
-        // Balance attribution over owned/conditional meet classes. Unknowns
-        // are indexed by meet-class representative; each group class and
-        // each summary class contributes one sum constraint.
-        var solved = try self.allocator.alloc(?u64, n);
-        defer self.allocator.free(solved);
-        @memset(solved, null);
-
-        const Constraint = struct {
-            total: u64,
-            /// Meet-class representatives (deduplicated, this constraint's
-            /// members).
-            members: []u32,
-        };
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        const scratch = arena.allocator();
-
-        var constraints = std.ArrayList(Constraint).empty;
-        // Group classes and summary classes, keyed by their own repr.
-        for (0..2) |side| {
-            const source = if (side == 0) g else summary;
-            var class_members = std.AutoHashMap(u32, std.ArrayList(u32)).init(scratch);
-            var class_total = std.AutoHashMap(u32, u64).init(scratch);
-            for (source, 0..) |entry, dense| {
-                if (entry.class != .owned and entry.class != .conditional_owned) continue;
-                const members = try class_members.getOrPut(entry.repr);
-                if (!members.found_existing) {
-                    members.value_ptr.* = .empty;
-                    try class_total.put(entry.repr, entry.balance);
-                }
-                const meet_class = meet_repr[dense];
-                var already = false;
-                for (members.value_ptr.items) |existing| {
-                    if (existing == meet_class) {
-                        already = true;
-                        break;
-                    }
-                }
-                if (!already) try members.value_ptr.append(scratch, meet_class);
-            }
-            var iter = class_members.iterator();
-            while (iter.next()) |entry| {
-                try constraints.append(scratch, .{
-                    .total = class_total.get(entry.key_ptr.*).?,
-                    .members = entry.value_ptr.items,
-                });
-            }
-        }
-
-        // Propagate: solve any constraint with exactly one unknown member;
-        // verify fully-solved constraints. Each round solves at least one
-        // unknown or stops, so this terminates in at most n rounds.
-        var progress = true;
-        while (progress) {
-            progress = false;
-            for (constraints.items) |constraint| {
-                var assigned_sum: u64 = 0;
-                var unsolved: usize = 0;
-                var unsolved_class: u32 = 0;
-                for (constraint.members) |meet_class| {
-                    if (solved[meet_class]) |units| {
-                        assigned_sum += units;
-                    } else {
-                        unsolved += 1;
-                        unsolved_class = meet_class;
-                    }
-                }
-                if (unsolved == 0) {
-                    if (assigned_sum != constraint.total) return .conflict;
-                } else if (unsolved == 1) {
-                    if (assigned_sum >= constraint.total) return .conflict;
-                    const remaining = constraint.total - assigned_sum;
-                    // A class carrying names summarized as owned always has
-                    // at least one unit on every real edge.
-                    if (remaining == 0) return .conflict;
-                    solved[unsolved_class] = remaining;
-                    progress = true;
+        if (same_partition) {
+            if (!same_balances) return .conflict;
+            var changed = false;
+            for (g, summary) |*entry, incoming| {
+                if (!entry.maybe_uninitialized_released and incoming.maybe_uninitialized_released) {
+                    entry.maybe_uninitialized_released = true;
+                    changed = true;
                 }
             }
+            return if (changed) .refined else .unchanged;
         }
-        for (constraints.items) |constraint| {
-            for (constraint.members) |meet_class| {
-                // Under-determined attribution (proper overlaps in both
-                // partitions with no forcing constraint): fall back to an
-                // exact per-summary group rather than guessing.
-                if (solved[meet_class] == null) return .conflict;
-            }
-        }
+
+        const scratch = &self.join_meet_scratch;
+        if (!try scratch.solve(self.allocator, g, summary)) return .conflict;
+        const meet_repr = scratch.reprs.items;
+        const solved = scratch.units.items;
 
         // Commit: rewrite the group's partition and balances in place.
         var changed = false;
@@ -3092,7 +3300,7 @@ const Certifier = struct {
                 changed = true;
             }
             if (entry.class == .owned or entry.class == .conditional_owned) {
-                const units: u32 = @intCast(solved[new_repr].?);
+                const units: u32 = @intCast(solved[new_repr]);
                 if (entry.balance != units) {
                     entry.balance = units;
                     changed = true;
@@ -4044,6 +4252,8 @@ const Certifier = struct {
             }
         }
 
+        try self.computeJoinComponents(&graph, pred_starts, predecessors);
+
         var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.proc_locals.items.len);
         var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
         var node_work = std.ArrayList(usize).empty;
@@ -4096,6 +4306,67 @@ const Certifier = struct {
             std.debug.panic("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@intFromEnum(start)});
         };
         return cached;
+    }
+
+    /// Kosaraju over the same final-LIR graph used for read-before-rebind
+    /// analysis. Numbering components in forward order makes every inter-
+    /// component predecessor settle before a queued successor join is walked.
+    fn computeJoinComponents(
+        self: *Certifier,
+        graph: *const ReadBeforeRebindGraph,
+        pred_starts: []const usize,
+        predecessors: []const usize,
+    ) Allocator.Error!void {
+        const allocator = graph.allocator;
+        const n = graph.nodes.items.len;
+        const Frame = struct { node: usize, next: usize = 0 };
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, n);
+        var frames = std.ArrayList(Frame).empty;
+        var finished = std.ArrayList(usize).empty;
+        for (0..n) |start| {
+            if (seen.isSet(start)) continue;
+            seen.set(start);
+            try frames.append(allocator, .{ .node = start });
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = graph.nodes.items[frame.node];
+                if (frame.next < node.successor_len) {
+                    const successor = graph.successors.items[node.successor_start + frame.next];
+                    frame.next += 1;
+                    const child = graph.indices.get(successor) orelse unreachable;
+                    if (!seen.isSet(child)) {
+                        seen.set(child);
+                        try frames.append(allocator, .{ .node = child });
+                    }
+                } else {
+                    try finished.append(allocator, frame.node);
+                    _ = frames.pop();
+                }
+            }
+        }
+
+        const components = try allocator.alloc(u32, n);
+        @memset(components, no_dense);
+        var reverse_work = std.ArrayList(usize).empty;
+        var component: u32 = 0;
+        while (finished.pop()) |start| {
+            if (components[start] != no_dense) continue;
+            components[start] = component;
+            try reverse_work.append(allocator, start);
+            while (reverse_work.pop()) |node| {
+                for (predecessors[pred_starts[node]..pred_starts[node + 1]]) |predecessor| {
+                    if (components[predecessor] != no_dense) continue;
+                    components[predecessor] = component;
+                    try reverse_work.append(allocator, predecessor);
+                }
+            }
+            component += 1;
+        }
+        var joins = self.join_bodies.iterator();
+        while (joins.next()) |join| {
+            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
+            try self.join_components.put(join.key_ptr.*, components[node]);
+        }
     }
 
     /// Computes the join's relevant-local set: every refcounted proc local the
@@ -4376,9 +4647,11 @@ const Certifier = struct {
         // a relevant local; anything else can never be released again. A
         // fully dismantled value is exempt: its unit is already spent by its
         // claims and owes no further release.
-        for (0..self.values.items.len) |value_index| {
-            const units = state.balanceOf(@intCast(value_index));
-            if (units == 0) continue;
+        var outstanding = state.balance.iterator();
+        while (outstanding.next()) |entry| {
+            const value_index = entry.index;
+            const units = entry.value;
+            ownership_entries_certified += 1;
             if (try self.claimsSpendUnit(state, @intCast(value_index))) continue;
             const origin = self.values.items[value_index].origin;
             if (units < 0) {
@@ -4502,7 +4775,7 @@ const Certifier = struct {
             }
         }
 
-        var work = std.ArrayList(WorkItem).empty;
+        var work = WorkQueue.init(&self.join_components);
         defer {
             while (work.pop()) |item| {
                 switch (item) {
@@ -4545,7 +4818,7 @@ const Certifier = struct {
         }
     }
 
-    fn scheduleJoinBody(self: *Certifier, work: *std.ArrayList(WorkItem), walk: JoinWalk) CertifyError!void {
+    fn scheduleJoinBody(self: *Certifier, work: *WorkQueue, walk: JoinWalk) CertifyError!void {
         const record = self.records.getPtr(walk.join) orelse return;
         const group = &record.groups.items[walk.group];
         // A refinement while this item sat on the stack re-queued the group;
@@ -4567,7 +4840,7 @@ const Certifier = struct {
         } });
     }
 
-    fn runSegment(self: *Certifier, work: *std.ArrayList(WorkItem), segment: Segment) CertifyError!void {
+    fn runSegment(self: *Certifier, work: *WorkQueue, segment: Segment) CertifyError!void {
         var state = segment.state;
         defer state.deinit();
         var cursor = segment.cursor;
@@ -5228,7 +5501,7 @@ const Certifier = struct {
         target: LIR.LocalId,
         projection: u64,
     ) CertifyError!void {
-        if (state.any_negative) try self.settleNegativeClaims(state);
+        try self.settleNegativeClaims(state);
         const claims = state.claimsOf(container);
         if (claims.isEmpty()) return;
         const container_origin = self.values.items[container].origin;
@@ -6242,6 +6515,55 @@ test "certify rejects erased call reuse from a different allocation" {
     _ = try f.addProc(&.{ closure, unrelated }, body, erased_callable);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "do not denote the same allocation") != null);
+}
+
+test "certifier terminal checks retain zero-balance claims without a local name" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record = try f.local(f.pair_str);
+    const body = try f.ret(record);
+    const proc_id = try f.addProc(&.{record}, body, f.pair_str);
+    var conditions = try MaybeUninitializedConditions.init(f.allocator, &f.store, &f.diag);
+    defer conditions.deinit();
+    var certifier = Certifier.initStore(f.allocator, &f.store, &f.layouts, .{ .sigs = &.{} }, &.{true}, &conditions, &f.diag, null);
+    defer certifier.deinit();
+    certifier.current_proc = proc_id;
+    certifier.current_stmt = body;
+    try certifier.collectProcLocals(f.store.getProcSpec(proc_id), body);
+    var state = try State.init(certifier.state_arena.allocator(), certifier.local_dense.items, certifier.proc_locals.items.len);
+    const value = try certifier.bindFresh(&state, record, 0, &.{});
+    try state.setClaims(value, .{ .low = 1 });
+    try state.bindValue(record, no_value);
+    try testing.expectError(error.Certification, certifier.checkLeaks(&state));
+    try testing.expect(std.mem.find(u8, f.diag.message(), "ended with balance 0") != null);
+}
+
+test "certifier boundary checks retain ownership after rebinding" {
+    for ([_]bool{ false, true }) |through_join| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const value = try f.local(.str);
+        const result = try f.local(.i64);
+        const ret = try f.ret(result);
+        var next = try f.assignI64(result, ret);
+        if (through_join) {
+            const join_id = f.freshJoinPointId();
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+            next = try f.store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = LIR.LocalSpan.empty(),
+                .body = next,
+                .remainder = jump,
+            } });
+        }
+        const release = try f.decrefStmt(value, .str, next);
+        const replacement = try f.assignStr(value, release);
+        const body = try f.assignStr(value, replacement);
+        _ = try f.addProc(&.{}, body, .i64);
+        try testing.expectError(error.Certification, f.certify());
+        const expected = if (through_join) "not carried into join" else "leaked";
+        try testing.expect(std.mem.find(u8, f.diag.message(), expected) != null);
+    }
 }
 
 test "certify flags a leaked binding" {

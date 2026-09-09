@@ -156,6 +156,8 @@ pub const CodecContractIdentity = struct {
     kind: CodecContractKind,
     constructor_ty_digest: names.TypeDigest,
     constructor_ty: Type.TypeId,
+    shape_ty_digest: names.TypeDigest,
+    shape_ty: Type.TypeId,
 };
 
 /// Function template plus source and monomorphic type identities.
@@ -297,7 +299,7 @@ pub fn fnEvidenceDigest(
     head: ?u32,
 ) EvidenceDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v2");
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v3");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
@@ -328,7 +330,7 @@ pub fn fnEvidenceDigest(
                     writeBytes(&hasher, &checked_structural.callable_key.bytes);
                     writeOptionalU32(
                         &hasher,
-                        if (checked_structural.generated_codec_derivation) |derivation|
+                        if (checked_structural.generated_codec_identity) |derivation|
                             @intFromEnum(derivation)
                         else
                             null,
@@ -339,6 +341,7 @@ pub fn fnEvidenceDigest(
                 writeU32(&hasher, use.index);
                 writeU8(&hasher, @intFromBool(use.independent_callable));
             },
+            .from_scheme => |index| writeU32(&hasher, index),
             .unreachable_value, .checked_error => {},
         }
     }
@@ -374,16 +377,17 @@ pub fn fnEvidenceEql(
                 .target => |right_target| {
                     if (!fnEvidenceTargetEql(left_target, right_target)) return false;
                 },
-                .structural, .from_callable, .unreachable_value, .checked_error => return false,
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => return false,
             },
             .structural => |left_structural| switch (right) {
-                .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
-                .target, .from_callable, .unreachable_value, .checked_error => return false,
+                .structural => |right_structural| if (!left_structural.identityEql(right_structural)) return false,
+                .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => return false,
             },
             .from_callable => |left_use| switch (right) {
                 .from_callable => |right_use| if (!std.meta.eql(left_use, right_use)) return false,
-                .target, .structural, .unreachable_value, .checked_error => return false,
+                .target, .structural, .from_scheme, .unreachable_value, .checked_error => return false,
             },
+            .from_scheme => |index| if (right != .from_scheme or right.from_scheme != index) return false,
             .unreachable_value => if (right != .unreachable_value) return false,
             .checked_error => if (right != .checked_error) return false,
         }
@@ -1312,7 +1316,7 @@ pub const ProgramView = struct {
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return .spec_type_out_of_bounds;
             if (spec.identity.codec_contract) |contract| {
-                if (!self.typeRefInBounds(contract.constructor_ty)) return .spec_type_out_of_bounds;
+                if (!self.typeRefInBounds(contract.constructor_ty) or !self.typeRefInBounds(contract.shape_ty)) return .spec_type_out_of_bounds;
             }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return .spec_type_out_of_bounds;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return .spec_type_out_of_bounds;
@@ -2567,4 +2571,67 @@ fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
         .source_fn_key = .{},
         .mono_fn_ty = mono_fn_ty,
     };
+}
+
+test "codec function evidence identity excludes per-use replay addresses" {
+    const allocator = std.testing.allocator;
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(allocator);
+    // Allocate distinct replay addresses with the same checked root key.
+    var replay_types: [4]checked.CheckedTypeId = undefined;
+    for (&replay_types) |*ty| {
+        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true);
+        try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
+    }
+    // Fill the proof table and its indices before building stored evidence.
+    var derivations: [3]static_dispatch.GeneratedCodecDerivation = undefined;
+    var derivation_ids: [3]static_dispatch.GeneratedCodecDerivationId = undefined;
+    for (&derivations, &derivation_ids, 0..) |*derivation, *id, index| {
+        id.* = @enumFromInt(@as(u32, @intCast(index)));
+        const ty = replay_types[if (index == 1) 2 else 0];
+        derivation.* = .{
+            .identity = if (index == 1) derivation_ids[0] else id.*,
+            .kind = if (index == 2) .parser else .encoder,
+            .source_constructor_ty = ty,
+            .source_runtime_ty = ty,
+            .source_shape_ty = ty,
+            .source_body_shape_ty = ty,
+            .source_encoding_ty = ty,
+            .source_state_ty = ty,
+            .source_error_ty = ty,
+            .constructor_ty = ty,
+            .runtime_ty = ty,
+            .shape_ty = ty,
+            .body_shape_ty = ty,
+            .encoding_ty = ty,
+            .state_ty = ty,
+            .error_ty = ty,
+        };
+    }
+    const Evidence = check.ConstStore.ConstFnEvidence;
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const left = [_]Evidence{.{ .structural = .{
+        .derivation = .encoder,
+        .checked = .{
+            .view = .{ .bytes = [_]u8{1} ** 32 },
+            .dispatcher_key = types.view().rootKey(replay_types[0]),
+            .dispatcher_ty = replay_types[0],
+            .callable_key = types.view().rootKey(replay_types[1]),
+            .callable_ty = replay_types[1],
+            .generated_codec_derivation = derivation_ids[0],
+            .generated_codec_identity = derivations[0].identity,
+        },
+    } }};
+    var right = left;
+    right[0].structural.checked.?.dispatcher_ty = replay_types[2];
+    right[0].structural.checked.?.callable_ty = replay_types[3];
+    right[0].structural.checked.?.generated_codec_derivation = derivation_ids[1];
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+    right[0].structural.checked.?.generated_codec_derivation = derivation_ids[2];
+    right[0].structural.checked.?.generated_codec_identity = derivations[2].identity;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }

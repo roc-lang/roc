@@ -140,6 +140,9 @@ pub const LirLoweringOptions = struct {
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
     monotype_only: bool = false,
+    /// Verify checked evidence consumption and worker ABIs at the Boxy planning
+    /// boundary, independently of codec body generation in Boxy lowering.
+    boxy_plan_inspect: ?*const fn (*const postcheck.Boxy.Plan.ProgramPlan) LowerToLirHarnessError!void = null,
     /// Receives deterministic Monotype work counters. This is independent of
     /// elapsed-time measurement and is available at the `monotype_only` boundary.
     monotype_diagnostics_out: ?*postcheck.Monotype.Lower.Diagnostics = null,
@@ -614,6 +617,15 @@ fn lowerAppPathToLir(
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    if (!opts.allow_user_errors and coord.hasUserErrors()) {
+        var reports = coord.iterReports();
+        while (reports.next()) |entry| {
+            var rendered = std.Io.Writer.Allocating.init(gpa);
+            defer rendered.deinit();
+            try entry.report.render(&rendered.writer, .markdown);
+            std.debug.print("{s}\n", .{rendered.written()});
+        }
+    }
     if (!opts.allow_user_errors) {
         try std.testing.expect(!coord.hasUserErrors());
     }
@@ -655,6 +667,17 @@ fn lowerAppPathToLir(
         );
         mono.deinit();
         if (opts.monotype_diagnostics_out) |out| out.* = diagnostics;
+        return;
+    }
+
+    if (opts.boxy_plan_inspect) |inspect_plan| {
+        var plan = try postcheck.Boxy.Plan.analyzeProgram(gpa, .{
+            .root_module = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+            .roots = lir_roots,
+        }, .{});
+        defer plan.deinit();
+        try inspect_plan(&plan);
         return;
     }
 

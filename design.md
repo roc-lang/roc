@@ -663,6 +663,11 @@ definition. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
+A resolved lookup's module identity is local to the module owning its expression.
+Consumers visiting imported bodies resolve that identity through the expression
+owner's identity table, then use the target module's definition store. An
+unavailable resolved target is a compiler invariant violation.
+
 The checker memoizes this resolution by alias declaration type variable and
 item, while each use still instantiates the selected method scheme separately.
 `CheckedBodyPayloadCopier.copyExprData` treats any unresolved associated lookup
@@ -2484,6 +2489,15 @@ right-hand side and complete scrutinee pattern. Those roots are emitted in
 dependency-first order and later lookups resolve through the selected binder,
 never as runtime-local pattern references.
 
+These top-level extraction roots are required binding definitions, not optional
+runtime-body hoists. Post-solve pruning must retain every well-checked top-level
+extraction independently of the optional-hoist dependency predicate. Its full
+checked body uses ordinary top-level constant/callable evaluation rules,
+including `expect`, `dbg`, loops, and mutable intermediate values. CheckedModule
+construction retains each binder's own source scheme and independently decides whether its
+result is context-free or requires specialization; retaining a definition does
+not force its type to be concrete or make a runtime-body expression hoistable.
+
 A non-exhaustive destructure in an unguarded runtime position is itself a strict
 compile-time demand when its right-hand side is top-level-equivalent. This demand
 does not depend on whether the pattern contains a binder or whether any binder is
@@ -3481,7 +3495,62 @@ identity. Boxy and Monotype consume the identity directly; they must not find a
 derivation by comparing runtime types or resolve one of its calls by looking up
 the method name in a registry.
 
+The evidence schema of a binding includes its explicitly captured codec
+requirements as well as constraints attached to variables in its callable.
+CheckedModule construction enumerates that complete schema once per owning scheme and reuses
+it for aliases and use sites. A captured codec requirement names its exact
+receiver and callable relation; a composite receiver is not a quantified
+variable and occupies no specialization-substitution slot. Such a requirement
+is supplied by checked use-site evidence, either a validated contract or an
+explicit reference to an enclosing requirement. Evidence resolution consults
+that relation before classifying a structural receiver. The receiver's known
+outer shape is not proof that its generic components have a concrete codec.
+Imported pristine schemes retain these requirements under the same substitution
+that copied their callable, including synthetic scheme roots without CIR nodes.
+
+When a local scheme leaves the solver's active lexical scope, its captured
+codec requirements are retained as checked module data. Retiring solver work
+does not discard the contract of the local procedure's checked body. Synthetic
+imported schemes and ordinary source bindings retain their producer-authored
+classification through serialization and rechecking.
+
+A generic local declaration binds its own composite evidence parameters. Its
+construction recipe records those entries as `from_scheme`, separately from
+checked callable paths and captured enclosing evidence. Checked use edges
+supply those parameters before Monotype or Boxy lowers dispatch; neither
+CheckedModule construction nor lowering may derive a concrete codec from the declaration's generic shape.
+
+A forwarded composite requirement carries both its lexical evidence coordinate
+and the absolute index of its owner parameter in the checked module's evidence
+pool. Monotype uses the lexical coordinate; Boxy uses the owner index to bind
+and capture a dictionary without recovering ownership from a receiver type.
+These source identities transport checked evidence and do not add specialization
+key components. CheckedModule construction caches the complete schema by its checker-authored
+owner; aliases and local scopes share the same evidence and quantified-variable
+pool ranges. Schemes whose checker-authored codec requirements require
+instantiation have no concrete template-root evidence. Selecting one as a root
+requires an explicit instantiated root edge with its own evidence.
+
+Constant-evaluation entry wrappers retain the evaluated value's quantified type
+variables without accepting its dispatch requirements as wrapper arguments.
+Procedure definitions and hoisted source-pattern roots bind evidence chains;
+constant and expression wrappers resolve their bodies without caller-supplied
+evidence. CheckedModule construction and use-site enumeration consume the same
+explicit root classification.
+
+Completed generated codec proof graphs also carry a producer-proven identity
+for specialization reuse. Type-role keys and call metadata select candidates; equality
+compares all source and frozen roles, every method selection and conditional
+edge, and nested evidence and substitutions. One alpha-equivalence bijection
+covers all type roots, including cross-root sharing. Cycles are compared as
+finite proof graphs. Source contracts remain intact for replay; specialization
+equality uses the shared identity rather than the per-use derivation index.
+
 Monotype instantiates a generated-codec contract once at the codec boundary.
+Queued specialization contexts retain both the constructor and the explicit
+public value shape. Both participate in specialization identity. A constructor
+may use the structural generated-body representation, so restoring the contract
+consumes the retained public shape to preserve its nominal boundary.
 While the specialization graph is mutable, codec preparation relates the
 contract's source and frozen constructor roles to that boundary, instantiates
 both its public value shape and its explicitly checker-authored generated-body
@@ -6876,6 +6945,15 @@ through erased callable construction using the checked procedure template or
 stored `ConstStore` function value that names the callable. A checked lookup
 without a resolved value reference is an invariant failure in boxy lowering.
 
+A local procedure declaration needs a runtime local only when another closure
+captures that binder. Ordinary procedure lookups construct the erased callable
+at their checked, instantiated use, including the procedure's source captures.
+Whether the procedure itself captures values does not require a second,
+unused callable at its declaration. In particular, that unused construction
+must not request descriptors for uninstantiated scheme parameters. Declarations
+whose binders are captured still provide the runtime value required by those
+explicit capture edges.
+
 Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
 the requested checked type. The const node is read from the module that owns the
 stored value, while checked type interpretation uses the module named by the
@@ -7353,6 +7431,24 @@ satisfies the literal's dispatch constraints), and Monotype commits only the
 per-specialization residue of generalized literals.
 
 ### Monotype Instantiation
+
+A generalized local callable alias (`alias = callable`) owns a checked
+instantiation scope, not a runtime monomorphic value cell or a new function
+body. Checking's binding-scheme classification and the declaration's explicit
+lookup edge authorize this plan; CheckedModule construction records it on the
+binder and its resolved procedure uses. Calls and other value-producing computations are not
+alias declarations and retain their original evaluation site.
+
+Every alias use carries its own checked substitution and evidence. Interface
+replay enters the alias scope instead of equating the use with one shared
+binding type. Body lowering installs that substitution in a fresh type-only
+scope and forwards the referenced callable, preserving its identity and
+captures. It does not clone runtime binder tables or create an alias closure,
+wrapper procedure, or specialization family. Monomorphic variables present in
+the substitution retain their existing cells. CheckedModule construction
+compresses alias identity edges to their final callable lookup in linear work without composing
+type graphs. Boxy consumes that target when planning each typed callable use;
+it never materializes an alias at an uninstantiated descriptor.
 
 Monotype lowering is a specialization-time instantiation of checked type graphs.
 This is the same core model as Cor/LSS: each reachable monomorphic
@@ -8637,8 +8733,10 @@ own callable relation.
 
 **Edges supply substitutions.** A scheme's quantified variables are its
 identity variables in identity order (`scheme_vars` on the checked template
-or dispatch scope); each evidence parameter names the slot its dispatcher
-occupies. Checking persists every scheme edge: an ordinary instantiation
+or dispatch scope), with any additional identities from explicit scheme
+requirements appended under the same numbering. An evidence parameter on an
+identity variable names the slot its dispatcher occupies. A composite scheme
+requirement has no such slot and consumes its checked evidence directly. Checking persists every scheme edge: an ordinary instantiation
 records the (pristine var, fresh var) pair of every quantified variable it
 copied (an orphan copy of an annotation or expected type is not a use of any
 scheme: it records no edge of its own and leaves every pending record slot to
@@ -11338,6 +11436,30 @@ exists, hash-consed within the procedure, and shared by every alias of the
 summary representative. Release builds compile the certifier away entirely,
 so only debug compiler builds pay, and any certifier slowness is fixed inside
 the certifier, never by weakening what it checks.
+
+Certification boundary checks enumerate the current path's nonzero balances
+and nonempty claim sets, never the procedure's history of abstract value
+identities. Claims still require certification at zero balance and after rebinding has
+removed a value's last local name. A persistent sign index records exactly the
+negative balances and changes only on sign transitions. Deferred claims settle
+in value order; claiming can increase a container balance or spend a positive
+surplus, but cannot create another negative balance. Sparse iteration borrows
+an immutable root and skips empty subtrees; it adds no metadata or update cost
+to the shared snapshot implementation's other consumers.
+
+The certifier's final-LIR read-before-rebind graph also supplies forward
+control-flow components for join scheduling. Pending paths contribute their
+arrivals before queued join bodies run, and loop components reach their fixed
+point before downstream join components run. Changes arriving before a group's
+queued walk are absorbed into that one state. Within a component, queued groups
+run in arrival order and strict refinements continue to schedule checks.
+This changes scheduling, not the entry-state abstraction or checked paths.
+Joins whose alias partitions are unchanged compare their exact balances
+directly. A changed partition creates one variable per class intersection;
+each variable belongs to exactly one sum constraint from each input partition.
+Remaining totals, unknown counts, and the exact two incidence edges propagate
+each solution once. Ambiguous or inconsistent attribution cannot merge the
+entry states. Temporary constraint storage retains capacity between meets.
 
 ### Mode Specialization
 

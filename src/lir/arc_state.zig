@@ -7,6 +7,9 @@ const Allocator = std.mem.Allocator;
 /// Debug-only work counter for exact sparse range queries.
 pub var range_query_node_visits: u64 = 0;
 
+/// Debug-only work counter for sparse enumeration, independent of ID width.
+pub var iterator_node_visits: u64 = 0;
+
 /// A bounded-depth radix tree whose absent entries have one caller-declared
 /// value. Copying a snapshot shares its root; changing one entry allocates
 /// only the nodes on that entry's path. Depth grows only as needed and is
@@ -69,6 +72,58 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             const leaf: *const Leaf = @ptrCast(@alignCast(node));
             return leaf.values[index & radix_mask];
         }
+
+        /// Enumerates non-default entries in ascending index order. The
+        /// iterator borrows this root, so shared updates may proceed while
+        /// iterating; unique updates require finishing the iteration first.
+        pub fn iterator(self: *const Self) Iterator {
+            var result = Iterator{ .depth = self.depth };
+            if (self.root) |root| result.push(root, 0);
+            return result;
+        }
+
+        /// Bounded-stack traversal of the borrowed immutable root.
+        pub const Iterator = struct {
+            /// A non-default entry and its exact snapshot index.
+            pub const Entry = struct { index: u32, value: T };
+            const Frame = struct { node: *const anyopaque, base: u32, slot: u8 = 0 };
+
+            frames: [max_branch_depth + 1]Frame = undefined,
+            len: usize = 0,
+            depth: u8,
+
+            fn push(self: *Iterator, node: *const anyopaque, base: u32) void {
+                if (@import("builtin").mode == .Debug) iterator_node_visits += 1;
+                self.frames[self.len] = .{ .node = node, .base = base };
+                self.len += 1;
+            }
+
+            /// Returns the next occupied entry, skipping absent subtrees.
+            pub fn next(self: *Iterator) ?Entry {
+                while (self.len != 0) {
+                    const frame = &self.frames[self.len - 1];
+                    if (frame.slot == radix) {
+                        self.len -= 1;
+                        continue;
+                    }
+                    const slot = frame.slot;
+                    frame.slot += 1;
+                    const remaining_depth = self.depth + 1 - self.len;
+                    if (remaining_depth == 0) {
+                        const leaf: *const Leaf = @ptrCast(@alignCast(frame.node));
+                        const value = leaf.values[slot];
+                        if (!std.meta.eql(value, empty)) return .{ .index = frame.base + slot, .value = value };
+                    } else {
+                        const branch: *const Branch = @ptrCast(@alignCast(frame.node));
+                        if (branch.children[slot]) |child| {
+                            const shift: u5 = @intCast(leaf_bits + (remaining_depth - 1) * radix_bits);
+                            self.push(child, frame.base | (@as(u32, slot) << shift));
+                        }
+                    }
+                }
+                return null;
+            }
+        };
 
         /// Whether a half-open index range contains a non-default entry.
         /// Canonical empty subtrees are null, so fully covered subtrees need
@@ -439,4 +494,32 @@ test "sparse range queries are exact across tree boundaries and shared updates" 
     for (keys) |key| try changed.put(key, 0);
     try std.testing.expect(!changed.hasNonEmptyInRange(0, @as(u64, 1) << 32));
     try std.testing.expect(original.hasNonEmptyInRange(0, @as(u64, 1) << 32));
+}
+
+test "sparse iteration preserves forks and skips absent history" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(i32, 0);
+    var original = Sparse.init(arena.allocator(), 0);
+    var empty_iter = original.iterator();
+    try std.testing.expectEqual(null, empty_iter.next());
+
+    const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
+    for (keys, 0..) |key, i| try original.putUnique(key, @intCast(i + 1));
+    var changed = original.clone();
+    var original_iter = original.iterator();
+    for (keys) |key| try changed.put(key, 0);
+    try changed.put(99999, -1);
+    for (keys, 0..) |key, i| {
+        const entry = original_iter.next().?;
+        try std.testing.expectEqual(key, entry.index);
+        try std.testing.expectEqual(@as(i32, @intCast(i + 1)), entry.value);
+    }
+    try std.testing.expectEqual(null, original_iter.next());
+
+    const before = iterator_node_visits;
+    var changed_iter = changed.iterator();
+    try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = 99999, .value = -1 }, changed_iter.next().?);
+    try std.testing.expectEqual(null, changed_iter.next());
+    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits - before <= 11);
 }

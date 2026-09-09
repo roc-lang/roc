@@ -3404,6 +3404,18 @@ test "issue 10763 - a stored call result is monomorphic" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
+test "issue 11217 - aliasing a stored call result does not generalize it" {
+    const source =
+        \\mk = |_| |x| x
+        \\main = {
+        \\    stored = mk({})
+        \\    alias = stored
+        \\    (alias(1), alias("a"))
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
 test "issue 10763 - imported partial schemes retain rank-1 binding metadata" {
     const source_a =
         \\module [mk]

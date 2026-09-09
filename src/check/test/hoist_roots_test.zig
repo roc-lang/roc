@@ -903,6 +903,82 @@ test "hoist roots publish top-level destructure binders used by executable roots
     try std.testing.expectEqual(@as(usize, 1), callable_binding_count);
 }
 
+test "hoist roots retain required top-level destructures with non-hoistable bodies (issue 11211)" {
+    const sources = [_][]const u8{
+        \\Ok(value) = {
+        \\    expect 1 == 1
+        \\    Ok(5.U64)
+        \\}
+        \\main = || value
+        ,
+        \\{ value } = {
+        \\    dbg 1
+        \\    { value: 5.U64 }
+        \\}
+        \\main = || value
+        ,
+        \\(value, _) = {
+        \\    var $n = 0.U64
+        \\    $n = $n + 5
+        \\    ($n, {})
+        \\}
+        \\main = || value
+        ,
+        \\Ok(value) = {
+        \\    var $n = 0.U64
+        \\    for item in [2.U64, 3] { $n = $n + item }
+        \\    Ok($n)
+        \\}
+        \\main = || value
+        ,
+        \\make = |n| {
+        \\    expect n == 5.U64
+        \\    Ok(n)
+        \\}
+        \\Ok(value) = make(5)
+        \\main = || value
+        ,
+        \\Ok(value) = Ok(Dict.empty().insert(5.U64, 5.U64).len())
+        \\main = || value
+        ,
+    };
+    for (sources) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+
+        var required_count: usize = 0;
+        for (test_env.checker.selectedHoistedRoots()) |root| {
+            if (!test_env.checker.selectedHoistedRootIsTopLevel(root)) continue;
+            try expectPatternExtractionRoot(root);
+            try std.testing.expectEqual(hoist_roots.ValueKind.data_constant, root.value_kind);
+            required_count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), required_count);
+    }
+}
+
+test "hoist roots retain independent data and callable top-level binders (issue 11211)" {
+    var test_env = try TestEnv.init("Test",
+        \\(value, identity) = {
+        \\    expect 1 == 1
+        \\    (5.U64, |arg| arg)
+        \\}
+        \\main = || identity(value)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expectEqual(hoist_roots.ValueKind.data_constant, roots[0].value_kind);
+    try std.testing.expectEqual(hoist_roots.ValueKind.callable_binding, roots[1].value_kind);
+    for (roots) |root| {
+        try expectPatternExtractionRoot(root);
+        try std.testing.expect(test_env.checker.selectedHoistedRootIsTopLevel(root));
+    }
+}
+
 test "hoist roots selected for single-branch match tuple binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {

@@ -37,6 +37,18 @@ pub fn sanitisePathForSnapshots(path: []const u8) []const u8 {
     return path;
 }
 
+/// Format terminal locations relative to the caller's working directory.
+/// Relative paths and virtual source names already have their display spelling.
+fn terminalPath(gpa: Allocator, path: []const u8, config: ReportingConfig) Allocator.Error![]u8 {
+    if (config.source_path_base) |base| {
+        if (std.fs.path.isAbsolute(path)) {
+            return std.fs.path.relative(gpa, base, null, base, path);
+        }
+        return gpa.dupe(u8, path);
+    }
+    return gpa.dupe(u8, sanitisePathForSnapshots(path));
+}
+
 /// Byte offset where `path`'s filename starts—just past the last separator,
 /// or 0 when there is none. Both separators are handled so the split is the
 /// same on every platform.
@@ -388,7 +400,7 @@ fn renderHeaderLine(
     const prefix_w = 3 + icon_w + 1 + source_region.displayWidth(title) + 1;
 
     var loc_len: usize = 0;
-    const fname = if (filename) |f| sanitisePathForSnapshots(f) else null;
+    const fname = filename;
     if (fname) |f| {
         loc_len = 1 + source_region.displayWidth(f) + 1 + decimalWidth(start_line) + 1 + decimalWidth(start_column);
     }
@@ -446,7 +458,9 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
     const title = report.title;
     const icon_info = getSeverityIcon(report.severity, title, palette);
 
-    try renderHeaderLine(writer, palette, config, icon_info, title, region.filename, region.start_line, region.start_column);
+    const path = if (region.filename) |filename| try terminalPath(gpa, filename, config) else null;
+    defer if (path) |p| gpa.free(p);
+    try renderHeaderLine(writer, palette, config, icon_info, title, path, region.start_line, region.start_column);
 
     if (summary.len > 0) {
         try writer.writeByte('\n');
@@ -1142,8 +1156,10 @@ const TerminalStyle = struct {
         }
     }
 
-    fn writeSourceLocation(ctx: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
-        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+    fn writeSourceLocation(ctx: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) (Allocator.Error || error{WriteFailed})!void {
+        const gpa = ctx.annotation_stack.allocator;
+        const path = try terminalPath(gpa, location.filename orelse "<source>", ctx.config);
+        defer gpa.free(path);
         try writeLocation(writer, ctx.palette, path, location.line, location.column);
         try writer.writeAll(ctx.palette.reset);
     }
@@ -1482,6 +1498,50 @@ test "report source selection uses only top-level source blocks and explicit foc
     try testing.expectEqual(@as(usize, 2), selected.index);
     try testing.expectEqual(@as(u32, 7), selected.start_column);
     try testing.expectEqual(@as(u32, 11), selected.end_column);
+}
+
+test "terminal source locations are relative to the configured working directory" {
+    const gpa = testing.allocator;
+    const sep = std.fs.path.sep_str;
+    const base = if (builtin.os.tag == .windows) "C:\\work\\project" else "/work/project";
+    const cases = .{
+        .{ base ++ sep ++ "main.roc", "main.roc" },
+        .{ base ++ sep ++ "src" ++ sep ++ "main.roc", "src" ++ sep ++ "main.roc" },
+        .{ base ++ sep ++ ".." ++ sep ++ "lib" ++ sep ++ "Other.roc", ".." ++ sep ++ "lib" ++ sep ++ "Other.roc" },
+        .{ base ++ "-other" ++ sep ++ "main.roc", ".." ++ sep ++ "project-other" ++ sep ++ "main.roc" },
+        .{ base ++ sep ++ "snapshots" ++ sep ++ "main.roc", "snapshots" ++ sep ++ "main.roc" },
+        .{ "src" ++ sep ++ "main.roc", "src" ++ sep ++ "main.roc" },
+        .{ "<source>", "<source>" },
+    };
+    inline for (cases) |case| {
+        var config = ReportingConfig.initColorTerminal();
+        config.source_path_base = base;
+        config.color_preference = .never;
+        var report = try Report.init(gpa, "Type Mismatch", "The types do not match.", .runtime_error);
+        defer report.deinit();
+        const region = @import("base").RegionInfo{
+            .start_line_idx = 0,
+            .start_col_idx = 0,
+            .end_line_idx = 0,
+            .end_col_idx = 1,
+        };
+        try report.addSourceContext(region, case[0], "x", &.{0});
+        try report.document.addText("See ");
+        try report.document.addSourceLocation(region, case[0]);
+        var out = std.Io.Writer.Allocating.init(gpa);
+        defer out.deinit();
+        try renderReportWithConfig(&report, &out.writer, config);
+        const header_end = std.mem.findScalar(u8, out.written(), '\n').?;
+        try testing.expect(std.mem.endsWith(u8, out.written()[0..header_end], " " ++ case[1] ++ ":1:1"));
+        try testing.expect(std.mem.find(u8, out.written()[header_end..], "See " ++ case[1] ++ ":1:1") != null);
+    }
+}
+
+test "terminal source paths preserve absolute locations without a working directory" {
+    const path = if (builtin.os.tag == .windows) "C:\\work\\main.roc" else "/work/main.roc";
+    const displayed = try terminalPath(testing.allocator, path, ReportingConfig.initColorTerminal());
+    defer testing.allocator.free(displayed);
+    try testing.expectEqualStrings(path, displayed);
 }
 
 test "report below-source hook preserves nested source style and top-level framing" {
