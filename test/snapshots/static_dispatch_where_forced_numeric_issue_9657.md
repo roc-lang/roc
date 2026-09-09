@@ -31,44 +31,117 @@ use_it = {
 TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 # PROBLEMS
-── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
-
-The encode method on Dec has an incompatible type.
-
-transform = make_map(|n| n + 1)
-            ^^^^^^^^
-
-The method encode has the type:
-
-    Dec, fmt -> Try(encoded, err)
-      where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]
-
-But I need it to have the type:
-
-    b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
-    -> b]
-
-Hint: This function expects 1 argument but got 2.
-
-── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
-
-The decode method on Dec has an incompatible type.
-
-transform = make_map(|n| n + 1)
-            ^^^^^^^^
-
-The method decode has the type:
-
-    src, fmt -> (Try(Dec, err), src)
-      where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]
-
-But I need it to have the type:
-
-    I64 -> b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
-    -> b]
-
-Hint: This function expects 1 argument but got 2.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 19 17) (end 19 25))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "decode")
+			(reflow " ")
+			(reflow "method on")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "has an incompatible type."))
+		(document
+			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
+			(line-break)
+			(reflow "The method")
+			(reflow " ")
+			(annotated code "decode")
+			(reflow " ")
+			(reflow "has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "src, fmt -> (Try(Dec, err), src)")
+			(line-break)
+			(indent 1)
+			(text "  where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need it to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "I64 -> b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec -> b]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "2")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 19 17) (end 19 25))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "encode")
+			(reflow " ")
+			(reflow "method on")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "has an incompatible type."))
+		(document
+			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
+			(line-break)
+			(reflow "The method")
+			(reflow " ")
+			(annotated code "encode")
+			(reflow " ")
+			(reflow "has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec, fmt -> Try(encoded, err)")
+			(line-break)
+			(indent 1)
+			(text "  where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need it to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec -> b]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "2")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,OpenRound,UpperIdent,OpArrow,UpperIdent,CloseRound,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,UpperIdent,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,
@@ -105,13 +178,13 @@ EndOfFile,
 					(ty (name "I64"))))
 			(where
 				(method (mod-of "a") (name "decode")
-					(args
-						(ty (name "I64")))
-					(ty-var (raw "a")))
+					(ty-fn
+						(ty (name "I64"))
+						(ty-var (raw "a"))))
 				(method (mod-of "b") (name "encode")
-					(args
-						(ty-var (raw "b")))
-					(ty (name "I64")))))
+					(ty-fn
+						(ty-var (raw "b"))
+						(ty (name "I64"))))))
 		(s-decl
 			(p-ident (raw "make_map"))
 			(e-lambda
@@ -217,18 +290,18 @@ use_it = {
 									(ty-rigid-var (name "a")))
 								(s-let
 									(p-assign (ident "value"))
-									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 28) (constraint-fn-var 304)
+									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 30) (constraint-fn-var 302)
 										(args
 											(e-lookup-local
 												(p-assign (ident "input"))))))
 								(s-let
 									(p-assign (ident "output"))
-									(e-call (constraint-fn-var 310)
+									(e-call (constraint-fn-var 308)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
 											(p-assign (ident "value")))))
-								(e-dispatch-call (method "encode") (constraint-fn-var 311)
+								(e-dispatch-call (method "encode") (constraint-fn-var 309)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "output"))))
@@ -247,30 +320,30 @@ use_it = {
 						(ty-lookup (name "I64") (builtin)))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "decode")
-					(args
-						(ty-lookup (name "I64") (builtin)))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(ty-fn (effectful false)
+						(ty-lookup (name "I64") (builtin))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "encode")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
-					(ty-lookup (name "I64") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+						(ty-lookup (name "I64") (builtin)))))))
 	(d-let
 		(p-assign (ident "use_it"))
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 333)
+				(e-call (constraint-fn-var 331)
 					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 331)
+						(e-dispatch-call (method "plus") (constraint-fn-var 329)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 341)
+			(e-call (constraint-fn-var 339)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

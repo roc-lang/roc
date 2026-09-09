@@ -23,9 +23,54 @@ result = {
 expect result == 32
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_var_conditional_persist.md:3:6:3:15
+VAR NAME MISSING `$` - for_loop_var_conditional_persist.md:4:6:4:16
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 15))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "lastEven_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$lastEven_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_var_conditional_persist.md") (start 3 6) (end 3 15) (annotation warning) (line-text "\tvar lastEven_ = 0"))))
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 4 6) (end 4 16))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "evenCount_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$evenCount_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_var_conditional_persist.md") (start 4 6) (end 4 16) (annotation warning) (line-text "\tvar evenCount_ = 0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -111,10 +156,10 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "lastEven_"))
+				(p-var-assign (ident "lastEven_"))
 				(e-num (value "0")))
 			(s-var
-				(p-assign (ident "evenCount_"))
+				(p-var-assign (ident "evenCount_"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -134,7 +179,7 @@ NO CHANGE
 							(if-branch
 								(e-method-eq (negated "false")
 									(lhs
-										(e-dispatch-call (method "rem_by") (constraint-fn-var 375)
+										(e-dispatch-call (method "rem_by") (constraint-fn-var 377)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "n"))))
@@ -144,28 +189,28 @@ NO CHANGE
 										(e-num (value "0"))))
 								(e-block
 									(s-reassign
-										(p-assign (ident "lastEven_"))
+										(p-var-assign (ident "lastEven_"))
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(s-reassign
-										(p-assign (ident "evenCount_"))
-										(e-dispatch-call (method "plus") (constraint-fn-var 395)
+										(p-var-assign (ident "evenCount_"))
+										(e-dispatch-call (method "plus") (constraint-fn-var 397)
 											(receiver
 												(e-lookup-local
-													(p-assign (ident "evenCount_"))))
+													(p-var-assign (ident "evenCount_"))))
 											(args
 												(e-num (value "1")))))
 									(e-empty_record))))
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-dispatch-call (method "times") (constraint-fn-var 400)
+			(e-dispatch-call (method "times") (constraint-fn-var 402)
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "lastEven_"))))
+						(p-var-assign (ident "lastEven_"))))
 				(args
 					(e-lookup-local
-						(p-assign (ident "evenCount_"))))))
+						(p-var-assign (ident "evenCount_"))))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

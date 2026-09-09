@@ -663,7 +663,7 @@ test "scanArArchive walks members and respects alignment" {
 
     var remaining = std.StringHashMap(void).init(std.testing.allocator);
     defer remaining.deinit();
-    try remaining.put("roc_alloc", {});
+    try remaining.put(shim_symbols.roc_alloc, {});
 
     // The member isn't a recognized object format, so the scan reports
     // non-authoritative.
@@ -674,7 +674,7 @@ test "scanArArchive walks members and respects alignment" {
 test "defineSymbol strips one leading underscore" {
     var remaining = std.StringHashMap(void).init(std.testing.allocator);
     defer remaining.deinit();
-    try remaining.put("roc_alloc", {});
+    try remaining.put(shim_symbols.roc_alloc, {});
     defineSymbol(&remaining, "_roc_alloc");
     try std.testing.expectEqual(@as(u32, 0), remaining.count());
 }

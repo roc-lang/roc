@@ -984,6 +984,7 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
         const pattern = module_env.store.getPattern(def.pattern);
         const ident = switch (pattern) {
             .assign => |assign| assign.ident,
+            .var_assign => |var_assign| var_assign.ident,
             .as => |as_pattern| as_pattern.ident,
             .applied_tag,
             .nominal,
@@ -2112,44 +2113,9 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
 
         if (byte_offset >= pattern_region.start.offset and byte_offset < pattern_region.end.offset) {
             const pattern = cir.store.getPattern(def.pattern);
-            switch (pattern) {
-                .assign => |assign| {
-                    const ident_text = cir.getIdent(assign.ident);
-                    if (std.mem.eql(u8, ident_text, identifier)) {
-                        // 1. Get type string
-                        const owned_type_str = if (def.annotation) |annotation_idx| blk: {
-                            const annotation = cir.store.getAnnotation(annotation_idx);
-                            const anno_region = cir.store.getTypeAnnoRegion(annotation.anno);
-                            break :blk try local_allocator.dupe(u8, cir.getSource(anno_region));
-                        } else blk: {
-                            var type_writer = try data.module_env.initTypeWriter();
-                            defer type_writer.deinit();
-
-                            try type_writer.write(ModuleEnv.varFrom(def.pattern), .wrap);
-                            break :blk try local_allocator.dupe(u8, type_writer.get());
-                        };
-
-                        // 2. Get definition region
-                        const def_region_loc = cir.store.getPatternRegion(def.pattern);
-                        const region_info = cir.calcRegionInfo(def_region_loc);
-                        const def_region = DiagnosticRegion{
-                            .start_line = region_info.start_line_idx + 1,
-                            .start_column = region_info.start_col_idx + 1,
-                            .end_line = region_info.end_line_idx + 1,
-                            .end_column = region_info.end_col_idx + 1,
-                        };
-
-                        // 3. Get docs (not yet implemented)
-                        const docs: ?[]const u8 = null;
-
-                        return HoverInfo{
-                            .name = ident_text,
-                            .type_str = owned_type_str,
-                            .definition_region = def_region,
-                            .docs = docs,
-                        };
-                    }
-                },
+            const ident = switch (pattern) {
+                .assign => |assign| assign.ident,
+                .var_assign => |var_assign| var_assign.ident,
                 .as,
                 .applied_tag,
                 .nominal,
@@ -2167,7 +2133,43 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                 .str_interpolation,
                 .underscore,
                 .runtime_error,
-                => {},
+                => continue,
+            };
+
+            const ident_text = cir.getIdent(ident);
+            if (std.mem.eql(u8, ident_text, identifier)) {
+                // 1. Get type string
+                const owned_type_str = if (def.annotation) |annotation_idx| blk: {
+                    const annotation = cir.store.getAnnotation(annotation_idx);
+                    const anno_region = cir.store.getTypeAnnoRegion(annotation.anno);
+                    break :blk try local_allocator.dupe(u8, cir.getSource(anno_region));
+                } else blk: {
+                    var type_writer = try data.module_env.initTypeWriter();
+                    defer type_writer.deinit();
+
+                    try type_writer.write(ModuleEnv.varFrom(def.pattern), .wrap);
+                    break :blk try local_allocator.dupe(u8, type_writer.get());
+                };
+
+                // 2. Get definition region
+                const def_region_loc = cir.store.getPatternRegion(def.pattern);
+                const region_info = cir.calcRegionInfo(def_region_loc);
+                const def_region = DiagnosticRegion{
+                    .start_line = region_info.start_line_idx + 1,
+                    .start_column = region_info.start_col_idx + 1,
+                    .end_line = region_info.end_line_idx + 1,
+                    .end_column = region_info.end_col_idx + 1,
+                };
+
+                // 3. Get docs (not yet implemented)
+                const docs: ?[]const u8 = null;
+
+                return HoverInfo{
+                    .name = ident_text,
+                    .type_str = owned_type_str,
+                    .definition_region = def_region,
+                    .docs = docs,
+                };
             }
         }
     }

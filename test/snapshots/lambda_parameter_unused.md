@@ -35,26 +35,40 @@ main! = |_| {
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
-── ● unused variable ──────────────────────────── lambda_parameter_unused.md:5:8
-
-Variable unused is defined here and then never used:
-
-add = |unused| 42
-       ^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _unused to
-suppress this warning.
-
-── ● underscore variable used ────────────────── lambda_parameter_unused.md:9:22
-
-Variable _factor is prefixed with an underscore but is actually used.
-
-multiply = |_factor| _factor * 2
-                     ^^^^^^^
-
-Variables prefixed with _ are intended to be unused. Remove the underscore
-prefix: factor.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 5 8) (end 5 14))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "unused")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_unused")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "lambda_parameter_unused.md") (start 5 8) (end 5 14) (annotation error) (line-text "add = |unused| 42"))))
+	(report
+		(severity warning)
+		(title "Underscore Variable Used")
+		(region (start 9 22) (end 9 29))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "_factor")
+			(reflow " is prefixed with an underscore but is actually used."))
+		(document
+			(reflow "Variables prefixed with ")
+			(annotated symbol-unqualified "_")
+			(reflow " are intended to be unused. Remove the underscore prefix: ")
+			(annotated symbol-unqualified "factor")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "lambda_parameter_unused.md") (start 9 22) (end 9 29) (annotation warning) (line-text "multiply = |_factor| _factor * 2")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

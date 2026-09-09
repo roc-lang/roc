@@ -14,32 +14,60 @@ a={
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_101.md:2:8:2:10
 TYPE MISMATCH - fuzz_crash_101.md:2:3:2:13
 # PROBLEMS
-── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_101.md:2:8
-
-I am part way through parsing this tuple, but it is empty.
-
-r=|()|(()())
-       ^^
-
-If you want to represent nothing, try using an empty record: {}.
-
-── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_101.md:2:3
-
-This expression is used in an unexpected way.
-
-r=|()|(()())
-  ^^^^^^^^^^
-
-It has the type:
-
-    () -> Error
-
-But the annotation says it should be:
-
-    (), (({}) -> c), (({}) -> d) -> c
-
-Hint: This function expects 3 arguments but got 1.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Empty Tuple Not Allowed")
+		(region (start 2 8) (end 2 10))
+		(headline
+			(reflow "I am part way through parsing this tuple, but it is empty."))
+		(document
+			(source-region (file "fuzz_crash_101.md") (start 2 8) (end 2 10) (annotation error) (line-text "r=|()|(()())"))
+			(line-break)
+			(reflow "If you want to represent nothing, try using an empty record: ")
+			(annotated code "{}")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 2 3) (end 2 13))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "fuzz_crash_101.md") (start 2 3) (end 2 13) (annotation error) (line-text "r=|()|(()())"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "() -> Error")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(), (({}) -> c), (({}) -> d) -> c")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function expects")
+			(reflow " ")
+			(reflow "3")
+			(reflow " ")
+			(reflow "arguments")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "1")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,NoSpaceOpenRound,CloseRound,Comma,NoSpaceOpenRound,OpArrow,LowerIdent,CloseRound,Comma,NoSpaceOpenRound,OpArrow,LowerIdent,CloseRound,OpArrow,NoSpaceOpenRound,LowerIdent,Comma,CloseRound,

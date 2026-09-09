@@ -177,6 +177,13 @@ const InstNamed = struct {
     declared_order: []const InstDeclaredField = &.{},
 };
 
+/// Union-find node for nominal applications that an explicit relation proved
+/// equivalent without joining their representation-owning type classes.
+const RelatedNamedInstance = struct {
+    parent: NodeId,
+    rank: u8 = 0,
+};
+
 /// Graph-owned data for a private iterator representation before sealing.
 pub const InstGeneratedIterator = struct {
     callable_evidence: ?names.TypeDigest,
@@ -241,6 +248,10 @@ pub const OpenFunctionInterfaceShape = struct {
 /// `InstGraph.diagnostics` remains null unless detailed diagnostics were
 /// requested, so ordinary lowering does not count hot-path operations.
 pub const GraphDiagnostics = struct {
+    /// Node identities retained by argument-class snapshots.
+    argument_class_members_snapshotted: u64 = 0,
+    /// Visited-set slots initialized or touched by structural backing walks.
+    structural_backing_scan_slots: u64 = 0,
     nodes_created: u64 = 0,
     unify_requests: u64 = 0,
     class_unions: u64 = 0,
@@ -269,6 +280,10 @@ pub const GraphDiagnostics = struct {
     /// 10978 hit exactly that).
     nominal_backing_lookups: u64 = 0,
     nominal_backing_instances_scanned: u64 = 0,
+    /// Nominal-backing deletions that leave tombstones in the lookup index.
+    /// This must remain zero: rekeying cannot make lookup cost depend on the
+    /// graph's history of root migrations.
+    nominal_backing_tombstone_deletions: u64 = 0,
     /// Union-find resolutions across all graph operations: the broadest
     /// deterministic proxy for total solver work.
     union_find_resolutions: u64 = 0,
@@ -360,6 +375,13 @@ const NominalBackingKeyContext = struct {
             std.mem.eql(NodeId, left.args, right.args);
     }
 };
+
+const NominalBackingIndex = collections.RekeyingHashMap(
+    NominalBackingKey,
+    NominalBackingInstanceId,
+    NominalBackingKeyContext,
+    80,
+);
 
 const NominalBackingLookup = struct {
     declaration: NominalBackingDeclaration,
@@ -509,6 +531,16 @@ pub const InstGraph = struct {
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
+    /// Explicit equivalence classes for matching nominal applications whose
+    /// backing nodes must remain independently owned. This is deliberately
+    /// separate from the main type union-find: consumers can use the proven
+    /// nominal identity without collapsing declaration and request storage.
+    related_named_instances: collections.DenseMap(NodeId, RelatedNamedInstance),
+    /// One related wrapper for each exact declaration-backing witness. The
+    /// nominal backing cache includes every type argument in its key, so a
+    /// shared permanent backing id proves two independently allocated wrappers
+    /// denote the same application without inspecting their shape.
+    related_named_backings: collections.DenseMap(NodeId, NodeId),
     /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
     /// retain their original provenance while `find` resolves that node to its
     /// current class root; unions therefore never move or reindex snapshots.
@@ -538,7 +570,7 @@ pub const InstGraph = struct {
     /// Exact declaration-plus-current-argument-roots index for instantiated
     /// nominal backings. Keys point into the stable argument storage owned by
     /// `nominal_backing_instances`.
-    nominal_backing_index: std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80),
+    nominal_backing_index: NominalBackingIndex,
     nominal_backing_instances: std.ArrayList(NominalBackingInstance),
     /// Argument positions by their current root. This is the precise
     /// invalidation index used to rekey affected instances in `union_`.
@@ -557,6 +589,7 @@ pub const InstGraph = struct {
     /// upstream generated-private arguments; retaining that producer node is
     /// what lets the callee instantiate those relations without reconstruction.
     request_source_interfaces: std.ArrayList(?NodeId),
+    constructor_evidence_requests: std.ArrayList(bool),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
@@ -624,6 +657,8 @@ pub const InstGraph = struct {
             .class_member_head = .empty,
             .class_member_tail = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
+            .related_named_instances = collections.DenseMap(NodeId, RelatedNamedInstance).init(allocator),
+            .related_named_backings = collections.DenseMap(NodeId, NodeId).init(allocator),
             .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .current_snapshots_dirty = false,
@@ -631,7 +666,7 @@ pub const InstGraph = struct {
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .provisional_view_shareable = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
-            .nominal_backing_index = std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80).init(allocator),
+            .nominal_backing_index = NominalBackingIndex.init(allocator, .{}),
             .nominal_backing_instances = .empty,
             .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
             .nominal_backing_affected = .empty,
@@ -640,6 +675,7 @@ pub const InstGraph = struct {
             .nominal_backing_collisions = .empty,
             .processing_nominal_backing_collisions = false,
             .request_source_interfaces = .empty,
+            .constructor_evidence_requests = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
             .containment_pending = .empty,
@@ -674,6 +710,12 @@ pub const InstGraph = struct {
         }
     }
 
+    fn countNominalBackingIndexRemoval(self: *InstGraph) void {
+        if (NominalBackingIndex.removal_leaves_tombstones) {
+            self.countDiagnostic("nominal_backing_tombstone_deletions");
+        }
+    }
+
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
         var views = self.node_snapshots.valueIterator();
@@ -693,6 +735,7 @@ pub const InstGraph = struct {
         self.nominal_backing_instances.deinit(allocator);
         self.nominal_backing_index.deinit();
         self.request_source_interfaces.deinit(allocator);
+        self.constructor_evidence_requests.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
@@ -711,6 +754,8 @@ pub const InstGraph = struct {
         self.active_snapshot_nodes.deinit();
         self.imported_type_nodes.deinit();
         self.provisional_view_shareable.deinit();
+        self.related_named_backings.deinit();
+        self.related_named_instances.deinit();
         self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
@@ -964,6 +1009,17 @@ pub const InstGraph = struct {
         return self.find(source_fn);
     }
 
+    pub fn registerConstructorEvidenceRequest(self: *InstGraph, request_fn: NodeId) void {
+        self.requireRelationProduction();
+        self.constructor_evidence_requests.items[@intFromEnum(request_fn)] = true;
+        self.constructor_evidence_requests.items[@intFromEnum(self.find(request_fn))] = true;
+    }
+
+    pub fn requestPropagatesConstructorEvidence(self: *InstGraph, request_fn: NodeId) bool {
+        return self.constructor_evidence_requests.items[@intFromEnum(request_fn)] or
+            self.constructor_evidence_requests.items[@intFromEnum(self.find(request_fn))];
+    }
+
     pub fn findGeneratedIterator(
         self: *InstGraph,
         public_node: NodeId,
@@ -1049,21 +1105,27 @@ pub const InstGraph = struct {
         self.relation_state = .frozen;
     }
 
+    /// An immutable segment of the append-only class-member list. Union only
+    /// links a class tail to another class head, so no link inside this saved
+    /// segment can change. Its last node remains the boundary after any union.
     pub const ArgumentClassSnapshot = struct {
-        members: []const NodeId,
+        first: NodeId,
+        last: NodeId,
 
-        fn contains(self: ArgumentClassSnapshot, node: NodeId) bool {
-            for (self.members) |member| {
+        fn contains(self: ArgumentClassSnapshot, graph: *const InstGraph, node: NodeId) bool {
+            var member = self.first;
+            while (true) {
                 if (member == node) return true;
+                if (member == self.last) return false;
+                member = graph.class_member_next.items[@intFromEnum(member)] orelse
+                    Common.invariant("argument class snapshot lost an interior link");
             }
-            return false;
         }
     };
 
-    /// Snapshot every permanent member of each ordered argument class before
-    /// a specialization body can add recursive relations. Root choice is not
-    /// stable under union, so recursive growth must compare permanent identity
-    /// against the whole initial class rather than one representative node.
+    /// Retain the exact initial membership without walking or copying the
+    /// class. Recursive growth tests permanent node identity against this
+    /// bounded segment, independently of later root choices and class joins.
     pub fn snapshotFunctionArgumentClasses(
         self: *InstGraph,
         fn_node: NodeId,
@@ -1071,15 +1133,12 @@ pub const InstGraph = struct {
         const args = (try self.functionNodes(fn_node)).args;
         const snapshots = try self.arena().alloc(ArgumentClassSnapshot, args.len);
         for (args, snapshots) |arg, *snapshot| {
-            var count: usize = 0;
-            var counting = self.classMemberIterator(arg);
-            while (counting.next() != null) count += 1;
-
-            const members = try self.arena().alloc(NodeId, count);
-            var filling = self.classMemberIterator(arg);
-            var index: usize = 0;
-            while (filling.next()) |member| : (index += 1) members[index] = member;
-            snapshot.* = .{ .members = members };
+            const root = @intFromEnum(self.find(arg));
+            snapshot.* = .{
+                .first = self.class_member_head.items[root],
+                .last = self.class_member_tail.items[root],
+            };
+            self.countDiagnosticBy("argument_class_members_snapshotted", 2);
         }
         return snapshots;
     }
@@ -1096,7 +1155,7 @@ pub const InstGraph = struct {
             Common.invariant("recursive function interface changed argument arity");
         }
         for (initial_active_arg_classes, request.args) |initial_class, request_arg| {
-            if (!initial_class.contains(request_arg)) {
+            if (!initial_class.contains(self, request_arg)) {
                 try self.recursive_argument_slots.append(self.allocator, request_arg);
             }
         }
@@ -1774,6 +1833,7 @@ pub const InstGraph = struct {
         try self.class_member_tail.append(self.allocator, id);
         try self.containment_visit_epochs.append(self.allocator, 0);
         try self.request_source_interfaces.append(self.allocator, null);
+        try self.constructor_evidence_requests.append(self.allocator, false);
         self.countDiagnostic("nodes_created");
         return id;
     }
@@ -1909,6 +1969,7 @@ pub const InstGraph = struct {
             };
             const removed = self.nominal_backing_index.fetchRemove(old_key) orelse
                 Common.invariant("active nominal backing instance was absent from its index");
+            self.countNominalBackingIndexRemoval();
             if (removed.value != instance_id) {
                 Common.invariant("nominal backing key referenced the wrong instance");
             }
@@ -1950,6 +2011,7 @@ pub const InstGraph = struct {
                 if (retained_id == instance_id) {
                     const removed = self.nominal_backing_index.fetchRemove(new_key) orelse
                         Common.invariant("colliding nominal backing key disappeared during migration");
+                    self.countNominalBackingIndexRemoval();
                     if (removed.value != existing_id) {
                         Common.invariant("colliding nominal backing key referenced the wrong instance");
                     }
@@ -2009,6 +2071,133 @@ pub const InstGraph = struct {
     /// Whether two live cells already belong to the same union-find class.
     pub fn sameClass(self: *InstGraph, left: NodeId, right: NodeId) bool {
         return self.find(left) == self.find(right);
+    }
+
+    fn relatedNamedInstanceRoot(self: *InstGraph, node: NodeId) NodeId {
+        var root = node;
+        while (self.related_named_instances.get(root)) |entry| {
+            if (entry.parent == root) break;
+            root = entry.parent;
+        }
+
+        var current = node;
+        while (current != root) {
+            const entry = self.related_named_instances.getPtr(current) orelse break;
+            const next = entry.parent;
+            entry.parent = root;
+            current = next;
+        }
+        return root;
+    }
+
+    fn ensureRelatedNamedInstanceNode(self: *InstGraph, node: NodeId) Allocator.Error!void {
+        const entry = try self.related_named_instances.getOrPut(node);
+        if (!entry.found_existing) entry.value_ptr.* = .{ .parent = node };
+    }
+
+    fn unionRelatedNamedInstanceNodes(self: *InstGraph, left_node: NodeId, right_node: NodeId) void {
+        var left_root = self.relatedNamedInstanceRoot(left_node);
+        var right_root = self.relatedNamedInstanceRoot(right_node);
+        if (left_root == right_root) return;
+        if (self.related_named_instances.get(left_root).?.rank <
+            self.related_named_instances.get(right_root).?.rank)
+        {
+            const temp = left_root;
+            left_root = right_root;
+            right_root = temp;
+        }
+        self.related_named_instances.getPtr(right_root).?.parent = left_root;
+        const left_rank = self.related_named_instances.get(left_root).?.rank;
+        if (left_rank == self.related_named_instances.get(right_root).?.rank) {
+            self.related_named_instances.getPtr(left_root).?.rank = left_rank + 1;
+        }
+    }
+
+    fn bindRelatedNamedBacking(
+        self: *InstGraph,
+        named_node: NodeId,
+        named: InstNamed,
+    ) Allocator.Error!void {
+        const backing = named.backing orelse return;
+        const entry = try self.related_named_backings.getOrPut(backing.node);
+        if (entry.found_existing) {
+            self.unionRelatedNamedInstanceNodes(named_node, entry.value_ptr.*);
+        } else {
+            entry.value_ptr.* = named_node;
+        }
+    }
+
+    /// Record an exact nominal identity proved by a graph relation. Backed
+    /// named applications intentionally keep distinct main type classes so
+    /// each request retains its own representation witness; this parallel
+    /// union-find exposes the proven source-level identity to later consumers.
+    pub fn relateNamedInstances(
+        self: *InstGraph,
+        raw_left: NodeId,
+        raw_right: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const left_node = self.find(raw_left);
+        const right_node = self.find(raw_right);
+        const left = switch (self.content(left_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named left node"),
+        };
+        const right = switch (self.content(right_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named right node"),
+        };
+        if (left.kind != right.kind or
+            !sameTypeDef(left.def, right.def) or
+            left.builtin_owner != right.builtin_owner or
+            left.args.len != right.args.len)
+        {
+            Common.invariant("named-instance relation received different declarations");
+        }
+
+        try self.ensureRelatedNamedInstanceNode(left_node);
+        try self.ensureRelatedNamedInstanceNode(right_node);
+        try self.bindRelatedNamedBacking(left_node, left);
+        try self.bindRelatedNamedBacking(right_node, right);
+        self.unionRelatedNamedInstanceNodes(left_node, right_node);
+    }
+
+    /// Whether the main type relation or a backed-nominal relation proved
+    /// that two named application cells have the same source-level identity.
+    pub fn sameRelatedNamedInstance(self: *InstGraph, left: NodeId, right: NodeId) bool {
+        const left_named = switch (self.content(left)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        const right_named = switch (self.content(right)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        };
+        if (left_named.kind != right_named.kind or
+            !sameTypeDef(left_named.def, right_named.def) or
+            left_named.builtin_owner != right_named.builtin_owner or
+            left_named.args.len != right_named.args.len) return false;
+        if (self.sameClass(left, right)) return true;
+
+        const left_related = if (self.related_named_instances.contains(left))
+            self.relatedNamedInstanceRoot(left)
+        else if (left_named.backing) |backing|
+            if (self.related_named_backings.get(backing.node)) |representative|
+                self.relatedNamedInstanceRoot(representative)
+            else
+                return false
+        else
+            return false;
+        const right_related = if (self.related_named_instances.contains(right))
+            self.relatedNamedInstanceRoot(right)
+        else if (right_named.backing) |backing|
+            if (self.related_named_backings.get(backing.node)) |representative|
+                self.relatedNamedInstanceRoot(representative)
+            else
+                return false
+        else
+            return false;
+        return left_related == right_related;
     }
 
     pub const ClassMemberIterator = struct {
@@ -3220,6 +3409,43 @@ pub const InstGraph = struct {
         return .{ .function = try self.functionNodes(node) };
     }
 
+    /// Distinct current equivalence classes in a function's explicit
+    /// interface. The caller must not merge classes during iteration; adding
+    /// independent nodes and compressing find paths does not change the set.
+    /// Each iterator owns its scratch until deinit, so overlapping
+    /// queries on the same graph cannot clear one another's visited classes.
+    pub const FunctionInterfaceClassIterator = struct {
+        graph: *InstGraph,
+        interface: FunctionInterfaceIterator,
+        seen: collections.DenseMap(NodeId, void),
+
+        pub fn deinit(self: *FunctionInterfaceClassIterator) void {
+            self.graph.node_set_pool.release(&self.seen);
+            self.* = undefined;
+        }
+
+        pub fn next(self: *FunctionInterfaceClassIterator) Allocator.Error!?NodeId {
+            while (self.interface.next()) |node| {
+                const root = self.graph.find(node);
+                if ((try self.seen.getOrPut(root)).found_existing) continue;
+                return root;
+            }
+            return null;
+        }
+    };
+
+    /// Lookup may probe each class once, but persistent indexes must retain
+    /// permanent node IDs through functionInterfaceIterator: later unions can
+    /// change which class owns an indexed node.
+    pub fn functionInterfaceClassIterator(self: *InstGraph, node: NodeId) Allocator.Error!FunctionInterfaceClassIterator {
+        const interface = try self.functionInterfaceIterator(node);
+        return .{
+            .graph = self,
+            .interface = interface,
+            .seen = self.node_set_pool.acquire(),
+        };
+    }
+
     /// Project tuple item cells without materializing a Monotype.
     pub fn tupleItemNodes(self: *InstGraph, node: NodeId) Allocator.Error![]const NodeId {
         const node_content = self.content(try self.shapeRoot(node, "tuple", .inspectable));
@@ -3679,6 +3905,9 @@ pub const InstGraph = struct {
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         const winner_content = self.nodes.items[@intFromEnum(winner)];
         const loser_content = self.nodes.items[@intFromEnum(loser)];
+        self.constructor_evidence_requests.items[@intFromEnum(winner)] =
+            self.constructor_evidence_requests.items[@intFromEnum(winner)] or
+            self.constructor_evidence_requests.items[@intFromEnum(loser)];
         const joins_nominal_with_structural = winner_content != .unresolved and loser_content != .unresolved and
             (winner_content == .named) != (loser_content == .named);
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
@@ -4347,13 +4576,13 @@ pub const InstGraph = struct {
     }
 
     fn findStructuralBackingNode(self: *InstGraph, raw: NodeId, owner: InstNamed) Allocator.Error!StructuralBacking {
-        var seen = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.nodes.items.len);
-        defer seen.deinit(self.allocator);
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
         var current = self.find(raw);
         while (true) {
-            const index = @intFromEnum(current);
-            if (seen.isSet(index)) return .{ .node = current, .recursive = true };
-            seen.set(index);
+            self.countDiagnostic("structural_backing_scan_slots");
+            const entry = try seen.getOrPut(current);
+            if (entry.found_existing) return .{ .node = current, .recursive = true };
             const next = self.structuralBackingNext(current, owner) orelse return .{ .node = current, .recursive = false };
             current = next;
         }
@@ -6622,6 +6851,103 @@ test "resolved graph type detection does not default open cells" {
     try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(open_list));
 }
 
+test "argument class snapshots preserve entry membership through unions on both sides" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    // Both outsiders predate the snapshot: node age cannot stand in for
+    // membership, and either side may become the representative later.
+    const before = try graph.newNode(.empty_record);
+    const after = try graph.newNode(.empty_record);
+    const first = try graph.newNode(.empty_record);
+    const last = try graph.newNode(.empty_record);
+    try graph.union_(first, last);
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const active = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{first}),
+        .ret = ret,
+    } });
+    const initial = try graph.snapshotFunctionArgumentClasses(active);
+    try graph.union_(before, first);
+    try graph.union_(before, after);
+    const new_node = try graph.newNode(.empty_record);
+    try graph.union_(new_node, before);
+    const later = try graph.snapshotFunctionArgumentClasses(active);
+
+    for ([_]NodeId{ first, last }) |member| {
+        try std.testing.expect(initial[0].contains(graph, member));
+        const request = try graph.newNode(.{ .func = .{
+            .args = try graph.arena().dupe(NodeId, &.{member}),
+            .ret = ret,
+        } });
+        try graph.unifyRecursiveFunctionInterface(active, initial, request);
+    }
+    try std.testing.expectEqual(@as(usize, 0), graph.recursive_argument_slots.items.len);
+    for ([_]NodeId{ before, after, new_node }) |member| {
+        try std.testing.expect(!initial[0].contains(graph, member));
+        try std.testing.expect(later[0].contains(graph, member));
+        const request = try graph.newNode(.{ .func = .{
+            .args = try graph.arena().dupe(NodeId, &.{member}),
+            .ret = ret,
+        } });
+        try graph.unifyRecursiveFunctionInterface(active, initial, request);
+    }
+    try std.testing.expectEqualSlices(NodeId, &.{ before, after, new_node }, graph.recursive_argument_slots.items);
+    // Re-reading a snapshot after another snapshot and recursive relations
+    // must still stop at its original tail.
+    try std.testing.expect(!initial[0].contains(graph, after));
+}
+
+test "structural backing traversal preserves cycle entry and clears only visited scratch" {
+    const gpa = std.testing.allocator;
+    for ([_]?usize{ null, 0, 1, 7 }) |cycle_entry| {
+        var type_store = Type.Store.init(gpa);
+        defer type_store.deinit();
+        var name_store = names.NameStore.init(gpa);
+        defer name_store.deinit();
+        const graph = try InstGraph.create(gpa, &type_store, &name_store);
+        defer graph.destroy();
+        const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+        const type_name = try name_store.internTypeName("Chain");
+        const terminal = try graph.newNode(.empty_record);
+        var nodes: [12]NodeId = undefined;
+        for (&nodes) |*node| node.* = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+        for (nodes, 0..) |node, index| {
+            const next = if (index + 1 < nodes.len) nodes[index + 1] else if (cycle_entry) |entry| nodes[entry] else terminal;
+            graph.setContent(node, .{ .named = .{
+                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+                .def = .{ .module = module_identity, .type_name = type_name },
+                .kind = .nominal,
+                .builtin_owner = null,
+                .args = &.{},
+                .backing = .{ .node = next, .use = .inspectable },
+            } });
+        }
+        var diagnostics = GraphDiagnostics{};
+        graph.diagnostics = &diagnostics;
+        const owner = graph.content(nodes[0]).named;
+        const expected = if (cycle_entry) |entry| nodes[entry] else terminal;
+        var prior_steps: ?u64 = null;
+        for (0..2) |_| {
+            const before_steps = diagnostics.structural_backing_scan_slots;
+            const result = try graph.findStructuralBackingNode(nodes[0], owner);
+            try std.testing.expectEqual(expected, result.node);
+            try std.testing.expectEqual(cycle_entry != null, result.recursive);
+            const steps = diagnostics.structural_backing_scan_slots - before_steps;
+            try std.testing.expect(steps <= 8 * nodes.len);
+            if (prior_steps) |previous| try std.testing.expectEqual(previous, steps);
+            prior_steps = steps;
+            // Unrelated graph growth must not increase the next walk's work.
+            for (0..1000) |_| _ = try graph.newNode(.empty_record);
+        }
+    }
+}
+
 test "open draft function interfaces use related graph classes directly" {
     const gpa = std.testing.allocator;
 
@@ -6660,6 +6986,65 @@ test "open draft function interfaces use related graph classes directly" {
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
+}
+
+test "function interface classes deduplicate aliases and refresh after unions" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const alias = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    // The same unresolved shape is a distinct class until explicitly related.
+    const other = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const function = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ arg, arg, alias, other }),
+        .ret = alias,
+    } });
+    try graph.unify(arg, alias);
+
+    {
+        var classes = try graph.functionInterfaceClassIterator(function);
+        defer classes.deinit();
+        var members = collections.DenseMap(NodeId, void).init(gpa);
+        defer members.deinit();
+        var count: usize = 0;
+        while (try classes.next()) |class| {
+            count += 1;
+            var aliases = graph.classMemberIterator(class);
+            while (aliases.next()) |member| {
+                try std.testing.expect(!(try members.getOrPut(member)).found_existing);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 2), count);
+        try std.testing.expectEqual(@as(usize, 3), members.count());
+        try std.testing.expect(members.contains(arg));
+        try std.testing.expect(members.contains(alias));
+        try std.testing.expect(members.contains(other));
+    }
+
+    try graph.unify(alias, other);
+    // A new lookup must observe the union, with no visited state retained
+    // from the previous query. Overlapping iterators own separate scratch.
+    var classes = try graph.functionInterfaceClassIterator(function);
+    defer classes.deinit();
+    var concurrent = try graph.functionInterfaceClassIterator(function);
+    defer concurrent.deinit();
+    const root = graph.find(arg);
+    try std.testing.expectEqual(root, (try classes.next()).?);
+    try std.testing.expectEqual(root, (try concurrent.next()).?);
+    try std.testing.expectEqual(null, try classes.next());
+    try std.testing.expectEqual(null, try concurrent.next());
+
+    const nullary = try graph.newNode(.{ .func = .{ .args = &.{}, .ret = arg } });
+    var return_only = try graph.functionInterfaceClassIterator(nullary);
+    defer return_only.deinit();
+    try std.testing.expectEqual(root, (try return_only.next()).?);
+    try std.testing.expectEqual(null, try return_only.next());
 }
 
 test "open function interface shape snapshot alpha-normalizes variables and survives refinement" {
@@ -8962,6 +9347,80 @@ test "nominal backing index rekeys root tuples and merges collisions" {
     }
     try std.testing.expectEqual(@as(usize, 3), active_instances);
     try std.testing.expectEqual(@as(u32, 3), graph.nominal_backing_index.count());
+}
+
+test "related named instances reuse exact backing witnesses" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const type_name = try name_store.internTypeName("Wrap");
+    const other_type_name = try name_store.internTypeName("Other");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const other_def: Type.TypeDef = .{ .module = module_identity, .type_name = other_type_name };
+
+    const request_arg = try graph.newNode(.{ .primitive = .bool });
+    const checked_arg = try graph.newNode(.{ .primitive = .bool });
+    try graph.unify(request_arg, checked_arg);
+    const request_backing = try graph.newNode(.empty_tag_union);
+    const checked_backing = try graph.newNode(.empty_tag_union);
+    const unrelated_backing = try graph.newNode(.empty_tag_union);
+
+    const request = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+    const same_request = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+    const checked_node = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{checked_arg}),
+        .backing = .{ .node = checked_backing, .use = .inspectable },
+    } });
+    const unrelated = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = unrelated_backing, .use = .inspectable },
+    } });
+    const other_definition = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = other_def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{request_arg}),
+        .backing = .{ .node = request_backing, .use = .inspectable },
+    } });
+
+    try graph.relateNamedInstances(request, checked_node);
+
+    try std.testing.expect(!graph.sameClass(request, checked_node));
+    try std.testing.expect(graph.sameRelatedNamedInstance(request, checked_node));
+    try std.testing.expect(graph.sameRelatedNamedInstance(same_request, checked_node));
+    try std.testing.expect(!graph.sameRelatedNamedInstance(unrelated, checked_node));
+    try std.testing.expect(!graph.sameRelatedNamedInstance(other_definition, checked_node));
 }
 
 test "issue 9647: same nominal backing wrapper resolves to structural backing once" {

@@ -19,7 +19,7 @@ const builtins = @import("builtins");
 const abi = @import("glue_abi");
 
 const RocOps = builtins.host_abi.RocOps;
-const extern_host = builtins.host_abi.extern_host;
+const extern_host = builtins.host_abi.ExternHostFns;
 const erased_callable = builtins.erased_callable;
 const shim_symbols = builtins.shim_symbols;
 
@@ -63,9 +63,16 @@ fn lockStruct(
             @compileError("generated " ++ what ++ " field order changed: expected " ++
                 expected_name ++ ", found " ++ gf.name);
         }
+        const canonical_name = if (std.mem.eql(u8, expected_name, "elements_ptr")) "bytes" else expected_name;
+        if (!std.mem.eql(u8, cf.name, canonical_name)) {
+            @compileError("canonical " ++ what ++ " field order changed: expected " ++ canonical_name);
+        }
         if (@offsetOf(Generated, gf.name) != @offsetOf(Canonical, cf.name)) {
             @compileError("generated " ++ what ++ "." ++ gf.name ++ " offset differs from builtins " ++
                 what ++ "." ++ cf.name);
+        }
+        if (gf.type != cf.type) {
+            @compileError("generated " ++ what ++ "." ++ gf.name ++ " type differs from builtins");
         }
         if (@sizeOf(gf.type) != @sizeOf(cf.type)) {
             @compileError("generated " ++ what ++ "." ++ gf.name ++ " size differs from builtins " ++
@@ -90,6 +97,12 @@ fn lockRocHost() void {
         @compileError("RocOps no longer ends with hosted_fns; update ZigGlue's RocHost and this lock");
     }
 
+    if (@alignOf(abi.RocHost) != @alignOf(RocOps) or
+        @sizeOf(abi.RocHost) != @offsetOf(RocOps, "hosted_fns"))
+    {
+        @compileError("generated RocHost size/alignment differs from the RocOps helper prefix");
+    }
+
     inline for (host_fields, ops_fields[0..host_fields.len]) |hf, of| {
         if (!std.mem.eql(u8, hf.name, of.name)) {
             @compileError("generated RocHost field " ++ hf.name ++ " does not match RocOps field " ++ of.name);
@@ -110,7 +123,7 @@ fn lockRuntimeSymbols() void {
         if (!@hasDecl(abi, name)) {
             @compileError("generated glue is missing extern " ++ name);
         }
-        if (@TypeOf(@field(abi, name)) != @TypeOf(@field(extern_host, name))) {
+        if (*const @TypeOf(@field(abi, name)) != @field(extern_host, name)) {
             @compileError("generated extern " ++ name ++ " signature differs from host_abi.extern_host");
         }
     }
@@ -155,6 +168,7 @@ fn fnPointersMatchModuloSelf(comptime Generated: type, comptime Canonical: type)
     const canonical_info = @typeInfo(@typeInfo(Canonical).pointer.child).@"fn";
 
     if (generated_info.params.len != canonical_info.params.len) return false;
+    if (generated_info.is_var_args != canonical_info.is_var_args) return false;
     if (generated_info.return_type != canonical_info.return_type) return false;
     if (!std.meta.eql(generated_info.calling_convention, canonical_info.calling_convention)) return false;
 

@@ -13,4 +13,7 @@ generator = map_fn(
 	},
 )
 
+# Keep this an eligible data root so finalization exercises restoration of the
+# erroneous callable value inside the record.
+target : { generator : Gen({ value : U64 }) }
 target = { generator: generator }

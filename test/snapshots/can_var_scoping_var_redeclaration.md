@@ -16,20 +16,76 @@ redeclareTest = |_| {
 result = redeclareTest({})
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
+VAR NAME MISSING `$` - can_var_scoping_var_redeclaration.md:3:6:3:8
+DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:6:4:8
+VAR NAME MISSING `$` - can_var_scoping_var_redeclaration.md:4:6:4:8
 # PROBLEMS
-── ● duplicate definition ───────────── can_var_scoping_var_redeclaration.md:4:2
-
-The name x_ is being redeclared here:
-
-var x_ = 10 # Redeclare var - should warn but proceed
-^^^^^^^^^^^
-
-In this scope, x_ was already defined in can_var_scoping_var_redeclaration.md:3:2:
-
-var x_ = 5
-^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 8))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "x_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$x_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "can_var_scoping_var_redeclaration.md") (start 3 6) (end 3 8) (annotation warning) (line-text "\tvar x_ = 5"))))
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 4 6) (end 4 8))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "x_")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_var_scoping_var_redeclaration.md") (start 4 6) (end 4 8) (annotation error) (line-text "\tvar x_ = 10 # Redeclare var - should warn but proceed"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "x_")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_var_scoping_var_redeclaration.md")
+				(line 3)
+				(column 6))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_var_scoping_var_redeclaration.md") (start 3 6) (end 3 8) (annotation dim) (line-text "\tvar x_ = 5"))))
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 4 6) (end 4 8))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "x_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$x_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "can_var_scoping_var_redeclaration.md") (start 4 6) (end 4 8) (annotation warning) (line-text "\tvar x_ = 10 # Redeclare var - should warn but proceed")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
@@ -81,19 +137,19 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-var
-					(p-assign (ident "x_"))
+					(p-var-assign (ident "x_"))
 					(e-num (value "5")))
 				(s-var
-					(p-assign (ident "x_"))
+					(p-var-assign (ident "x_"))
 					(e-num (value "10")))
 				(s-reassign
-					(p-assign (ident "x_"))
+					(p-var-assign (ident "x_"))
 					(e-num (value "15")))
 				(e-lookup-local
-					(p-assign (ident "x_"))))))
+					(p-var-assign (ident "x_"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 251)
+		(e-call (constraint-fn-var 253)
 			(e-lookup-local
 				(p-assign (ident "redeclareTest")))
 			(e-empty_record))))

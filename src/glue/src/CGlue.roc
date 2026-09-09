@@ -807,7 +807,7 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 	struct_name = tag_union_struct_name(preferred_names, duplicate_tags, type_id, tu)
 	disc_type = c_discriminant_type(abi_layout.discriminant_size())
 	abi_tags = abi_tag_layouts_c(abi_layout)
-	is_pure_enum = List.all(abi_tags, |tag| !(abi_tag_has_payload_c(tag)))
+	is_pure_enum = !abi_layout.tag_union_has_payload()
 
 	var $tag_constants = ""
 	var $tag_index = 0

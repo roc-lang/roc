@@ -7,6 +7,7 @@ const collections = @import("collections");
 const layout = @import("layout");
 
 const lir_defs = @import("LIR.zig");
+const TailCallBuilder = @import("tail_call_builder.zig");
 
 const Allocator = std.mem.Allocator;
 pub const GuardedList = collections.GuardedList;
@@ -63,6 +64,7 @@ pub const BodyPrefix = struct {
     pattern_ids: u32,
     inline_scopes: u32,
     strings: u32,
+    boxy_names: u32,
     proc_specs: u32,
     proc_locs: u32,
     proc_debug_names: u32,
@@ -99,6 +101,10 @@ pub const BodyRelocation = struct {
         return relocateBodyValue(LocalId, id, prefix, self);
     }
 
+    pub fn stmt(self: BodyRelocation, prefix: BodyPrefix, id: CFStmtId) CFStmtId {
+        return relocateBodyValue(CFStmtId, id, prefix, self);
+    }
+
     pub fn localSpan(self: BodyRelocation, prefix: BodyPrefix, span: LocalSpan) LocalSpan {
         return relocateBodyValue(LocalSpan, span, prefix, self);
     }
@@ -113,7 +119,7 @@ pub const AppendedBody = struct {
 
 /// Failures while validating or appending a private body suffix.
 pub const AppendBodyError = Allocator.Error || error{
-    /// String or inline-scope interning changed after the frozen prefix.
+    /// String, Boxy name, or inline-scope interning changed after the frozen prefix.
     /// The coordinator may retry this body through serial lowering.
     UnsupportedShardMetadata,
     InvalidBodyPrefix,
@@ -149,6 +155,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .pattern_ids = @intCast(self.pattern_ids.len()),
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .strings = self.stringEntryCount(),
+        .boxy_names = self.boxyNameCount(),
         .proc_specs = @intCast(self.proc_specs.len()),
         .proc_locs = @intCast(self.proc_locs.len()),
         .proc_debug_names = @intCast(self.proc_debug_names.len()),
@@ -179,6 +186,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         if (!std.meta.eql(prefix, self.body_prefix)) return error.InvalidBodyPrefix;
         if (self.inline_scopes.len() != 0 or
             self.ownStringEntryCount() != 0 or
+            self.boxy_names.count() != 0 or
             self.proc_specs.len() != 0 or
             self.proc_locs.len() != 0 or
             self.proc_debug_names.len() != 0 or
@@ -205,6 +213,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.pattern_ids > self.pattern_ids.len() or
         prefix.inline_scopes > self.inline_scopes.len() or
         prefix.strings > self.stringEntryCount() or
+        prefix.boxy_names > self.boxyNameCount() or
         prefix.proc_specs > self.proc_specs.len() or
         prefix.proc_locs > self.proc_locs.len() or
         prefix.proc_debug_names > self.proc_debug_names.len() or
@@ -217,6 +226,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
     }
     if (prefix.inline_scopes != self.inline_scopes.len() or
         prefix.strings != self.stringEntryCount() or
+        prefix.boxy_names != self.boxyNameCount() or
         prefix.proc_specs != self.proc_specs.len() or
         prefix.proc_locs != self.proc_locs.len() or
         prefix.proc_debug_names != self.proc_debug_names.len() or
@@ -388,6 +398,8 @@ u32s: GuardedList.List(u32, "LirStore.u32s"),
 erased_call_arg_plans: GuardedList.List(ErasedCallArgsPlan, "LirStore.erased_call_arg_plans"),
 proc_specs: GuardedList.List(LirProcSpec, "LirStore.proc_specs"),
 strings: base.StringLiteral.Store,
+/// Boxy semantic names and their transient insertion index.
+boxy_names: @import("BoxyNames.zig") = .{},
 string_builder: base.StringLiteral.BuilderState,
 strings_insertable: bool,
 allocator: Allocator,
@@ -435,6 +447,9 @@ current_loc: base.SourceLoc,
 current_region: base.Region,
 /// Ambient virtual source frame recorded by `addCFStmt`.
 current_inline_scope: InlineScopeId,
+/// Active procedure-construction scope. Never persisted in LIR images or
+/// transferred into another body worker; completed proofs live in LIR itself.
+tail_call_builder: ?*TailCallBuilder = null,
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -491,6 +506,7 @@ pub fn deinit(self: *Self) void {
     self.proc_specs.deinit(self.allocator);
     self.string_builder.deinit(self.allocator);
     self.strings.deinit(self.allocator);
+    self.boxy_names.deinit(self.allocator);
     self.patterns.deinit(self.allocator);
     self.pattern_ids.deinit(self.allocator);
     self.source_file_bytes.deinit(self.allocator);
@@ -708,6 +724,23 @@ pub fn freshSyntheticSymbol(self: *Self) Symbol {
     const symbol = Symbol.fromRaw(self.next_synthetic_symbol);
     self.next_synthetic_symbol += 1;
     return symbol;
+}
+
+fn boxyNameCount(self: *const Self) u32 {
+    if (self.body_coordinator) |coordinator| return coordinator.boxyNameCount();
+    return self.boxy_names.count();
+}
+
+/// Assigns a Boxy identity without inserting bytes into the literal store.
+pub fn insertBoxyName(self: *Self, text: []const u8) Allocator.Error!lir_defs.BoxyNameId {
+    self.assertStringsInsertable();
+    return self.boxy_names.insert(self.allocator, text);
+}
+
+/// Resolves a Boxy name in the same identity domain used by generated code.
+pub fn getBoxyName(self: *const Self, id: lir_defs.BoxyNameId) []const u8 {
+    if (self.body_coordinator) |coordinator| return coordinator.getBoxyName(id);
+    return self.boxy_names.get(id);
 }
 
 /// Interns a string literal in the store-level string table.
@@ -1030,7 +1063,15 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     try self.cf_stmt_locs.append(self.allocator, loc);
     try self.cf_stmt_regions.append(self.allocator, region);
     try self.cf_stmt_inline_scopes.append(self.allocator, inline_scope);
-    return @enumFromInt(@as(u32, @intCast(idx)));
+    const id: CFStmtId = @enumFromInt(@as(u32, @intCast(idx)));
+    if (self.tail_call_builder) |builder| try builder.record(id, stmt);
+    return id;
+}
+
+/// Fill a producer-owned placeholder and record its final control-flow facts.
+pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt) Allocator.Error!void {
+    self.getCFStmtPtr(id).* = stmt;
+    if (self.tail_call_builder) |builder| try builder.record(id, stmt);
 }
 
 /// Number of stored control-flow statements.
@@ -1638,6 +1679,25 @@ pub fn procNeedsStackProbe(self: *const Self, layouts: *const layout.Store, proc
     return false;
 }
 
+test "body shards borrow Boxy identities and reject added name metadata" {
+    const allocator = std.testing.allocator;
+    var coordinator = Self.init(allocator);
+    defer coordinator.deinit();
+    const name = try coordinator.insertBoxyName("Only");
+    var worker = try coordinator.cloneForBodyShard(allocator);
+    defer worker.deinit();
+    try std.testing.expectEqualStrings("Only", worker.getBoxyName(name));
+    try std.testing.expectEqual(@as(u32, 0), worker.boxy_names.count());
+    const prefix = worker.captureBodyPrefix();
+    _ = try worker.captureBodyShard(prefix);
+    // A shard must never publish locally assigned ids into the coordinator.
+    _ = try worker.boxy_names.insert(allocator, "Different");
+    try std.testing.expectError(error.UnsupportedShardMetadata, worker.captureBodyShard(prefix));
+    const coordinator_prefix = coordinator.captureBodyPrefix();
+    _ = try coordinator.insertBoxyName("Later");
+    try std.testing.expectError(error.UnsupportedShardMetadata, coordinator.captureBodyShard(coordinator_prefix));
+}
+
 test "source file table stores display and package-qualified names per entry" {
     const gpa = std.testing.allocator;
     var store = Self.init(gpa);
@@ -1660,4 +1720,52 @@ test "source file table stores display and package-qualified names per entry" {
     try std.testing.expectEqualStrings("app.Cfg", store.sourceFileQualifiedName(0));
     try std.testing.expectEqualStrings("pf.Cfg", store.sourceFileQualifiedName(1));
     try std.testing.expectEqualStrings("app.Utils", store.sourceFileQualifiedName(2));
+}
+
+test "body shard relocates producer tail-call links" {
+    const allocator = std.testing.allocator;
+    var coordinator = Self.init(allocator);
+    defer coordinator.deinit();
+    const arg = try coordinator.addLocal(.{ .layout_idx = .u64 });
+    const proc = try coordinator.addProcSpec(.{
+        .name = coordinator.freshSyntheticSymbol(),
+        .args = try coordinator.addLocalSpan(&.{arg}),
+        .ret_layout = .u64,
+    });
+    var worker = try coordinator.cloneForBodyShard(allocator);
+    defer worker.deinit();
+    const prefix = worker.captureBodyPrefix();
+    var builder = TailCallBuilder.init(allocator, proc);
+    defer builder.deinit();
+    worker.tail_call_builder = &builder;
+    const result = try worker.addLocal(.{ .layout_idx = .u64 });
+    const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } });
+    const first = try worker.addCFStmt(.{ .assign_call = .{
+        .proc = proc,
+        .args = try worker.addLocalSpan(&.{arg}),
+        .target = result,
+        .next = ret,
+    } });
+    const second = try worker.addCFStmt(.{ .assign_call = .{
+        .proc = proc,
+        .args = try worker.addLocalSpan(&.{arg}),
+        .target = result,
+        .next = ret,
+    } });
+    const body = try worker.addCFStmt(.{ .switch_stmt = .{
+        .cond = arg,
+        .branches = try worker.addCFSwitchBranches(&.{.{ .value = 0, .body = first }}),
+        .default_branch = second,
+    } });
+    const frame = try worker.addLocalSpan(&.{ arg, result });
+    const sites = (try builder.finish(&worker)).?;
+    worker.tail_call_builder = null;
+    _ = try coordinator.addCFStmt(.{ .ret = .{ .value = arg } });
+    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), body, frame);
+    const head = appended.relocation.stmt(prefix, sites.head);
+    try std.testing.expectEqual(appended.relocation.stmt(prefix, second), head);
+    const link = coordinator.getCFStmt(head).assign_call.tail_call.?.next.?;
+    try std.testing.expectEqual(appended.relocation.stmt(prefix, first), link);
+    try std.testing.expect(coordinator.getCFStmt(link).assign_call.tail_call.?.next == null);
+    try std.testing.expect(coordinator.tail_call_builder == null);
 }

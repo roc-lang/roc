@@ -4158,11 +4158,44 @@ test "check type - unary not" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
+test "check type - unary not infers Bool argument" {
+    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "Bool -> Bool");
+}
+
+test "check type - unary not mutable boolean in loop" {
+    const source =
+        \\run = |values| {
+        \\    var $swapped = False
+        \\    while True {
+        \\        for value in values {
+        \\            if value > 0 { $swapped = True }
+        \\        }
+        \\        if !$swapped { break }
+        \\        $swapped = False
+        \\    }
+        \\    !$swapped
+        \\}
+        \\result = run([0, 0])
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
 test "check type - unary not mismatch" {
     const source =
         \\x = !"Hello"
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - unary not rejects custom not method" {
+    const source =
+        \\Custom := [Value].{
+        \\    not : Custom -> Custom
+        \\    not = |value| value
+        \\}
+        \\result = !Custom.Value
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // unary minus
@@ -4811,9 +4844,9 @@ test "check type - patterns record field mismatch" {
 test "check type - var reassignment" {
     const source =
         \\main = {
-        \\  var x = 1
-        \\  x = x + 1
-        \\  x
+        \\  var $x = 1
+        \\  $x = $x + 1
+        \\  $x
         \\}
     ;
     try checkTypesModule(
@@ -5282,11 +5315,11 @@ test "check type - type module - fn declarations " {
 test "check type - for" {
     const source =
         \\main = {
-        \\  var result = 0
+        \\  var $result = 0
         \\  for x in [1, 2, 3] {
-        \\    result = result + x
+        \\    $result = $result + x
         \\  }
-        \\  result
+        \\  $result
         \\}
     ;
     try checkTypesModule(
@@ -9448,16 +9481,13 @@ test "check type - tag union - ext hints 2" {
     );
 }
 
-// Userland reproduction of a recursive-constraint static-dispatch method that
-// cannot self-nest.
+// Userland reproduction of a concrete recursive-constraint static-dispatch
+// method that can self-nest.
 //
-// A method like `join : Vec(a), a -> a where [a.join : Vec(a), a -> a]` has a
-// recursive constraint. For a nested `Vec(Vec(_))` the element `Vec(_)` cannot
-// satisfy it with the right shape, and static dispatch has no general overload
-// resolution, so there is no second binding to resolve to: the base case
-// (element implements the method) type-checks, but the self-nested case has no
-// candidate and is a type error.
-test "static dispatch - userland recursive-constraint method cannot self-nest (no general overload)" {
+// The explicit constraint dispatches on `a`, not necessarily on its first
+// argument. At a = Vec(Leaf), Vec.join has exactly the requested callable
+// Vec(Vec(Leaf)), Vec(Leaf) -> Vec(Leaf); its concrete requirement repeats.
+test "static dispatch - concrete recursive where-clause reuses the selected binding" {
     const source =
         \\Leaf := [L].{
         \\  join : Vec(Leaf), Leaf -> Leaf
@@ -9478,20 +9508,15 @@ test "static dispatch - userland recursive-constraint method cannot self-nest (n
         \\nested : Vec(Vec(Leaf))
         \\nested = Vec.V([leaves])
         \\
-        \\bad : Vec(Leaf)
-        \\bad = nested.join(leaves)
+        \\nested_result : Vec(Leaf)
+        \\nested_result = nested.join(leaves)
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    // Base case: element type `Leaf` implements `join`, so regular static
-    // dispatch resolves it. (Tolerate the nested error elsewhere in the module.)
-    try test_env.assertDefTypeOptions("ok", "Leaf", .{ .allow_type_errors = true });
-
-    // Self-nested case: element type `Vec(Leaf)` would need a `join` of shape
-    // `Vec(Vec(Leaf)), Vec(Leaf) -> Vec(Leaf)`, but the only `Vec.join` has shape
-    // `Vec(a), a -> a`. No overload to select, no userland reroute -> type error.
-    try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("ok", "Leaf");
+    try test_env.assertDefType("nested_result", "Vec(Leaf)");
 }
 
 test "static dispatch - deep finite nested requirement chain stays within resource contract" {
@@ -10464,6 +10489,43 @@ test "check type - derived codec - annotated encoder_for body with annotated mod
     try test_env.assertNoErrors();
 }
 
+test "check type - derived codec - generic structural encoder propagates through schemes" {
+    const source =
+        \\to_json = |a, b| Json.to_str({ a, b })
+        \\forward = |a, b| to_json(a, b)
+        \\result = forward("hi", {})
+        \\tuple_json = |a, b| Json.to_str((a, b))
+        \\tuple_result = tuple_json("hi", {})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - derived codec - generic structural parser specializes at use" {
+    const source =
+        \\parse_or = |a, b, text| match Json.parse(text) {
+        \\  Ok(value) => value
+        \\  Err(_) => { a, b }
+        \\}
+        \\result = parse_or("", {}, "{}")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - derived codec - value-restricted structural receiver settles from later use" {
+    const source =
+        \\make_encoder = |_| |a, b| Json.to_str({ a, b })
+        \\to_json = make_encoder({})
+        \\result = to_json("hi", {})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 // RECURSIVE DISPATCH MUST BE REPORTED AS SUCH. Satisfying the interpolation's
 // `from_interpolation` constraint on the annotation's inner
 // `Try(Url, [InvalidUrl])` would require dispatching `from_interpolation` on
@@ -10490,13 +10552,73 @@ test "check type - dispatch - nested Try interpolation reports recursive dispatc
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
 
+// Bare patterns leave payload equality requirements on the method's scheme.
+// At Expr, the recursive payload closes a concrete implementation backedge.
+test "check type - dispatch - inferred recursive nominal equality closes a concrete backedge" {
+    const source =
+        \\Expr := [Leaf(Str), Next(Expr)].{
+        \\    is_eq = |self, other|
+        \\        match (self, other) {
+        \\            (Leaf(left), Leaf(right)) => left == right
+        \\            (Next(left), Next(right)) => left == right
+        \\            _ => False
+        \\        }
+        \\}
+        \\
+        \\make : {} -> Expr
+        \\make = |_| Leaf("a")
+        \\
+        \\main = Leaf("a") == make({})
+        \\qualified = Expr.Leaf("a") == make({})
+        \\reversed = make({}) == Leaf("a")
+        \\different = Expr.Leaf("b") != make({})
+        \\method = Expr.Leaf("a").is_eq(make({}))
+        \\bare_method = Leaf("a").is_eq(make({}))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - recursive equality does not discharge a sibling missing method" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(Str -> Str), Next(Expr)].{
+        \\  is_eq = |left, right|
+        \\    match (left, right) {
+        \\      (Next(a), Next(b)) => a == b
+        \\      (Leaf(a), Leaf(b)) => a == b
+        \\      _ => False
+        \\    }
+        \\}
+        \\main = Expr.Leaf(|x| x) == Expr.Leaf(|x| x)
+    );
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Does Not Support Equality");
+    try expectNoRecursiveDispatchReported(&test_env);
+}
+
+test "check type - concrete recursive where-clause still rejects an incompatible method" {
+    var test_env = try TestEnv.init("Test",
+        \\Leaf := [L].{
+        \\  join : Vec(Leaf), Leaf -> Str
+        \\  join = |_, _| "wrong result"
+        \\}
+        \\Vec(a) := [V(List(a))].{
+        \\  join : Vec(a), a -> a where [a.join : Vec(a), a -> a]
+        \\  join = |_, sep| sep
+        \\}
+        \\main = Vec.V([Leaf.L]).join(Leaf.L)
+    );
+    defer test_env.deinit();
+    try std.testing.expect(try test_env.typeProblemCount() > 0);
+}
+
 // STRICTLY GROWING DISPATCH CHAINS MUST BE REJECTED STRUCTURALLY. Every
 // `go` step dispatches `go` again on a receiver wrapped in two more layers of
 // `Wrap`, so the chain can never terminate and no two states on it are ever
 // equal. The checker must reject the chain as recursive dispatch quickly,
 // rather than grinding out the whole deferred-dispatch budget on receivers
 // whose printed form grows without bound.
-
 test "check type - dispatch - strictly growing dispatch chain reports recursive dispatch" {
     const source =
         \\Wrap(a) := [W(a)].{

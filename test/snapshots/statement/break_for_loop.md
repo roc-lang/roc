@@ -97,7 +97,7 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "$allTrue"))
+				(p-var-assign (ident "$allTrue"))
 				(e-tag (name "True")))
 			(s-for
 				(p-assign (ident "b"))
@@ -121,7 +121,7 @@ NO CHANGE
 										(e-tag (name "False"))))
 								(e-block
 									(s-reassign
-										(p-assign (ident "$allTrue"))
+										(p-var-assign (ident "$allTrue"))
 										(e-tag (name "False")))
 									(s-break)
 									(e-empty_record))))
@@ -129,7 +129,7 @@ NO CHANGE
 							(e-block
 								(e-empty_record))))))
 			(e-lookup-local
-				(p-assign (ident "$allTrue"))))
+				(p-var-assign (ident "$allTrue"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect

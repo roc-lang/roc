@@ -299,7 +299,7 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
 
 test "hoist roots are not selected for static dispatch requiring where evidence" {
     var test_env = try TestEnv.init("Test",
-        \\f : a -> _ where [a.f : {}]
+        \\f : a -> _ where [a.f : () -> {}]
         \\f = |_| {
         \\    A : a
         \\    A.f
@@ -760,7 +760,7 @@ test "refutable closed destructure selects validation root without live binders"
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
@@ -779,7 +779,7 @@ test "unused concrete binder retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -811,7 +811,7 @@ test "non-concrete extraction retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -901,6 +901,82 @@ test "hoist roots publish top-level destructure binders used by executable roots
     }
     try std.testing.expectEqual(@as(usize, 3), data_constant_count);
     try std.testing.expectEqual(@as(usize, 1), callable_binding_count);
+}
+
+test "hoist roots retain required top-level destructures with non-hoistable bodies (issue 11211)" {
+    const sources = [_][]const u8{
+        \\Ok(value) = {
+        \\    expect 1 == 1
+        \\    Ok(5.U64)
+        \\}
+        \\main = || value
+        ,
+        \\{ value } = {
+        \\    dbg 1
+        \\    { value: 5.U64 }
+        \\}
+        \\main = || value
+        ,
+        \\(value, _) = {
+        \\    var $n = 0.U64
+        \\    $n = $n + 5
+        \\    ($n, {})
+        \\}
+        \\main = || value
+        ,
+        \\Ok(value) = {
+        \\    var $n = 0.U64
+        \\    for item in [2.U64, 3] { $n = $n + item }
+        \\    Ok($n)
+        \\}
+        \\main = || value
+        ,
+        \\make = |n| {
+        \\    expect n == 5.U64
+        \\    Ok(n)
+        \\}
+        \\Ok(value) = make(5)
+        \\main = || value
+        ,
+        \\Ok(value) = Ok(Dict.empty().insert(5.U64, 5.U64).len())
+        \\main = || value
+        ,
+    };
+    for (sources) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+
+        var required_count: usize = 0;
+        for (test_env.checker.selectedHoistedRoots()) |root| {
+            if (!test_env.checker.selectedHoistedRootIsTopLevel(root)) continue;
+            try expectPatternExtractionRoot(root);
+            try std.testing.expectEqual(hoist_roots.ValueKind.data_constant, root.value_kind);
+            required_count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), required_count);
+    }
+}
+
+test "hoist roots retain independent data and callable top-level binders (issue 11211)" {
+    var test_env = try TestEnv.init("Test",
+        \\(value, identity) = {
+        \\    expect 1 == 1
+        \\    (5.U64, |arg| arg)
+        \\}
+        \\main = || identity(value)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expectEqual(hoist_roots.ValueKind.data_constant, roots[0].value_kind);
+    try std.testing.expectEqual(hoist_roots.ValueKind.callable_binding, roots[1].value_kind);
+    for (roots) |root| {
+        try expectPatternExtractionRoot(root);
+        try std.testing.expect(test_env.checker.selectedHoistedRootIsTopLevel(root));
+    }
 }
 
 test "hoist roots selected for single-branch match tuple binders" {
@@ -1058,7 +1134,7 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ Tes
     try std.testing.expect(root.pattern != null);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
-        .expr, .pattern_validation => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation, .pattern_error => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(root.expr, extraction.base_expr);
     try std.testing.expectEqual(root.pattern.?, extraction.result_pattern);
@@ -1087,7 +1163,7 @@ fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) u
     for (roots) |root| {
         switch (root.body) {
             .pattern_extraction => count += 1,
-            .expr, .pattern_validation => {},
+            .expr, .pattern_validation, .pattern_error => {},
         }
     }
     return count;
@@ -1140,7 +1216,6 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_nominal_external,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_interpolation,
             .e_structural_eq,
@@ -1214,8 +1289,8 @@ test "hoist roots are not selected for branch-local binding dependencies" {
 test "hoist roots are not selected for mutable local dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
-        \\    var x = 41.I64
-        \\    y = x + 1.I64
+        \\    var $x = 41.I64
+        \\    y = $x + 1.I64
         \\    y
         \\}
     );

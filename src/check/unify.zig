@@ -1207,7 +1207,7 @@ const Unifier = struct {
             .record => |a_record| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_record.fields, a_record.ext);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_record.fields, a_record.ext, null);
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(
@@ -1247,7 +1247,7 @@ const Unifier = struct {
             .record_unbound => |a_fields| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_fields, null);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_fields, null, null);
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(
@@ -1295,10 +1295,10 @@ const Unifier = struct {
                     },
 
                     .record => |b_record| {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_record.fields, b_record.ext);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_record.fields, b_record.ext, null);
                     },
                     .record_unbound => |b_fields| {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_fields, null);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_fields, null, null);
                     },
                     .nominal_type => |b_type| {
                         // Try to unify empty record (a) with nominal record (b)
@@ -1306,7 +1306,7 @@ const Unifier = struct {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyEmptyWithNominal(vars, b_type, .empty_record, .b_is_nominal, .skip_opacity);
+                        try self.unifyEmptyWithNominal(vars, b_type, .empty_record, .b_is_nominal, .enforce_opacity);
                     },
                     .tuple,
                     .fn_pure,
@@ -1563,12 +1563,13 @@ const Unifier = struct {
         return .{ .opened = opened };
     }
 
-    /// Which shape an empty anonymous side must find in the nominal's backing.
+    /// The shape of the empty anonymous operand.
     const EmptyShape = enum { empty_record, empty_tag_union };
     const OpacityGate = enum { enforce_opacity, skip_opacity };
 
-    /// Unify an empty anonymous record/tag union with a nominal whose backing
-    /// is (an equivalent of) the same empty shape; the nominal wins.
+    /// Empty records use ordinary backing-row unification, including default
+    /// and optional field omission. Empty tag unions require an empty backing.
+    /// In either case the nominal wins only after the backing relation succeeds.
     fn unifyEmptyWithNominal(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -1594,24 +1595,39 @@ const Unifier = struct {
             return;
         }
 
-        const backing_is_empty = blk: {
-            if (backing_content != .structure) break :blk false;
-            const backing_flat = backing_content.structure;
-            switch (empty_shape) {
-                .empty_record => {
-                    if (backing_flat == .empty_record) break :blk true;
-                    if (backing_flat == .record) {
-                        const fields = self.types_store.getRecordFieldsSlice(backing_flat.record.fields);
-                        if (fields.len == 0) break :blk true;
-                    }
-                    break :blk false;
-                },
-                .empty_tag_union => {
-                    break :blk backing_flat == .empty_tag_union;
-                },
+        if (backing_content != .structure) return error.TypeMismatch;
+        if (empty_shape == .empty_record) {
+            switch (backing_content.structure) {
+                .record, .empty_record => {},
+                .record_unbound,
+                .nominal_type,
+                .tuple,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => return error.TypeMismatch,
             }
-        };
-        if (backing_is_empty) {
+
+            try self.retainOuterRecordMismatch(vars, opened, direction);
+            if (backing_content.structure == .empty_record) {
+                try self.mergeToNominal(vars, direction);
+            } else {
+                const record = backing_content.structure.record;
+                const source = switch (direction) {
+                    .a_is_nominal => self.unresolved_b.?,
+                    .b_is_nominal => self.unresolved_a.?,
+                };
+                // Relate the source construction directly to the backing row.
+                // Never merge the opened backing root with the nominal result:
+                // later constructions may reuse that structural opening.
+                try self.unifyRowWithEmptyRecord(vars, source, record.fields, record.ext, direction);
+            }
+            return;
+        }
+
+        if (backing_content.structure == .empty_tag_union) {
             // Both are empty—merge to the NOMINAL side.
             try self.mergeToNominal(vars, direction);
         } else {
@@ -2321,15 +2337,27 @@ const Unifier = struct {
     }
 
     /// Absorb an optional/defaulted row only for a fresh construction relation.
+    /// A nominal result retains its wrapper without merging it into the opened
+    /// backing or its extension; those structures may serve other constructions.
     fn unifyRowWithEmptyRecord(
         self: *Self,
         vars: *const ResolvedVarDescs,
         record_var: Var,
         fields: RecordFieldSafeMultiList.Range,
         mb_ext: ?Var,
+        nominal_direction: ?NominalDirection,
     ) Error!void {
         if (fields.len() == 0) {
-            if (mb_ext) |ext| {
+            if (nominal_direction) |direction| {
+                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+                    .vars = vars.*,
+                    .direction = direction,
+                } });
+                if (mb_ext) |ext| {
+                    const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
+                    try self.unifyGuarded(ext, empty_var);
+                }
+            } else if (mb_ext) |ext| {
                 try self.unifyGuarded(ext, record_var);
             } else {
                 try self.merge(vars, .{ .structure = .empty_record });
@@ -2342,13 +2370,20 @@ const Unifier = struct {
         try self.recordAbsorbedRecordDefaults(record_var, fields, mb_ext);
 
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
+        if (nominal_direction) |direction| {
+            _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+                .vars = vars.*,
+                .direction = direction,
+            } });
+        } else {
+            try self.merge(vars, Content{ .structure = .{ .record = .{
+                .fields = fields,
+                .ext = mb_ext orelse empty_var,
+            } } });
+        }
         if (mb_ext) |ext| {
             try self.unifyGuarded(ext, empty_var);
         }
-        try self.merge(vars, Content{ .structure = .{ .record = .{
-            .fields = fields,
-            .ext = mb_ext orelse empty_var,
-        } } });
     }
 
     /// Unify two extensible records.
@@ -4048,7 +4083,7 @@ pub const Scratch = struct {
 
     // Reusable formal->actual substitution map for the nominal-vs-structural
     // lift's declaration-backed opening operation.
-    open_var_map: std.AutoHashMap(types_mod.Var, types_mod.Var),
+    open_var_map: collections.DenseMap(types_mod.Var, types_mod.Var),
 
     // Memo of declaration openings performed during the CURRENT unify call:
     // one instantiated backing per (declaration, resolved arg roots). Without
@@ -4206,7 +4241,7 @@ pub const Scratch = struct {
             .b_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
-            .open_var_map = std.AutoHashMap(types_mod.Var, types_mod.Var).init(gpa),
+            .open_var_map = collections.DenseMap(types_mod.Var, types_mod.Var).init(gpa),
             .opened_nominals = .empty,
             .opened_nominal_persistable = .empty,
             .persistent_openings = .empty,

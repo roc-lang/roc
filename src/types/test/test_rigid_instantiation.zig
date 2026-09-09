@@ -450,7 +450,7 @@ test "instantiate - multiple instantiations are independent" {
     const original = try env.types.freshFromContentWithRank(func_content, .generalized);
 
     // First instantiation
-    var var_map1 = std.AutoHashMap(Var, Var).init(gpa);
+    var var_map1 = @import("collections").DenseMap(Var, Var).init(gpa);
     defer var_map1.deinit();
 
     var instantiator1 = Instantiator{
@@ -464,7 +464,7 @@ test "instantiate - multiple instantiations are independent" {
     const inst1 = try instantiator1.instantiateVar(original);
 
     // Second instantiation
-    var var_map2 = std.AutoHashMap(Var, Var).init(gpa);
+    var var_map2 = @import("collections").DenseMap(Var, Var).init(gpa);
     defer var_map2.deinit();
 
     var instantiator2 = Instantiator{
@@ -500,14 +500,14 @@ const TestEnv = struct {
     gpa: std.mem.Allocator,
     types: Store,
     idents: Ident.Store,
-    var_map: std.AutoHashMap(Var, Var),
+    var_map: @import("collections").DenseMap(Var, Var),
 
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
             .types = try Store.initCapacity(gpa, 16, 8),
             .idents = try Ident.Store.initCapacity(gpa, 16),
-            .var_map = std.AutoHashMap(Var, Var).init(gpa),
+            .var_map = @import("collections").DenseMap(Var, Var).init(gpa),
         };
     }
 

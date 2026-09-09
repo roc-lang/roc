@@ -152,7 +152,7 @@ const SpecEntryId = union(enum(u8)) {
 /// the source function type digest, and one closed monomorphic function type
 /// digest (a record is reachable under its requested digest and, once ready
 /// with a different solved type, under its solved digest as an alias).
-const SpecLookupAddress = struct {
+pub const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
     method_scope: [32]u8,
@@ -169,6 +169,12 @@ const SpecLookupAddress = struct {
     evidence_digest: [32]u8,
     codec_contract_digest: [32]u8,
     type_digest: [32]u8,
+
+    /// Share the durable identity bucket between reservation and draft commit.
+    /// Exact type and evidence equality remain the caller's collision checks.
+    pub fn fromIdentity(identity: Ast.SpecIdentity) SpecLookupAddress {
+        return from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+    }
 
     fn from(
         callable: Ast.CallableIdentity,
@@ -483,6 +489,11 @@ pub const SpecBuilder = struct {
         const left_contract = left.codec_contract.?;
         const right_contract = right.codec_contract.?;
         if (!digestEql(left_contract.constructor_ty_digest, right_contract.constructor_ty_digest)) return false;
+        if (!digestEql(left_contract.shape_ty_digest, right_contract.shape_ty_digest)) return false;
+        if (left_contract.shape_ty != right_contract.shape_ty) {
+            self.countExactTypeCheck();
+            if (!try self.types.typeEql(self.names, left_contract.shape_ty, right_contract.shape_ty)) return false;
+        }
         if (left_contract.constructor_ty == right_contract.constructor_ty) return true;
         self.countExactTypeCheck();
         return try self.types.typeEql(
@@ -502,6 +513,16 @@ pub const SpecBuilder = struct {
         const loaded_contract = loaded.record.identity.codec_contract.?;
         const current_contract = current.codec_contract.?;
         if (!digestEql(loaded_contract.constructor_ty_digest, current_contract.constructor_ty_digest)) return false;
+        if (!digestEql(loaded_contract.shape_ty_digest, current_contract.shape_ty_digest)) return false;
+        self.countExactTypeCheck();
+        if (!try Type.typeEqlAcrossStores(
+            self.allocator,
+            self.names,
+            self.types.view(),
+            current_contract.shape_ty,
+            loaded.types,
+            loaded_contract.shape_ty,
+        )) return false;
         self.countExactTypeCheck();
         return try Type.typeEqlAcrossStores(
             self.allocator,
@@ -1080,9 +1101,13 @@ test "monotype spec builder uses exact codec contract equality after digest matc
         .kind = .encoder,
         .constructor_ty_digest = forced_grounding_digest,
         .constructor_ty = first_grounding_ty,
+        .shape_ty_digest = forced_grounding_digest,
+        .shape_ty = first_grounding_ty,
     };
     var second_identity = first_identity;
     second_identity.codec_contract.?.constructor_ty = second_grounding_ty;
+    var third_identity = first_identity;
+    third_identity.codec_contract.?.shape_ty = second_grounding_ty;
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);
@@ -1092,14 +1117,17 @@ test "monotype spec builder uses exact codec contract equality after digest matc
 
     const first = try builder.reserve(first_identity, testEvidenceView(), @enumFromInt(1));
     const second = try builder.reserve(second_identity, testEvidenceView(), @enumFromInt(2));
+    const third = try builder.reserve(third_identity, testEvidenceView(), @enumFromInt(4));
     const repeated_first = try builder.reserve(first_identity, testEvidenceView(), @enumFromInt(3));
 
     try std.testing.expect(first.created);
     try std.testing.expect(second.created);
+    try std.testing.expect(third.created);
+    try std.testing.expect(first.spec != third.spec);
     try std.testing.expect(!repeated_first.created);
     try std.testing.expect(first.spec != second.spec);
     try std.testing.expectEqual(first.spec, repeated_first.spec);
-    try std.testing.expectEqual(@as(usize, 2), builder.records.len());
+    try std.testing.expectEqual(@as(usize, 3), builder.records.len());
     builder.validateLookupIntegrity();
 }
 

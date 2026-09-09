@@ -10,14 +10,23 @@ if True 1 else 2
 # EXPECTED
 UNCONDITIONAL CONDITION - if_true_literal.md:1:4:1:8
 # PROBLEMS
-── ● unconditional condition ──────────────────────────── if_true_literal.md:1:4
-
-This if condition is known at compile time, so this conditional will always
-make the same choice.
-
-if True 1 else 2
-   ^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 1 4) (end 1 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "if condition")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this conditional will always make the same choice."))
+		(document
+			(source-region (file "if_true_literal.md") (start 1 4) (end 1 8) (annotation warning) (line-text "if True 1 else 2")))))
+~~~
 # TOKENS
 ~~~zig
 KwIf,UpperIdent,Int,KwElse,Int,

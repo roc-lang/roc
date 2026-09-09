@@ -500,3 +500,126 @@ fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
         return;
     }
 }
+
+var simd_concat_ops: usize = 0;
+var simd_constant_concats: usize = 0;
+
+fn countSimdConcatCounts(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    simd_concat_ops = 0;
+    simd_constant_concats = 0;
+    const buf = try std.testing.allocator.alloc(u8, 1 << 22);
+    defer std.testing.allocator.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(std.testing.allocator, store, layouts, @enumFromInt(index), &writer);
+        simd_concat_ops += std.mem.count(u8, writer.buffered(), "low_level simd_concat_shift_bytes(");
+        simd_constant_concats += std.mem.count(u8, writer.buffered(), " concat_count=");
+    }
+}
+
+fn simdConcatApp(comptime count: []const u8) []const u8 {
+    return
+    \\main! : List(Str) => Try({}, [Exit(I8), ..])
+    \\main! = |args| {
+    \\    v = U8x16.splat(args.len().to_u8_wrap())
+    ++ "\n    result = v.concat_shift_bytes(v.bitwise_not(), " ++ count ++ ")\n" ++
+        \\    echo!(Str.inspect(result.to_u128_bits()))
+        \\    Ok({})
+        \\}
+    ;
+}
+
+test "SIMD alignment records exact constant counts including endpoints" {
+    inline for (.{ "0", "14", "16", "7 + 8" }) |count| {
+        try harness.expectLirInspectionWithOptions(
+            simdConcatApp(count),
+            .{ .inline_mode = .wrappers, .prove_ranges = true },
+            countSimdConcatCounts,
+        );
+        try std.testing.expect(simd_concat_ops > 0);
+        try std.testing.expect(simd_constant_concats > 0);
+    }
+}
+
+test "SIMD alignment keeps caller-dependent counts dynamic" {
+    try harness.expectLirInspectionWithOptions(
+        simdConcatApp("args.len().to_u8_wrap() % 17"),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countSimdConcatCounts,
+    );
+    try std.testing.expect(simd_concat_ops > 0);
+    try std.testing.expectEqual(@as(usize, 0), simd_constant_concats);
+}
+
+test "SIMD alignment does not specialize a changing loop count from its initial value" {
+    try harness.expectLirInspectionWithOptions(
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    v = U8x16.splat(args.len().to_u8_wrap())
+        \\    var $count = 0.U8
+        \\    var $bits = 0.U128
+        \\    while $count <= 16 {
+        \\        $bits = $bits.bitwise_xor(v.concat_shift_bytes(v.bitwise_not(), $count).to_u128_bits())
+        \\        $count = $count + 1
+        \\    }
+        \\    echo!(Str.inspect($bits))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countSimdConcatCounts,
+    );
+    try std.testing.expect(simd_concat_ops > 0);
+    try std.testing.expectEqual(@as(usize, 0), simd_constant_concats);
+}
+
+var guarded_proc_survives: bool = false;
+
+fn inspectGuardedWrapper(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
+    guarded_proc_survives = false;
+    for (0..store.procSpecCount()) |index| {
+        if (store.procDebugName(@enumFromInt(index))) |name| {
+            if (std.mem.eql(u8, name, "guarded")) guarded_proc_survives = true;
+        }
+    }
+}
+
+fn guardedWrapperApp(comptime body: []const u8) []const u8 {
+    return "guarded : U64, U8 -> U64\nguarded = |x, n| " ++ body ++ "\n" ++
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    x = args.len().to_u64()
+        \\    n = args.len().to_u8_wrap()
+        \\    echo!(Str.inspect(guarded(x, n).bitwise_or(guarded(x, n + 1))))
+        \\    Ok({})
+        \\}
+    ;
+}
+
+test "SIMD alignment prerequisite inlines checked wrappers with either crash arm" {
+    inline for (.{
+        "if n > 16 { crash \"count\" } else { x.shl_wrap(n) }",
+        "if n <= 16 { x.shl_wrap(n) } else { crash \"count\" }",
+    }) |body| {
+        try harness.expectLirInspectionWithOptions(
+            guardedWrapperApp(body),
+            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            inspectGuardedWrapper,
+        );
+        try std.testing.expect(!guarded_proc_survives);
+    }
+}
+
+test "SIMD alignment prerequisite keeps two-continuation functions out of wrapper inlining" {
+    inline for (.{
+        "if n > 16 { x.shr_zf_wrap(n) } else { x.shl_wrap(n) }",
+        "x.bitwise_or(if n > 16 { x.shr_zf_wrap(n) } else { x.shl_wrap(n) })",
+    }) |body| {
+        try harness.expectLirInspectionWithOptions(
+            guardedWrapperApp(body),
+            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            inspectGuardedWrapper,
+        );
+        try std.testing.expect(guarded_proc_survives);
+    }
+}

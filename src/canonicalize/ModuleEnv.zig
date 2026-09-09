@@ -711,6 +711,16 @@ pub const SchemeUseRecord = extern struct {
         /// The edge shares the definition's vars, so its record has no copy
         /// pairs but still names the exact scheme root used by checking.
         shared_value_use,
+        /// A fully concrete recursive dispatch reuses an ancestor's selected
+        /// method instance. `slot_data` identifies this constraint, and
+        /// `scheme_root` names the reused instance; no fresh pairs are minted.
+        /// Its requirements are determined by the target's callable paths.
+        recursive_dispatch_target,
+        /// Producer-authored provenance for a reference to a definition in an
+        /// on-stack recursive binding group. This record carries no evidence
+        /// or substitution of its own; an accompanying value/shared use owns
+        /// those facts when the referenced scheme has quantified variables.
+        recursive_reference,
     };
 };
 
@@ -862,10 +872,17 @@ pub const BindingScheme = extern struct {
 /// the complete callable graph and metadata without reconstructing either from
 /// the receiver's final shape.
 pub const BindingSchemeCodecRequirement = extern struct {
+    /// Binding source var, or a synthetic pristine imported scheme var. The
+    /// latter has no CIR node but still owns a complete evidence schema.
     node_idx: u32,
     scheme_root: u32,
     receiver_var: u32,
     constraint_index: u32,
+    /// The checker retired definition-side validation because this relation
+    /// must be instantiated before a concrete codec can be selected.
+    requires_instantiation: u32,
+    /// Persist the producer's classification for checked-environment rechecks.
+    is_synthetic: u32,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -925,8 +942,10 @@ external_decls: CIR.ExternalDecl.SafeList,
 imports: CIR.Import.Store,
 /// Source-relative file imports read while canonicalizing this module.
 file_dependencies: FileDependency.SafeList,
-/// The module's name as a string
-/// This is needed for import resolution to match import names to modules
+/// The module's source-visible final path segment, such as `Foo` for the
+/// logical module path `Folder/Foo`.
+/// Used for type-module main types and associated-name construction; logical
+/// import paths remain in coordinator state.
 module_name: []const u8,
 /// The module's bare name as an interned identifier (e.g., "Color").
 /// Used for display, type module validation, and method name construction.
@@ -1873,19 +1892,17 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .underscore_in_type_declaration => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{data.declared.label()});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "Underscore In Type Alias", headline, .runtime_error);
+            var report = try Report.init(allocator, data.declared.underscoreReportTitle(), data.declared.underscoreHeadline(), .runtime_error);
 
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
             try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
 
             try report.document.addLineBreak();
-            const explanation = try std.fmt.allocPrint(allocator, "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.", .{});
-            defer allocator.free(explanation);
-            const owned_explanation = try report.addOwnedString(explanation);
-            try report.document.addReflowingText(owned_explanation);
+            switch (data.declared) {
+                .alias, .where_alias => try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead."),
+                .nominal, .@"opaque" => try report.document.addReflowingText("A bare underscore in a type annotation means \"I don't care about this type\", so it does not declare a type parameter. If this parameter is intentionally phantom, give it an underscore-prefixed name like `_a` instead."),
+            }
 
             break :blk report;
         },
@@ -2425,6 +2442,66 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
 
+            break :blk report;
+        },
+        .binding_name_does_not_match_mutability => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const title = switch (data.mutability) {
+                .mutable => "Var Name Missing `$`",
+                .immutable => "Dollar Prefix Without `var`",
+            };
+            var report = try Report.init(allocator, title, "", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+
+            switch (data.mutability) {
+                .mutable => {
+                    try report.headline.addReflowingText("The mutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" is declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(" but its name does not start with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = try std.fmt.allocPrint(allocator, "${s}", .{ident_name});
+                    defer allocator.free(suggested);
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(". The name is only a convention; mutability comes from the ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" declaration.");
+                },
+                .immutable => {
+                    try report.headline.addReflowingText("The immutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" starts with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(" but is not declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = if (ident_name.len > 0) ident_name[1..] else ident_name;
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Either rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(", or declare it with ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" if it should be mutable.");
+                },
+            }
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
             break :blk report;
         },
         .empty_tuple => |data| blk: {
@@ -3625,9 +3702,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
 
             var report = try Report.init(allocator, "Trailing `?`", "", .warning);
-            try report.headline.addReflowingText("This ");
+            try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
             try report.headline.addAnnotated("?", .inline_code);
-            try report.headline.addReflowingText(" is applied to the value this function returns:");
+            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
 
             try report.document.addSourceRegion(
                 region_info,
@@ -3638,31 +3715,78 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("A ");
+            try report.document.addReflowingText("This is because ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(" here is almost always a mistake. On ");
-            try report.document.addAnnotated("Err", .inline_code);
-            try report.document.addReflowingText(", it returns the error from the function early. On ");
-            try report.document.addAnnotated("Ok", .inline_code);
-            try report.document.addReflowingText(", it unwraps the payload and returns that instead of the ");
+            try report.document.addReflowingText(" is syntax sugar for doing a ");
+            try report.document.addAnnotated("match", .inline_code);
+            try report.document.addReflowingText(" on a ");
             try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(", which only type-checks when the payload is itself a ");
-            try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(".");
+            try report.document.addReflowingText(" value like this:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.startAnnotation(.code_block);
+            try report.document.addIndent(1);
+            try report.document.addKeyword("match");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("value_before_question_mark");
+            try report.document.addText(" {");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Ok");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addKeyword("return");
+            try report.document.addText(" ");
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(")");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("}");
+            try report.document.endAnnotation();
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("If you meant to return the ");
-            try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(" as-is, remove the ");
+            try report.document.addReflowingText("When you use ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(". If you really do want to unwrap a nested ");
+            try report.document.addReflowingText(" on the value at the end of a function, it changes \"implicitly return this ");
             try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(" here, write that as a ");
+            try report.document.addReflowingText(" value\" to \"return this ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" value if it's an ");
+            try report.document.addAnnotated("Err", .inline_code);
+            try report.document.addReflowingText(", but if it's ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(", unwrap its ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(" payload and return that instead\" - which can only possibly type-check when returning ");
+            try report.document.addAnnotated("Try(Try(..., ...), ...)", .inline_code);
+            try report.document.addReflowingText(", which is so unusual that using ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is almost always a mistake in practice.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Usually removing the ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ");
             try report.document.addAnnotated("match", .inline_code);
-            try report.document.addReflowingText(" instead, because a trailing ");
+            try report.document.addReflowingText(" instead of the ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(" is confusing to read.");
+            try report.document.addReflowingText(" syntax sugar.");
 
             break :blk report;
         },
@@ -4048,7 +4172,7 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) std.mem.Allocator.Error!*Self {
         // Allocate a fresh ModuleEnv on the heap
         const env = try gpa.create(Self);
@@ -4077,7 +4201,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4108,6 +4232,8 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
 
+        env.debugAssertModuleBasename();
+
         return env;
     }
 
@@ -4119,13 +4245,13 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) error{CorruptSerializedModuleEnv}!Self {
         if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
 
-        return Self{
+        const env = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
             .types = self.types.deserializeInto(base_addr, gpa),
@@ -4148,7 +4274,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = CIR.Import.Store.init(),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4178,6 +4304,9 @@ pub const Serialized = extern struct {
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
+
+        env.debugAssertModuleBasename();
+        return env;
     }
 
     /// Deserialize with mutable type store and node store for cache modules.
@@ -4189,7 +4318,7 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) std.mem.Allocator.Error!*Self {
         // Allocate a fresh ModuleEnv on the heap
         const env = try gpa.create(Self);
@@ -4219,7 +4348,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4252,9 +4381,25 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
 
+        env.debugAssertModuleBasename();
+
         return env;
     }
 };
+
+/// Assert that the runtime-only module basename agrees with its serialized
+/// identifier. The basename is supplied by the cache consumer because its
+/// slice is not relocatable; it must never be replaced with a logical path.
+fn debugAssertModuleBasename(self: *const Self) void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(!self.display_module_name_idx.isNone());
+        std.debug.assert(std.mem.eql(
+            u8,
+            self.module_name,
+            self.getIdent(self.display_module_name_idx),
+        ));
+    }
+}
 
 /// Convert a type into a node index
 pub fn nodeIdxFrom(idx: anytype) Node.Idx {
@@ -4448,12 +4593,16 @@ pub fn recordBindingSchemeCodecRequirement(
     scheme_root: TypeVar,
     receiver_var: TypeVar,
     constraint_index: u32,
+    requires_instantiation: bool,
+    is_synthetic: bool,
 ) std.mem.Allocator.Error!void {
     const entry = BindingSchemeCodecRequirement{
         .node_idx = @intFromEnum(node_idx),
         .scheme_root = @intFromEnum(scheme_root),
         .receiver_var = @intFromEnum(receiver_var),
         .constraint_index = constraint_index,
+        .requires_instantiation = @intFromBool(requires_instantiation),
+        .is_synthetic = @intFromBool(is_synthetic),
     };
     const entries = self.binding_scheme_codec_requirements.items.items;
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
@@ -4463,6 +4612,7 @@ pub fn recordBindingSchemeCodecRequirement(
             existing.receiver_var == entry.receiver_var and
             existing.constraint_index == entry.constraint_index)
         {
+            std.debug.assert(existing.requires_instantiation == entry.requires_instantiation and existing.is_synthetic == entry.is_synthetic);
             return;
         }
     }
@@ -4528,8 +4678,15 @@ pub fn recordNumeralDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .numeral, target_var, fn_var);
+    try self.store.recordLiteralDispatchPlan(
+        node_idx,
+        .numeral,
+        target_var,
+        fn_var,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+    );
 }
 
 /// Return the checked `from_numeral` function for a numeric expression.
@@ -4553,8 +4710,15 @@ pub fn recordQuoteDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .quote, target_var, fn_var);
+    try self.store.recordLiteralDispatchPlan(
+        node_idx,
+        .quote,
+        target_var,
+        fn_var,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+    );
 }
 
 /// Record a constrained-scheme use for static-dispatch evidence.

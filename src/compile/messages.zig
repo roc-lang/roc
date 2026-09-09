@@ -96,7 +96,7 @@ pub const CanonicalizeTask = struct {
     source_dir: []const u8,
     /// Dependency depth
     depth: u32,
-    /// Module environment (ownership transferred from coordinator)
+    /// Module environment borrowed from the coordinator
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
@@ -116,7 +116,7 @@ pub const TypeCheckTask = struct {
     module_name: []const u8,
     /// Filesystem path (for diagnostics)
     path: []const u8,
-    /// Module environment (ownership transferred)
+    /// Module environment borrowed from the coordinator
     module_env: *ModuleEnv,
     /// Imported module environments (read-only pointers to completed modules)
     imported_envs: []const *ModuleEnv,
@@ -264,6 +264,7 @@ pub const TypeCheckedPublication = union(enum) {
 /// User diagnostics do not alter this outcome: publication is either complete
 /// or explicitly deferred until platform/app relation finalization.
 pub const OwnedSemanticModuleData = struct {
+    /// The coordinator retains this input until it accepts the publication.
     module_env: *ModuleEnv,
     publication: TypeCheckedPublication,
     publication_owned: bool = true,
@@ -271,7 +272,7 @@ pub const OwnedSemanticModuleData = struct {
     pub fn deinit(self: *OwnedSemanticModuleData) void {
         if (!self.publication_owned) return;
         switch (self.publication) {
-            .published => |*artifact| artifact.deinit(artifact.canonical_names.allocator),
+            .published => |*artifact| artifact.deinitRetainingModuleEnv(artifact.canonical_names.allocator),
             .deferred => |state| state.deinit(),
         }
     }
@@ -316,38 +317,21 @@ pub const DeferredPublicationState = struct {
     }
 };
 
-/// Result when parsing fails (but we still return partial info)
-pub const ParseFailure = struct {
-    /// Package this module belongs to
+/// Operational failures are returned to the coordinator, never module outcomes.
+pub const SourceReadError = error{ AccessDenied, FileNotFound, IoError, StreamTooLong };
+/// Errors which abort the compilation operation rather than a source module.
+pub const WorkerOperationError = SourceReadError || @import("compile_package.zig").TypeCheckModuleError;
+/// Allocation-free failure data returned through the worker result channel.
+pub const WorkerOperationFailure = struct {
     package_name: []const u8,
-    /// Module identifier
     module_id: ModuleId,
-    /// Module name
     module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// Raw source file state observed before parsing failed, when requested.
-    source_file_state: ?watch_inputs.State,
-    /// Error reports explaining the failure
-    reports: std.ArrayList(Report),
-    /// Partial module env if available (for error recovery)
-    partial_env: ?*ModuleEnv,
-};
-
-/// Result when a non-parsing compilation stage cannot continue safely.
-pub const CompileFailure = struct {
-    /// Package this module belongs to
-    package_name: []const u8,
-    /// Module identifier
-    module_id: ModuleId,
-    /// Module name
-    module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// Error reports explaining the failure
-    reports: std.ArrayList(Report),
-    /// Partial module env if available. The coordinator takes ownership.
-    partial_env: ?*ModuleEnv,
+    /// The producer records the stage and exact error; reporting does not infer it.
+    cause: union(enum) {
+        read_source: SourceReadError,
+        type_check: @import("compile_package.zig").TypeCheckModuleError,
+    },
+    source_file_state: ?watch_inputs.State = null,
 };
 
 /// Result when an import cycle is detected during canonicalization
@@ -389,10 +373,8 @@ pub const WorkerResult = union(enum) {
     canonicalized: CanonicalizedResult,
     /// Module was successfully type-checked
     type_checked: TypeCheckedResult,
-    /// Parsing failed
-    parse_failed: ParseFailure,
-    /// A later compilation stage failed before producing explicit facts
-    compile_failed: CompileFailure,
+    /// A worker could not complete the compilation operation.
+    operation_failed: WorkerOperationFailure,
     /// Import cycle was detected
     cycle_detected: CycleDetected,
     /// A worker stage ran out of memory
@@ -405,8 +387,7 @@ pub const WorkerResult = union(enum) {
             .parsed => |r| r.package_name,
             .canonicalized => |r| r.package_name,
             .type_checked => |r| r.package_name,
-            .parse_failed => |r| r.package_name,
-            .compile_failed => |r| r.package_name,
+            .operation_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
             .worker_oom => |r| r.package_name,
             .post_check => "",
@@ -418,8 +399,7 @@ pub const WorkerResult = union(enum) {
             .parsed => |r| r.module_id,
             .canonicalized => |r| r.module_id,
             .type_checked => |r| r.module_id,
-            .parse_failed => |r| r.module_id,
-            .compile_failed => |r| r.module_id,
+            .operation_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
             .worker_oom => |r| r.module_id,
             .post_check => 0,
@@ -431,12 +411,26 @@ pub const WorkerResult = union(enum) {
             .parsed => |r| r.module_name,
             .canonicalized => |r| r.module_name,
             .type_checked => |r| r.module_name,
-            .parse_failed => |r| r.module_name,
-            .compile_failed => |r| r.module_name,
+            .operation_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
             .worker_oom => |r| r.module_name,
             .post_check => "",
         };
+    }
+
+    /// Release a result that shutdown prevented the coordinator from accepting.
+    /// Parsed environments have no coordinator owner yet; later stages borrow
+    /// the module's environment, and only their output allocations are released.
+    pub fn discard(self: *WorkerResult, gpa: Allocator) void {
+        switch (self.*) {
+            .parsed => |r| {
+                r.cached_ast.deinit();
+                var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
+                storage.deinit();
+            },
+            .canonicalized, .type_checked, .operation_failed, .cycle_detected, .worker_oom, .post_check => {},
+        }
+        self.deinit(gpa);
     }
 
     /// Free any owned memory in the result
@@ -477,14 +471,7 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
-            .parse_failed => |*r| {
-                for (r.reports.items) |*rep| rep.deinit();
-                r.reports.deinit(gpa);
-            },
-            .compile_failed => |*r| {
-                for (r.reports.items) |*rep| rep.deinit();
-                r.reports.deinit(gpa);
-            },
+            .operation_failed => {},
             .cycle_detected => |*r| {
                 if (r.cycle_info.cycle_path) |path| gpa.free(path);
                 for (r.reports.items) |*rep| rep.deinit();
@@ -500,6 +487,13 @@ pub const WorkerResult = union(enum) {
 // for performance. If you need to add fields that would exceed these limits,
 // consider using pointers instead.
 comptime {
+    // Operational errors must fit inside an existing successful result so
+    // abort support never increases the payload copied for every worker task.
+    if (@sizeOf(WorkerOperationFailure) > @sizeOf(ParsedResult) or
+        @alignOf(WorkerOperationFailure) > @alignOf(ParsedResult))
+    {
+        @compileError("operational failure must not enlarge worker results");
+    }
     const max_message_size = 512;
     if (@sizeOf(WorkerTask) > max_message_size) {
         @compileError("WorkerTask too large for efficient thread-safe copy");

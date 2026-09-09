@@ -29,6 +29,70 @@ const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || li
     MissingSpecializedWorker,
 };
 
+const PeakAllocator = struct {
+    child: Allocator,
+    mutex: std.atomic.Mutex = .unlocked,
+    current_bytes: usize = 0,
+    peak_bytes: usize = 0,
+
+    fn allocator(self: *PeakAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn lock(self: *PeakAllocator) void {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    fn noteResize(self: *PeakAllocator, old_len: usize, new_len: usize) void {
+        self.current_bytes -= old_len;
+        self.current_bytes += new_len;
+        self.peak_bytes = @max(self.peak_bytes, self.current_bytes);
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        const result = self.child.rawAlloc(len, alignment, ret_addr);
+        if (result != null) self.noteResize(0, len);
+        return result;
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        if (!self.child.rawResize(memory, alignment, new_len, ret_addr)) return false;
+        self.noteResize(memory.len, new_len);
+        return true;
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        const result = self.child.rawRemap(memory, alignment, new_len, ret_addr);
+        if (result != null) self.noteResize(memory.len, new_len);
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *PeakAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
+        self.child.rawFree(memory, alignment, ret_addr);
+        self.noteResize(memory.len, 0);
+    }
+};
+
 var shared_test_builtins: ?eval.BuiltinModules = null;
 var shared_test_builtins_mutex: std.Io.Mutex = .init;
 
@@ -470,6 +534,18 @@ fn structuralJsonLirStats(
         .decrefs = decrefs,
         .conditional_decrefs = conditional_decrefs,
     };
+}
+
+fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
+    const source = try structuralJsonSource(std.testing.allocator, field_count, "Str", .parse);
+    defer std.testing.allocator.free(source);
+
+    var peak_allocator = PeakAllocator{ .child = std.testing.allocator };
+    const allocator = peak_allocator.allocator();
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), peak_allocator.current_bytes);
+    return peak_allocator.peak_bytes;
 }
 
 fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
@@ -1924,6 +2000,31 @@ test "issue 10979 flat JSON record parser growth is linear in field count" {
     try std.testing.expect(wide_per_field <= narrow_per_field * 2);
 }
 
+test "issue 11100 flat JSON record parser peak allocation is linear in field count" {
+    // Repro for https://github.com/roc-lang/roc/issues/11100.
+    // Peak live requested bytes are deterministic allocator accounting, not
+    // wall time. A whole-pipeline peak is the maximum of several phases, so
+    // compare adjacent totals: subtracting them becomes invalid when the
+    // dominating phase changes between input sizes. A doubling may use at
+    // most three times the memory, allowing 50% per-field variance while
+    // still rejecting the issue's greater-than-fourfold 16-to-32 growth.
+    const sizes = [_]usize{ 8, 16, 32 };
+    var peaks: [sizes.len]usize = undefined;
+    for (sizes, &peaks) |field_count, *peak| {
+        peak.* = try structuralJsonLirPeakBytes(field_count);
+    }
+
+    if (peaks[1] > peaks[0] * 3 or peaks[2] > peaks[1] * 3) {
+        std.debug.print(
+            "flat JSON parser peak allocation grew nonlinearly: " ++
+                "{d}/{d}/{d} fields used {d}/{d}/{d} peak bytes\n",
+            .{ sizes[0], sizes[1], sizes[2], peaks[0], peaks[1], peaks[2] },
+        );
+    }
+    try std.testing.expect(peaks[1] <= peaks[0] * 3);
+    try std.testing.expect(peaks[2] <= peaks[1] * 3);
+}
+
 test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
     const allocator = std.testing.allocator;
     const four = try structuralJsonLirStats(allocator, 4, "Str", .parse);
@@ -2151,8 +2252,8 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 1,
-        .nominal_backing_instantiations = 86,
+        .nominal_backing_reuses = 8,
+        .nominal_backing_instantiations = 79,
     });
 }
 
@@ -2302,10 +2403,12 @@ test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
     ;
 
     const counters = try monotypeCountersForModule(allocator, source);
-    // Each helper adds a fixed amount of work: completed transitive interface
-    // summaries replay without coupling the two independent calls.
-    try std.testing.expect(counters.template_misses <= 75);
-    try std.testing.expect(counters.nominal_backing_instantiations <= 2250);
+    // Each helper adds a bounded amount of work: completed transitive interface
+    // summaries replay without coupling the two independent calls. Resolving
+    // hidden defaultable evidence at checked edges adds exact specializations
+    // to this chain, but does not restore its prior combinatorial growth.
+    try std.testing.expect(counters.template_misses <= 80);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 3100);
 }
 
 test "independent same-name helper requirements lower separately" {
@@ -2454,8 +2557,8 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 360,
         .max_specialization_type_digest_nodes_visited = 360,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 149,
+        .nominal_backing_reuses = 30,
+        .nominal_backing_instantiations = 127,
     });
 }
 
@@ -2588,6 +2691,95 @@ test "issue 10978 repeated recursive nominal constructions scan bounded backing 
     }
     try std.testing.expect(scan_growth_linear);
     try std.testing.expect(find_growth_linear);
+}
+
+/// The event-handler view from issue 11144, with one nested lambda per item.
+fn issue11144EventHandlerViewSource(allocator: Allocator, item_count: usize) Allocator.Error![]u8 {
+    var source = std.ArrayList(u8).empty;
+    errdefer source.deinit(allocator);
+    try source.appendSlice(allocator,
+        \\Attribute(msg) := [Attr(Str, Str), On(Str, ({} -> msg))]
+        \\Html(msg) := [Text(Str), Element(Str, List(Attribute(msg)), List(Html(msg)))]
+        \\div : List(Attribute(msg)), List(Html(msg)) -> Html(msg)
+        \\div = |attrs, children| Element("div", attrs, children)
+        \\class : Str -> Attribute(msg)
+        \\class = |name| Attr("class", name)
+        \\text : Str -> Html(msg)
+        \\text = |s| Text(s)
+        \\render : Html(msg) -> Str
+        \\render = |html|
+        \\    match html {
+        \\        Text(s) => s
+        \\        Element(tag, _attrs, children) => "<${tag}>${Str.join_with(children.map(render), "")}</${tag}>"
+        \\    }
+        \\view : Str -> Html([Clicked(U64)])
+        \\view = |s| div([class("page")], [
+        \\
+    );
+    for (0..item_count) |index| {
+        const item = try std.fmt.allocPrint(
+            allocator,
+            "    div([class(\"item\"), On(\"click\", |{{}}| Clicked({d}))], [text(s), text(\"{d}\")]),\n",
+            .{ index + 1, index + 1 },
+        );
+        defer allocator.free(item);
+        try source.appendSlice(allocator, item);
+    }
+    try source.appendSlice(allocator,
+        \\])
+        \\main : Str
+        \\main = render(view("hi"))
+        \\
+    );
+    return try source.toOwnedSlice(allocator);
+}
+
+test "issue 11144 nested lambdas in one large body specialize in linear work" {
+    const allocator = std.testing.allocator;
+    {
+        const source = try issue11144EventHandlerViewSource(allocator, 2);
+        defer allocator.free(source);
+        var resources = try helpers.parseAndCheckProgramForProblemsWithBuiltin(
+            allocator,
+            .module,
+            source,
+            &.{},
+            try sharedPrePublishedBuiltin(),
+        );
+        defer resources.deinit(allocator);
+        const diagnostics = try resources.main.module_env.getDiagnostics();
+        defer allocator.free(diagnostics);
+        try std.testing.expectEqual(@as(usize, 0), resources.main.parse_ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), resources.main.parse_ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
+        try std.testing.expectEqual(@as(usize, 0), resources.main.checker.problems.problems.items.len);
+    }
+    const Counts = struct { snapshots: u64, backing_slots: u64, lookup_probes: u64, commit_steps: u64 };
+    var counts: [3]Counts = undefined;
+    for ([_]usize{ 16, 32, 64 }, &counts) |n, *out| {
+        const source = try issue11144EventHandlerViewSource(allocator, n);
+        defer allocator.free(source);
+        var diagnostics = MonoLower.Diagnostics{};
+        var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{ .diagnostics = &diagnostics });
+        defer lowered.deinit(allocator);
+        out.* = .{
+            .snapshots = diagnostics.graph.argument_class_members_snapshotted,
+            .backing_slots = diagnostics.graph.structural_backing_scan_slots,
+            .lookup_probes = diagnostics.body.nested_lookup_probes,
+            .commit_steps = diagnostics.body.draft_commit_lookup_steps,
+        };
+    }
+    // Compare deltas to remove fixed module work. A linear delta doubles;
+    // quadratic work approaches four times the preceding delta.
+    inline for (std.meta.fields(Counts)) |field| {
+        const small = @field(counts[0], field.name);
+        const medium = @field(counts[1], field.name);
+        const large = @field(counts[2], field.name);
+        const linear = small <= medium and medium <= large and
+            large - medium <= ((medium - small) *| 5) / 2;
+        if (!linear) std.debug.print("issue 11144 {s} grew nonlinearly: {d}->{d}->{d}\n", .{ field.name, small, medium, large });
+        try std.testing.expect(linear);
+    }
 }
 
 test "closed direct method calls reuse specialization before durable key construction" {
@@ -3056,6 +3248,8 @@ test "procedure boundary keeps a deeper single-use helper inline" {
 }
 
 test "escaping single-call block helper is not inlined" {
+    // The annotation makes this callable-containing data value an explicit
+    // compile-time root for the inline-plan pipeline exercised by this test.
     try expectInlinePlanDecision(
         \\helper : List(U64), U64 -> List(U64)
         \\helper = |xs, i| {
@@ -3063,6 +3257,7 @@ test "escaping single-call block helper is not inlined" {
         \\    a.set(1, i) ?? a
         \\}
         \\
+        \\main : (List(U64), (List(U64), U64 -> List(U64)))
         \\main = (helper([0.U64, 0], 1), helper)
     , "helper", false);
 }
@@ -3409,6 +3604,104 @@ test "boxy lowering preserves a runtime-built crash message" {
         return;
     };
     return error.TestUnexpectedResult;
+}
+
+test "issue 11024 boxy materializes imported defaults for repeated empty constructions" {
+    const allocator = std.testing.allocator;
+    const cfg_module =
+        \\Cfg := { f : U8 -> U8 ?? |n| n + 5, amount : U8 ?? 7, extra ?: U8 }
+    ;
+    const source =
+        \\import Cfg
+        \\make : {} -> Cfg.Cfg
+        \\make = |_| {}
+        \\main = {
+        \\    first = make({})
+        \\    second = make({})
+        \\    f = first.f
+        \\    g = second.f
+        \\    f(1) + g(2) + first.amount + second.amount + (first.?extra ?? 9)
+        \\}
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Cfg", .source = cfg_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("36", output);
+}
+
+test "issue 11099 boxy dispatches an imported procedure stored in a record" {
+    const allocator = std.testing.allocator;
+    const tp_module =
+        \\Tp := [].{
+        \\    effects = { send: send }
+        \\
+        \\    send = |x| x.concat("!")
+        \\}
+    ;
+    const source =
+        \\import Tp
+        \\
+        \\main = {
+        \\    send = Tp.effects.send
+        \\    send("hi")
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Tp", .source = tp_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"hi!\"", output);
+}
+
+test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\render : a -> Str
+        \\render = |value| Str.inspect(value)
+        \\main = render({ boxed: Box.box(U64x2.default().with_lane(1, 9)), vectors: [I64x2.splat(-1)] })
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"{ boxed: Box(U64x2(0, 9)), vectors: [I64x2(-1, -1)] }\"", output);
 }
 
 test "spec constr preserves direct call argument effect order" {
@@ -7411,6 +7704,8 @@ test "iterdiff: coarse custom is_eq set dedup keeps same representative across i
         \\Bucket := { key : I64, tag : I64 }.{
         \\    is_eq : Bucket, Bucket -> Bool
         \\    is_eq = |a, b| a.key == b.key
+        \\    to_hash : Bucket, Hasher -> Hasher
+        \\    to_hash = |value, hasher| value.key.to_hash(hasher)
         \\}
         \\
         \\main : I64
@@ -7932,19 +8227,19 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     try std.testing.expect(templates.specialization_interface_relations.len > 0);
 
     var template_index: ?usize = null;
-    for (templates.templates, 0..) |template, i| {
+    for (templates.templates.items, 0..) |template, i| {
         if (template.specialization_interface_relations.len > 0) {
             template_index = i;
             break;
         }
     }
     const raw_template = template_index orelse return error.TestUnexpectedResult;
-    const saved_template_span = templates.templates[raw_template].specialization_interface_relations;
-    templates.templates[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
-    templates.templates[raw_template].specialization_interface_relations.len = 1;
+    const saved_template_span = templates.templates.items[raw_template].specialization_interface_relations;
+    templates.templates.items[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
+    templates.templates.items[raw_template].specialization_interface_relations.len = 1;
     var failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
-    templates.templates[raw_template].specialization_interface_relations = saved_template_span;
+    templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
     templates.dispatch_scopes[0].parent = @enumFromInt(templates.dispatch_scopes.len);
@@ -8041,8 +8336,8 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
 
-    var path_param_span: ?@TypeOf(templates.templates[0].evidence_params) = null;
-    for (templates.templates) |template| {
+    var path_param_span: ?@TypeOf(templates.templates.items[0].evidence_params) = null;
+    for (templates.templates.items) |template| {
         const params = templates.evidenceParams(&template);
         for (params) |param| {
             if (param.path.len > 0) {
@@ -9743,4 +10038,262 @@ test "imported recursive nominal at a constant argument lowers finitely" {
         .{ .name = "Chain", .source = chain_module },
     });
     try std.testing.expect(counters.nominal_backing_instantiations >= 1);
+}
+
+// Regression for https://github.com/roc-lang/roc/issues/11092.
+// A single-use helper's inlined loop must not prevent either self-tail call
+// from becoming a back-edge, even when lowering shares the continuation.
+test "tail calls behind an inlined loop still become jumps" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\total : List(U64) -> U64
+        \\total = |ys| {
+        \\    var $sum = 0
+        \\    for y in ys {
+        \\        $sum = $sum + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\walk : List(U64), U64, U64 -> U64
+        \\walk = |xs, n, acc| {
+        \\    if n == 0 {
+        \\        acc
+        \\    } else {
+        \\        t = total(xs)
+        \\        if t % 2 == 0 {
+        \\            walk(xs, n - 1, acc + t)
+        \\        } else {
+        \\            walk(xs, n - 1, acc + t + 1)
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = walk([1, 2, 3], 2000, 0)
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered_source = try lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = true });
+        defer lowered_source.deinit(allocator);
+        const result = &lowered_source.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        var interpreter = try eval.Interpreter.init(
+            allocator,
+            &result.store,
+            &result.layouts,
+            runtime_env.get_ops(),
+            .preserve,
+        );
+        defer interpreter.deinit();
+        const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) });
+        try std.testing.expectEqual(@as(u64, 12_000), evaluated.value.read(u64));
+        const walk_proc = blk: {
+            for (0..result.store.procSpecCount()) |index| {
+                const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+                const name = result.store.procDebugName(proc_id) orelse continue;
+                if (std.mem.eql(u8, name, "walk")) break :blk proc_id;
+            }
+            return error.MissingProcSpec;
+        };
+        try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpec(walk_proc).tail_transform);
+    }
+}
+
+test "tail-call lowering handles a source loop in both inline modes" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\walk : List(U64), U64, U64 -> U64
+        \\walk = |xs, n, acc| {
+        \\    if n == 0 {
+        \\        acc
+        \\    } else {
+        \\        var $total = 0
+        \\        for y in xs { $total = $total + y }
+        \\        walk(xs, n - 1, acc + $total)
+        \\    }
+        \\}
+        \\main : U64
+        \\main = walk([1, 2, 3], 2000, 0)
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModuleWithOptions(allocator, source, inline_mode, .{
+            .proc_debug_names = true,
+        });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        var interpreter = try eval.Interpreter.initWithBoxyTables(
+            allocator,
+            &result.store,
+            &result.layouts,
+            eval.boxy_runtime.BoxyTables.fromResult(result),
+            runtime_env.get_ops(),
+            .preserve,
+        );
+        defer interpreter.deinit();
+        const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) });
+        try std.testing.expectEqual(@as(u64, 12_000), evaluated.value.read(u64));
+        var found_walk = false;
+        for (0..result.store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @enumFromInt(index);
+            const name = result.store.procDebugName(proc_id) orelse continue;
+            if (!std.mem.eql(u8, name, "walk")) continue;
+            found_walk = true;
+            try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpec(proc_id).tail_transform);
+        }
+        try std.testing.expect(found_walk);
+    }
+}
+
+test "tail-call lowering preserves a failure after a recursive call" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\walk : U64 -> U64
+        \\walk = |n| {
+        \\    if n == 0 { 0 } else {
+        \\        answer = walk(n - 1)
+        \\        if n == 2 { crash "after recursion" } else { {} }
+        \\        answer
+        \\    }
+        \\}
+        \\main : U64
+        \\main = walk(3)
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = true });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+        defer interpreter.deinit();
+        try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) }));
+    }
+}
+
+test "tail-call lowering preserves boxy return adaptations" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\walk : U64, U64 -> U64
+        \\walk = |n, acc| if n == 0 { acc } else { walk(n - 1, acc + 1) }
+        \\main : U64
+        \\main = walk(20, 0)
+    ;
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
+        .specialization_strategy = .boxy,
+        .proc_debug_names = true,
+    });
+    defer lowered.deinit(allocator);
+    const result = &lowered.lowered.lir_result;
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.initWithBoxyTables(
+        allocator,
+        &result.store,
+        &result.layouts,
+        eval.boxy_runtime.BoxyTables.fromResult(result),
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+    const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) });
+    try std.testing.expectEqual(@as(u64, 20), evaluated.value.read(u64));
+    var found_walk = false;
+    for (0..result.store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(index);
+        const name = result.store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "walk")) continue;
+        found_walk = true;
+        try std.testing.expectEqual(LIR.TailTransform.none, result.store.getProcSpec(proc_id).tail_transform);
+    }
+    try std.testing.expect(found_walk);
+}
+
+test "tail-call lowering preserves owning argument permutations" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\walk : List(U64), List(U64), U64 -> List(U64)
+        \\walk = |a, b, n| if n == 0 { a } else { walk(b, a, n - 1) }
+        \\main : U64 -> U64
+        \\main = |count| List.len(walk(List.repeat(1, count), List.repeat(2, count + 1), 2001))
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+            defer interpreter.deinit();
+            var count: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&count),
+            });
+            try std.testing.expectEqual(@as(u64, 6), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
+test "tail-call transfers preserve owning cycles and duplicated sources" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, expected: u64 }{
+        .{
+            .source =
+            \\walk : List(U64), List(U64), List(U64), U64 -> { a: List(U64), b: List(U64), c: List(U64) }
+            \\walk = |a, b, c, n| {
+            \\    if n == 0 { { a, b, c } }
+            \\    else if n % 2 == 0 { walk(b, c, a, n - 1) }
+            \\    else { walk(b, List.append(a, 0), b, n - 1) }
+            \\}
+            \\main : U64 -> U64
+            \\main = |count| {
+            \\    result = walk(List.repeat(1, count), List.repeat(2, count + 1), List.repeat(3, count + 2), 2001)
+            \\    List.len(result.a) + 10 * List.len(result.b) + 100 * List.len(result.c)
+            \\}
+            ,
+            .expected = 10666,
+        },
+        .{
+            .source =
+            \\walk : List(U64), List(U64), List(U64), List(U64), U64 -> { a: List(U64), b: List(U64), c: List(U64), d: List(U64) }
+            \\walk = |a, b, c, d, n| {
+            \\    if n == 0 { { a, b, c, d } }
+            \\    else { walk(b, a, d, c, n - 1) }
+            \\}
+            \\main : U64 -> U64
+            \\main = |count| {
+            \\    result = walk(List.repeat(1, count), List.repeat(2, count + 1), List.repeat(3, count + 2), List.repeat(4, count + 3), 2001)
+            \\    List.len(result.a) + 10 * List.len(result.b) + 100 * List.len(result.c) + 1000 * List.len(result.d)
+            \\}
+            ,
+            .expected = 7856,
+        },
+    };
+    for (cases) |case| {
+        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+            var lowered = try lowerModule(allocator, case.source, inline_mode);
+            defer lowered.deinit(allocator);
+            var runtime_env = eval.RuntimeHostEnv.init(allocator);
+            defer runtime_env.deinit();
+            {
+                const result = &lowered.lowered.lir_result;
+                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+                defer interpreter.deinit();
+                var count: u64 = 5;
+                const evaluated = try interpreter.eval(.{
+                    .proc_id = try rootProc(&lowered.lowered),
+                    .arg_layouts = &.{.u64},
+                    .arg_ptr = @ptrCast(&count),
+                });
+                try std.testing.expectEqual(case.expected, evaluated.value.read(u64));
+            }
+            try runtime_env.checkForLeaks();
+        }
+    }
 }

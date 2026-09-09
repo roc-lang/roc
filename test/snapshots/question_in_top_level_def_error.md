@@ -15,14 +15,19 @@ result = f(3)?
 # EXPECTED
 TRY OPERATOR OUTSIDE FUNCTION - question_in_top_level_def_error.md:6:10:6:15
 # PROBLEMS
-── ✗ try operator outside function ───── question_in_top_level_def_error.md:6:10
-
-The ? operator can only be used inside function bodies because it can cause an
-early return.
-
-result = f(3)?
-         ^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Try Operator Outside Function")
+		(region (start 6 10) (end 6 15))
+		(headline
+			(reflow "The ")
+			(annotated code "?")
+			(reflow " operator can only be used inside function bodies because it can cause an early return."))
+		(document
+			(source-region (file "question_in_top_level_def_error.md") (start 6 10) (end 6 15) (annotation error) (line-text "result = f(3)?")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

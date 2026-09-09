@@ -15,13 +15,19 @@ main! = |_| processNested([])
 # EXPECTED
 UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 # PROBLEMS
-── ✗ undeclared type ─────────────────────────────────── type_app_nested.md:3:31
-
-The type Err is not declared in this scope.
-
-processNested : List(Try(Str, Err)) -> List(Str)
-                              ^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 3 31) (end 3 34))
+		(headline
+			(reflow "The type ")
+			(annotated code "Err")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_app_nested.md") (start 3 31) (end 3 34) (annotation error) (line-text "processNested : List(Try(Str, Err)) -> List(Str)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

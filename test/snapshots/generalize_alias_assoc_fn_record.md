@@ -17,17 +17,25 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 # PROBLEMS
-── ✗ type mismatch ──────────────────── generalize_alias_assoc_fn_record.md:8:42
-
-This string literal is being used where a non-string type is needed.
-
-main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
-                                         ^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 8 42) (end 8 45))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "generalize_alias_assoc_fn_record.md") (start 8 42) (end 8 45) (annotation error) (line-text "main = ((bag.run)([1, 2, 3]), (bag.run)([\"a\", \"b\"]))"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,
@@ -142,9 +150,9 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(segment (name "run") (mode "required"))))
 					(e-list
 						(elems
-							(e-num (value "1"))
-							(e-num (value "2"))
-							(e-num (value "3")))))
+							(e-runtime-error (tag "erroneous_value_expr"))
+							(e-runtime-error (tag "erroneous_value_expr"))
+							(e-runtime-error (tag "erroneous_value_expr")))))
 				(e-call (constraint-fn-var 324)
 					(e-field-access
 						(receiver
@@ -155,8 +163,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 					(e-list
 						(elems
 							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-string
-								(e-literal (string "b")))))))))
+							(e-runtime-error (tag "erroneous_value_expr"))))))))
 	(s-nominal-decl
 		(ty-header (name "FooBar"))
 		(ty-record)))

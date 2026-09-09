@@ -516,6 +516,9 @@ jobs:
           command: zig build build-test-hosts -Dplatform=fx
           retry_count: 3
 
+      - name: Test native instruction-cache publication
+        run: zig test src/machine_code_shim/instruction_cache.zig -O ReleaseSafe
+
       - name: run hello_world.roc
         run: |
           set -euo pipefail

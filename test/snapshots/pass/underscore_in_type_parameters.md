@@ -28,72 +28,69 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:11:13:11:14
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:11:14:12
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 # PROBLEMS
-── ✗ underscore in type alias ───────────── underscore_in_type_parameters.md:2:8
-
-Underscores are not allowed in type alias declarations.
-
-MyType(_) : Str
-       ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ───────────── underscore_in_type_parameters.md:5:9
-
-Underscores are not allowed in type alias declarations.
-
-MyType2(_, b) : b
-        ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ──────────── underscore_in_type_parameters.md:8:12
-
-Underscores are not allowed in type alias declarations.
-
-MyType3(a, _) : a
-           ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ─────────── underscore_in_type_parameters.md:11:13
-
-Underscores are not allowed in type alias declarations.
-
-ComplexType(_, b) : { field: b }
-            ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ─────────── underscore_in_type_parameters.md:14:11
-
-Underscores are not allowed in type alias declarations.
-
-MultiType(_, _, c) : c
-          ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ─────────── underscore_in_type_parameters.md:14:14
-
-Underscores are not allowed in type alias declarations.
-
-MultiType(_, _, c) : c
-             ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 2 8) (end 2 9))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_in_type_parameters.md") (start 2 8) (end 2 9) (annotation error) (line-text "MyType(_) : Str"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 5 9) (end 5 10))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_in_type_parameters.md") (start 5 9) (end 5 10) (annotation error) (line-text "MyType2(_, b) : b"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 8 12) (end 8 13))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_in_type_parameters.md") (start 8 12) (end 8 13) (annotation error) (line-text "MyType3(a, _) : a"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 11 13) (end 11 14))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_in_type_parameters.md") (start 11 13) (end 11 14) (annotation error) (line-text "ComplexType(_, b) : { field: b }"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 14 11) (end 14 12))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_in_type_parameters.md") (start 14 11) (end 14 12) (annotation error) (line-text "MultiType(_, _, c) : c"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 14 14) (end 14 15))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_in_type_parameters.md") (start 14 14) (end 14 15) (annotation error) (line-text "MultiType(_, _, c) : c"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,OpColon,UpperIdent,
@@ -164,24 +161,24 @@ MultiType(_, _, c) : c
 	(s-alias-decl
 		(ty-header (name "MyType")
 			(ty-args
-				(ty-underscore)))
+				(ty-malformed)))
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyType2")
 			(ty-args
-				(ty-underscore)
+				(ty-malformed)
 				(ty-rigid-var (name "b"))))
 		(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 	(s-alias-decl
 		(ty-header (name "MyType3")
 			(ty-args
 				(ty-rigid-var (name "a"))
-				(ty-underscore)))
+				(ty-malformed)))
 		(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 	(s-alias-decl
 		(ty-header (name "ComplexType")
 			(ty-args
-				(ty-underscore)
+				(ty-malformed)
 				(ty-rigid-var (name "b"))))
 		(ty-record
 			(field (field "field")
@@ -189,8 +186,8 @@ MultiType(_, _, c) : c
 	(s-alias-decl
 		(ty-header (name "MultiType")
 			(ty-args
-				(ty-underscore)
-				(ty-underscore)
+				(ty-malformed)
+				(ty-malformed)
 				(ty-rigid-var (name "c"))))
 		(ty-rigid-var-lookup (ty-rigid-var (name "c")))))
 ~~~
@@ -199,30 +196,30 @@ MultiType(_, _, c) : c
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "MyType(Error)")
+		(alias (type "Error")
 			(ty-header (name "MyType")
 				(ty-args
-					(ty-underscore))))
-		(alias (type "MyType2(Error, b)")
+					(ty-malformed))))
+		(alias (type "Error")
 			(ty-header (name "MyType2")
 				(ty-args
-					(ty-underscore)
+					(ty-malformed)
 					(ty-rigid-var (name "b")))))
-		(alias (type "MyType3(a, Error)")
+		(alias (type "Error")
 			(ty-header (name "MyType3")
 				(ty-args
 					(ty-rigid-var (name "a"))
-					(ty-underscore))))
-		(alias (type "ComplexType(Error, b)")
+					(ty-malformed))))
+		(alias (type "Error")
 			(ty-header (name "ComplexType")
 				(ty-args
-					(ty-underscore)
+					(ty-malformed)
 					(ty-rigid-var (name "b")))))
-		(alias (type "MultiType(Error, Error, c)")
+		(alias (type "Error")
 			(ty-header (name "MultiType")
 				(ty-args
-					(ty-underscore)
-					(ty-underscore)
+					(ty-malformed)
+					(ty-malformed)
 					(ty-rigid-var (name "c"))))))
 	(expressions))
 ~~~

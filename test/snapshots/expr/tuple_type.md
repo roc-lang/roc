@@ -16,28 +16,41 @@ type=expr
 TYPE MISMATCH - tuple_type.md:5:8:5:9
 TYPE MISMATCH - tuple_type.md:5:11:5:12
 # PROBLEMS
-── ✗ type mismatch ─────────────────────────────────────────── tuple_type.md:5:8
-
-This number is being used where a non-number type is needed.
-
-f((1, 2))
-   ^
-
-Other code expects this to have the type:
-
-    Str
-
-── ✗ type mismatch ────────────────────────────────────────── tuple_type.md:5:11
-
-This number is being used where a non-number type is needed.
-
-f((1, 2))
-      ^
-
-Other code expects this to have the type:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 5 8) (end 5 9))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "tuple_type.md") (start 5 8) (end 5 9) (annotation error) (line-text "    f((1, 2))"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 5 11) (end 5 12))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "tuple_type.md") (start 5 11) (end 5 12) (annotation error) (line-text "    f((1, 2))"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

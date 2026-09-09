@@ -13,7 +13,8 @@ pub const DataRelocationKind = enum {
     pageoff12,
 };
 
-/// A relocation that needs to be applied during linking.
+/// A named relocation at a linker or process boundary. Machine-code producers
+/// use IndexedRelocation and carry its symbol-name column alongside the code.
 pub const Relocation = union(enum) {
     /// Inline data that should be placed in the data section.
     /// The offset is where in the code the reference to this data appears.
@@ -70,6 +71,40 @@ pub const Relocation = union(enum) {
             .local_data => |*r| r.offset += delta,
             .linked_function => |*r| r.offset += delta,
             .linked_data => |*r| r.offset += delta,
+            .jmp_to_return => |*r| {
+                r.inst_loc += delta;
+                r.offset += delta;
+            },
+        }
+    }
+};
+
+/// A relocation whose producer has already assigned its target identity.
+/// Symbol IDs are scoped to the accompanying SymbolTable name column.
+pub const IndexedRelocation = union(enum) {
+    linked_function: struct { offset: u64, symbol: @import("SymbolTable.zig").Id },
+    linked_data: struct {
+        offset: u64,
+        symbol: @import("SymbolTable.zig").Id,
+        kind: DataRelocationKind = .abs64,
+    },
+    local_data: @FieldType(Relocation, "local_data"),
+    jmp_to_return: @FieldType(Relocation, "jmp_to_return"),
+
+    pub fn getOffset(self: IndexedRelocation) u64 {
+        return switch (self) {
+            .linked_function => |r| r.offset,
+            .linked_data => |r| r.offset,
+            .local_data => |r| r.offset,
+            .jmp_to_return => |r| r.inst_loc,
+        };
+    }
+
+    pub fn adjustOffset(self: *IndexedRelocation, delta: u64) void {
+        switch (self.*) {
+            .linked_function => |*r| r.offset += delta,
+            .linked_data => |*r| r.offset += delta,
+            .local_data => |*r| r.offset += delta,
             .jmp_to_return => |*r| {
                 r.inst_loc += delta;
                 r.offset += delta;
@@ -272,7 +307,9 @@ fn patchAarch64BranchInstruction(code: []u8, inst_offset: usize, inst_addr: usiz
     var inst = std.mem.readInt(u32, code[inst_offset..][0..4], .little);
     const rel_bytes_i128 = @as(i128, @intCast(target_addr)) - @as(i128, @intCast(inst_addr));
     if ((rel_bytes_i128 & 0b11) != 0) return error.MisalignedBranchTarget;
-    const rel_words_i128 = @divExact(rel_bytes_i128, 4);
+    // Alignment is established above. Arithmetic shift expresses the signed
+    // word displacement directly, without a debug-build i128 division libcall.
+    const rel_words_i128 = rel_bytes_i128 >> 2;
 
     if ((inst >> 26) == 0b000101 or (inst >> 26) == 0b100101) {
         if (!fitsSignedBits(rel_words_i128, 26)) return error.BranchOutOfRange;
@@ -317,7 +354,9 @@ fn patchAarch64AdrpRelocation(code: []u8, inst_offset: usize, inst_addr: usize, 
     const page_mask: usize = ~@as(usize, 0xFFF);
     const inst_page = inst_addr & page_mask;
     const target_page = target_addr & page_mask;
-    const delta_pages_i128 = @divExact(@as(i128, @intCast(target_page)) - @as(i128, @intCast(inst_page)), 4096);
+    // Both addresses have their low twelve bits cleared. This signed shift
+    // is exact for backward as well as forward page displacements.
+    const delta_pages_i128 = (@as(i128, @intCast(target_page)) - @as(i128, @intCast(inst_page))) >> 12;
     if (!fitsSignedBits(delta_pages_i128, 21)) return error.BranchOutOfRange;
 
     const delta_pages_i21: i21 = @intCast(delta_pages_i128);
@@ -374,7 +413,7 @@ test "relocation creation" {
 
     const func = Relocation{ .linked_function = .{
         .offset = 200,
-        .name = "roc_alloc",
+        .name = @import("builtins").shim_symbols.roc_alloc,
     } };
     try std.testing.expectEqual(@as(u64, 200), func.getOffset());
 }
@@ -515,4 +554,31 @@ test "applyRelocations patches aarch64 jmp_to_return" {
     const inst = std.mem.readInt(u32, code[0..4], .little);
     try std.testing.expectEqual(@as(u32, 0b000101), inst >> 26); // B
     try std.testing.expectEqual(@as(u32, 2), inst & 0x03FF_FFFF); // 8-byte delta / 4
+}
+
+test "aarch64 signed branch and page displacements preserve exact units" {
+    var code: [4]u8 = undefined;
+    for ([_]i64{ -0x8000000, -4, 0, 4, 0x7fffffc }) |displacement| {
+        std.mem.writeInt(u32, &code, 0x94000000, .little); // BL
+        const base: usize = 0x8000000;
+        const target: usize = @intCast(@as(i64, base) + displacement);
+        try patchAarch64BranchInstruction(&code, 0, base, target);
+        const words: i26 = @bitCast(@as(u26, @truncate(std.mem.readInt(u32, &code, .little))));
+        try std.testing.expectEqual(displacement, @as(i64, words) * 4);
+    }
+    std.mem.writeInt(u32, &code, 0x94000000, .little);
+    try std.testing.expectError(error.MisalignedBranchTarget, patchAarch64BranchInstruction(&code, 0, 0, 2));
+    try std.testing.expectError(error.BranchOutOfRange, patchAarch64BranchInstruction(&code, 0, 0, 0x8000000));
+    if (@sizeOf(usize) < 8) return;
+    for ([_]i64{ -0x100000, -1, 0, 1, 0xfffff }) |pages| {
+        std.mem.writeInt(u32, &code, 0x90000000, .little); // ADRP
+        const base: usize = 0x100000000;
+        const target: usize = @intCast(@as(i64, base) + pages * 4096 + 7);
+        try patchAarch64AdrpRelocation(&code, 0, base + 3, target);
+        const inst = std.mem.readInt(u32, &code, .little);
+        const imm: u21 = @intCast(((inst >> 29) & 3) | (((inst >> 5) & 0x7ffff) << 2));
+        try std.testing.expectEqual(pages, @as(i64, @as(i21, @bitCast(imm))));
+    }
+    std.mem.writeInt(u32, &code, 0x90000000, .little);
+    try std.testing.expectError(error.BranchOutOfRange, patchAarch64AdrpRelocation(&code, 0, 0, 0x100000000));
 }

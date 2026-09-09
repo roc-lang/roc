@@ -21,30 +21,39 @@ Decode(a) : a
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:1:1:8:19
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
 # PROBLEMS
-── ✗ where clause not allowed in type declaration ─────── where_clauses_7.md:1:1
-
-You cannot define a where clause inside a type declaration.
-
-Hash(a, hasher) # After header
-    : # After colon
-        a # After var
-            where [ # After where
-                a.hash : hasher # After method
-                    -> # After arrow
-                        hasher, # After first clause
-                hasher.Hasher]
-
-Hint: where clauses can only go on function type annotations.
-
-── ✗ where clause not allowed in type declaration ────── where_clauses_7.md:10:1
-
-You cannot define a where clause inside a type declaration.
-
-Decode(a) : a
-    where [a.decode : List(U8) -> a]
-
-Hint: where clauses can only go on function type annotations.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 1 1) (end 8 19))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "where_clauses_7.md") (start 1 1) (end 8 19) (annotation error) (line-text "Hash(a, hasher) # After header\n\t: # After colon\n\t\ta # After var\n\t\t\twhere [ # After where\n\t\t\t\ta.hash : hasher # After method\n\t\t\t\t\t-> # After arrow\n\t\t\t\t\t\thasher, # After first clause\n\t\t\t\thasher.Hasher]"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(annotated code "where")
+			(reflow " clauses can only go on function type annotations.")))
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 10 1) (end 11 34))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "where_clauses_7.md") (start 10 1) (end 11 34) (annotation error) (line-text "Decode(a) : a\n\twhere [a.decode : List(U8) -> a]"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(annotated code "where")
+			(reflow " clauses can only go on function type annotations."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
@@ -72,9 +81,9 @@ EndOfFile,
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "hash")
-					(args
-						(ty-var (raw "hasher")))
-					(ty-var (raw "hasher")))
+					(ty-fn
+						(ty-var (raw "hasher"))
+						(ty-var (raw "hasher"))))
 				(alias (mod-of "hasher")
 					(ty (name "Hasher")))))
 		(s-type-decl
@@ -84,11 +93,11 @@ EndOfFile,
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "decode")
-					(args
+					(ty-fn
 						(ty-apply
 							(ty (name "List"))
-							(ty (name "U8"))))
-					(ty-var (raw "a")))))))
+							(ty (name "U8")))
+						(ty-var (raw "a"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -96,9 +105,8 @@ Hash(a, hasher) # After header
 	: # After colon
 		a # After var
 			where [ # After where
-				a.hash : hasher # After method
-					-> # After arrow
-						hasher, # After first clause
+				a.hash : hasher -> # After arrow
+					hasher, # After first clause
 				hasher.Hasher,
 			]
 

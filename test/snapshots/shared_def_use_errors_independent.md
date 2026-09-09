@@ -26,36 +26,59 @@ second_use = |s| {
 TYPE MISMATCH - shared_def_use_errors_independent.md:7:6:7:14
 TYPE MISMATCH - shared_def_use_errors_independent.md:14:6:14:14
 # PROBLEMS
-── ✗ type mismatch ──────────────────── shared_def_use_errors_independent.md:7:6
-
-This expression is used in an unexpected way.
-
-n = parse(s)
-    ^^^^^^^^
-
-It has the type:
-
-    Try(U64, [BadInput])
-
-But the annotation says it should be:
-
-    Str
-
-── ✗ type mismatch ─────────────────── shared_def_use_errors_independent.md:14:6
-
-This expression is used in an unexpected way.
-
-m = parse(s)
-    ^^^^^^^^
-
-It has the type:
-
-    Try(U64, [BadInput])
-
-But the annotation says it should be:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 7 6) (end 7 14))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "shared_def_use_errors_independent.md") (start 7 6) (end 7 14) (annotation error) (line-text "\tn = parse(s)"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try(U64, [BadInput])")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 14 6) (end 14 14))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "shared_def_use_errors_independent.md") (start 14 6) (end 14 14) (annotation error) (line-text "\tm = parse(s)"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try(U64, [BadInput])")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

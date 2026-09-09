@@ -13,17 +13,21 @@ a.EncodableTo(fmt) : where [
 # EXPECTED
 WHERE ALIAS CONSTRAINS ANOTHER TYPE - where_alias_parameter_constraint.md:3:2:3:25
 # PROBLEMS
-── ✗ where alias constrains another type ─ where_alias_parameter_constraint.md:3:2
-
-A where alias constrains only its receiver, but this constraint is on a
-different type variable.
-
-fmt.finish : fmt -> Str,
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Write this constraint against a, or declare a separate where alias for the
-other type variable and apply it alongside this one.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Where Alias Constrains Another Type")
+		(region (start 3 2) (end 3 25))
+		(headline
+			(reflow "A where alias constrains only its receiver, but this constraint is on a different type variable."))
+		(document
+			(source-region (file "where_alias_parameter_constraint.md") (start 3 2) (end 3 25) (annotation error) (line-text "\tfmt.finish : fmt -> Str,"))
+			(line-break)
+			(reflow "Write this constraint against ")
+			(annotated code "a")
+			(reflow ", or declare a separate where alias for the other type variable and apply it alongside this one."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,KwWhere,OpenSquare,
@@ -44,14 +48,14 @@ EndOfFile,
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "encode")
-					(args
+					(ty-fn
 						(ty-var (raw "a"))
-						(ty-var (raw "fmt")))
-					(ty-var (raw "fmt")))
+						(ty-var (raw "fmt"))
+						(ty-var (raw "fmt"))))
 				(method (mod-of "fmt") (name "finish")
-					(args
-						(ty-var (raw "fmt")))
-					(ty (name "Str")))))))
+					(ty-fn
+						(ty-var (raw "fmt"))
+						(ty (name "Str"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -71,14 +75,14 @@ a.EncodableTo(fmt) :
 		(ty-rigid-var (name "a"))
 		(where
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "encode")
-				(args
+				(ty-fn (effectful false)
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))))
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "fmt"))) (name "finish")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))
-				(ty-lookup (name "Str") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))
+					(ty-lookup (name "Str") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
