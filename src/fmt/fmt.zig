@@ -5029,7 +5029,7 @@ test "issue 11244: comment between a tuple receiver and its field access is idem
     , false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(
-        "a = (\n\t(\n\t\t(0) #\n\t\t\t.0\n\t)\n)\n",
+        "a = (\n\t(\n\t\t(0)  #\n\t\t\t.0\n\t)\n)\n",
         result,
     );
 }
@@ -5048,7 +5048,7 @@ test "postfix boundaries preserve comments with inserted and existing receiver p
             for ([_][]const u8{ "\n", "\r\n", "\r" }) |line_ending| {
                 const source = try std.fmt.allocPrint(gpa, "a=(({s}# keep{s}{s}))", .{ receiver.source, line_ending, postfix });
                 defer gpa.free(source);
-                const expected = try std.fmt.allocPrint(gpa, "a = (\n\t(\n\t\t{s} # keep\n\t\t\t{s}\n\t)\n)\n", .{ receiver.expected, postfix });
+                const expected = try std.fmt.allocPrint(gpa, "a = (\n\t(\n\t\t{s}  # keep\n\t\t\t{s}\n\t)\n)\n", .{ receiver.expected, postfix });
                 defer gpa.free(expected);
 
                 const result = try moduleFmtsStable(gpa, source, false);
@@ -5071,11 +5071,11 @@ test "mixed postfix chain preserves each boundary comment once" {
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(
         "a = (\n" ++
-            "\t(0) # tuple\n" ++
-            "\t\t.0 # field\n" ++
-            "\t\t.field # optional\n" ++
-            "\t\t.?field # method\n" ++
-            "\t\t.method() # tuple again\n" ++
+            "\t(0)  # tuple\n" ++
+            "\t\t.0  # field\n" ++
+            "\t\t.field  # optional\n" ++
+            "\t\t.?field  # method\n" ++
+            "\t\t.method()  # tuple again\n" ++
             "\t\t.1\n" ++
             ")\n",
         result,
@@ -5113,7 +5113,7 @@ test "postfix after multiline string preserves standalone comments" {
 test "trailing comments count CRLF as one line ending" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=0 # first\r\n# second\r\n", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = 0 # first\n# second\n", result);
+    try std.testing.expectEqualStrings("a = 0  # first\n# second\n", result);
 }
 
 test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
@@ -5255,7 +5255,7 @@ test "issue 11208: pipe start grouping follows callees and receivers only" {
         .{ .input = "t=x|>Box.(_0)", .expected = "t = x |> Box.(_0)\n" },
         .{ .input = "t=_0.field.0.method(_1)", .expected = "t = _0.field.0.method(_1)\n" },
         .{ .input = "t=x|>(\n_0\n).0", .expected = "t = x\n\t|> (_0).0\n" },
-        .{ .input = "t=x|> # target\n(_0).0", .expected = "t = x\n\t|> # target\n\t(_0).0\n" },
+        .{ .input = "t=x|> # target\n(_0).0", .expected = "t = x\n\t|>  # target\n\t(_0).0\n" },
     };
     for (cases) |case| {
         const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
