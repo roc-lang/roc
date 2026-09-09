@@ -1504,7 +1504,7 @@ app [main!] { pf: platform "c" }
 import pf.Stdout exposing [line!]
 
 import Stdot
-	exposing [ # tem
+	exposing [  # tem
 		Cust,
 	]
 
@@ -1513,27 +1513,27 @@ import
 	Ba
 Map(a, b) : Lis, (ab) -> List(b)
 
-MapML # Ag
-	: # Aon
-		List( # rg
+MapML  # Ag
+	:  # Aon
+		List(  # rg
 		),
-		(ab) -> # row
-			List(b) # z)
+		(ab) ->  # row
+			List(b)  # z)
 
-line : ( # Cm
-) # Co
+line : (  # Cm
+)  # Co
 
 Som : { foo : O, bar : g }
 
-Ml(a) : { # ld
+Ml(a) : {  # ld
 }
 
-Soine(a) : { #
-} #
+Soine(a) : {  #
+}  #
 
 Maybe(a) : [Somne]
 
-Mayine(a) : [] # )
+Mayine(a) : []  # )
 
 ane = |num| if num 2 else 5
 
@@ -1542,7 +1542,7 @@ one : U6
 add = |num| {
 	1
 	if num {
-		dbg # bug
+		dbg  # bug
 			s
 		exp0
 	} else {
@@ -1554,7 +1554,7 @@ add = |num| {
 me = |
 	a,
 	Tb,
-| # As
+|  # As
 	match a {
 		lue => {
 			x
@@ -1562,14 +1562,14 @@ me = |
 		Blue => {
 			x
 		}
-		er # ent
-			=> # ent
+		er  # ent
+			=>  # ent
 				1
 		"for" => 20
 		[
 			1,
-		] # t
-			=> # t
+		]  # t
+			=>  # t
 				ment
 		[1, 2, 3, est] => 123
 		[] => 23
@@ -1583,7 +1583,7 @@ me = |
 		Ok(123) => 12
 	}
 
-expect # Cord
+expect  # Cord
 	nt
 
 main! : Listlt({}, _)
@@ -1598,17 +1598,17 @@ ma = |_| {
 	#
 		
 	me(
-		..., # r
+		...,  # r
 	)
 	crash ke
-	"Unr!" # )
+	"Unr!"  # )
 	i = "H, ${d}"
 	t = [
 		one(
 			er,
 		),
-		456, # two
-		9, # ee
+		456,  # two
+		9,  # ee
 	]
 	for n in list {
 		line!("Ag ${n} to ${er}")
@@ -1621,18 +1621,18 @@ ma = |_| {
 		123,
 		"World",
 		ag1,
-		O, # nt
+		O,  # nt
 		(ne, tuple),
 		[1, 2, 3],
 	)
 	b ?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3
 	e_fn(arg1)?.od()?.ned()?.recd?
 	Stdo!(
-		"Ho${ #
-			r(nu) # xpr
+		"Ho${  #
+			r(nu)  # xpr
 		} ",
 	)
-} # Cocl
+}  # Cocl
 
 y : {}
 

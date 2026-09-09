@@ -32,7 +32,7 @@ EndOfFile,
 ~~~roc
 "This is a string with ${
 	some_func(
-		a, # This is a comment
+		a,  # This is a comment
 		b,
 	)
 } lines of text due to the template parts"

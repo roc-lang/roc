@@ -586,15 +586,15 @@ config1 = {
 	name: "integers",
 }
 
-config2 = { # Test comment 1
-	data: ["apple", "banana", "cherry"], # Test comment 2
-	metadata: { # Test comment 3
-		version: num, # Test comment 4
-		ratio: frac, # Test comment 5
-		description: str, # Test comment 6
-	}, # Test comment 7
-	name: "fruits", # Test comment 8
-} # Test comment 9
+config2 = {  # Test comment 1
+	data: ["apple", "banana", "cherry"],  # Test comment 2
+	metadata: {  # Test comment 3
+		version: num,  # Test comment 4
+		ratio: frac,  # Test comment 5
+		description: str,  # Test comment 6
+	},  # Test comment 7
+	name: "fruits",  # Test comment 8
+}  # Test comment 9
 
 # Polymorphic function-like structures
 make_container = |val| { value: val, wrapper: [val] }

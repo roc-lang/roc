@@ -85,7 +85,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 
 outer : a -> a
 outer = |x| {
-	inner : a -> a # Shadows outer 'a'
+	inner : a -> a  # Shadows outer 'a'
 	inner = |y| y
 
 	inner(x)

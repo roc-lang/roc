@@ -2284,7 +2284,7 @@ app [main!] { pf: platform "c" }
 
 import pf.Stdout exposing [line!, e!]
 
-import Stdot # Cose
+import Stdot  # Cose
 
 
 
@@ -2298,18 +2298,18 @@ import Stdot # Cose
 
 
 
-line : ( # Cpen
-	Bar, #
-	Baz, # m
-) # Co
+line : (  # Cpen
+	Bar,  #
+	Baz,  # m
+)  # Co
 
 Some(a) : { foo : Ok(a), bar : g }
 
-Ml(a) : { # d
-	bar : Som, # Afld
+Ml(a) : {  # d
+	bar : Som,  # Afld
 }
 
-Soine(a) : { # d
+Soine(a) : {  # d
 	bar : Som,
 }
 #
@@ -2323,8 +2323,8 @@ add_one : U64 -> U64
 ne = |num| {
 	other = 1
 	if num {
-		dbg # bug
-			() # r
+		dbg  # bug
+			()  # r
 		0
 	} else {
 		dbg 123
@@ -2333,19 +2333,19 @@ ne = |num| {
 }
 
 match_time = |
-	a, # rg
+	a,  # rg
 	b,
-| # As
+|  # As
 	match a {
 		lue | Red => {
 			x
 			x
 		}
 		Blue => 1
-		"foo" => # ent
+		"foo" =>  # ent
 			00
 		"foo" | "bar" => 20
-		[1, 2, 3, .. as rest] # t
+		[1, 2, 3, .. as rest]  # t
 			=> ment
 		[1, 2 | 5, 3, .. as rest] => 123
 		[] => 1
@@ -2354,10 +2354,10 @@ match_time = |
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
 		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
-		{ # Afpen
-			oo #
-				: # ue
-					1, # eld
+		{  # Afpen
+			oo  #
+				:  # ue
+					1,  # eld
 			ar: 2,
 			..,
 		} => 12
@@ -2368,22 +2368,22 @@ match_time = |
 		Ok(123) => 12
 	}
 
-expect # Cord
-	blah == 1 # nt
+expect  # Cord
+	blah == 1  # nt
 
 main! : (String) -> Result({}, _)
 
-ma = |_| { # Yee
+ma = |_| {  # Yee
 	world = "d"
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # d
+	return  # d
 		tag
 	
 	match_time(...)
 	nc(
-		dbg # bug
+		dbg  # bug
 			2,
 	)
 	crash "Unrnt"
@@ -2391,10 +2391,10 @@ ma = |_| { # Yee
 	i = "H, ${world}"
 	t = [
 		add_one(
-			dbg # Afist
-				er, # afarg
+			dbg  # Afist
+				er,  # afarg
 		),
-		456, # ee
+		456,  # ee
 	]
 	for n in list {
 		line!("Ag ${n} to ${er}")
@@ -2406,18 +2406,18 @@ ma = |_| { # Yee
 		123,
 		"World",
 		ag1,
-		Ok(world), # nt
+		Ok(world),  # nt
 		(ne, tuple),
 		[1, 2, 3],
 	)
 	b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 	le = (arg1)?.od()?.ned()?.recd?
 	line!(
-		"Ho${ #
-			r(number) # xpr
+		"Ho${  #
+			r(number)  # xpr
 		} ",
 	)
-} # Cocl
+}  # Cocl
 
 y : {}
 

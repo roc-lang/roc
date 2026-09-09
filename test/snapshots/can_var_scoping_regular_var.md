@@ -148,7 +148,25 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Regular function with var usage
+processItems = |items| {
+	var count_ = 0
+	var total_ = 0
+
+	# Reassign vars within same function - should work
+	count_ = count_ + 1
+	total_ = total_ + 10
+
+	# Nested function - var reassignment should fail across function boundary
+	nestedFunc = |_| {
+		count_ = count_ + 5  # Should cause error - different function
+		total_ = total_ * 2  # Should cause error - different function
+		count_
+	}
+
+	result = nestedFunc({})
+	total_ + result
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

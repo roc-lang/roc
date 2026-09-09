@@ -177,8 +177,8 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 match items {
-	[first, .. as rest] => 0 # invalid rest pattern should error
-	[.. as rest, last] => 1 # invalid rest pattern should error
+	[first, .. as rest] => 0  # invalid rest pattern should error
+	[.. as rest, last] => 1  # invalid rest pattern should error
 	[x, .. as rest, y] => 2
 }
 ~~~

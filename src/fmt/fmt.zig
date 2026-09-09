@@ -3747,7 +3747,7 @@ const Formatter = struct {
 
     inline fn setInlineCommentSeparator(fmt: *Formatter) void {
         std.debug.assert(!fmt.has_newline);
-        fmt.pending_spaces = 1;
+        fmt.pending_spaces = 2;
     }
 
     fn push(fmt: *Formatter, c: u8) error{WriteFailed}!void {
@@ -4555,6 +4555,21 @@ test "package platform dependency preserves inline source order" {
     try std.testing.expectEqualStrings(input, result);
 }
 
+test "inline comments are separated from code by two spaces" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\first=1 # first comment
+        \\second=2#second comment
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "first = 1  # first comment\n" ++
+            "\n" ++
+            "second = 2  # second comment\n",
+        result,
+    );
+}
+
 test "issue 10431: wrapped declaration has no trailing whitespace" {
     // Repro for https://github.com/roc-lang/roc/issues/10431
     const result = try moduleFmtsStable(std.testing.allocator,
@@ -4711,7 +4726,7 @@ test "legacy optional marker preserves a trailing comment once" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        "value : {\n\ta ?: # keep me\n\t\tU8,\n}\n",
+        "value : {\n\ta ?:  # keep me\n\t\tU8,\n}\n",
         result,
     );
 }
@@ -4726,7 +4741,7 @@ test "legacy optional marker preserves a comment between colon and marker" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        "value : {\n\ta ? # keep me\n\t\t: U8,\n}\n",
+        "value : {\n\ta ?  # keep me\n\t\t: U8,\n}\n",
         result,
     );
 }
@@ -4809,8 +4824,8 @@ test "comments between flat field access segments retain one level of indentatio
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        "value = record # first\n" ++
-            "\t.?outer # second\n" ++
+        "value = record  # first\n" ++
+            "\t.?outer  # second\n" ++
             "\t.inner\n",
         result,
     );
@@ -4963,7 +4978,7 @@ test "multiline pipe result postfix preserves boundary comments" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        "x = value |> pair # keep with pipe\n" ++
+        "x = value |> pair  # keep with pipe\n" ++
             "\t.first()\n",
         result,
     );
@@ -5317,11 +5332,11 @@ test "multiline pipes preserve comments around the operator" {
     , false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(
-        "a = foo # after lhs\n" ++
+        "a = foo  # after lhs\n" ++
             "\t|> bar(baz)\n" ++
             "\n" ++
             "b = foo\n" ++
-            "\t|> # after pipe\n" ++
+            "\t|>  # after pipe\n" ++
             "\tbar(baz)\n",
         result,
     );
@@ -5367,7 +5382,7 @@ test "parenthesized type application with leading newline is idempotent" {
 test "import alias after comment stays separated" {
     const result = try moduleFmtsStable(std.testing.allocator, "import A / B as#\nX", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("import A/B as #\nX\n", result);
+    try std.testing.expectEqualStrings("import A/B as  #\nX\n", result);
 }
 
 test "import path spacing is normalized" {
@@ -5556,7 +5571,7 @@ test "issue 11176: grouped expression layout follows formatted children" {
         .{ .input = "a=((0\n.0))", .expected = "a = (((0).0))\n" },
         .{ .input = "a=[(0\n.0)]", .expected = "a = [((0).0)]\n" },
         .{ .input = "a=f((0\n.0))", .expected = "a = f(((0).0))\n" },
-        .{ .input = "a=((# comment\n0))", .expected = "a = (\n\t( # comment\n\t\t0\n\t)\n)\n" },
+        .{ .input = "a=((# comment\n0))", .expected = "a = (\n\t(  # comment\n\t\t0\n\t)\n)\n" },
         .{ .input = "a=((0,))", .expected = "a = (\n\t(\n\t\t0,\n\t)\n)\n" },
     };
     for (cases) |case| {
@@ -6001,7 +6016,7 @@ test "fmt upgrades a roc version pin that has a comment written inside it" {
     // its value whether or not the field is a version pin, so upgrading such a
     // pin loses nothing that would otherwise have survived.
     const input = "package [Foo] {\n" ++
-        "\troc: # pinned deliberately\n" ++
+        "\troc:  # pinned deliberately\n" ++
         "\t\t\"nightly-2026-July-30-aaaaaaa\",\n" ++
         "}\n";
     const result = try fmtAsCompiler(std.testing.allocator, input, "nightly-2026-August-1-bbbbbbb");

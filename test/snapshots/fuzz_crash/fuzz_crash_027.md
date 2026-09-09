@@ -1515,7 +1515,7 @@ app [main!] { pf: platform "c" }
 
 import pf.Stdout exposing [line!, e!]
 
-import Stdot # Cose
+import Stdot  # Cose
 
 import pkg.S exposing [func as fry, Custom.*]
 
@@ -1524,30 +1524,30 @@ import
 	Ba
 Map(a, b) : List(a), (a -> b) -> List(b)
 
-MapML( # Cere
-	a, # Anre
+MapML(  # Cere
+	a,  # Anre
 	b,
-) # Ag
-	: # Aon
-		List( # rg
+)  # Ag
+	:  # Aon
+		List(  # rg
 		),
-		(a -> b) -> # row
-			List(b) #
+		(a -> b) ->  # row
+			List(b)  #
 
 Foo : (Bar, Baz)
 
-line : ( # Cpen
-	Bar, #
-	Baz, # m
-) # Co
+line : (  # Cpen
+	Bar,  #
+	Baz,  # m
+)  # Co
 
 Some(a) : { foo : Ok(a), bar : g }
 
-Ml(a) : { # d
-	bar : Som, # Afld
+Ml(a) : {  # d
+	bar : Som,  # Afld
 }
 
-Soine(a) : { # d
+Soine(a) : {  # d
 	bar : Som,
 }
 #
@@ -1561,8 +1561,8 @@ add_one : U64 -> U64
 add_one = |num| {
 	other = 1
 	if num {
-		dbg # bug
-			() # r
+		dbg  # bug
+			()  # r
 		0
 	} else {
 		dbg 123
@@ -1571,19 +1571,19 @@ add_one = |num| {
 }
 
 match_time = |
-	a, # rg
+	a,  # rg
 	b,
-| # As
+|  # As
 	match a {
 		lue | Red => {
 			x
 			x
 		}
 		Blue => 1
-		"foo" => # ent
+		"foo" =>  # ent
 			00
 		"foo" | "bar" => 20
-		[1, 2, 3, .. as rest] # Aftet
+		[1, 2, 3, .. as rest]  # Aftet
 			=> ment
 
 		[1, 2 | 5, 3, .. as rest] => 123
@@ -1593,10 +1593,10 @@ match_time = |
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
 		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
-		{ # Afrd open
-			foo #
-				: # ue
-					1, # Aftd field
+		{  # Afrd open
+			foo  #
+				:  # ue
+					1,  # Aftd field
 			bar: 2,
 			..,
 		} => 12
@@ -1607,11 +1607,11 @@ match_time = |
 		Ok(123) => 121000
 	}
 
-expect # Commeneyword
-	blah == 1 # Commnt
+expect  # Commeneyword
+	blah == 1  # Commnt
 
 main! : List(String) -> Try({}, _)
-main! = |_| { # Yeah Ie
+main! = |_| {  # Yeah Ie
 	world = "World"
 	var number = 123
 	expect blah == 1
@@ -1622,11 +1622,11 @@ main! = |_| { # Yeah Ie
 
 		
 	match_time(
-		..., #
+		...,  #
 	)
 	some_func(
-		dbg # bug
-			42, # Aft expr
+		dbg  # bug
+			42,  # Aft expr
 	)
 	crash "Unreachtement"
 	tag_with = Ok(number)

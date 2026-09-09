@@ -91,7 +91,13 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool {
+	1
+} else if 10 {  # Comment after else open
+	A
+} else {  # Comment after else open
+	3
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

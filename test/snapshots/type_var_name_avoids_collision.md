@@ -412,7 +412,7 @@ main! = |_| {
 	result5 = finalIdentity(3.14)
 
 	# Return something to complete the function
-	a + f # Just use some of our variables
+	a + f  # Just use some of our variables
 }
 ~~~
 # CANONICALIZE

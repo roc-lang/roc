@@ -73,9 +73,9 @@ EndOfFile,
 ~~~roc
 import Decode exposing [Decode]
 
-decode_things # After member name
-	: # After colon
-		List(List(U8)) -> List(a) # After anno
+decode_things  # After member name
+	:  # After colon
+		List(List(U8)) -> List(a)  # After anno
 			where [
 				a.Decode,
 			]

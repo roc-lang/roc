@@ -6609,7 +6609,7 @@ Builtin :: [].{
 
 		Numeral :: [
 			Literal(
-				{ # TODO get rid of this wrapper once we have nominal records"
+				{  # TODO get rid of this wrapper once we have nominal records"
 					# True iff there was a minus sign in front of the literal
 					is_negative : Bool,
 					# Base-256 digits before and after the decimal point, with any underscores

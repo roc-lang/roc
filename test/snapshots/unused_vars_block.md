@@ -123,9 +123,9 @@ main! = |_| {
 	another_unused = "hello"
 
 	# Underscore variable that is unused - should be fine
-	_ignored # Comment 1
-		= # Comment 2
-			999 # Comment 3
+	_ignored  # Comment 1
+		=  # Comment 2
+			999  # Comment 3
 
 	# Use only the used_var
 	result = used_var + 10
