@@ -745,7 +745,7 @@ the original candidate. Debug validation checks initializer locals in an empty
 lexical scope. Candidate views are scoped to the specialization pass and keep
 only source-owned identities, so speculative output rewinds cannot invalidate
 them. This avoids cloning a shared initializer at each use while preserving
-constructor evidence for projection and specialization.
+constructor evidence for field reads and specialization.
 
 Compile-time evaluation is allowed to fail with user diagnostics only during
 checking. After checking, stored constant data is ordinary checked output. A
@@ -13294,15 +13294,15 @@ the selected target, and there is no `--no-link` style flag. `--target` and
 `--output` (the output path) remain per-build choices.
 
 For headerless applications, the synthetic default platform owns the process
-entrypoint. Every executable build path, including embedded interpreter
-builds, links its target-specific executable runtime object. The generated
+entrypoint. Every native program build path, including embedded interpreter
+builds, links its target-specific process startup object. The generated
 Roc or interpreter wrapper exports the platform's declared entrypoint, which
 receives process arguments from that runtime and returns the exit status.
 The explicit synthetic-platform flag selects these link inputs; builds using
 an application-declared platform consume that platform's own inputs.
 The interpreter archive imports only its runtime dependencies. On Linux it
 uses direct OS operations without libc, so compiler-only libraries cannot
-introduce libc requirements into the freestanding default-platform executable.
+introduce libc requirements into the freestanding default-platform program.
 Because that startup also supplies no TLS, interpreter execution ownership on
 Linux without libc uses the kernel thread id directly, preserving concurrent
 host calls and same-thread reentrancy without accessing TLS.

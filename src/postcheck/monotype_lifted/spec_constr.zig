@@ -13710,6 +13710,14 @@ test "SpecConstr analysis rewind discards field access segments" {
     try std.testing.expectEqualDeep(before, program.markSpecConstrAnalysis());
 }
 
+fn addStaticDataIdentityForTest(program: *Ast.Program) Allocator.Error!Common.StaticDataId {
+    const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(program.static_data_values.len())));
+    // SpecConstr transports and compares the allocated ID but never reads the
+    // checked request. These tests stop before static-data lowering consumes it.
+    try program.static_data_values.append(program.allocator, undefined);
+    return id;
+}
+
 test "static candidate clones share closed initializers without emitting caller work" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -13719,7 +13727,7 @@ test "static candidate clones share closed initializers without emitting caller 
     const item = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
     const list = try program.addExpr(.{ .ty = list_ty, .data = .{ .list = try program.addExprSpan(&.{item}) } });
     const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
-        .static_data = @enumFromInt(0),
+        .static_data = try addStaticDataIdentityForTest(&program),
         .runtime_expr = list,
     } } });
     var pass = try Pass.init(allocator, &program);
@@ -13756,7 +13764,7 @@ test "static candidate constructor views are linear in shared source graph size"
         expr = try program.addExpr(.{ .ty = ty, .data = .{ .tuple = try program.addExprSpan(&.{ expr, expr }) } });
     }
     const candidate = try program.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
-        .static_data = @enumFromInt(0),
+        .static_data = try addStaticDataIdentityForTest(&program),
         .runtime_expr = expr,
     } } });
     var pass = try Pass.init(allocator, &program);
@@ -13788,7 +13796,7 @@ test "static candidate match rebinding preserves the initializer and its private
     const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
     const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{private}) } });
     const candidate = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .static_data_candidate = .{
-        .static_data = @enumFromInt(0),
+        .static_data = try addStaticDataIdentityForTest(&program),
         .runtime_expr = tuple,
     } } });
     const field_local = try program.addLocal(@enumFromInt(2), ty);
