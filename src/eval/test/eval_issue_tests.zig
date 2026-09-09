@@ -1568,10 +1568,11 @@ pub const tests = [_]TestCase{
         // A type-module function whose Bool result comes from a method
         // dispatch on an unresolved receiver (`boxes.any(...)`) is called
         // directly as an operand of `==` against a bare tag literal. The
-        // call expression must lower at the operand type the checked
-        // comparison recorded for it; no boxes block the point, so the
-        // comparison is true and both points are kept.
-        .name = "issue 11243: direct call compared with a bare Bool tag lowers at its checked operand type",
+        // comparison must take place at the call's completed result type,
+        // the nominal Bool the callee produces, rather than at the anonymous
+        // tag union the call site observed; no boxes block the point, so
+        // the comparison is true and both points are kept.
+        .name = "issue 11243: direct call compared with a bare Bool tag compares at the callee's result type",
         .source_kind = .module,
         .source =
         \\Repro :: {}.{

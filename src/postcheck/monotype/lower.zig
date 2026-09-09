@@ -31903,9 +31903,10 @@ const BodyContext = struct {
     /// Relating the callee's interface before answering makes the result
     /// class carry that completion, so a consumer that seals the type from
     /// this cell agrees with the type the lowered call produces. Calls that
-    /// lowering never routes through a callee template (a generated
-    /// iterator `next`, `Str.inspect`, or an argument proven uninhabited)
-    /// answer with the request cell, exactly as their lowering does.
+    /// lowering never routes through a callee template (a divergent callee
+    /// or argument expression, a generated iterator `next`, `Str.inspect`,
+    /// or an argument proven uninhabited) answer with the request cell,
+    /// exactly as their lowering does.
     fn directCallCompletedResultNode(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -31914,6 +31915,10 @@ const BodyContext = struct {
         fn_node: NodeId,
     ) Allocator.Error!NodeId {
         const fn_nodes = try self.graph.functionNodes(fn_node);
+        if (self.checkedExprDivergesInLoweredRuntime(call.func)) return fn_nodes.ret;
+        for (call.args) |arg| {
+            if (self.checkedExprDivergesInLoweredRuntime(arg)) return fn_nodes.ret;
+        }
         if (self.iteratorProcedureForResolvedTarget(target) != null or self.resolvedTargetIsStrInspect(target)) {
             return fn_nodes.ret;
         }

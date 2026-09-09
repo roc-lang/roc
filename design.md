@@ -11833,7 +11833,9 @@ parameter to owned—the mode-specialized variants callers with dying
 arguments select. Dismantle analysis outputs the exact per-procedure `u16`
 parameter-benefit mask consumed by variant admission; the caller does not
 rediscover the benefit from field reads or uniqueness checks. The base emission
-keeps the borrowed schedule untouched.
+keeps the borrowed schedule untouched, and the parameter's residual field
+domain is committed only in the emissions that apply its takes, so an emission
+that skips them releases the parameter whole.
 Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
