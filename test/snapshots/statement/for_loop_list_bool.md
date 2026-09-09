@@ -23,17 +23,30 @@ expect result == Bool.False
 # EXPECTED
 VAR NAME MISSING `$` - for_loop_list_bool.md:3:6:3:14
 # PROBLEMS
-── ● var name missing `$` ──────────────────────────── for_loop_list_bool.md:3:6
-
-The mutable binding allTrue_ is declared with var but its name does not start
-with $.
-
-var allTrue_ = Bool.True
-    ^^^^^^^^
-
-Rename this binding and all of its uses to $allTrue_. The name is only a
-convention; mutability comes from the var declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 14))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "allTrue_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$allTrue_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_list_bool.md") (start 3 6) (end 3 14) (annotation warning) (line-text "\tvar allTrue_ = Bool.True")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

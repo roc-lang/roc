@@ -13,35 +13,55 @@ EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:1:1:9
 EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:31:1:36
 INVALID NUMBER - fuzz_crash_103.md:2:4:2:12
 # PROBLEMS
-── ● effectful function name ───────────────────────────── fuzz_crash_103.md:1:1
-
-This function performs an effect, so its name must end in `!`.
-
-topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
-^^^^^^^^
-
-Add a trailing ! to this function name.
-
-── ● effectful function name ──────────────────────────── fuzz_crash_103.md:1:31
-
-This function performs an effect, so its name must end in `!`.
-
-topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
-                              ^^^^^
-
-Add a trailing ! to this function name.
-
-── ✗ invalid number ────────────────────────────────────── fuzz_crash_103.md:2:4
-
-This number literal does not fit in the inferred type.
-
-({}1E483647)}
-   ^^^^^^^^
-
-The inferred type is:
-
-    a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Effectful Function Name")
+		(region (start 1 1) (end 1 9))
+		(headline
+			(reflow "This function performs an effect, so its name must end in `!`."))
+		(document
+			(source-region (file "fuzz_crash_103.md") (start 1 1) (end 1 9) (annotation warning) (line-text "topThunk=||echo!(\"\")main!=|_|{thunk=||echo!(\"\")thunk()topThunk()"))
+			(line-break)
+			(line-break)
+			(reflow "Add a trailing")
+			(reflow " ")
+			(annotated code "!")
+			(reflow " ")
+			(reflow "to this function name.")))
+	(report
+		(severity warning)
+		(title "Effectful Function Name")
+		(region (start 1 31) (end 1 36))
+		(headline
+			(reflow "This function performs an effect, so its name must end in `!`."))
+		(document
+			(source-region (file "fuzz_crash_103.md") (start 1 31) (end 1 36) (annotation warning) (line-text "topThunk=||echo!(\"\")main!=|_|{thunk=||echo!(\"\")thunk()topThunk()"))
+			(line-break)
+			(line-break)
+			(reflow "Add a trailing")
+			(reflow " ")
+			(annotated code "!")
+			(reflow " ")
+			(reflow "to this function name.")))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 2 4) (end 2 12))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "fuzz_crash_103.md") (start 2 4) (end 2 12) (annotation error) (line-text "({}1E483647)}"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,LowerIdent,OpAssign,OpBar,OpBar,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,LowerIdent,NoSpaceOpenRound,CloseRound,LowerIdent,NoSpaceOpenRound,CloseRound,

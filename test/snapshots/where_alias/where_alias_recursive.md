@@ -14,31 +14,56 @@ describe = |value| value.to_str()
 RECURSIVE WHERE ALIAS - where_alias_recursive.md:1:21:1:29
 MISSING METHOD - where_alias_recursive.md:4:26:4:32
 # PROBLEMS
-── ✗ recursive where alias ─────────────────────── where_alias_recursive.md:1:21
-
-The where alias Looping names itself.
-
-a.Looping : where [a.Looping, a.to_str : a -> Str]
-                    ^^^^^^^^
-
-A where alias is expanded where it is used, so it cannot reach itself, directly
-or through other where aliases.
-
-── ✗ missing method ────────────────────────────── where_alias_recursive.md:4:26
-
-This to_str method is being called on a value whose type doesn't have that
-method.
-
-describe = |value| value.to_str()
-                         ^^^^^^
-
-The value's type, which does not have a method named to_str, is:
-
-    a
-
-Hint: For this to work, the type would need to have a method named to_str
-associated with it in the type's declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Recursive Where Alias")
+		(region (start 1 21) (end 1 29))
+		(headline
+			(reflow "The where alias")
+			(reflow " ")
+			(annotated type "Looping")
+			(reflow " ")
+			(reflow "names itself."))
+		(document
+			(source-region (file "where_alias_recursive.md") (start 1 21) (end 1 29) (annotation error) (line-text "a.Looping : where [a.Looping, a.to_str : a -> Str]"))
+			(line-break)
+			(reflow "A where alias is expanded where it is used, so it cannot reach itself, directly or through other where aliases.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 4 26) (end 4 32))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "to_str")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "where_alias_recursive.md") (start 4 26) (end 4 32) (annotation error) (line-text "describe = |value| value.to_str()"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "to_str")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "to_str")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotUpperIdent,OpColon,KwWhere,OpenSquare,LowerIdent,NoSpaceDotUpperIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

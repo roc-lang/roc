@@ -11359,6 +11359,7 @@ fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.
     return .{
         .allocator = allocator,
         .vars = try cloneArrayList(SolvedType.Content, allocator, &source.vars),
+        .owned_named_backings = try cloneArrayList(bool, allocator, &source.owned_named_backings),
         .spans = try cloneArrayList(SolvedType.TypeVarId, allocator, &source.spans),
         .fields = try cloneArrayList(SolvedType.Field, allocator, &source.fields),
         .tags = try cloneArrayList(SolvedType.Tag, allocator, &source.tags),

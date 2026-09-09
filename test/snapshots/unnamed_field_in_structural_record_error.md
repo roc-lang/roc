@@ -10,17 +10,27 @@ Bad : { x : U8, _ : U8 }
 # EXPECTED
 UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD - unnamed_field_in_structural_record_error.md:1:17:1:23
 # PROBLEMS
-── ✗ unnamed field not allowed in structural record ─ unnamed_field_in_structural_record_error.md:1:17
-
-Unnamed fields (written _ or _name) are only allowed in nominal record type
-declarations, not in structural record types.
-
-Bad : { x : U8, _ : U8 }
-                ^^^^^^
-
-Hint: Unnamed fields reserve layout padding for a nominal type (declared with
-:=). Give the field a name, or move it into a nominal type declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unnamed Field Not Allowed In Structural Record")
+		(region (start 1 17) (end 1 23))
+		(headline
+			(reflow "Unnamed fields (written ")
+			(annotated code "_")
+			(reflow " or ")
+			(annotated code "_name")
+			(reflow ") are only allowed in nominal record type declarations, not in structural record types."))
+		(document
+			(source-region (file "unnamed_field_in_structural_record_error.md") (start 1 17) (end 1 23) (annotation error) (line-text "Bad : { x : U8, _ : U8 }"))
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " Unnamed fields reserve layout padding for a nominal type (declared with ")
+			(annotated code ":=")
+			(reflow "). Give the field a name, or move it into a nominal type declaration."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,Underscore,OpColon,UpperIdent,CloseCurly,

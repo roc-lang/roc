@@ -23,21 +23,34 @@ answer = composed([42])
 # EXPECTED
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
-── ✗ type mismatch ──────────────────── test_nested_instantiation_crash.md:12:16
-
-This expression is used in an unexpected way.
-
-composed = |n| get_value(make_record(n))
-               ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    List(a)
-
-But the annotation says it should be:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 12 16) (end 12 41))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "test_nested_instantiation_crash.md") (start 12 16) (end 12 41) (annotation error) (line-text "composed = |n| get_value(make_record(n))"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(a)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

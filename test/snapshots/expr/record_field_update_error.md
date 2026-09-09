@@ -12,46 +12,68 @@ UNEXPECTED EXPRESSION SYNTAX - record_field_update_error.md:1:10:1:11
 UNEXPECTED TYPE SYNTAX - record_field_update_error.md:1:17:1:19
 DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
-── ✗ unexpected expression syntax ──────────── record_field_update_error.md:1:10
-
-I was parsing an expression, and this token cannot start an expression here.
-
-{ person & age: 31 }
-         ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found & here.
-
-── ✗ unexpected type syntax ────────────────── record_field_update_error.md:1:17
-
-I was parsing a type annotation, and this token cannot start a type here.
-
-{ person & age: 31 }
-                ^^
-
-Types can be type variables, uppercase type names, function types, tuples,
-records, or tag unions.
-
-For example:
-    List(U64)
-
-I found 31 here.
-
-── ● declaration has no value ──────────────── record_field_update_error.md:1:12
-
-This declaration has a type annotation but no implementation.
-
-{ person & age: 31 }
-           ^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 1 10) (end 1 11))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "&")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_field_update_error.md") (start 1 10) (end 1 11) (annotation error) (line-text "{ person & age: 31 }"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Type Syntax")
+		(region (start 1 17) (end 1 19))
+		(headline
+			(reflow "I was parsing a type annotation, and this token cannot start a type here."))
+		(document
+			(reflow "Types can be type variables, uppercase type names, function types, tuples, records, or tag unions.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "31")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_field_update_error.md") (start 1 17) (end 1 19) (annotation error) (line-text "{ person & age: 31 }"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 1 12) (end 1 19))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "record_field_update_error.md") (start 1 12) (end 1 19) (annotation error) (line-text "{ person & age: 31 }"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,

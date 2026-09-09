@@ -46,37 +46,7 @@ const windows_cross_targets = [_]CrossTarget{
 /// live in the platform's `targets/<target>/` directory. `test/fx` holds the
 /// checked-in copy (regenerate with `ci/vendor_mingw_runtime.py`) and the build
 /// copies it into the other test platforms rather than committing duplicates.
-const mingw_runtime_files = [_][]const u8{
-    "crt2.obj",
-    "dllcrt2.obj",
-    "libmingw32.lib",
-    "zigc.lib",
-    "compiler_rt.lib",
-    "api-ms-win-crt-conio-l1-1-0.lib",
-    "api-ms-win-crt-convert-l1-1-0.lib",
-    "api-ms-win-crt-environment-l1-1-0.lib",
-    "api-ms-win-crt-filesystem-l1-1-0.lib",
-    "api-ms-win-crt-heap-l1-1-0.lib",
-    "api-ms-win-crt-locale-l1-1-0.lib",
-    "api-ms-win-crt-math-l1-1-0.lib",
-    "api-ms-win-crt-multibyte-l1-1-0.lib",
-    "api-ms-win-crt-private-l1-1-0.lib",
-    "api-ms-win-crt-process-l1-1-0.lib",
-    "api-ms-win-crt-runtime-l1-1-0.lib",
-    "api-ms-win-crt-stdio-l1-1-0.lib",
-    "api-ms-win-crt-string-l1-1-0.lib",
-    "api-ms-win-crt-time-l1-1-0.lib",
-    "api-ms-win-crt-utility-l1-1-0.lib",
-    "advapi32.lib",
-    "kernel32.lib",
-    "ntdll.lib",
-    "shell32.lib",
-    "user32.lib",
-    // The http-headers host calls into Winsock; `/nodefaultlib` drops the
-    // `.drectve /defaultlib:ws2_32` its object carries, so platforms that need
-    // sockets list this explicitly.
-    "ws2_32.lib",
-};
+const mingw_runtime_files = @import("src/echo_platform/mingw_runtime.zig").files;
 
 /// Copies fx's checked-in MinGW C runtime into another test platform's
 /// `platform/targets/<target_name>/` directory, so a `*mingw` link finds every
@@ -746,10 +716,10 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2473, .end = 2473 },
+        .{ .file = "inspected.zig", .start = 2474, .end = 2474 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
-        .{ .file = "inspected.zig", .start = 3263, .end = 3274 },
+        .{ .file = "inspected.zig", .start = 3264, .end = 3275 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
@@ -2482,6 +2452,7 @@ fn buildAndCopyStrongIntrinsicWasmHostObject(
     b: *std.Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
 ) *Step {
@@ -2497,6 +2468,7 @@ fn buildAndCopyStrongIntrinsicWasmHostObject(
         }),
     });
     configureBackend(obj, target);
+    obj.root_module.addImport("host_alloc", roc_modules.host_alloc);
     obj.link_function_sections = true;
     obj.link_data_sections = true;
     obj.bundle_compiler_rt = false;
@@ -2515,6 +2487,7 @@ fn buildAndCopyExportsFixtureWasmHostObject(
     b: *std.Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
 ) *Step {
@@ -2530,6 +2503,7 @@ fn buildAndCopyExportsFixtureWasmHostObject(
         }),
     });
     configureBackend(obj, target);
+    obj.root_module.addImport("host_alloc", roc_modules.host_alloc);
     obj.link_function_sections = true;
     obj.link_data_sections = true;
     obj.bundle_compiler_rt = false;
@@ -2881,6 +2855,7 @@ fn setupTestPlatforms(
         b,
         wasm_target,
         optimize,
+        roc_modules,
         strip,
         omit_frame_pointer,
     ));
@@ -2888,6 +2863,7 @@ fn setupTestPlatforms(
         b,
         wasm_target,
         optimize,
+        roc_modules,
         strip,
         omit_frame_pointer,
     ));
@@ -3607,6 +3583,13 @@ pub fn build(b: *std.Build) void {
         // track as inputs, so always regenerate.
         run_glue_abi.has_side_effects = true;
 
+        const run_zig_union_layouts = b.addRunArtifact(roc_exe);
+        run_zig_union_layouts.addArgs(&.{ "glue", "--no-cache" });
+        run_zig_union_layouts.addFileArg(b.path("src/glue/src/ZigGlue.roc"));
+        const zig_union_layouts_dir = run_zig_union_layouts.addOutputDirectoryArg("glue-zig-union-layouts");
+        run_zig_union_layouts.addFileArg(b.path("test/glue/tag-union-layouts/main.roc"));
+        run_zig_union_layouts.has_side_effects = true;
+
         const lock_targets = [_]struct { name: []const u8, target: std.Build.ResolvedTarget }{
             .{ .name = "x64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }) },
             .{ .name = "arm64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }) },
@@ -3630,6 +3613,19 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = glue_abi_dir.path(b, "roc_platform_abi.zig"),
             });
             run_check_glue_abi_step.dependOn(&lock_obj.step);
+
+            const union_lock_obj = b.addObject(.{
+                .name = b.fmt("glue_zig_union_layouts_{s}", .{lock_target.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("test/glue/tag-union-layouts/compile_lock.zig"),
+                    .target = lock_target.target,
+                    .optimize = optimize,
+                }),
+            });
+            union_lock_obj.root_module.addAnonymousImport("glue_abi", .{
+                .root_source_file = zig_union_layouts_dir.path(b, "roc_platform_abi.zig"),
+            });
+            run_check_glue_abi_step.dependOn(&union_lock_obj.step);
         }
 
         const run_c_glue_abi = b.addRunArtifact(roc_exe);
@@ -3638,6 +3634,27 @@ pub fn build(b: *std.Build) void {
         const c_glue_abi_dir = run_c_glue_abi.addOutputDirectoryArg("glue-c-abi");
         run_c_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
         run_c_glue_abi.has_side_effects = true;
+
+        const run_rust_glue_abi = b.addRunArtifact(roc_exe);
+        run_rust_glue_abi.addArgs(&.{ "glue", "--no-cache" });
+        run_rust_glue_abi.addFileArg(b.path("src/glue/src/RustGlue.roc"));
+        const rust_glue_abi_dir = run_rust_glue_abi.addOutputDirectoryArg("glue-rust-abi");
+        run_rust_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
+        run_rust_glue_abi.has_side_effects = true;
+
+        const foreign_abi_generator = b.addExecutable(.{
+            .name = "generate_foreign_abi_lock",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/glue/generate_abi_lock.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+                .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
+            }),
+        });
+        const generate_foreign_lock = b.addRunArtifact(foreign_abi_generator);
+        const canonical_header = generate_foreign_lock.addOutputFileArg("canonical_host_abi.h");
+        generate_foreign_lock.addFileArg(rust_glue_abi_dir.path(b, "roc_platform_abi.rs"));
+        const rust_with_canonical_lock = generate_foreign_lock.addOutputFileArg("roc_platform_abi_lock.rs");
 
         const c_lock_targets = [_]struct { name: []const u8, triple: []const u8, simd128: bool }{
             .{ .name = "x64_linux", .triple = "x86_64-linux-musl", .simd128 = false },
@@ -3663,18 +3680,24 @@ pub fn build(b: *std.Build) void {
             if (lock_target.simd128) compile_c_lock.addArg("-msimd128");
             compile_c_lock.addArg("-I");
             compile_c_lock.addDirectoryArg(c_glue_abi_dir);
+            compile_c_lock.addArg("-I");
+            compile_c_lock.addDirectoryArg(canonical_header.dirname());
             compile_c_lock.addFileArg(b.path("test/glue/c_abi_compile_lock.c"));
             compile_c_lock.addArg("-o");
             _ = compile_c_lock.addOutputFileArg(b.fmt("c-abi-lock-{s}.o", .{lock_target.name}));
             run_check_glue_abi_step.dependOn(&compile_c_lock.step);
         }
 
-        const run_rust_glue_abi = b.addRunArtifact(roc_exe);
-        run_rust_glue_abi.addArgs(&.{ "glue", "--no-cache" });
-        run_rust_glue_abi.addFileArg(b.path("src/glue/src/RustGlue.roc"));
-        const rust_glue_abi_dir = run_rust_glue_abi.addOutputDirectoryArg("glue-rust-abi");
-        run_rust_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
-        run_rust_glue_abi.has_side_effects = true;
+        const run_rust_union_layouts = b.addRunArtifact(roc_exe);
+        run_rust_union_layouts.addArgs(&.{ "glue", "--no-cache" });
+        run_rust_union_layouts.addFileArg(b.path("src/glue/src/RustGlue.roc"));
+        const rust_union_layouts_dir = run_rust_union_layouts.addOutputDirectoryArg("glue-rust-union-layouts");
+        run_rust_union_layouts.addFileArg(b.path("test/glue/tag-union-layouts/main.roc"));
+        run_rust_union_layouts.has_side_effects = true;
+
+        const rust_union_lock_files = b.addWriteFiles();
+        _ = rust_union_lock_files.addCopyFile(rust_union_layouts_dir.path(b, "roc_platform_abi.rs"), "roc_platform_abi.rs");
+        const rust_union_lock_source = rust_union_lock_files.addCopyFile(b.path("test/glue/tag-union-layouts/compile_lock.rs"), "compile_lock.rs");
 
         const native_arch = target.result.cpu.arch;
         const native_rust_target: ?[]const u8 = switch (roc_target.classifyOs(target.result.os.tag)) {
@@ -3702,10 +3725,27 @@ pub fn build(b: *std.Build) void {
                 lock_target.triple,
             });
             if (lock_target.simd128) compile_rust_lock.addArgs(&.{ "-C", "target-feature=+simd128" });
-            compile_rust_lock.addFileArg(rust_glue_abi_dir.path(b, "roc_platform_abi.rs"));
+            compile_rust_lock.addFileArg(rust_with_canonical_lock);
             compile_rust_lock.addArg("-o");
             _ = compile_rust_lock.addOutputFileArg(b.fmt("rust-abi-lock-{s}.rmeta", .{lock_target.name}));
             run_check_glue_abi_step.dependOn(&compile_rust_lock.step);
+
+            const compile_rust_union_lock = b.addSystemCommand(&.{
+                "rustc",
+                "--edition=2021",
+                "-D",
+                "warnings",
+                "--crate-type=lib",
+                "--emit=metadata",
+                "--cfg",
+                "no_roc_std_helpers",
+                "--target",
+                lock_target.triple,
+            });
+            compile_rust_union_lock.addFileArg(rust_union_lock_source);
+            compile_rust_union_lock.addArg("-o");
+            _ = compile_rust_union_lock.addOutputFileArg(b.fmt("rust-union-layouts-{s}.rmeta", .{lock_target.name}));
+            run_check_glue_abi_step.dependOn(&compile_rust_union_lock.step);
         }
     }
 
@@ -5061,6 +5101,7 @@ pub fn build(b: *std.Build) void {
         configureBackend(wasm_test_exe, target);
         wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         wasm_test_exe.root_module.addImport("build_options", roc_modules.build_options);
+        wasm_test_exe.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
 
         const install = b.addInstallArtifact(wasm_test_exe, .{});
         build_test_wasm_static_lib_runner_step.dependOn(&install.step);
@@ -5528,6 +5569,14 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    for (main_exe_result.boundary_link_tests, 0..) |maybe_test, index| {
+        if (maybe_test) |boundary_test| test_suites.register(.{
+            .step_suffix = if (index == 0) "machine-code-boundary-link" else "interpreter-boundary-link",
+            .description = "Link canonical symbols through a real shim archive",
+            .compile = boundary_test,
+        });
+    }
+
     if (main_exe_result.machine_code_shim_archive_test) |archive_test| {
         test_suites.register(.{
             .step_suffix = "machine-code-shim-archive",
@@ -5807,6 +5856,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                 .{ .name = "collections", .module = roc_modules.collections },
                 .{ .name = "backend", .module = roc_modules.backend },
+                .{ .name = "builtins", .module = roc_modules.builtins },
                 .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 .{ .name = "build_options", .module = roc_modules.build_options },
             },
@@ -7312,6 +7362,7 @@ const MainExeResult = struct {
     exe: *Step.Compile,
     machine_code_shim_test: ?*Step.Compile,
     machine_code_shim_archive_check: ?*Step,
+    boundary_link_tests: [2]?*Step.Compile,
     machine_code_shim_archive_test: ?*Step.Compile,
 };
 fn addMainExe(
@@ -7487,8 +7538,15 @@ fn addMainExe(
         .linkage = .static,
     });
     configureBackend(interpreter_shim_lib, target);
-    // Add all modules from roc_modules that the shim needs
-    roc_modules.addAll(interpreter_shim_lib);
+    // Keep compiler-only modules out of this runtime archive. In particular,
+    // bundle links libc through zstd even when its source is never imported.
+    interpreter_shim_lib.root_module.addImport("base", roc_modules.base);
+    interpreter_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    interpreter_shim_lib.root_module.addImport("eval", roc_modules.eval);
+    interpreter_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
+    interpreter_shim_lib.root_module.addImport("layout", roc_modules.layout);
+    interpreter_shim_lib.root_module.addImport("lir", roc_modules.lir);
+    if (target.result.os.tag == .linux) interpreter_shim_lib.root_module.link_libc = false;
     interpreter_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     interpreter_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     interpreter_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_interpreter", .{
@@ -7516,6 +7574,7 @@ fn addMainExe(
 
     var machine_code_shim_test_for_registry: ?*Step.Compile = null;
     var machine_code_shim_archive_check_for_registry: ?*Step = null;
+    var boundary_link_tests: [2]?*Step.Compile = .{ null, null };
     var machine_code_shim_archive_test_for_registry: ?*Step.Compile = null;
     if (add_machine_code_shim_test) {
         const machine_code_shim_test = b.addTest(.{
@@ -7553,6 +7612,28 @@ fn addMainExe(
         machine_code_shim_test.bundle_compiler_rt = true;
         add_tracy(b, roc_modules.build_options, machine_code_shim_test, b.graph.host, false, flag_enable_tracy);
         machine_code_shim_test_for_registry = machine_code_shim_test;
+
+        const boundary_link_step = b.step("run-test-shim-boundary-link", "Link canonical host symbols through both real shim archives");
+        for ([_]*Step.Compile{ machine_code_shim_lib, interpreter_shim_lib }, 0..) |shim_lib, index| {
+            const options = b.addOptions();
+            options.addOption(bool, "is_interpreter", index == 1);
+            const boundary_link_test = b.addTest(.{
+                .name = if (index == 0) "machine-code-boundary-link" else "interpreter-boundary-link",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/machine_code_shim/boundary_link_test.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                }),
+            });
+            configureBackend(boundary_link_test, target);
+            boundary_link_test.root_module.addImport("builtins", roc_modules.builtins);
+            boundary_link_test.root_module.addOptions("boundary_test_options", options);
+            boundary_link_test.root_module.addObject(machine_code_shim_test_host);
+            boundary_link_test.root_module.linkLibrary(shim_lib);
+            const run_boundary_link_test = b.addRunArtifact(boundary_link_test);
+            boundary_link_step.dependOn(&run_boundary_link_test.step);
+            boundary_link_tests[index] = boundary_link_test;
+        }
     }
 
     // Build-time only: validate the exact archive that will be installed and
@@ -7951,6 +8032,17 @@ fn addMainExe(
         }
     }
 
+    const copy_default_mingw_runtime = b.addUpdateSourceFiles();
+    for ([_][]const u8{ "x64mingw", "arm64mingw" }) |target_name| {
+        for (mingw_runtime_files) |filename| {
+            copy_default_mingw_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", target_name, filename })),
+                b.pathJoin(&.{ "src/cli/targets", target_name, filename }),
+            );
+        }
+    }
+    exe.step.dependOn(&copy_default_mingw_runtime.step);
+
     const use_bundled_deps = !use_system_llvm and user_llvm_path == null;
 
     const config = b.addOptions();
@@ -7975,6 +8067,7 @@ fn addMainExe(
         .exe = exe,
         .machine_code_shim_test = machine_code_shim_test_for_registry,
         .machine_code_shim_archive_check = machine_code_shim_archive_check_for_registry,
+        .boundary_link_tests = boundary_link_tests,
         .machine_code_shim_archive_test = machine_code_shim_archive_test_for_registry,
     };
 }

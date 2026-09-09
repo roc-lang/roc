@@ -802,6 +802,8 @@ const SpecEvidence = union(enum) {
         index: u32,
         independent_callable: bool,
     },
+    /// Abstract local scheme parameter, supplied by the checked use edge.
+    from_scheme: u32,
     /// The edge left the requirement's dispatcher unsolved: no value of that
     /// type can ever reach the dispatch. Monotype represents that non-returning
     /// path with an ordinary Roc runtime crash instead of a dispatch call.
@@ -957,6 +959,9 @@ const EvidenceScope = struct {
 
 const EvidenceChain = struct {
     scope: EvidenceScope,
+    /// Stored evidence is graph-free until a nested body creates its own
+    /// instantiation context. It must remain graph-free across root requests.
+    origin: enum { specialization, stored_function } = .specialization,
     vector: []const SpecEvidence = &.{},
     /// The scheme this frame's vector answers for, and the substitution the
     /// vector was derived from. A body lowered inside this frame forwards an
@@ -1777,8 +1782,15 @@ fn relateCheckedMonoRequestNodeAt(
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
-        .tag_union => |checked_row| switch (request_content) {
-            .tag_union => |request_row| {
+        .tag_union => switch (request_content) {
+            .tag_union => {
+                // Earlier components of this request can instantiate an
+                // extension with a tag already present in the head. Compare
+                // complete normalized rows before relating their residuals.
+                try graph.normalizeTagRow(checked_root);
+                try graph.normalizeTagRow(request_root);
+                const checked_row = graph.content(checked_root).tag_union;
+                const request_row = graph.content(request_root).tag_union;
                 if (checked_row.tags.len == request_row.tags.len) {
                     for (checked_row.tags, request_row.tags) |checked_tag, request_tag| {
                         if (checked_tag.name != request_tag.name or checked_tag.payloads.len != request_tag.payloads.len) break;
@@ -1869,19 +1881,25 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
                 }
                 break :blk true;
             },
-            .structural, .from_callable, .unreachable_value, .checked_error => false,
+            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .structural => |a_structural| switch (b) {
             .structural => |b_structural| specStructuralEvidenceEql(a_structural, b_structural),
-            .target, .from_callable, .unreachable_value, .checked_error => false,
+            .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .from_callable => |a_use| switch (b) {
             .from_callable => |b_use| std.meta.eql(a_use, b_use),
-            .target, .structural, .unreachable_value, .checked_error => false,
+            .target, .structural, .from_scheme, .unreachable_value, .checked_error => false,
         },
+        .from_scheme => |index| b == .from_scheme and b.from_scheme == index,
         .unreachable_value => b == .unreachable_value,
         .checked_error => b == .checked_error,
     };
+}
+
+fn codecEvidenceIdentity(evidence: CheckedSpecStructuralEvidence) ?static_dispatch.GeneratedCodecDerivationId {
+    const id = evidence.evidence.generated_codec_derivation orelse return null;
+    return evidence.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(id)].identity;
 }
 
 fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructuralEvidence) bool {
@@ -1891,7 +1909,7 @@ fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructural
     const left_checked = left.checked.?;
     const right_checked = right.checked.?;
     return moduleBytesEqual(left_checked.view.key.bytes, right_checked.view.key.bytes) and
-        left_checked.evidence.generated_codec_derivation == right_checked.evidence.generated_codec_derivation and
+        codecEvidenceIdentity(left_checked) == codecEvidenceIdentity(right_checked) and
         std.meta.eql(
             left_checked.view.types.rootKey(left_checked.evidence.dispatcher_ty),
             right_checked.view.types.rootKey(right_checked.evidence.dispatcher_ty),
@@ -1929,7 +1947,7 @@ fn specEvidenceRequiresLocalContext(evidence: []const SpecEvidence) bool {
                 .synthesize => {},
             }
         },
-        .structural, .from_callable, .unreachable_value, .checked_error => {},
+        .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
     };
     return false;
 }
@@ -1941,7 +1959,7 @@ fn specEvidenceContainsStructural(evidence: []const SpecEvidence) bool {
             .synthesize => {},
         },
         .structural => return true,
-        .from_callable, .unreachable_value, .checked_error => {},
+        .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
     };
     return false;
 }
@@ -1973,6 +1991,7 @@ fn optionalDraftCodecContractContextEql(
     if ((left == null) != (right == null)) return false;
     if (left == null) return true;
     return optionalCodecContractAnchorEql(left.?.anchor, right.?.anchor) and
+        graph.sameClass(left.?.shape_node, right.?.shape_node) and
         graph.sameFunctionInterface(
             left.?.constructor_node,
             right.?.constructor_node,
@@ -2017,7 +2036,7 @@ fn specEvidenceLocalOwner(
                 .synthesize => {},
             }
         },
-        .structural, .from_callable, .unreachable_value, .checked_error => {},
+        .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
     };
     return owner;
 }
@@ -2978,6 +2997,7 @@ fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeD
     hasher.update(&integer);
     hasher.update(&.{@intFromEnum(actual.kind)});
     hasher.update(&actual.constructor_ty_digest.bytes);
+    hasher.update(&actual.shape_ty_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -3426,6 +3446,8 @@ const Builder = struct {
             },
             .constructor_ty_digest = self.specializationTypeDigest(actual.constructor_ty),
             .constructor_ty = actual.constructor_ty,
+            .shape_ty_digest = self.specializationTypeDigest(actual.shape_ty),
+            .shape_ty = actual.shape_ty,
         };
     }
 
@@ -4157,13 +4179,16 @@ const Builder = struct {
             const callee, const completed_fn = dispatch: {
                 var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
                 defer dispatch_timing_scope.end();
+                const edge = if (request.root_evidence) |root_evidence|
+                    try ctx.checkedProcedureEdgeAtRequest(template_ref, root_evidence, root_node, .body_lowering)
+                else
+                    EdgeEvidence{ .subst = &.{}, .vector = &.{} };
                 const selected = try ctx.draftFnSlotForProcedureUseAtNode(
                     procedure,
                     request.checked_type,
                     procedure.source_fn_ty_template,
                     root_node,
-                    .{ .subst = &.{}, .vector = &.{} },
-                    request.root_evidence,
+                    edge,
                     false,
                 );
                 const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
@@ -4279,6 +4304,10 @@ const Builder = struct {
                     } },
                 });
             },
+            .checked_error => try self.program.addExpr(.{
+                .ty = fn_data.ret,
+                .data = .{ .crash = try self.program.addStringLiteral("runtime error") },
+            }),
             .callable_eval_template => blk: {
                 const callee = try self.lowerProcedureBindingValue(view, binding, fn_ty);
                 break :blk try self.program.addExpr(.{
@@ -4322,6 +4351,7 @@ const Builder = struct {
                     .data = .{ .fn_def = .{ .fn_id = fn_id } },
                 });
             },
+            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
         };
     }
@@ -4358,6 +4388,7 @@ const Builder = struct {
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
                 break :blk switch (binding.body) {
                     .direct_template => null,
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => |template| .{ .view = view, .template = template },
                 };
             },
@@ -4367,6 +4398,7 @@ const Builder = struct {
                     if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
                     break :blk switch (binding.body) {
                         .direct_template => null,
+                        .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                         .callable_eval_template => |template| .{ .view = view, .template = template },
                     };
                 }
@@ -4378,6 +4410,7 @@ const Builder = struct {
                 const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
                 break :blk switch (binding.body) {
                     .direct_template => null,
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => |template| .{ .view = view, .template = template },
                 };
             },
@@ -4551,6 +4584,7 @@ const Builder = struct {
                     .callable_key = checked_structural.view.types.rootKey(checked_structural.evidence.callable_ty),
                     .callable_ty = checked_structural.evidence.callable_ty,
                     .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
+                    .generated_codec_identity = codecEvidenceIdentity(checked_structural),
                 } else null,
             } }),
             .from_callable => |use| {
@@ -4559,6 +4593,7 @@ const Builder = struct {
                     .independent_callable = use.independent_callable,
                 } });
             },
+            .from_scheme => |index| try nodes.append(self.allocator, .{ .from_scheme = index }),
             .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
             .checked_error => try nodes.append(self.allocator, .checked_error),
         };
@@ -5773,11 +5808,13 @@ const Builder = struct {
             .constructor_node = try body_ctx.activeNodeFromType(
                 try body_ctx.importProgramType(contract.constructor_ty),
             ),
+            .shape_node = try body_ctx.activeNodeFromType(try body_ctx.importProgramType(contract.shape_ty)),
         } else null;
         if (draft_codec_contract) |contract| {
             try body_ctx.instantiateCodecContractAtCall(
                 contract.anchor,
                 contract.constructor_node,
+                contract.shape_node,
             );
         }
         self.active_template_root = .{
@@ -5979,15 +6016,18 @@ const Builder = struct {
         // a repeat skips the graph-native recursive lookup below. The latter
         // view does not mutate the live request; a hit joins the live
         // interfaces below.
+        const lookup_prefix = try source_ctx.draft.template_spec_lookup.internPrefix(family, evidence_digest.bytes);
         const resolved_lookup_address: ?DraftTemplateLookupAddress = if (resolved_request_ty) |request_fn_ty| .{
-            .family = family,
-            .evidence_digest = evidence_digest.bytes,
-            .request_kind = 0,
-            .request_fn_key = source_ctx.specializationTypeDigest(request_fn_ty).bytes,
+            .digest = .{
+                .prefix = lookup_prefix,
+                .kind = .closed,
+                .digest = source_ctx.specializationTypeDigest(request_fn_ty).bytes,
+            },
         } else null;
         if (resolved_lookup_address) |address| {
-            if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
-                for (candidates.items) |raw_spec| {
+            if (source_ctx.draft.template_spec_lookup.get(address)) |candidate_iterator| {
+                var candidates = candidate_iterator;
+                while (candidates.next()) |raw_spec| {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
@@ -6003,18 +6043,20 @@ const Builder = struct {
         if (selection.selected() == null) {
             var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
             defer seen_specs.deinit();
-            var interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
-            while (interface.next()) |interface_node| {
-                var aliases = source_ctx.graph.classMemberIterator(interface_node);
+            var interface = try source_ctx.graph.functionInterfaceClassIterator(request_fn_node);
+            defer interface.deinit();
+            while (try interface.next()) |interface_class| {
+                var aliases = source_ctx.graph.classMemberIterator(interface_class);
                 while (aliases.next()) |member| {
                     const lookup_address = DraftTemplateLookupAddress{
-                        .family = family,
-                        .evidence_digest = evidence_digest.bytes,
-                        .request_kind = 1,
-                        .request_fn_key = draftOpenRequestKey(member),
+                        .open = .{
+                            .prefix = lookup_prefix,
+                            .node = member,
+                        },
                     };
-                    if (source_ctx.draft.template_spec_lookup.get(lookup_address)) |candidates| {
-                        for (candidates.items) |raw_spec| {
+                    if (source_ctx.draft.template_spec_lookup.get(lookup_address)) |candidate_iterator| {
+                        var candidates = candidate_iterator;
+                        while (candidates.next()) |raw_spec| {
                             const seen = try seen_specs.getOrPut(raw_spec);
                             if (seen.found_existing) continue;
                             const spec = &source_ctx.draft.template_specs.items[raw_spec];
@@ -6123,7 +6165,7 @@ const Builder = struct {
                     active_spec_fn_ty,
                     resolved_request_ty.?,
                 )) {
-                    try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
+                    try registerTemplateSpecLookup(source_ctx.draft, address, raw_spec);
                 }
             }
             return .{ .local = .{ .draft = spec.fn_id } };
@@ -6203,13 +6245,12 @@ const Builder = struct {
             source_ctx.draft,
             self.allocator,
             source_ctx.graph,
-            family,
-            evidence_digest.bytes,
+            lookup_prefix,
             request_fn_node,
             @intCast(spec_index),
         );
         if (resolved_lookup_address) |address| {
-            try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
+            try registerTemplateSpecLookup(source_ctx.draft, address, @intCast(spec_index));
         }
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
         defer owner_scope.leave();
@@ -6260,6 +6301,7 @@ const Builder = struct {
             try body_ctx.instantiateCodecContractAtCall(
                 contract.anchor,
                 contract.constructor_node,
+                contract.shape_node,
             );
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
@@ -6306,8 +6348,7 @@ const Builder = struct {
             source_ctx.draft,
             self.allocator,
             source_ctx.graph,
-            family,
-            evidence_digest.bytes,
+            lookup_prefix,
             completed_fn_node,
             @intCast(spec_index),
         );
@@ -6472,6 +6513,7 @@ const Builder = struct {
     ) Ast.FnTemplate {
         return switch (body) {
             .direct_template => |direct| self.fnDefForCallableTemplate(view, direct.template, source_fn_ty, source_fn_key, mono_fn_ty),
+            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
             .callable_eval_template => Common.invariant("callable eval template must be restored through ConstStore before Monotype lowering"),
         };
     }
@@ -7615,6 +7657,7 @@ const Builder = struct {
                         .lifted => Common.invariant("lifted direct target reached Monotype procedure use"),
                         .synthetic => Common.invariant("synthetic direct target reached Monotype procedure use"),
                     },
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => Common.invariant("callable-eval template reached Monotype procedure use"),
                 };
             },
@@ -7628,6 +7671,7 @@ const Builder = struct {
                                 .lifted => Common.invariant("imported lifted target reached Monotype procedure use"),
                                 .synthetic => Common.invariant("imported synthetic target reached Monotype procedure use"),
                             },
+                            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                             .callable_eval_template => Common.invariant("imported callable-eval template reached Monotype procedure use"),
                         };
                     }
@@ -7644,6 +7688,7 @@ const Builder = struct {
                         .lifted => Common.invariant("platform lifted target reached Monotype procedure use"),
                         .synthetic => Common.invariant("platform synthetic target reached Monotype procedure use"),
                     },
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
                     .callable_eval_template => Common.invariant("platform callable-eval template reached Monotype procedure use"),
                 };
             },
@@ -7956,21 +8001,24 @@ const Builder = struct {
             try source_ctx.activeTypeFromNode(request_fn_node)
         else
             null;
+        const lookup_prefix = try source_ctx.draft.nested_spec_lookup.internPrefix(family, evidence_digest.bytes);
         const resolved_lookup_address: ?DraftNestedLookupAddress = if (resolved_request_ty) |request_fn_ty| .{
-            .family = family,
-            .evidence_digest = evidence_digest.bytes,
-            .request_kind = 0,
-            .request_fn_key = source_ctx.specializationTypeDigest(request_fn_ty).bytes,
+            .digest = .{
+                .prefix = lookup_prefix,
+                .kind = .closed,
+                .digest = source_ctx.specializationTypeDigest(request_fn_ty).bytes,
+            },
         } else null;
         const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (resolved_request_ty == null)
             try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
         else
             null;
         const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape) |shape| .{
-            .family = family,
-            .evidence_digest = evidence_digest.bytes,
-            .request_kind = 2,
-            .request_fn_key = shape.digest.bytes,
+            .digest = .{
+                .prefix = lookup_prefix,
+                .kind = .open_shape,
+                .digest = shape.digest.bytes,
+            },
         } else null;
         // Nested draft requests use the same graph-native identity discipline
         // as template requests; no resolved node becomes a durable cache key
@@ -7979,8 +8027,9 @@ const Builder = struct {
         defer seen_specs.deinit();
         var selection = DraftOpenCandidateSelection{};
         if (resolved_lookup_address) |address| {
-            if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
-                for (candidates.items) |raw_spec| {
+            if (source_ctx.draft.nested_spec_lookup.get(address)) |candidate_iterator| {
+                var candidates = candidate_iterator;
+                while (candidates.next()) |raw_spec| {
                     self.countBodyDiagnostic("nested_lookup_probes");
                     const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                     if (signature_relation == .exact_graph and
@@ -8002,8 +8051,9 @@ const Builder = struct {
         }
         if (family_exists and selection.selected() == null) {
             if (open_shape_lookup_address) |address| {
-                if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
-                    for (candidates.items) |raw_spec| {
+                if (source_ctx.draft.nested_spec_lookup.get(address)) |candidate_iterator| {
+                    var candidates = candidate_iterator;
+                    while (candidates.next()) |raw_spec| {
                         self.countBodyDiagnostic("nested_lookup_probes");
                         const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                         if (spec.state != .lowered) continue;
@@ -8024,20 +8074,22 @@ const Builder = struct {
                 }
             }
         }
-        var interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
         if (family_exists and selection.selected() == null) {
-            while (interface.next()) |interface_node| {
-                var aliases = source_ctx.graph.classMemberIterator(interface_node);
+            var interface = try source_ctx.graph.functionInterfaceClassIterator(request_fn_node);
+            defer interface.deinit();
+            while (try interface.next()) |interface_class| {
+                var aliases = source_ctx.graph.classMemberIterator(interface_class);
                 while (aliases.next()) |member| {
                     self.countBodyDiagnostic("nested_lookup_probes");
                     const lookup_address = DraftNestedLookupAddress{
-                        .family = family,
-                        .evidence_digest = evidence_digest.bytes,
-                        .request_kind = 1,
-                        .request_fn_key = draftOpenRequestKey(member),
+                        .open = .{
+                            .prefix = lookup_prefix,
+                            .node = member,
+                        },
                     };
-                    if (source_ctx.draft.nested_spec_lookup.get(lookup_address)) |candidates| {
-                        for (candidates.items) |raw_spec| {
+                    if (source_ctx.draft.nested_spec_lookup.get(lookup_address)) |candidate_iterator| {
+                        var candidates = candidate_iterator;
+                        while (candidates.next()) |raw_spec| {
                             self.countBodyDiagnostic("nested_lookup_probes");
                             const seen = try seen_specs.getOrPut(raw_spec);
                             if (seen.found_existing) continue;
@@ -8192,36 +8244,34 @@ const Builder = struct {
             const indexed = try indexed_nodes.getOrPut(interface_node);
             if (indexed.found_existing) continue;
             const lookup_address = DraftNestedLookupAddress{
-                .family = family,
-                .evidence_digest = evidence_digest.bytes,
-                .request_kind = 1,
-                .request_fn_key = draftOpenRequestKey(interface_node),
+                .open = .{
+                    .prefix = lookup_prefix,
+                    .node = interface_node,
+                },
             };
-            const lookup_entry = try source_ctx.draft.nested_spec_lookup.getOrPut(lookup_address);
-            if (!lookup_entry.found_existing) lookup_entry.value_ptr.* = .empty;
-            try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
+            try source_ctx.draft.nested_spec_lookup.add(lookup_address, @intCast(spec_index));
         }
         if (open_shape_lookup_address) |address| {
-            try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
+            try registerNestedSpecLookup(source_ctx.draft, address, @intCast(spec_index));
         }
         // A closed request has an exact interface before its body completes.
         // Index it now so recursive calls with fresh instantiation cells can
         // reuse this body through structural equality of the live interface.
         if (resolved_lookup_address) |address| {
-            try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
+            try registerNestedSpecLookup(source_ctx.draft, address, @intCast(spec_index));
         }
 
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
         defer owner_scope.leave();
 
-        var nested_ctx = try source_ctx.nestedInstantiationContext(source_fn_key);
+        var nested_ctx = try source_ctx.nestedInstantiationContext(source_fn_key, nested.site, requested_evidence, false);
         nested_ctx.in_deferred_body = true;
-        nested_ctx.evidence = requested_evidence;
         defer nested_ctx.deinit();
         if (codec_contract) |contract| {
             try nested_ctx.instantiateCodecContractAtCall(
                 contract.anchor,
                 contract.constructor_node,
+                contract.shape_node,
             );
         }
         const root_node = try nested_ctx.instNode(source_fn_ty);
@@ -8276,19 +8326,19 @@ const Builder = struct {
         if (try source_ctx.graph.typeIsResolved(completed_fn_node)) {
             const completed_fn_ty = try source_ctx.activeTypeFromNode(completed_fn_node);
             source_ctx.draft.nested_specs.items[spec_index].request_fn_ty = completed_fn_ty;
-            try registerNestedSpecLookup(source_ctx.draft, self.allocator, .{
-                .family = family,
-                .evidence_digest = evidence_digest.bytes,
-                .request_kind = 0,
-                .request_fn_key = source_ctx.specializationTypeDigest(completed_fn_ty).bytes,
+            try registerNestedSpecLookup(source_ctx.draft, .{
+                .digest = .{
+                    .prefix = lookup_prefix,
+                    .kind = .closed,
+                    .digest = source_ctx.specializationTypeDigest(completed_fn_ty).bytes,
+                },
             }, @intCast(spec_index));
         }
         try registerNestedSpecInterfaceLookups(
             source_ctx.draft,
             self.allocator,
             source_ctx.graph,
-            family,
-            evidence_digest.bytes,
+            lookup_prefix,
             completed_fn_node,
             @intCast(spec_index),
         );
@@ -8425,6 +8475,8 @@ const Builder = struct {
                 left_contract.derivation != right_contract.derivation or
                 left_contract.kind != right_contract.kind or
                 !std.meta.eql(left_contract.constructor_ty_digest, right_contract.constructor_ty_digest) or
+                !std.meta.eql(left_contract.shape_ty_digest, right_contract.shape_ty_digest) or
+                !try self.program.types.typeEql(&self.program.names, left_contract.shape_ty, right_contract.shape_ty) or
                 !try self.program.types.typeEql(
                     &self.program.names,
                     left_contract.constructor_ty,
@@ -9321,6 +9373,7 @@ const Builder = struct {
                 .constructor_ty = try committed_types.commitType(
                     contract.constructor_ty,
                 ),
+                .shape_ty = try committed_types.commitType(contract.shape_ty),
             } else null;
             // Seal-time requests are symbolic: they reserve the callee's id
             // for call-site patching and queue the body for the wave drain.
@@ -9397,6 +9450,7 @@ const Builder = struct {
                     .constructor_ty = try committed_types.commitType(
                         contract.constructor_ty,
                     ),
+                    .shape_ty = try committed_types.commitType(contract.shape_ty),
                 })
             else
                 null;
@@ -9456,6 +9510,7 @@ const Builder = struct {
                             .constructor_ty = try committed_types.commitType(
                                 contract.constructor_ty,
                             ),
+                            .shape_ty = try committed_types.commitType(contract.shape_ty),
                         })
                     else
                         null;
@@ -9717,6 +9772,7 @@ const Builder = struct {
                 .codec_contract = if (spec.codec_contract) |contract| .{
                     .anchor = contract.anchor,
                     .constructor_ty = try sealer.sealNode(contract.constructor_node),
+                    .shape_ty = try sealer.sealNode(contract.shape_node),
                 } else null,
                 .requires_local = spec.requires_local,
                 .local_context_dependent = spec.local_context_dependent,
@@ -9745,6 +9801,7 @@ const Builder = struct {
                 .codec_contract = if (spec.codec_contract) |contract| .{
                     .anchor = contract.anchor,
                     .constructor_ty = try sealer.sealNode(contract.constructor_node),
+                    .shape_ty = try sealer.sealNode(contract.shape_node),
                 } else null,
                 .lexical_owner = spec.lexical_owner,
                 .requires_local = spec.requires_local,
@@ -12286,22 +12343,17 @@ fn draftCaptureEntryGuardsMatch(
 
 fn registerTemplateSpecLookup(
     draft: *BodyDraftStore,
-    allocator: Allocator,
     address: DraftTemplateLookupAddress,
     raw_spec: u32,
 ) Allocator.Error!void {
-    const entry = try draft.template_spec_lookup.getOrPut(address);
-    if (!entry.found_existing) entry.value_ptr.* = .empty;
-    for (entry.value_ptr.items) |existing| if (existing == raw_spec) return;
-    try entry.value_ptr.append(allocator, raw_spec);
+    try draft.template_spec_lookup.add(address, raw_spec);
 }
 
 fn updateTemplateSpecInterfaceLookups(
     draft: *BodyDraftStore,
     allocator: Allocator,
     graph: *InstGraph,
-    family: DraftTemplateFamilyAddress,
-    evidence_digest: [32]u8,
+    lookup_prefix: DraftTemplateSpecLookup.PrefixId,
     request_fn_node: NodeId,
     raw_spec: u32,
 ) Allocator.Error!void {
@@ -12312,12 +12364,12 @@ fn updateTemplateSpecInterfaceLookups(
         const indexed = try indexed_nodes.getOrPut(interface_node);
         if (indexed.found_existing) continue;
         const address = DraftTemplateLookupAddress{
-            .family = family,
-            .evidence_digest = evidence_digest,
-            .request_kind = 1,
-            .request_fn_key = draftOpenRequestKey(interface_node),
+            .open = .{
+                .prefix = lookup_prefix,
+                .node = interface_node,
+            },
         };
-        try registerTemplateSpecLookup(draft, allocator, address, raw_spec);
+        try registerTemplateSpecLookup(draft, address, raw_spec);
     }
 }
 
@@ -12334,22 +12386,17 @@ fn draftNestedSpecRequestNode(
 
 fn registerNestedSpecLookup(
     draft: *BodyDraftStore,
-    allocator: Allocator,
     address: DraftNestedLookupAddress,
     raw_spec: u32,
 ) Allocator.Error!void {
-    const entry = try draft.nested_spec_lookup.getOrPut(address);
-    if (!entry.found_existing) entry.value_ptr.* = .empty;
-    for (entry.value_ptr.items) |existing| if (existing == raw_spec) return;
-    try entry.value_ptr.append(allocator, raw_spec);
+    try draft.nested_spec_lookup.add(address, raw_spec);
 }
 
 fn registerNestedSpecInterfaceLookups(
     draft: *BodyDraftStore,
     allocator: Allocator,
     graph: *InstGraph,
-    family: DraftNestedFamilyAddress,
-    evidence_digest: [32]u8,
+    lookup_prefix: DraftNestedSpecLookup.PrefixId,
     request_fn_node: NodeId,
     raw_spec: u32,
 ) Allocator.Error!void {
@@ -12359,11 +12406,11 @@ fn registerNestedSpecInterfaceLookups(
     while (spec_interface.next()) |interface_node| {
         const indexed = try indexed_nodes.getOrPut(interface_node);
         if (indexed.found_existing) continue;
-        try registerNestedSpecLookup(draft, allocator, .{
-            .family = family,
-            .evidence_digest = evidence_digest,
-            .request_kind = 1,
-            .request_fn_key = draftOpenRequestKey(interface_node),
+        try registerNestedSpecLookup(draft, .{
+            .open = .{
+                .prefix = lookup_prefix,
+                .node = interface_node,
+            },
         }, raw_spec);
     }
 }
@@ -12527,24 +12574,143 @@ const DraftNestedFamilyAddress = struct {
     }
 };
 
-const DraftTemplateLookupAddress = struct {
-    family: DraftTemplateFamilyAddress,
-    evidence_digest: [32]u8,
-    request_kind: u8,
-    request_fn_key: [32]u8,
-};
+const DraftTemplateSpecLookup = DraftSpecLookup(DraftTemplateFamilyAddress);
+const DraftNestedSpecLookup = DraftSpecLookup(DraftNestedFamilyAddress);
+const DraftTemplateLookupAddress = DraftTemplateSpecLookup.Address;
+const DraftNestedLookupAddress = DraftNestedSpecLookup.Address;
 
-const DraftNestedLookupAddress = struct {
-    family: DraftNestedFamilyAddress,
-    evidence_digest: [32]u8,
-    request_kind: u8,
-    request_fn_key: [32]u8,
-};
+/// Intern the exact family/evidence prefix once per request, rather than
+/// hashing and storing it again for every permanent interface node. Prefix IDs
+/// are append-only and local to this index; reentrant lowering may grow the
+/// tables without invalidating an outer request's ID. Exact candidate checks
+/// remain authoritative after this index selects a bucket.
+fn DraftSpecLookup(comptime Family: type) type {
+    return struct {
+        const Self = @This();
+        const Prefix = struct {
+            family: Family,
+            evidence_digest: [32]u8,
+        };
+        const PrefixId = enum(u32) { _ };
+        const OpenAddress = struct {
+            prefix: PrefixId,
+            node: NodeId,
+        };
+        const DigestAddress = struct {
+            prefix: PrefixId,
+            kind: enum { closed, open_shape },
+            digest: [32]u8,
+        };
+        const Address = union(enum) {
+            open: OpenAddress,
+            digest: DigestAddress,
+        };
+        const OverflowId = enum(u32) { none = std.math.maxInt(u32), _ };
+        const Candidates = struct {
+            first: u32,
+            overflow: OverflowId = .none,
+        };
+        const Iterator = struct {
+            first: ?u32,
+            rest: []const u32,
 
-fn draftOpenRequestKey(node: NodeId) [32]u8 {
-    var bytes = [_]u8{0} ** 32;
-    std.mem.writeInt(u32, bytes[0..@sizeOf(u32)], @intFromEnum(node), .little);
-    return bytes;
+            fn next(self: *Iterator) ?u32 {
+                if (self.first) |first| {
+                    self.first = null;
+                    return first;
+                }
+                if (self.rest.len == 0) return null;
+                const next_candidate = self.rest[0];
+                self.rest = self.rest[1..];
+                return next_candidate;
+            }
+        };
+        const Entry = struct {
+            value_ptr: *Candidates,
+            found_existing: bool,
+        };
+
+        allocator: Allocator,
+        prefixes: std.array_hash_map.Auto(Prefix, void),
+        open_requests: std.AutoHashMap(OpenAddress, Candidates),
+        digest_requests: std.AutoHashMap(DigestAddress, Candidates),
+        /// Only buckets with multiple candidates own an overflow list. Its
+        /// stable slot survives growth of both request indexes and this table.
+        overflow_lists: std.ArrayList(std.ArrayList(u32)),
+
+        fn init(allocator: Allocator) Self {
+            return .{
+                .allocator = allocator,
+                .prefixes = .empty,
+                .open_requests = std.AutoHashMap(OpenAddress, Candidates).init(allocator),
+                .digest_requests = std.AutoHashMap(DigestAddress, Candidates).init(allocator),
+                .overflow_lists = .empty,
+            };
+        }
+
+        fn deinit(self: *Self) void {
+            self.open_requests.deinit();
+            self.digest_requests.deinit();
+            for (self.overflow_lists.items) |*list| list.deinit(self.allocator);
+            self.overflow_lists.deinit(self.allocator);
+            self.prefixes.deinit(self.allocator);
+        }
+
+        fn isEmpty(self: *const Self) bool {
+            return self.prefixes.count() == 0 and self.open_requests.count() == 0 and self.digest_requests.count() == 0 and self.overflow_lists.items.len == 0;
+        }
+
+        fn get(self: *const Self, address: Address) ?Iterator {
+            const candidates = switch (address) {
+                .open => |key| self.open_requests.get(key),
+                .digest => |key| self.digest_requests.get(key),
+            } orelse return null;
+            return .{
+                .first = candidates.first,
+                .rest = if (candidates.overflow == .none) &.{} else self.overflow_lists.items[@intFromEnum(candidates.overflow)].items,
+            };
+        }
+
+        fn getOrPut(self: *Self, address: Address) Allocator.Error!Entry {
+            return switch (address) {
+                inline .open, .digest => |key, tag| blk: {
+                    const map = &@field(self, @tagName(tag) ++ "_requests");
+                    const entry = try map.getOrPut(key);
+                    break :blk .{ .value_ptr = entry.value_ptr, .found_existing = entry.found_existing };
+                },
+            };
+        }
+
+        fn add(self: *Self, address: Address, raw_spec: u32) Allocator.Error!void {
+            const entry = try self.getOrPut(address);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = .{ .first = raw_spec };
+                return;
+            }
+            if (entry.value_ptr.first == raw_spec) return;
+            if (entry.value_ptr.overflow != .none) {
+                const list = &self.overflow_lists.items[@intFromEnum(entry.value_ptr.overflow)];
+                for (list.items) |existing| if (existing == raw_spec) return;
+                try list.append(self.allocator, raw_spec);
+            } else {
+                if (self.overflow_lists.items.len == @intFromEnum(OverflowId.none)) return error.OutOfMemory;
+                var list: std.ArrayList(u32) = .empty;
+                errdefer list.deinit(self.allocator);
+                try list.append(self.allocator, raw_spec);
+                const overflow: OverflowId = @enumFromInt(self.overflow_lists.items.len);
+                try self.overflow_lists.append(self.allocator, list);
+                entry.value_ptr.overflow = overflow;
+            }
+        }
+
+        fn internPrefix(self: *Self, family: Family, evidence_digest: [32]u8) Allocator.Error!PrefixId {
+            const entry = try self.prefixes.getOrPut(self.allocator, .{
+                .family = family,
+                .evidence_digest = evidence_digest,
+            });
+            return @enumFromInt(entry.index);
+        }
+    };
 }
 
 const EagerTemplateResolution = struct {
@@ -12834,12 +13000,14 @@ const CheckedCodecContractAnchor = struct {
 };
 
 /// Graph-local specialization context for a procedure body reached from a
-/// generated codec call. The instantiated constructor carries the complete
+/// generated codec call. The constructor and public shape carry the complete
 /// producer-authored contract component bindings, including components that
-/// the grounding format call's own type does not mention.
+/// the grounding format call's own type does not mention. The public shape
+/// retains its nominal boundary when the constructor uses the body shape.
 const DraftCodecContractContext = struct {
     anchor: CheckedCodecContractAnchor,
     constructor_node: NodeId,
+    shape_node: NodeId,
 };
 
 /// Durable form of `DraftCodecContractContext` used after the requesting
@@ -12847,6 +13015,7 @@ const DraftCodecContractContext = struct {
 const SealedCodecContractContext = struct {
     anchor: CheckedCodecContractAnchor,
     constructor_ty: Type.TypeId,
+    shape_ty: Type.TypeId,
 };
 
 const CodecContractBoundary = struct {
@@ -12887,6 +13056,7 @@ const ActiveCodecContract = struct {
     method_call_slots: []CodecMethodCallSlot,
     grounding_call_index: ?u32,
     constructor_node: NodeId,
+    shape_node: NodeId,
 };
 
 /// Graph-native snapshot of an already-instantiated checker contract. Deferred
@@ -12901,6 +13071,7 @@ const RetainedCodecContract = struct {
     method_call_slots: []const CodecMethodCallSlot,
     grounding_call_index: ?u32,
     constructor_node: NodeId,
+    shape_node: NodeId,
 
     fn deinit(self: RetainedCodecContract, allocator: Allocator) void {
         allocator.free(self.calls);
@@ -13594,7 +13765,7 @@ const BodyDraftStore = struct {
     template_specs: std.ArrayList(DraftTemplateSpec),
     sealed_template_specs: std.ArrayList(SealedTemplateSpec),
     template_spec_by_fn: collections.DenseMap(DraftFnId, u32),
-    template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
+    template_spec_lookup: DraftTemplateSpecLookup,
     /// Exact checked identities bypass the general graph/digest lookup after
     /// the first closed direct call in this draft.
     closed_direct_specializations: std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization),
@@ -13625,7 +13796,7 @@ const BodyDraftStore = struct {
     stmt_impossibility_proofs: std.ArrayList(?RuntimeImpossibilityProofId),
     nested_specs: std.ArrayList(DraftNestedSpec),
     sealed_nested_specs: std.ArrayList(SealedNestedSpec),
-    nested_spec_lookup: std.AutoHashMap(DraftNestedLookupAddress, std.ArrayList(u32)),
+    nested_spec_lookup: DraftNestedSpecLookup,
     /// Exact family membership proves a new site's miss without visiting any
     /// graph aliases. It is independent of mutable interface root identity.
     nested_spec_families: std.AutoHashMap(DraftNestedFamilyAddress, void),
@@ -13709,7 +13880,7 @@ const BodyDraftStore = struct {
             .template_specs = .empty,
             .sealed_template_specs = .empty,
             .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
-            .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
+            .template_spec_lookup = DraftTemplateSpecLookup.init(allocator),
             .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
             .active_callable_eval_bindings = .empty,
             .active_const_node_bindings = .empty,
@@ -13738,7 +13909,7 @@ const BodyDraftStore = struct {
             .stmt_impossibility_proofs = .empty,
             .nested_specs = .empty,
             .sealed_nested_specs = .empty,
-            .nested_spec_lookup = std.AutoHashMap(DraftNestedLookupAddress, std.ArrayList(u32)).init(allocator),
+            .nested_spec_lookup = DraftNestedSpecLookup.init(allocator),
             .nested_spec_families = std.AutoHashMap(DraftNestedFamilyAddress, void).init(allocator),
             .exprs = .empty,
             .pats = .empty,
@@ -13929,13 +14100,9 @@ const BodyDraftStore = struct {
         }
         for (self.local_proc_contexts.items) |context| self.allocator.free(context.entries);
         self.local_proc_contexts.deinit(self.allocator);
-        var template_lookup_lists = self.template_spec_lookup.valueIterator();
-        while (template_lookup_lists.next()) |list| list.deinit(self.allocator);
         self.template_spec_lookup.deinit();
         self.closed_direct_specializations.deinit();
         self.template_spec_by_fn.deinit();
-        var nested_lookup_lists = self.nested_spec_lookup.valueIterator();
-        while (nested_lookup_lists.next()) |list| list.deinit(self.allocator);
         self.nested_spec_lookup.deinit();
         self.nested_spec_families.deinit();
         self.owner_runs.deinit(self.allocator);
@@ -14686,15 +14853,11 @@ const BodyDraftStore = struct {
         self.stmt_impossibility_proofs.deinit(self.allocator);
         self.stmt_impossibility_proofs = .empty;
 
-        var template_lookup_lists = self.template_spec_lookup.valueIterator();
-        while (template_lookup_lists.next()) |list| list.deinit(self.allocator);
         self.template_spec_lookup.deinit();
-        self.template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(self.allocator);
-        var nested_lookup_lists = self.nested_spec_lookup.valueIterator();
-        while (nested_lookup_lists.next()) |list| list.deinit(self.allocator);
+        self.template_spec_lookup = DraftTemplateSpecLookup.init(self.allocator);
         self.nested_spec_lookup.deinit();
         self.nested_spec_families.deinit();
-        self.nested_spec_lookup = std.AutoHashMap(DraftNestedLookupAddress, std.ArrayList(u32)).init(self.allocator);
+        self.nested_spec_lookup = DraftNestedSpecLookup.init(self.allocator);
         self.nested_spec_families = std.AutoHashMap(DraftNestedFamilyAddress, void).init(self.allocator);
         self.template_spec_by_fn.deinit();
         self.template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(self.allocator);
@@ -14723,8 +14886,8 @@ const BodyDraftStore = struct {
             self.structural_eq_method_calls.items.len != 0 or
             self.runtime_value_demands.items.len != 0 or
             self.impossibility_proofs.items.len != 0 or
-            self.template_spec_lookup.count() != 0 or
-            self.nested_spec_lookup.count() != 0 or
+            !self.template_spec_lookup.isEmpty() or
+            !self.nested_spec_lookup.isEmpty() or
             self.nested_spec_families.count() != 0 or
             self.template_specs.items.len != 0 or
             self.nested_specs.items.len != 0 or
@@ -18152,7 +18315,11 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         return switch (self.typeStore().get(shape_ty)) {
-            .primitive => |primitive| try self.primitiveInspect(value, primitive, str_ty),
+            .primitive => |primitive| switch (Common.primitiveInspectLowering(primitive)) {
+                .low_level => |op| try self.lowLevelExpr(op, &.{value}, str_ty),
+                .builtin_method => try self.inspectPrimitiveMethod(value, value_ty, shape_ty, str_ty),
+                .bool_tag_union => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
+            },
             .named => |named| blk: {
                 if (named.builtin_owner) |owner| {
                     switch (owner) {
@@ -18187,6 +18354,32 @@ const BodyContext = struct {
         };
     }
 
+    fn inspectPrimitiveMethod(
+        self: *BodyContext,
+        value: DraftExprId,
+        value_ty: Type.TypeId,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (value_ty == shape_ty) {
+            return (try self.toInspectCall(value, shape_ty, str_ty)) orelse
+                Common.invariant("primitive inspect had no checked to_inspect method");
+        }
+
+        // Structural inspection may have traversed inspectable nominal backing
+        // edges. A method call needs the backing value at its own type, with
+        // each nominal layer explicitly destructured in the IR.
+        const backing_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
+        const backing_value = try self.localExpr(backing_local, shape_ty);
+        const body = (try self.toInspectCall(backing_value, shape_ty, str_ty)) orelse
+            Common.invariant("primitive inspect backing had no checked to_inspect method");
+        const pat = try self.addConstructorPat(value_ty, .{ .bind = backing_local });
+        return try self.addExpr(.{ .ty = str_ty, .data = .{ .match_ = .{
+            .scrutinee = value,
+            .branches = try self.addBranchSpan(&.{.{ .pat = pat, .body = body }}),
+        } } });
+    }
+
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
         const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null);
@@ -18219,26 +18412,21 @@ const BodyContext = struct {
         if (entry.found_existing) return false;
 
         switch (self.graph.content(node)) {
+            .primitive => |primitive| switch (Common.primitiveInspectLowering(primitive)) {
+                .builtin_method => return (try self.prepareToInspectMethodAtNode(
+                    node,
+                    str_ty,
+                    .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
+                )) orelse Common.invariant("primitive inspect had no checked to_inspect method"),
+                .low_level, .bool_tag_union => return false,
+            },
             .named => |named| {
                 if (named.builtin_owner == .list) {
                     if (named.args.len != 1) Common.invariant("List inspect graph node did not have one type argument");
                     return try self.prepareInspectMethodsAtNode(named.args[0], str_ty, seen);
                 }
                 if (self.methodOwnerFromNode(node)) |owner| {
-                    if (try self.lookupMethodTargetByName(owner, "to_inspect")) |raw_lookup| {
-                        const lookup = try self.withLocalProcContext(raw_lookup);
-                        for (self.draft.prepared_inspect_methods.items) |prepared| {
-                            if (self.graph.sameClass(prepared.value_node, node)) return false;
-                        }
-                        const ret_node = try self.graph.importMono(str_ty);
-                        const request_node = try self.graphFunctionNode(&.{node}, ret_node);
-                        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, null);
-                        try self.draft.prepared_inspect_methods.append(self.allocator, .{
-                            .value_node = node,
-                            .callee = callee,
-                        });
-                        return true;
-                    }
+                    if (try self.prepareToInspectMethodAtNode(node, str_ty, owner)) |added| return added;
                 }
                 const backing = named.backing orelse return false;
                 if (backing.use != .inspectable) return false;
@@ -18264,7 +18452,6 @@ const BodyContext = struct {
             },
             .redirect => unreachable,
             .unresolved,
-            .primitive,
             .func,
             .empty_tag_union,
             .empty_record,
@@ -18274,9 +18461,27 @@ const BodyContext = struct {
         }
     }
 
-    fn primitiveInspect(self: *BodyContext, value: DraftExprId, primitive: Type.Primitive, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
-        const args = [_]DraftExprId{value};
-        return try self.lowLevelExpr(Common.primitiveInspectLowLevelOp(primitive), &args, str_ty);
+    /// Null means the owner has no custom method; false means it was already
+    /// prepared. Both immediate and deferred inspection use the checked target.
+    fn prepareToInspectMethodAtNode(
+        self: *BodyContext,
+        node: NodeId,
+        str_ty: Type.TypeId,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?bool {
+        const raw_lookup = (try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null;
+        const lookup = try self.withLocalProcContext(raw_lookup);
+        for (self.draft.prepared_inspect_methods.items) |prepared| {
+            if (self.graph.sameClass(prepared.value_node, node)) return false;
+        }
+        const ret_node = try self.graph.importMono(str_ty);
+        const request_node = try self.graphFunctionNode(&.{node}, ret_node);
+        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, null);
+        try self.draft.prepared_inspect_methods.append(self.allocator, .{
+            .value_node = node,
+            .callee = callee,
+        });
+        return true;
     }
 
     fn inspectTuple(self: *BodyContext, value: DraftExprId, items: anytype, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -18524,6 +18729,7 @@ const BodyContext = struct {
             .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, active.method_call_slots),
             .grounding_call_index = active.grounding_call_index,
             .constructor_node = active.constructor_node,
+            .shape_node = active.shape_node,
         };
     }
 
@@ -18571,12 +18777,50 @@ const BodyContext = struct {
         return scope;
     }
 
-    fn nestedInstantiationContext(self: *BodyContext, current_fn_key: names.TypeDigest) Allocator.Error!BodyContext {
+    fn nestedInstantiationContext(
+        self: *BodyContext,
+        current_fn_key: names.TypeDigest,
+        site_id: names.NestedProcSiteId,
+        evidence: EvidenceChain,
+        constructing_scope: bool,
+    ) Allocator.Error!BodyContext {
         var child = try self.childContextWithTypeCells(current_fn_key, false);
         errdefer child.deinit();
+        child.evidence = switch (evidence.origin) {
+            .specialization => evidence,
+            .stored_function => try child.instantiateStoredEvidence(evidence),
+        };
         child.function_entry_demand_guards = &.{};
+        try child.bindNestedTypes(site_id, constructing_scope);
         try child.constrainCopiedBinderTypes();
         return child;
+    }
+
+    /// The checked inventory is sorted by lexical depth. Visit each frame
+    /// once, indexing its substitution directly; no enclosing type map is
+    /// copied and no checked type is searched for by identity.
+    fn bindNestedTypes(self: *BodyContext, site_id: names.NestedProcSiteId, constructing_scope: bool) Allocator.Error!void {
+        const site = self.view.nested_proc_sites.sites[@intFromEnum(site_id)];
+        const span = site.type_bindings;
+        const bindings = self.view.nested_proc_sites.type_bindings[span.start .. span.start + span.len];
+        var frame: *const EvidenceChain = &self.evidence;
+        // A scope's construction has its parent's evidence. Its own slots
+        // are fresh until the construction request determines them.
+        var depth: u32 = if (constructing_scope) 1 else 0;
+        for (bindings) |binding| {
+            if (constructing_scope and binding.depth == 0) continue;
+            while (depth < binding.depth) : (depth += 1) {
+                frame = frame.parent orelse Common.invariant("nested type binding omitted its lexical frame");
+            }
+            const schema = frame.schema orelse Common.invariant("nested type binding frame had no substitution schema");
+            if (binding.slot >= frame.subst.len or schema.scheme_vars[binding.slot] != binding.ty) {
+                Common.invariant("nested type binding differed from its checked lexical substitution");
+            }
+            switch (frame.subst[binding.slot]) {
+                .node => |node| try self.putScopedNode(self.scopedCheckedType(binding.ty), node),
+                .checked_error => {},
+            }
+        }
     }
 
     fn childContextWithTypeCells(
@@ -20504,10 +20748,7 @@ const BodyContext = struct {
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
-        const partial_edge = if (root_evidence) |producer_evidence|
-            try self.checkedProcedureEdgeAtRequest(template_ref, producer_evidence, request_fn_node, .specialization_interface)
-        else
-            try self.evidenceForUseSiteForPurposeAtNode(record.expr, .specialization_interface, request_fn_node);
+        const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .specialization_interface);
         var edge = if (partial_edge.vector.len == template.evidence_params.len)
             partial_edge
         else
@@ -22015,14 +22256,20 @@ const BodyContext = struct {
         return try self.lowerExprWithType(expr_id, expr_ty);
     }
 
-    fn lowerReturn(self: *BodyContext, ret: anytype) Allocator.Error!DraftReturn {
+    fn lowerReturn(self: *BodyContext, ret: anytype, context: checked.CheckedReturnContext) Allocator.Error!DraftReturn {
         const target = self.current_return_target orelse
             Common.invariant("checked return reached lowering without an active specialization return target");
         if (ret.lambda != target.lambda) {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
         return .{
-            .value = try self.lowerExprAtTypeCell(ret.expr, target.cell),
+            // `?` contributes its source error row to the enclosing result;
+            // it does not equate those rows. Keep the checked source type so
+            // the explicit return boundary can convert it to the target.
+            .value = switch (context) {
+                .try_suffix => try self.lowerExpr(ret.expr),
+                .return_expr => try self.lowerExprAtTypeCell(ret.expr, target.cell),
+            },
             .target = target.cell,
         };
     }
@@ -22348,7 +22595,7 @@ const BodyContext = struct {
             else
                 .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
             .for_ => |for_| try self.lowerIteratorFor(for_, .{ .sealed = ty }, &.{}),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
@@ -23067,6 +23314,7 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| {
                     const request_fn_node = try self.activeNodeFromType(ty);
+                    if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
                     const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                     const fn_id = try self.lowerDraftLocalProcAtNode(
                         local,
@@ -23148,12 +23396,19 @@ const BodyContext = struct {
         );
 
         var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
-        body_ctx.evidence = rootEvidence(wrapper.template, self.restore_evidence.vector);
+        defer body_ctx.deinit();
+        const entry_template = view.templates.get(wrapper.template.template);
+        const schema = templateSchemaIn(view, &entry_template);
+        const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
+        body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
+            .subst = subst,
+            .vector = self.restore_evidence.vector,
+        });
+        try body_ctx.seedSubstitution(schema, subst);
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
         body_ctx.frozen_field_defaults = self.frozen_field_defaults;
-        defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, self.typeStore(), self.nameStore());
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -23205,12 +23460,19 @@ const BodyContext = struct {
             Common.invariant("callable eval template root had no checked entry wrapper");
 
         var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
-        body_ctx.evidence = rootEvidence(wrapper.template, self.restore_evidence.vector);
+        defer body_ctx.deinit();
+        const entry_template = view.templates.get(wrapper.template.template);
+        const schema = templateSchemaIn(view, &entry_template);
+        const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
+        body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
+            .subst = subst,
+            .vector = self.restore_evidence.vector,
+        });
+        try body_ctx.seedSubstitution(schema, subst);
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
         body_ctx.frozen_field_defaults = self.frozen_field_defaults;
-        defer body_ctx.deinit();
         const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -24401,7 +24663,7 @@ const BodyContext = struct {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
             .numeric_range_delegate => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_to, .numeric_until => {},
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_to, .numeric_until => {},
         };
 
         switch (procedure) {
@@ -24503,7 +24765,7 @@ const BodyContext = struct {
                 );
             },
             .iter_map, .iter_keep_if, .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_take_first, .iter_drop_first, .iter_append => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_take_first, .iter_drop_first, .iter_append, .iter_with_index, .iter_step_by => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
             .iter_concat => {
                 if (checked_args.len != 2 or request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
@@ -31695,7 +31957,6 @@ const BodyContext = struct {
             Common.invariant("checked direct call target is outside resolved value table");
         }
         const record = self.view.resolved_refs.records[raw];
-        const evidence = try self.evidenceForUseSiteAtNode(record.expr, request_fn_node);
         return switch (record.ref) {
             .local_proc => |local| .{ .local = try self.lowerDraftLocalProcAtNode(
                 local,
@@ -31704,7 +31965,7 @@ const BodyContext = struct {
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
-                evidence,
+                try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
                 record.recursive_reference,
                 null,
             ) },
@@ -31712,14 +31973,20 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null, record.recursive_reference),
+            => |proc| try self.draftFnSlotForProcedureUseAtNode(
+                proc,
+                source_fn_ty,
+                source_fn_key,
+                request_fn_node,
+                try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
+                record.recursive_reference,
+            ),
             .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(
                 proc.procedure,
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
-                evidence,
-                proc.root_evidence,
+                try self.evidenceForProcedureUseAtNode(proc.procedure, record.expr, proc.root_evidence, request_fn_node, .body_lowering),
                 record.recursive_reference,
             ),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
@@ -31733,21 +32000,16 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         edge: EdgeEvidence,
-        root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftFnSlot {
         const template_ref = self.builder.templateRefForProcedureUse(proc);
-        const requested_edge = if (root_evidence) |producer_evidence|
-            try self.checkedProcedureEdgeAtRequest(template_ref, producer_evidence, request_fn_node, .body_lowering)
-        else
-            edge;
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
             source_fn_ty,
             source_fn_key,
             request_fn_node,
-            requested_edge,
+            edge,
             if (recursive_reference) .recursive_reference else .instantiation,
             if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
             null,
@@ -32445,6 +32707,7 @@ const BodyContext = struct {
             => Common.invariant("local lookup reached Monotype without a current local binding"),
             .local_proc => |local| blk: {
                 const request_fn_node = try self.activeNodeFromType(ty);
+                if (local.is_alias) break :blk try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
                     local,
@@ -32490,6 +32753,35 @@ const BodyContext = struct {
             Common.invariant("checked type closure query referenced a missing root");
         }
         return !self.view.types.roots[raw].contains_identity_variables;
+    }
+
+    /// A checked callable alias is a scheme-use edge, not a new function or
+    /// runtime local. Install its exact substitution in a fresh type-only
+    /// scope and forward the original callable value. Runtime binder and
+    /// declaration-context tables remain shared with the enclosing body.
+    fn lowerSchemeAliasAtNode(
+        self: *BodyContext,
+        alias: checked.LocalProcedureBinding,
+        use_expr: checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const scope_id = alias.dispatch_scope orelse
+            Common.invariant("generalized callable alias has no checked scheme scope");
+        const edge = try self.evidenceForUseSiteAtNode(use_expr, expected_node);
+        const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        const scope = self.view.templates.dispatch_scopes[@intFromEnum(scope_id)];
+        const previous_instantiation = self.instantiation;
+        const previous_evidence = self.evidence;
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.evidence = evidence;
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.evidence = previous_evidence;
+        }
+        try self.seedSubstitution(evidence.schema.?, edge.subst);
+        try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), expected_node);
+        return try self.lowerExprAtTypeCell(alias.expr, DraftTypeCell.fromGraphNode(expected_node));
     }
 
     fn lowerLookupExprAtNode(
@@ -32554,6 +32846,7 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| {
+                if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, expected_node);
                 const checked_ty = self.view.bodies.expr(checked_expr).ty;
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
@@ -32690,7 +32983,7 @@ const BodyContext = struct {
                 edge.vector,
             );
         }
-        const edge = try self.evidenceForProcedureValueAtNode(proc, site_expr, request_fn_node);
+        const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
         const source_fn_ty = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
         const slot = try self.draftFnSlotForProcedureUseAtNode(
@@ -32699,7 +32992,6 @@ const BodyContext = struct {
             proc.source_fn_ty_template,
             request_fn_node,
             edge,
-            root_evidence,
             recursive_reference,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
@@ -32868,6 +33160,7 @@ const BodyContext = struct {
             .constructor_ty = try self.commitGraphType(
                 try self.activeTypeFromNode(contract.constructor_node),
             ),
+            .shape_ty = try self.commitGraphType(try self.activeTypeFromNode(contract.shape_node)),
         } else null;
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
@@ -32910,28 +33203,28 @@ const BodyContext = struct {
         self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
         const completed_spec = self.draft.template_specs.items[spec_index];
         const completed_source = self.draft.fns.items[@intFromEnum(draft_fn)].source;
-        try updateTemplateSpecInterfaceLookups(
-            self.draft,
-            self.allocator,
-            self.graph,
+        const lookup_prefix = try self.draft.template_spec_lookup.internPrefix(
             DraftTemplateFamilyAddress.init(
                 completed_spec.template_ref,
                 completed_spec.method_scope,
                 completed_spec.source_fn_key,
             ),
             completed_source.evidence_digest.bytes,
+        );
+        try updateTemplateSpecInterfaceLookups(
+            self.draft,
+            self.allocator,
+            self.graph,
+            lookup_prefix,
             completed_node,
             @intCast(spec_index),
         );
-        try registerTemplateSpecLookup(self.draft, self.allocator, .{
-            .family = DraftTemplateFamilyAddress.init(
-                completed_spec.template_ref,
-                completed_spec.method_scope,
-                completed_spec.source_fn_key,
-            ),
-            .evidence_digest = completed_source.evidence_digest.bytes,
-            .request_kind = 0,
-            .request_fn_key = self.specializationTypeDigest(completed_ty).bytes,
+        try registerTemplateSpecLookup(self.draft, .{
+            .digest = .{
+                .prefix = lookup_prefix,
+                .kind = .closed,
+                .digest = self.specializationTypeDigest(completed_ty).bytes,
+            },
         }, raw_spec);
         return completed_node;
     }
@@ -33195,18 +33488,18 @@ const BodyContext = struct {
             self.graph,
             self.draft,
         );
-        try body_ctx.inheritActiveConstBinding(self);
-        body_ctx.evidence = rootEvidence(eval.entry_template, self.restore_evidence.vector);
-        if (self.restore_evidence.vector.len < entry_template.evidence_params.len) {
-            const root_evidence = try self.rootEdgeEvidence(store_view, eval.entry_template, entry_template);
-            body_ctx.evidence = rootEvidenceWithSubstitution(
-                eval.entry_template,
-                templateSchemaIn(store_view, &entry_template),
-                root_evidence,
-            );
-            try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, root_evidence.subst);
-        }
         defer body_ctx.deinit();
+        try body_ctx.inheritActiveConstBinding(self);
+        const schema = templateSchemaIn(store_view, &entry_template);
+        const root_evidence: EdgeEvidence = if (self.restore_evidence.vector.len < entry_template.evidence_params.len)
+            try body_ctx.rootEdgeEvidence(store_view, eval.entry_template, entry_template)
+        else
+            .{
+                .subst = try body_ctx.substitutionFromCheckedTypes(store_view, schema.scheme_vars),
+                .vector = self.restore_evidence.vector,
+            };
+        body_ctx.evidence = rootEvidenceWithSubstitution(eval.entry_template, schema, root_evidence);
+        try body_ctx.seedSubstitution(schema, root_evidence.subst);
         body_ctx.source_region_override = source_region_override;
         body_ctx.current_entry_root = current_entry_root orelse .{
             .module = store_view.key,
@@ -38195,7 +38488,7 @@ const BodyContext = struct {
                 }
                 // The construction instantiates the scope's scheme: its root
                 // related to the request binds every quantified variable.
-                var scheme_ctx = try self.nestedInstantiationContext(self.current_fn_key);
+                var scheme_ctx = try self.nestedInstantiationContext(self.current_fn_key, site.site, self.evidence, true);
                 defer scheme_ctx.deinit();
                 const scheme_root_node = try scheme_ctx.instNode(scope.scheme_root);
                 try relateFunctionRequestInterface(self.graph, scheme_root_node, request_fn_node);
@@ -39721,6 +40014,7 @@ const BodyContext = struct {
                     Common.invariant("stored function evidence did not begin at the checked root scope");
                 }
                 restored[index] = rootEvidence(owner, vector);
+                restored[index].origin = .stored_function;
                 continue;
             }
             if (scope == .root or frame.parent == null or frame.parent.? != index - 1) {
@@ -39741,6 +40035,7 @@ const BodyContext = struct {
             }
             restored[index] = .{
                 .scope = .{ .owner = owner, .lexical = scope },
+                .origin = .stored_function,
                 .vector = vector,
                 .parent = &restored[index - 1],
             };
@@ -39790,6 +40085,59 @@ const BodyContext = struct {
             Common.invariant("stored function evidence head differed from its checked nested site scope");
         }
         return restored[head];
+    }
+
+    fn instantiateStoredEvidence(self: *BodyContext, evidence: EvidenceChain) Allocator.Error!EvidenceChain {
+        var count: usize = 0;
+        var current: ?*const EvidenceChain = &evidence;
+        while (current) |frame| : (current = frame.parent) count += 1;
+        const frames = try self.builder.evidence_arena.allocator().alloc(EvidenceChain, count);
+        var index = count;
+        current = &evidence;
+        while (current) |frame| : (current = frame.parent) {
+            index -= 1;
+            frames[index] = frame.*;
+        }
+        for (frames, 0..) |*frame, i| {
+            const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(frame.scope.owner));
+            frame.* = try self.restoreEvidenceFrame(view, frame.scope.owner, frame.scope.lexical, frame.vector, if (i == 0) null else &frames[i - 1]);
+        }
+        return frames[count - 1];
+    }
+
+    /// Stored functions have graph-free evidence. Recreate its lexical
+    /// substitution in the restoration context, where saved callable and
+    /// capture interfaces will constrain the same checked identities. Hidden
+    /// receivers additionally consume their retained method contracts.
+    fn restoreEvidenceFrame(
+        self: *BodyContext,
+        view: ModuleView,
+        owner: names.ProcTemplate,
+        scope: LexicalDispatchScope,
+        vector: []const SpecEvidence,
+        parent: ?*const EvidenceChain,
+    ) Allocator.Error!EvidenceChain {
+        const schema = switch (scope) {
+            .root => self.templateSchema(owner),
+            .generalized => |id| self.scopeSchema(view, id),
+        };
+        const subst = try self.substitutionFromCheckedTypes(view, schema.scheme_vars);
+        var ctx: ?BodyContext = null;
+        defer if (ctx) |*context| context.deinit();
+        for (schema.params, vector) |param, entry| {
+            if (!evidenceParamRequiresConstraintRelation(param)) continue;
+            switch (entry) {
+                .target => |target| {
+                    if (ctx == null) {
+                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        try ctx.?.seedSubstitution(schema, subst);
+                    }
+                    try self.relateTargetToConstraint(target, &ctx.?, param);
+                },
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
+        }
+        return .{ .scope = .{ .owner = owner, .lexical = scope }, .schema = schema, .subst = subst, .vector = vector, .parent = parent };
     }
 
     fn materializeConstFnEvidenceVector(
@@ -39852,6 +40200,12 @@ const BodyContext = struct {
                         {
                             Common.invariant("stored structural evidence checked type identity changed during restoration");
                         }
+                        const identity = if (stored_checked.generated_codec_derivation) |id|
+                            view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(id)].identity
+                        else
+                            null;
+                        if (identity != stored_checked.generated_codec_identity)
+                            Common.invariant("stored codec proof identity changed during restoration");
                         break :restored .{
                             .view = view,
                             .evidence = static_dispatch.StructuralEvidence{
@@ -39871,6 +40225,7 @@ const BodyContext = struct {
                     .index = use.index,
                     .independent_callable = use.independent_callable,
                 } },
+                .from_scheme => |index| .{ .from_scheme = index },
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
@@ -39878,23 +40233,22 @@ const BodyContext = struct {
         return out;
     }
 
-    /// Materialize a procedure value's checked construction recipe together
-    /// with the exact substitution recorded for that use. Callable-reachable
-    /// entries remain symbolic until the concrete function request can resolve
-    /// their checker-authored paths.
-    fn evidenceForProcedureValueAtNode(
+    /// Select the producer-authored edge before materializing any evidence.
+    /// Platform requirements carry app-owned root evidence; ordinary procedure
+    /// uses carry their checked call-site or construction evidence. Direct calls,
+    /// procedure values, and interface specialization share this selection.
+    fn evidenceForProcedureUseAtNode(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
         expr: checked.CheckedExprId,
+        root_evidence: ?checked.CheckedEvidenceSpan,
         request_fn_node: NodeId,
+        purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!EdgeEvidence {
-        const edge = try self.evidenceForUseSiteAtNode(expr, request_fn_node);
-        const refs = self.view.static_dispatch_plans.siteEvidence(expr) orelse return edge;
-        const schema = self.procedureUseSchema(proc);
-        if (refs.len != schema.params.len or edge.vector.len != refs.len) {
-            Common.invariant("procedure value evidence recipe length differed from its checked scheme");
+        if (root_evidence) |evidence| {
+            return try self.checkedProcedureEdgeAtRequest(self.builder.templateRefForProcedureUse(proc), evidence, request_fn_node, purpose);
         }
-        return edge;
+        return try self.evidenceForUseSiteForPurposeAtNode(expr, purpose, request_fn_node);
     }
 
     /// Resolve every symbolic callable-path entry whose dispatcher is already
@@ -40014,7 +40368,7 @@ const BodyContext = struct {
                     );
                 }
             },
-            .target, .structural, .unreachable_value, .checked_error => {},
+            .target, .structural, .from_scheme, .unreachable_value, .checked_error => {},
         };
         return resolved;
     }
@@ -40374,7 +40728,7 @@ const BodyContext = struct {
                         .index = use.index,
                         .independent_callable = true,
                     } },
-                    .structural, .unreachable_value, .checked_error => entry,
+                    .structural, .from_scheme, .unreachable_value, .checked_error => entry,
                 };
             },
             .structural => |evidence| .{ .structural = .{
@@ -40383,7 +40737,7 @@ const BodyContext = struct {
             } },
             .unreachable_value => .unreachable_value,
             .checked_error => .checked_error,
-            .from_callable => Common.invariant("callable-derived checked evidence escaped a nested procedure construction recipe"),
+            .from_callable, .from_scheme => Common.invariant("symbolic checked evidence escaped a nested procedure construction recipe"),
         };
     }
 
@@ -40452,7 +40806,7 @@ const BodyContext = struct {
                 }
             },
             .structural => |structural| if (structural.checked != null) return true,
-            .from_callable => return true,
+            .from_callable, .from_scheme => return true,
             .unreachable_value, .checked_error => return true,
         };
         return false;
@@ -40489,9 +40843,9 @@ const BodyContext = struct {
                     merged.nested = contract_nested;
                     break :blk .{ .target = merged };
                 },
-                .structural, .from_callable, .unreachable_value, .checked_error => Common.invariant("checked target contract differed from substitution-derived evidence kind"),
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("checked target contract differed from substitution-derived evidence kind"),
             },
-            .structural, .from_callable, .unreachable_value, .checked_error => contract,
+            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => contract,
         };
     }
 
@@ -40507,6 +40861,9 @@ const BodyContext = struct {
         site_refs: ?[]const static_dispatch.CheckedEvidence,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
+        // An initializer with no requirements derives no method evidence.
+        // Its value's use may still have a checked recipe for a callable
+        // stored inside that value; that recipe is not an initializer edge.
         if (schema.params.len == 0) return &.{};
         if (site_refs) |refs| {
             if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
@@ -40517,7 +40874,17 @@ const BodyContext = struct {
         defer self.allocator.free(derived);
         @memset(derived, false);
         for (schema.params, 0..) |param, k| {
-            if (param.slot >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
+            if (param.source == .scheme_requirement) {
+                if (param.slot != null) Common.invariant("composite requirement occupied a quantified-variable slot");
+                const refs = site_refs orelse Common.invariant("composite scheme requirement had no checked call-site evidence");
+                out[k] = if (refs[k].resolution == .from_scheme)
+                    .{ .from_scheme = @intCast(k) }
+                else
+                    try self.materializeCheckedEvidenceRef(site_view, refs[k], param, purpose);
+                derived[k] = true;
+                continue;
+            }
+            if (param.slot.? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
             const site_ref: ?static_dispatch.CheckedEvidence = if (site_refs) |refs| refs[k] else null;
             if (site_ref) |ref| switch (ref.resolution) {
                 .structural => |evidence| {
@@ -40535,6 +40902,7 @@ const BodyContext = struct {
                     out[k] = .checked_error;
                     derived[k] = true;
                 },
+                .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
                 .from_callable => {
                     out[k] = .{ .from_callable = .{
                         .index = @intCast(k),
@@ -40556,6 +40924,10 @@ const BodyContext = struct {
                         out[k] = .checked_error;
                         derived[k] = true;
                     },
+                    .from_scheme => |index| {
+                        out[k] = .{ .from_scheme = index };
+                        derived[k] = true;
+                    },
                     .from_callable => |use| {
                         out[k] = .{ .from_callable = .{
                             .index = use.index,
@@ -40567,7 +40939,7 @@ const BodyContext = struct {
                 },
                 .direct => {},
             };
-            if (subst[param.slot] == .checked_error) {
+            if (subst[param.slot.?] == .checked_error) {
                 out[k] = .checked_error;
                 derived[k] = true;
             }
@@ -40592,14 +40964,14 @@ const BodyContext = struct {
             progress = false;
             for (schema.params, 0..) |param, k| {
                 if (derived[k]) continue;
-                const node = subst[param.slot].node;
+                const node = subst[param.slot.?].node;
                 if (self.forwardedRequirement(node, param.method)) |forwarded| switch (forwarded) {
                     // Callable targets are selected again from this scheme's
                     // substitution below. Terminal evidence belongs to the
                     // enclosing requirement on this exact cell: structural
                     // codecs in particular carry their producer-authored
                     // checked contract only on that entry.
-                    .structural, .from_callable, .unreachable_value, .checked_error => {
+                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {
                         out[k] = forwarded;
                         derived[k] = true;
                         progress = true;
@@ -40628,14 +41000,14 @@ const BodyContext = struct {
                         }
                         try self.relateTargetToConstraint(target, &scheme_ctx.?, param);
                     },
-                    .structural, .from_callable, .unreachable_value, .checked_error => {},
+                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
                 }
             }
         }
 
         for (schema.params, 0..) |param, k| {
             if (derived[k]) continue;
-            out[k] = try self.deriveOpenRequirement(schema.view, param, subst[param.slot].node, purpose);
+            out[k] = try self.deriveOpenRequirement(schema.view, param, subst[param.slot.?].node, purpose);
         }
         if (site_refs) |refs| {
             for (refs, schema.params, out) |ref, param, *entry| switch (ref.resolution) {
@@ -40646,7 +41018,7 @@ const BodyContext = struct {
                         true,
                     );
                 },
-                .structural, .from_callable, .checked_error, .unreachable_value => {},
+                .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
             };
         }
         return out;
@@ -40693,7 +41065,7 @@ const BodyContext = struct {
     /// carries the exact relation that closes it.
     fn evidenceParamRequiresConstraintRelation(param: static_dispatch.EvidenceParamRecord) bool {
         return switch (param.source) {
-            .constraint_callable, .use_site_only => true,
+            .scheme_requirement, .constraint_callable, .use_site_only => true,
             .scheme_callable, .explicit_default, .erased_row_remainder => false,
         };
     }
@@ -40743,7 +41115,8 @@ const BodyContext = struct {
             }
             for (schema.params, 0..) |param, k| {
                 if (param.method != method) continue;
-                const slot = switch (current.subst[param.slot]) {
+                const receiver_slot = param.slot orelse continue;
+                const slot = switch (current.subst[receiver_slot]) {
                     .node => |slot_node| slot_node,
                     .checked_error => continue,
                 };
@@ -40792,7 +41165,7 @@ const BodyContext = struct {
                     Common.invariant("dispatch target evidence was absent from its lexical chain");
                 const target = switch (entry) {
                     .target => |target| target,
-                    .structural, .from_callable, .unreachable_value, .checked_error => Common.invariant("dispatch target evidence was not a callable target"),
+                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("dispatch target evidence was not a callable target"),
                 };
                 if (dependent.independent_callable) break :blk .derive;
                 break :blk switch (target.nested) {
@@ -40857,7 +41230,7 @@ const BodyContext = struct {
                     Common.invariant("iterator target evidence was absent from its lexical chain");
                 const target = switch (entry) {
                     .target => |target| target,
-                    .structural, .from_callable, .unreachable_value, .checked_error => Common.invariant("iterator target evidence was not a callable target"),
+                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("iterator target evidence was not a callable target"),
                 };
                 if (dependent.independent_callable) break :blk .derive;
                 break :blk switch (target.nested) {
@@ -40908,7 +41281,7 @@ const BodyContext = struct {
                     .structural => |derivation| .{ .structural = derivation },
                     // Unreachable and checked-error dispatches crash before
                     // target resolution.
-                    .from_callable, .unreachable_value, .checked_error => null,
+                    .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
                 };
             },
             .structural => |derivation| return .{ .structural = .{
@@ -41044,6 +41417,7 @@ const BodyContext = struct {
             .checked_error => .checked_error,
             .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .from_callable, .unreachable_value => .unreachable_value,
+                .from_scheme => Common.invariant("abstract scheme requirement reached executable dispatch without use evidence"),
                 .checked_error => .checked_error,
                 .target, .structural => null,
             } else Common.invariant("dispatch runtime evidence was absent from its lexical chain"),
@@ -41636,7 +42010,7 @@ const BodyContext = struct {
                     if (!evidenceParamRequiresConstraintRelation(param)) continue;
                     switch (entry) {
                         .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
-                        .structural, .from_callable, .unreachable_value, .checked_error => {},
+                        .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
                     }
                 }
                 const derived = try self.deriveEvidenceVector(
@@ -45020,6 +45394,7 @@ const BodyContext = struct {
         self: *BodyContext,
         anchor: CheckedCodecContractAnchor,
         constructor_node: NodeId,
+        shape_node: NodeId,
     ) Allocator.Error!void {
         if (@intFromEnum(anchor.derivation) >= anchor.view.static_dispatch_plans.generated_codec_derivations.len) {
             Common.invariant("checked codec call anchor referenced a missing derivation");
@@ -45028,7 +45403,6 @@ const BodyContext = struct {
         if (anchor.call_index >= derivation.calls.len) {
             Common.invariant("checked codec call anchor referenced a missing generated call");
         }
-        const shape_node = try self.codecShapeNodeFromConstructor(anchor.kind, constructor_node);
         var active = try self.instantiateCheckedCodecContract(
             anchor.view,
             anchor.derivation,
@@ -45037,32 +45411,6 @@ const BodyContext = struct {
         );
         active.grounding_call_index = anchor.call_index;
         self.active_codec_contract = active;
-    }
-
-    fn codecShapeNodeFromConstructor(
-        self: *BodyContext,
-        kind: CodecKind,
-        constructor_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const constructor = try self.graph.functionNodes(constructor_node);
-        if (constructor.args.len != 1) {
-            Common.invariant("generated codec boundary constructor did not have one encoding argument");
-        }
-        const runtime = try self.graph.functionNodes(constructor.ret);
-        return switch (kind) {
-            .parser => blk: {
-                if (runtime.args.len != 1) {
-                    Common.invariant("generated parser boundary runtime did not have one state argument");
-                }
-                break :blk (try self.graphParserResultNodes(runtime.ret)).value;
-            },
-            .encoder => blk: {
-                if (runtime.args.len != 2) {
-                    Common.invariant("generated encoder boundary runtime did not have value and state arguments");
-                }
-                break :blk runtime.args[0];
-            },
-        };
     }
 
     /// Select the checker-authored subject role for a container reached while
@@ -45078,7 +45426,7 @@ const BodyContext = struct {
             Common.invariant("generated codec subject selection had no active contract");
         const derivation = active.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(active.derivation)];
         if (derivation.body_shape_ty == derivation.shape_ty) return shape_node;
-        const boundary_shape_node = try self.codecShapeNodeFromConstructor(active.kind, active.constructor_node);
+        const boundary_shape_node = active.shape_node;
         return if (self.graph.sameClass(boundary_shape_node, shape_node)) structural_node else shape_node;
     }
 
@@ -45268,6 +45616,7 @@ const BodyContext = struct {
             .method_call_slots = try self.codecMethodCallSlots(instantiated_calls),
             .grounding_call_index = null,
             .constructor_node = boundary.callable_node,
+            .shape_node = boundary.shape_node,
         };
     }
 
@@ -45340,6 +45689,7 @@ const BodyContext = struct {
                     .kind = active.kind,
                 },
                 .constructor_node = active.constructor_node,
+                .shape_node = active.shape_node,
             };
         }
         Common.invariant("active generated codec contract lost its grounding call");
@@ -45358,7 +45708,7 @@ const BodyContext = struct {
         {
             Common.invariant("generated codec call anchor disagreed with its active contract");
         }
-        return .{ .anchor = anchor, .constructor_node = active.constructor_node };
+        return .{ .anchor = anchor, .constructor_node = active.constructor_node, .shape_node = active.shape_node };
     }
 
     fn retainActiveCodecContract(self: *BodyContext) Allocator.Error!RetainedCodecContract {
@@ -45376,6 +45726,7 @@ const BodyContext = struct {
             .method_call_slots = method_call_slots,
             .grounding_call_index = active.grounding_call_index,
             .constructor_node = active.constructor_node,
+            .shape_node = active.shape_node,
         };
     }
 
@@ -45397,6 +45748,7 @@ const BodyContext = struct {
             .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, retained.method_call_slots),
             .grounding_call_index = retained.grounding_call_index,
             .constructor_node = retained.constructor_node,
+            .shape_node = retained.shape_node,
         };
     }
 
@@ -52004,7 +52356,7 @@ const BodyContext = struct {
             .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = checked_expr.source_region,
@@ -52437,7 +52789,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
         }
     }
 
@@ -52466,7 +52818,7 @@ const BodyContext = struct {
                         target.instantiation,
                     .local_proc_context = target.local_proc_context,
                 },
-                .structural, .from_callable, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
             } else Common.invariant("iterator method evidence was absent from its lexical chain"),
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
             .structural, .checked_error, .@"unreachable" => Common.invariant("iterator dispatch plan resolution was not a callable target"),
@@ -53217,6 +53569,8 @@ const BodyContext = struct {
             .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .decl => |decl| blk: {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
+                    const binder = self.localProcBinder(decl.pattern);
+                    if (self.view.bodies.patternBinder(binder).is_scheme_alias) return .{ .stmt = null, .termination = .none };
                     try self.registerLocalProc(decl.pattern, decl.expr, statement_id);
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
@@ -53319,7 +53673,7 @@ const BodyContext = struct {
                 } };
             },
             .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, .return_expr) },
         };
         return .{
             .stmt = try self.addStmt(stmt),
@@ -53750,7 +54104,9 @@ const BodyContext = struct {
     ) bool {
         // A local procedure declaration has a named binder. A lambda assigned
         // to an ignored or erroneous pattern remains an ordinary value.
-        if (self.view.bodies.pattern(pattern_id).data != .assign) return false;
+        const pattern = self.view.bodies.pattern(pattern_id);
+        if (pattern.data != .assign) return false;
+        if (self.view.bodies.patternBinder(pattern.data.assign).is_scheme_alias) return true;
         return switch (self.view.bodies.expr(expr_id).data) {
             .lambda, .closure => true,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
@@ -54951,6 +55307,149 @@ test "record destructure treats a scheme-interior field as required" {
         @as(?checked.CheckedFieldKind.Tag, null),
         BodyContext.recordDestructKindFromResolution(.absent),
     );
+}
+
+test "draft specialization lookup preserves family evidence and request identity" {
+    const allocator = std.testing.allocator;
+    var type_store = Type.Store.init(allocator);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &type_store, &name_store);
+    defer graph.destroy();
+    const first_node = try graph.newNode(.{ .primitive = .bool });
+    const second_node = try graph.newNode(.{ .primitive = .str });
+    inline for (.{ DraftTemplateFamilyAddress, DraftNestedFamilyAddress }) |Family| {
+        const Lookup = DraftSpecLookup(Family);
+        var lookup = Lookup.init(allocator);
+        defer lookup.deinit();
+        const family = std.mem.zeroes(Family);
+        const evidence = [_]u8{0} ** 32;
+        const prefix = try lookup.internPrefix(family, evidence);
+        try std.testing.expectEqual(prefix, try lookup.internPrefix(family, evidence));
+
+        // The same bytes can name a structural type, a permanent graph node,
+        // or an open shape. Those request domains must remain disjoint.
+        const addresses = [_]Lookup.Address{
+            .{ .digest = .{ .prefix = prefix, .kind = .closed, .digest = @splat(0) } },
+            .{ .open = .{ .prefix = prefix, .node = first_node } },
+            .{ .digest = .{ .prefix = prefix, .kind = .open_shape, .digest = @splat(0) } },
+            .{ .open = .{ .prefix = prefix, .node = second_node } },
+        };
+        for (addresses, 0..) |address, raw_spec| {
+            try std.testing.expect(lookup.get(address) == null);
+            try lookup.add(address, @intCast(raw_spec));
+        }
+
+        // Every family qualifier and evidence byte contributes to identity.
+        // Growing the prefix table must also preserve previously issued IDs.
+        inline for (std.meta.fields(Family)) |field| {
+            const changes = if (field.type == [32]u8) 32 else 1;
+            for (0..changes) |byte| {
+                var different_family = family;
+                if (field.type == [32]u8) {
+                    @field(different_family, field.name)[byte] = 1;
+                } else if (field.type == u32) {
+                    @field(different_family, field.name) = 1;
+                } else if (field.type == bool) {
+                    @field(different_family, field.name) = true;
+                } else {
+                    @compileError("unsupported specialization family qualifier");
+                }
+                const other = try lookup.internPrefix(different_family, evidence);
+                try std.testing.expect(other != prefix);
+                var address = addresses[0];
+                address.digest.prefix = other;
+                try std.testing.expect(lookup.get(address) == null);
+                try lookup.add(address, 0);
+            }
+        }
+        for (0..evidence.len) |byte| {
+            var different_evidence = evidence;
+            different_evidence[byte] = 1;
+            const other = try lookup.internPrefix(family, different_evidence);
+            try std.testing.expect(other != prefix);
+            var address = addresses[0];
+            address.digest.prefix = other;
+            try std.testing.expect(lookup.get(address) == null);
+            try lookup.add(address, 0);
+        }
+        try std.testing.expectEqual(prefix, try lookup.internPrefix(family, evidence));
+        for (addresses, 0..) |address, raw_spec| {
+            var candidates = lookup.get(address).?;
+            try std.testing.expectEqual(@as(u32, @intCast(raw_spec)), candidates.next().?);
+            try std.testing.expect(candidates.next() == null);
+        }
+
+        lookup.deinit();
+        lookup = Lookup.init(allocator);
+        try std.testing.expect(lookup.isEmpty());
+        const fresh_prefix = try lookup.internPrefix(family, evidence);
+        var address = addresses[0];
+        address.digest.prefix = fresh_prefix;
+        try std.testing.expect(lookup.get(address) == null);
+    }
+}
+
+test "draft specialization candidates retain insertion order across overflow growth and allocation failure" {
+    const Scenario = struct {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+            var type_store = Type.Store.init(allocator);
+            defer type_store.deinit();
+            var name_store = names.NameStore.init(allocator);
+            defer name_store.deinit();
+            const graph = try InstGraph.create(allocator, &type_store, &name_store);
+            defer graph.destroy();
+            const request_node = try graph.newNode(.{ .primitive = .bool });
+            var other_nodes: [20]NodeId = undefined;
+            for (&other_nodes) |*node| node.* = try graph.newNode(.{ .primitive = .str });
+            inline for (.{ DraftTemplateFamilyAddress, DraftNestedFamilyAddress }) |Family| {
+                const Lookup = DraftSpecLookup(Family);
+                var lookup = Lookup.init(allocator);
+                defer lookup.deinit();
+                const prefix = try lookup.internPrefix(std.mem.zeroes(Family), @splat(0));
+                const addresses = [_]Lookup.Address{
+                    .{ .open = .{ .prefix = prefix, .node = request_node } },
+                    .{ .digest = .{ .prefix = prefix, .kind = .closed, .digest = @splat(0) } },
+                    .{ .digest = .{ .prefix = prefix, .kind = .open_shape, .digest = @splat(0) } },
+                };
+                for (addresses) |address| {
+                    // Every u32 is a valid candidate ID, including zero and
+                    // the maximum value; neither acts as an empty marker.
+                    try lookup.add(address, std.math.maxInt(u32));
+                    for (0..20) |i| {
+                        const raw_spec: u32 = @intCast(i);
+                        try lookup.add(address, raw_spec);
+                        try lookup.add(address, raw_spec);
+                        try lookup.add(address, std.math.maxInt(u32));
+                        // Other buckets grow the indexes and overflow table
+                        // between appends to the bucket being checked.
+                        const other: Lookup.Address = .{ .open = .{
+                            .prefix = prefix,
+                            .node = other_nodes[i],
+                        } };
+                        try lookup.add(other, raw_spec);
+                        try lookup.add(other, std.math.maxInt(u32));
+                    }
+                    var candidates = lookup.get(address).?;
+                    try std.testing.expect(candidates.next().? == std.math.maxInt(u32));
+                    for (0..20) |i| try std.testing.expect(candidates.next().? == i);
+                    try std.testing.expect(candidates.next() == null);
+                    for (0..20) |i| {
+                        var other = lookup.get(.{ .open = .{
+                            .prefix = prefix,
+                            .node = other_nodes[i],
+                        } }).?;
+                        try std.testing.expect(other.next().? == i);
+                        try std.testing.expect(other.next().? == std.math.maxInt(u32));
+                        try std.testing.expect(other.next() == null);
+                    }
+                }
+            }
+        }
+    };
+    try Scenario.run(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
 }
 
 test "open draft recursive provenance joins fresh interface cells only while lowering" {
@@ -57308,6 +57807,44 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     try std.testing.expect(graph.sameClass(checked_row, mono_row));
     try std.testing.expect(!graph.sameClass(checked_payload, mono_payload));
     try std.testing.expect(graph.sameClass(checked_backing, mono_backing));
+}
+
+test "issue 11235: request arguments normalize overlapping return extensions before residual matching" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const a = try name_store.internTagLabel("A");
+    const tags = [_]solve.InstTag{.{ .name = a, .checked_name = a, .payloads = &.{} }};
+    const tail = try graph.newNode(.{ .unresolved = solve.InstVariable.row(.empty_tag_union) });
+    const checked_ret = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(solve.InstTag, &tags),
+        .ext = tail,
+    } });
+    const checked_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{tail}),
+        .ret = checked_ret,
+    } });
+    const request_row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(solve.InstTag, &tags),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const request_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{request_row}),
+        .ret = request_row,
+    } });
+
+    _ = try checkedMonoRequestNode(graph, checked_fn, request_fn, .construction);
+    try std.testing.expect(graph.sameClass(checked_fn, request_fn));
+    try std.testing.expect(graph.sameClass(tail, request_row));
+    const normalized = try graph.tagRowNodes(checked_ret);
+    try std.testing.expectEqual(@as(usize, 1), normalized.tags.len);
+    try std.testing.expectEqual(a, normalized.tags[0].name);
+    try std.testing.expect(try graph.tagRowIsClosed(checked_ret));
 }
 
 test "direct call request preserves generated-private return provenance" {

@@ -948,7 +948,7 @@ test "fromAST accepts explicit hostless targets section" {
         \\    requires { make_glue : List({}) -> Try(List({}), Str) }
         \\    exposes []
         \\    packages {}
-        \\    provides { "roc_make_glue": make_glue_for_host }
+    ++ "\n    provides { \"" ++ @import("builtins").shim_symbols.roc_make_glue ++ "\": make_glue_for_host }\n" ++
         \\    targets: {}
         \\
     ;

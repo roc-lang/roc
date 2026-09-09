@@ -35,6 +35,10 @@ pub const renderDocumentToLsp = @import("renderer.zig").renderDocumentToLsp;
 pub const writeShouted = @import("renderer.zig").writeShouted;
 pub const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
 
+// Canonical (presentation-independent) S-expression serialization
+pub const pushReportToSExprTree = @import("report_sexpr.zig").pushReportToSExprTree;
+pub const pushReportsToSExprTree = @import("report_sexpr.zig").pushReportsToSExprTree;
+
 // Configuration utilities
 pub const validateUtf8 = @import("config.zig").validateUtf8;
 pub const truncateUtf8 = @import("config.zig").truncateUtf8;
@@ -46,4 +50,5 @@ test {
     std.testing.refAllDecls(@import("test.zig"));
     std.testing.refAllDecls(@import("parity_test.zig"));
     std.testing.refAllDecls(@import("common_misspellings.zig"));
+    std.testing.refAllDecls(@import("report_sexpr.zig"));
 }

@@ -16,28 +16,35 @@ value = "test"
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
 TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 # PROBLEMS
-── ✗ underscore in type alias ──────────────────── test_error_propagation.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadBase := _
-^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ type mismatch ─────────────────────────────── test_error_propagation.md:6:9
-
-This string literal is being used where a non-string type is needed.
-
-value = "test"
-        ^^^^^^
-
-The type was determined to be:
-
-    GoodAlias
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "test_error_propagation.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadBase := _"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 6 9) (end 6 15))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "test_error_propagation.md") (start 6 9) (end 6 15) (annotation error) (line-text "value = \"test\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "GoodAlias")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

@@ -11,21 +11,34 @@ process = |x| x.convert()
 # EXPECTED
 TYPE MISMATCH - duplicate_where_requirements_share_one_callable.md:1:61:1:69
 # PROBLEMS
-── ✗ type mismatch ───── duplicate_where_requirements_share_one_callable.md:1:61
-
-This expression is used in an unexpected way.
-
-process : a -> U64 where [a.convert : a -> U64, a.convert : a -> Str]
-                                                            ^^^^^^^^
-
-It has the type:
-
-    a -> Str where [a.convert : a -> U64]
-
-But you are trying to use it as:
-
-    a -> U64 where [a.convert : a -> U64]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 61) (end 1 69))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "duplicate_where_requirements_share_one_callable.md") (start 1 61) (end 1 69) (annotation error) (line-text "process : a -> U64 where [a.convert : a -> U64, a.convert : a -> Str]"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a -> Str where [a.convert : a -> U64]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a -> U64 where [a.convert : a -> U64]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

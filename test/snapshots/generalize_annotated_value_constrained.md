@@ -15,17 +15,24 @@ main! = |_| {}
 # EXPECTED
 POLYMORPHIC VALUE - generalize_annotated_value_constrained.md:4:1:4:6
 # PROBLEMS
-── ✗ polymorphic value ─────────── generalize_annotated_value_constrained.md:4:1
-
-This top-level value still has an unresolved polymorphic type.
-
-items = []
-^^^^^
-
-Its type is:
-List(a) where [a.to_str : a -> Str]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 4 1) (end 4 6))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "generalize_annotated_value_constrained.md") (start 4 1) (end 4 6) (annotation error) (line-text "items = []"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "List(a) where [a.to_str : a -> Str]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

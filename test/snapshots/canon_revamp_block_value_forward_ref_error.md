@@ -14,25 +14,36 @@ x = {
 NAME NOT IN SCOPE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
 UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 # PROBLEMS
-── ✗ name not in scope ─────── canon_revamp_block_value_forward_ref_error.md:2:5
-
-Nothing is named y in this scope.
-
-y + 1
-^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ───────── canon_revamp_block_value_forward_ref_error.md:3:5
-
-Variable y is defined here and then never used:
-
-y = 5
-^
-
-If you don't need this variable, prefix it with an underscore like _y to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 2 5) (end 2 6))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "y")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "canon_revamp_block_value_forward_ref_error.md") (start 2 5) (end 2 6) (annotation error) (line-text "    y + 1"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 3 5) (end 3 6))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "y")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_y")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "canon_revamp_block_value_forward_ref_error.md") (start 3 5) (end 3 6) (annotation error) (line-text "    y = 5")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,

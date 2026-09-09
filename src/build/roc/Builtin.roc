@@ -2226,6 +2226,23 @@ Builtin :: [].{
 			is_eq : Utf8Problem, Utf8Problem -> Bool
 		}
 
+		## Returns guidance about string length instead of a number.
+		##
+		## A string can have different lengths depending on what you count: UTF-8
+		## bytes, Unicode code points, or grapheme clusters (an approximation of
+		## user-perceived characters). For example, `é` can be represented as one
+		## code point or as `e` followed by a combining accent. These representations
+		## use different numbers of bytes and code points, but each is one grapheme
+		## cluster. A grapheme cluster's display width also depends on how it is rendered.
+		##
+		## Use `Str.count_utf8_bytes` when you need the byte count, or `Str.is_empty`
+		## to check whether a string is empty. For other measurements, choose a
+		## Unicode library that supports the unit you need. For text known to be
+		## ASCII, each code point occupies one byte; this does not hold for arbitrary
+		## Unicode text.
+		len : Str -> [LearnAboutStringsInRoc(Str)]
+		len = |_str| LearnAboutStringsInRoc("String length depends on what you count: UTF-8 bytes, Unicode code points, or grapheme clusters (an approximation of user-perceived characters). A single grapheme cluster can contain multiple code points, and a code point can occupy multiple UTF-8 bytes. Display width also depends on how the text is rendered. Use Str.count_utf8_bytes for the byte count, or Str.is_empty to check whether a string is empty. For other measurements, choose a Unicode library that supports the unit you need. For text known to be ASCII, each code point occupies one byte; this does not hold for arbitrary Unicode text.")
+
 		is_empty : Str -> Bool
 		is_empty = |str| Str.count_utf8_bytes(str) == 0
 
@@ -2515,12 +2532,12 @@ Builtin :: [].{
 		iter_utf8 : Str -> Iter(U8)
 		iter_utf8 = |str| {
 			make = |index| {
-				len = Str.count_utf8_bytes(str)
+				byte_count = Str.count_utf8_bytes(str)
 
 				iter_from_step(
-					Known(len - index),
+					Known(byte_count - index),
 					||
-						if index == len {
+						if index == byte_count {
 							Done
 						} else {
 							One({ item: str_get_utf8_byte_unsafe(str, index), rest: make(index + 1) })
@@ -2553,11 +2570,11 @@ Builtin :: [].{
 			if count == 0 {
 				Ok(str)
 			} else {
-				len = Str.count_utf8_bytes(str)
-				if count >= len {
+				byte_count = Str.count_utf8_bytes(str)
+				if count >= byte_count {
 					Ok("")
 				} else {
-					end = len - count
+					end = byte_count - count
 					byte = str_get_utf8_byte_unsafe(str, end)
 					if byte >= 128 and byte < 192 {
 						Err(BadUtf8)
@@ -3198,6 +3215,17 @@ Builtin :: [].{
 					)
 				}
 
+		## Returns an iterator that pairs each item with its position among the
+		## items this iterator yields. The first yielded item gets index `0`, and
+		## the index only advances for items that are actually yielded.
+		## ```roc
+		## expect Iter.fold(["a", "b"].iter().with_index(), [], |acc, item| acc.append(item)) == [(0, "a"), (1, "b")]
+		##
+		## expect Iter.fold([1, 2, 3, 4].iter().keep_if(|n| n > 2).with_index(), [], |acc, item| acc.append(item)) == [(0, 3), (1, 4)]
+		## ```
+		with_index : Iter(a) -> Iter((U64, a))
+		with_index = |iterator| iter_with_index(iterator, 0)
+
 		keep_if : Iter(a), (a -> Bool) -> Iter(a)
 		keep_if = |iterator, predicate|
 			iter_from_step(
@@ -3425,40 +3453,7 @@ Builtin :: [].{
 		## expect Iter.fold(Iter.step_by(List.iter([1, 2, 3]), 0), [], |acc, item| acc.append(item)) == []
 		## ```
 		step_by : Iter(item), U64 -> Iter(item)
-		step_by = |iterator, n|
-			match iterator {
-				{ len_if_known, .. } =>
-					iter_from_step(
-						match len_if_known {
-							Known(len) => if n == 0 {
-								Known(0)
-							} else {
-								Known(
-									if len == 0 {
-										0
-									} else {
-										(len - 1) / n + 1
-									},
-								)
-							}
-							Unknown => if n == 0 {
-								Known(0)
-							} else {
-								Unknown
-							}
-						},
-						||
-							if n == 0 {
-								Done
-							} else {
-								match Iter.next(iterator) {
-									Done => Done
-									Skip({ rest }) => Skip({ rest: Iter.step_by(rest, n) })
-									One({ item, rest }) => One({ item, rest: Iter.step_by(Iter.drop_first(rest, n - 1), n) })
-								}
-							},
-					)
-				}
+		step_by = |iterator, n| iter_step_by(iterator, (n, 0))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
@@ -6233,47 +6228,28 @@ Builtin :: [].{
 		}
 	}
 
-	Set(item) :: [Items(List(item))].{
+	Set(item) :: Dict(item, {}).{
 		parser_for : _
 		encoder_for : _
 
 		## Returns `Bool.True` if the two sets contain the same values, and `Bool.False` otherwise.
 		is_eq : Set(a), Set(a) -> Bool
-			where [a.is_eq : a, a -> Bool]
-		is_eq = |set_a, set_b| {
-			list_a = Set.to_list(set_a)
-			list_b = Set.to_list(set_b)
-
-			if List.len(list_a) != List.len(list_b) {
-				False
-			} else {
-				state = List.fold(
-					list_a,
-					{ all_found: Bool.True, check: list_b },
-					|st, item|
-						if List.contains(st.check, item) {
-							st
-						} else {
-							{ all_found: Bool.False, check: st.check }
-						},
-				)
-				state.all_found
-			}
-		}
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
+		is_eq = |Set.(a), Set.(b)| Dict.is_eq(a, b)
 
 		## Feed a [Set] into a [Hasher]. The hash is independent of insertion order.
 		to_hash : Set(a), Hasher -> Hasher
 			where [a.to_hash : a, Hasher -> Hasher]
 		to_hash = |set, hasher| match set {
-			Items(items) => {
+			Set.(dict) => {
 				var $item_hashes = 0
 
-				for item in items {
+				for (item, _) in Dict.iter(dict) {
 					item_hash = hasher_finish(item.to_hash(hasher))
 					$item_hashes = combine_unordered_hashes($item_hashes, item_hash)
 				}
 
-				Hasher.write_u64(Hasher.write_u64(hasher, List.len(items)), $item_hashes)
+				Hasher.write_u64(Hasher.write_u64(hasher, Dict.len(dict)), $item_hashes)
 			}
 		}
 
@@ -6287,61 +6263,51 @@ Builtin :: [].{
 
 		## Creates a new empty `Set`.
 		empty : () -> Set(_item)
-		empty = || Items([])
+		empty = || Set.(Dict.empty())
 
 		## Creates a new `Set` with a single value.
 		## ```roc
 		## Set.single(42.I64)
 		## ```
 		single : item -> Set(item)
-		single = |item| Items([item])
+			where [item.is_eq : item, item -> Bool, item.to_hash : item, Hasher -> Hasher]
+		single = |item| Set.(Dict.single(item, {}))
 
 		## Counts the number of values in a given `Set`.
 		## ```roc
 		## expect Set.single(42).len() == 1
 		## ```
 		len : Set(_item) -> U64
-		len = |set| match set {
-			Items(list) => List.len(list)
-		}
+		len = |Set.(dict)| Dict.len(dict)
 
 		## Check if the set is empty.
 		is_empty : Set(_item) -> Bool
-		is_empty = |set| match set {
-			Items(list) => List.is_empty(list)
-		}
+		is_empty = |Set.(dict)| Dict.is_empty(dict)
 
 		## Test if a value is in the `Set`.
 		contains : Set(a), a -> Bool
-			where [a.is_eq : a, a -> Bool]
-		contains = |set, item| match set {
-			Items(list) => List.contains(list, item)
-		}
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
+		contains = |Set.(dict), item| Dict.contains(dict, item)
 
-		## Insert a value into a `Set`.
+		## Insert a value into a `Set`. An equal value already present is retained.
 		insert : Set(a), a -> Set(a)
-			where [a.is_eq : a, a -> Bool]
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
 		insert = |set, item| match set {
-			Items(list) => Items(
-				List.append(
-					List.keep_if(list, |x| x != item),
-					item,
-				),
-			)
+			Set.(HashMap(data)) => match dict_find(data, item) {
+				Found(_) => set
+				Missing(missing) => Set.(HashMap(dict_insert_absent_data(data, missing, item, {})))
+			}
 		}
 
-		## Removes the value from the given `Set`.
+		## Removes the value from the given `Set`. May reorder the remaining values
+		## by moving the last value into the removed value's position.
 		remove : Set(a), a -> Set(a)
-			where [a.is_eq : a, a -> Bool]
-		remove = |set, item| match set {
-			Items(list) => Items(List.keep_if(list, |x| x != item))
-		}
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
+		remove = |Set.(dict), item| Set.(Dict.remove(dict, item))
 
 		## Retrieve the values in a `Set` as a `List`.
 		to_list : Set(a) -> List(a)
-		to_list = |set| match set {
-			Items(list) => list
-		}
+		to_list = |Set.(dict)| Dict.keys(dict)
 
 		## Build a value by folding through each value in the set. Starting with
 		## a given `state` value, this runs the given `step` function on each
@@ -6353,51 +6319,22 @@ Builtin :: [].{
 		## expect Set.empty().fold(0, |sum, item| sum + item) == 0.U64
 		## ```
 		fold : Set(a), state, (state, a -> state) -> state
-		fold = |set, init, step| match set {
-			Items(list) => List.fold(list, init, step)
-		}
+		fold = |Set.(dict), init, step| Dict.fold(dict, init, |state, item, _| step(state, item))
 
-		## Iterate over the set's values in their current backing order.
-		## [Set.from_list] keeps the first insertion order, but inserting a value
-		## that is already present removes and re-appends it, which changes that
-		## value's position.
-		## ```roc
-		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item)) == [1, 2, 3]
-		## ```
+		## Iterate over the set's values without allocating a list of keys.
+		## New values are appended, and inserting an existing value preserves its
+		## position. [Set.remove] may reorder the remaining values.
 		iter : Set(a) -> Iter(a)
-		iter = |set| match set {
-			Items(list) => List.iter(list)
-		}
+		iter = |Set.(dict)| Iter.map(Dict.iter(dict), |(item, _)| item)
 
-		## Iterate over the set's values in reverse current backing order. Like
-		## [List.iter_rev], this reads the values in place rather than building a
-		## reversed copy. Inserting an already-present value can change this order,
-		## as described by [Set.iter].
-		## ```roc
-		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
-		## ```
+		## Iterate in reverse of [Set.iter]'s order without allocating a reversed list.
 		iter_rev : Set(a) -> Iter(a)
-		iter_rev = |set| match set {
-			Items(list) => List.iter_rev(list)
-		}
+		iter_rev = |Set.(dict)| Iter.map(Dict.iter_rev(dict), |(item, _)| item)
 
 		## Create a `Set` from a `List` of values.
 		from_list : List(a) -> Set(a)
-			where [a.is_eq : a, a -> Bool]
-		from_list = |list| {
-			Items(
-				List.fold(
-					list,
-					[],
-					|acc, item|
-						if List.contains(acc, item) {
-							acc
-						} else {
-							List.append(acc, item)
-						},
-				),
-			)
-		}
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
+		from_list = |list| List.fold(list, Set.with_capacity(List.len(list)), |set, item| Set.insert(set, item))
 
 		## Run the given function on each item in the `Set`, and return
 		## a `Set` with just the items for which the function returned `Bool.True`.
@@ -6405,9 +6342,8 @@ Builtin :: [].{
 		## expect Set.from_list([1, 2, 3, 4]).keep_if(|num| num > 2) == Set.from_list([3, 4])
 		## ```
 		keep_if : Set(a), (a -> Bool) -> Set(a)
-		keep_if = |set, predicate| match set {
-			Items(list) => Items(List.keep_if(list, predicate))
-		}
+			where [a.to_hash : a, Hasher -> Hasher]
+		keep_if = |Set.(dict), predicate| Set.(Dict.keep_if(dict, |(item, _)| predicate(item)))
 
 		## Run the given function on each item in the `Set`, and return
 		## a `Set` with just the items for which the function returned `Bool.False`.
@@ -6415,9 +6351,8 @@ Builtin :: [].{
 		## expect Set.from_list([1, 2, 3, 4]).drop_if(|num| num > 2) == Set.from_list([1, 2])
 		## ```
 		drop_if : Set(a), (a -> Bool) -> Set(a)
-		drop_if = |set, predicate| match set {
-			Items(list) => Items(List.drop_if(list, predicate))
-		}
+			where [a.to_hash : a, Hasher -> Hasher]
+		drop_if = |set, predicate| Set.keep_if(set, |item| !predicate(item))
 
 		## Combine two `Set`s by keeping the
 		## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
@@ -6430,9 +6365,8 @@ Builtin :: [].{
 		## }
 		## ```
 		union : Set(a), Set(a) -> Set(a)
-			where [a.is_eq : a, a -> Bool]
-		union = |set_a, set_b|
-			List.fold(Set.to_list(set_b), set_a, |acc, item| Set.insert(acc, item))
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
+		union = |set_a, set_b| Set.fold(set_b, set_a, |acc, item| Set.insert(acc, item))
 
 		## Combine two `Set`s by keeping the
 		## [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
@@ -6445,23 +6379,8 @@ Builtin :: [].{
 		## }
 		## ```
 		intersection : Set(a), Set(a) -> Set(a)
-			where [a.is_eq : a, a -> Bool]
-		intersection = |set_a, set_b| {
-			list_a = Set.to_list(set_a)
-			list_b = Set.to_list(set_b)
-
-			state = List.fold(
-				list_a,
-				{ result: [], check: list_b },
-				|st, item|
-					if List.contains(st.check, item) {
-						{ result: List.append(st.result, item), check: st.check }
-					} else {
-						st
-					},
-			)
-			Items(state.result)
-		}
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
+		intersection = |set_a, set_b| Set.keep_if(set_a, |item| Set.contains(set_b, item))
 
 		## Remove the values in the first `Set` that are also in the second `Set`
 		## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement).
@@ -6473,23 +6392,8 @@ Builtin :: [].{
 		## }
 		## ```
 		difference : Set(a), Set(a) -> Set(a)
-			where [a.is_eq : a, a -> Bool]
-		difference = |set_a, set_b| {
-			list_a = Set.to_list(set_a)
-			list_b = Set.to_list(set_b)
-
-			state = List.fold(
-				list_a,
-				{ result: [], check: list_b },
-				|st, item|
-					if List.contains(st.check, item) {
-						st
-					} else {
-						{ result: List.append(st.result, item), check: st.check }
-					},
-			)
-			Items(state.result)
-		}
+			where [a.is_eq : a, a -> Bool, a.to_hash : a, Hasher -> Hasher]
+		difference = |set_a, set_b| Set.drop_if(set_a, |item| Set.contains(set_b, item))
 
 		## Convert each value in the set to something new, by calling a conversion
 		## function on each of them. Then return a new set containing the unique
@@ -6501,24 +6405,57 @@ Builtin :: [].{
 		## expect Set.from_list([1, -1, 2, -2]).map(|n| n * n) == Set.from_list([1, 4])
 		## ```
 		map : Set(a), (a -> b) -> Set(b)
-			where [b.is_eq : b, b -> Bool]
-		map = |set, transform| match set {
-			Items(list) =>
-				Items(
-					List.fold(
-						list,
-						[],
-						|acc, item| {
-							new_item = transform(item)
-							if List.contains(acc, new_item) {
-								acc
-							} else {
-								List.append(acc, new_item)
-							}
-						},
-					),
-				)
+			where [b.is_eq : b, b -> Bool, b.to_hash : b, Hasher -> Hasher]
+		map = |set, transform| Set.fold(set, Set.empty(), |acc, item| Set.insert(acc, transform(item)))
+
+		## Creates an empty set with room for at least the requested number of values.
+		with_capacity : U64 -> Set(_item)
+		with_capacity = |requested| Set.(Dict.with_capacity(requested))
+
+		## Returns the number of values the set can hold before growing its hash table.
+		capacity : Set(_item) -> U64
+		capacity = |Set.(dict)| Dict.capacity(dict)
+
+		## Ensures room for at least this many additional values.
+		reserve : Set(item), U64 -> Set(item)
+			where [item.to_hash : item, Hasher -> Hasher]
+		reserve = |Set.(dict), additional| Set.(Dict.reserve(dict, additional))
+
+		## Reduces unused capacity while retaining every value.
+		release_excess_capacity : Set(item) -> Set(item)
+			where [item.to_hash : item, Hasher -> Hasher]
+		release_excess_capacity = |Set.(dict)| Set.(Dict.release_excess_capacity(dict))
+
+		## Removes every value while preserving the current capacity.
+		clear : Set(item) -> Set(item)
+		clear = |Set.(dict)| Set.(Dict.clear(dict))
+
+		## Alias for [Set.contains].
+		subscript : Set(item), item -> Bool
+			where [item.is_eq : item, item -> Bool, item.to_hash : item, Hasher -> Hasher]
+		subscript = |set, item| Set.contains(set, item)
+
+		## Creates a set from an iterator, retaining the first position of each value.
+		## Uses the iterator's known length to reserve storage when available.
+		from_iter : Iter(item) -> Set(item)
+			where [item.is_eq : item, item -> Bool, item.to_hash : item, Hasher -> Hasher]
+		from_iter = |iterator| {
+			initial = match iterator.len_if_known {
+				Known(n) => Set.with_capacity(n)
+				Unknown => Set.empty()
 			}
+			Iter.fold(iterator, initial, |set, item| Set.insert(set, item))
+		}
+
+		## Folds values in iteration order, stopping immediately on `Break(state)`.
+		## Returns the initial state when the set is empty.
+		fold_until : Set(item), state, (state, item -> [Continue(state), Break(state)]) -> state
+		fold_until = |Set.(dict), init, step| Dict.fold_until(dict, init, |state, item, _| step(state, item))
+
+		## Transforms each value into a set and combines the results, removing duplicates.
+		join_map : Set(a), (a -> Set(b)) -> Set(b)
+			where [b.is_eq : b, b -> Bool, b.to_hash : b, Hasher -> Hasher]
+		join_map = |set, transform| Set.fold(set, Set.empty(), |acc, item| Set.union(acc, transform(item)))
 	}
 
 	Num :: {}.{
@@ -17591,7 +17528,17 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `U8x16(1, 2, 3, ...)`.
 			to_inspect : U8x16 -> Str
-			to_inspect = |vector| Str.concat("U8x16(", Str.concat(Str.join_with(List.map(U8x16.to_list(vector), U8.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				var $out = "U8x16(".reserve(79)
+				$out = Str.concat($out, U8.to_str(U8x16.get_lane(vector, 0)))
+				var $i = 1.U64
+				while $i < 16 {
+					$out = Str.concat($out, ", ")
+					$out = Str.concat($out, U8.to_str(U8x16.get_lane(vector, $i)))
+					$i = $i + 1
+				}
+				Str.concat($out, ")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
@@ -18137,7 +18084,17 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `I8x16(1, 2, 3, ...)`.
 			to_inspect : I8x16 -> Str
-			to_inspect = |vector| Str.concat("I8x16(", Str.concat(Str.join_with(List.map(I8x16.to_list(vector), I8.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				var $out = "I8x16(".reserve(95)
+				$out = Str.concat($out, I8.to_str(I8x16.get_lane(vector, 0)))
+				var $i = 1.U64
+				while $i < 16 {
+					$out = Str.concat($out, ", ")
+					$out = Str.concat($out, I8.to_str(I8x16.get_lane(vector, $i)))
+					$i = $i + 1
+				}
+				Str.concat($out, ")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
@@ -18618,7 +18575,17 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `U16x8(1, 2, 3, ...)`.
 			to_inspect : U16x8 -> Str
-			to_inspect = |vector| Str.concat("U16x8(", Str.concat(Str.join_with(List.map(U16x8.to_list(vector), U16.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				var $out = "U16x8(".reserve(55)
+				$out = Str.concat($out, U16.to_str(U16x8.get_lane(vector, 0)))
+				var $i = 1.U64
+				while $i < 8 {
+					$out = Str.concat($out, ", ")
+					$out = Str.concat($out, U16.to_str(U16x8.get_lane(vector, $i)))
+					$i = $i + 1
+				}
+				Str.concat($out, ")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
@@ -19111,7 +19078,17 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `I16x8(1, 2, 3, ...)`.
 			to_inspect : I16x8 -> Str
-			to_inspect = |vector| Str.concat("I16x8(", Str.concat(Str.join_with(List.map(I16x8.to_list(vector), I16.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				var $out = "I16x8(".reserve(63)
+				$out = Str.concat($out, I16.to_str(I16x8.get_lane(vector, 0)))
+				var $i = 1.U64
+				while $i < 8 {
+					$out = Str.concat($out, ", ")
+					$out = Str.concat($out, I16.to_str(I16x8.get_lane(vector, $i)))
+					$i = $i + 1
+				}
+				Str.concat($out, ")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
@@ -19648,7 +19625,22 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `U32x4(1, 2, 3, 4)`.
 			to_inspect : U32x4 -> Str
-			to_inspect = |vector| Str.concat("U32x4(", Str.concat(Str.join_with(List.map(U32x4.to_list(vector), U32.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				lane0 = U32.to_str(U32x4.get_lane(vector, 0))
+				lane1 = U32.to_str(U32x4.get_lane(vector, 1))
+				lane2 = U32.to_str(U32x4.get_lane(vector, 2))
+				lane3 = U32.to_str(U32x4.get_lane(vector, 3))
+				spare = lane0.count_utf8_bytes() + lane1.count_utf8_bytes() + lane2.count_utf8_bytes() + lane3.count_utf8_bytes() + 7
+				"U32x4(".reserve(spare)
+					.concat(lane0)
+					.concat(", ")
+					.concat(lane1)
+					.concat(", ")
+					.concat(lane2)
+					.concat(", ")
+					.concat(lane3)
+					.concat(")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
@@ -20086,7 +20078,22 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `I32x4(-1, 2, -3, 4)`.
 			to_inspect : I32x4 -> Str
-			to_inspect = |vector| Str.concat("I32x4(", Str.concat(Str.join_with(List.map(I32x4.to_list(vector), I32.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				lane0 = I32.to_str(I32x4.get_lane(vector, 0))
+				lane1 = I32.to_str(I32x4.get_lane(vector, 1))
+				lane2 = I32.to_str(I32x4.get_lane(vector, 2))
+				lane3 = I32.to_str(I32x4.get_lane(vector, 3))
+				spare = lane0.count_utf8_bytes() + lane1.count_utf8_bytes() + lane2.count_utf8_bytes() + lane3.count_utf8_bytes() + 7
+				"I32x4(".reserve(spare)
+					.concat(lane0)
+					.concat(", ")
+					.concat(lane1)
+					.concat(", ")
+					.concat(lane2)
+					.concat(", ")
+					.concat(lane3)
+					.concat(")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
@@ -20551,7 +20558,16 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `U64x2(1, 2)`.
 			to_inspect : U64x2 -> Str
-			to_inspect = |vector| Str.concat("U64x2(", Str.concat(Str.join_with(List.map(U64x2.to_list(vector), U64.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				lane0 = U64.to_str(U64x2.get_lane(vector, 0))
+				lane1 = U64.to_str(U64x2.get_lane(vector, 1))
+				spare = lane0.count_utf8_bytes() + lane1.count_utf8_bytes() + 3
+				"U64x2(".reserve(spare)
+					.concat(lane0)
+					.concat(", ")
+					.concat(lane1)
+					.concat(")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
@@ -20917,7 +20933,16 @@ Builtin :: [].{
 
 			## Render the lanes for debugging, e.g. `I64x2(-1, 2)`.
 			to_inspect : I64x2 -> Str
-			to_inspect = |vector| Str.concat("I64x2(", Str.concat(Str.join_with(List.map(I64x2.to_list(vector), I64.to_str), ", "), ")"))
+			to_inspect = |vector| {
+				lane0 = I64.to_str(I64x2.get_lane(vector, 0))
+				lane1 = I64.to_str(I64x2.get_lane(vector, 1))
+				spare = lane0.count_utf8_bytes() + lane1.count_utf8_bytes() + 3
+				"I64x2(".reserve(spare)
+					.concat(lane0)
+					.concat(", ")
+					.concat(lane1)
+					.concat(")")
+			}
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
 			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
@@ -22937,6 +22962,61 @@ range_done = || iter_from_step(
 	Known(0),
 	|| Done,
 )
+
+# The recursive worker behind `Iter.with_index`. It is a registered iterator
+# adapter (`static_dispatch_registry.zig`), so it must take the source iterator
+# first and exactly one other argument; the public `with_index` is the arity-1
+# wrapper that seeds the counter.
+iter_with_index : Iter(a), U64 -> Iter((U64, a))
+iter_with_index = |src, index|
+	iter_from_step(
+		src.len_if_known,
+		||
+			match Iter.next(src) {
+				Done => Done
+				Skip({ rest }) => Skip({ rest: iter_with_index(rest, index) })
+				One({ item, rest }) => One({ item: (index, item), rest: iter_with_index(rest, index + 1) })
+			},
+	)
+
+# The recursive worker behind `Iter.step_by`, carrying `(stride, pending)`: how
+# far apart yielded items are, and how many yielded items are still to be
+# dropped before the next one. Skipping inline (rather than delegating to
+# `Iter.drop_first`) is what keeps this a registered adapter: a `drop_first`
+# layer per yielded item would grow the successor's type without bound, so the
+# chain could never mint. The counters ride in one tuple because a registered
+# adapter takes the source iterator plus exactly one other argument.
+iter_step_by : Iter(item), (U64, U64) -> Iter(item)
+iter_step_by = |src, (stride, pending)|
+	iter_from_step(
+		match src.len_if_known {
+			Known(len) => if stride == 0 or len <= pending {
+				Known(0)
+			} else {
+				Known((len - pending - 1) / stride + 1)
+			}
+			Unknown => if stride == 0 {
+				Known(0)
+			} else {
+				Unknown
+			}
+		},
+		||
+			if stride == 0 {
+				Done
+			} else {
+				match Iter.next(src) {
+					Done => Done
+					Skip({ rest }) => Skip({ rest: iter_step_by(rest, (stride, pending)) })
+					One({ item, rest }) =>
+						if pending == 0 {
+							One({ item, rest: iter_step_by(rest, (stride, stride - 1)) })
+						} else {
+							Skip({ rest: iter_step_by(rest, (stride, pending - 1)) })
+						}
+					}
+			},
+	)
 
 ## The result of scanning a JSON string body; all fields are zero-copy slices.
 ## `after` is the text following the closing quote. The body is:

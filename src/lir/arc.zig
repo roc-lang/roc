@@ -1198,7 +1198,7 @@ const ArcPlanStep = struct {
     retain_assign_ref_target: bool = true,
     take_assign_ref_target: bool = false,
     /// Absent committed field places on a same-layout representation-shell
-    /// alias, in the dismantle container's compact field-mask domain.
+    /// alias, indexed by the fields' semantic record positions.
     residual_shell_absent_mask: u64 = 0,
     residual_shell_all_rc_fields_absent: bool = false,
     retain_set_target: bool = true,
@@ -1814,8 +1814,8 @@ const Inserter = struct {
 
         var semantic_fields: [64]u32 = undefined;
         var count: usize = 0;
-        for (container.fields, 0..) |field, index| {
-            const field_mask = @as(u64, 1) << @intCast(index);
+        for (container.fields) |field| {
+            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
             if ((absent_mask & field_mask) == 0) continue;
             semantic_fields[count] = field.field_idx;
             count += 1;
@@ -9985,6 +9985,48 @@ test "RC complete payload moves while parent representation has a later scalar f
     // manufacturing another unit, while the certifier keeps the shell read
     // distinct from any later RC-bearing use.
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
+}
+
+test "RC residual shell metadata uses semantic field indices" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .i64 },
+        .{ .index = 2, .layout = .str },
+    });
+    const first_scalar = try f.local(.i64);
+    const second_scalar = try f.local(.i64);
+    const payload = try f.local(.str);
+    const record = try f.local(record_layout);
+    const taken = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const shell = try f.local(record_layout);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const read_scalar = try f.assignRefField(result, shell, 0, ret);
+    const alias_shell = try f.assignRefLocal(shell, record, read_scalar);
+    const consume_payload = try f.assignCall(call_result, &.{taken}, alias_shell);
+    const take_payload = try f.assignRefField(taken, record, 2, consume_payload);
+    const make_record = try f.assignStruct(record, &.{ first_scalar, second_scalar, payload }, take_payload);
+    const make_payload = try f.assignStr(payload, "payload", make_record);
+    const make_second_scalar = try f.assignI64(second_scalar, 2, make_payload);
+    const body = try f.assignI64(first_scalar, 1, make_second_scalar);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    var found = false;
+    for (0..f.store.cfStmtCount()) |stmt_index| {
+        const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_ref or stmt.assign_ref.target != shell) continue;
+        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        if (absent.len == 0) continue;
+        try testing.expectEqual(@as(usize, 1), absent.len);
+        try testing.expectEqual(@as(u32, 2), GuardedList.at(absent, 0));
+        found = true;
+    }
+    try testing.expect(found);
 }
 
 test "RC early_return emits correct number of decrefs for multi-use symbol" {

@@ -140,7 +140,9 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 				name_to_struct_name(rec.name)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
-		RocFunction(_) => "*mut c_void"
+		# A function stored inside a value is one erased-callable allocation,
+		# exactly like `Box(fn)`.
+		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "*mut c_void"
 	}
 }
@@ -341,11 +343,11 @@ generated_type_names_rust = |type_table, duplicate_names| {
 				if List.len(tu.tags) >= 2 and tu.name != "" {
 					struct_name = default_tag_union_struct_name(duplicate_names, $type_id, tu)
 					$names = $names.append(struct_name)
-					if TypeTable.tag_union_has_payload(tu) {
+					if type_info.layout.tag_union_has_payload() {
 						$names = $names.append("${struct_name}Tag")
 						$names = $names.append("${struct_name}Payload")
-						for tag in tu.tags {
-							if List.len(tag.payload) > 1 {
+						for tag in type_info.layout.tag_layouts() {
+							if abi_tag_has_payload(tag) and List.len(tag.payload) > 1 {
 								$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
 							}
 						}
@@ -561,14 +563,11 @@ add_type_alias_rust = |state, alias, target| {
 	}
 }
 
-tag_union_has_payload_rust : TagUnionRepr -> Bool
-tag_union_has_payload_rust = |tu| TypeTable.tag_union_has_payload(tu)
-
-add_tag_union_aliases_rust : { content : Str, seen : List(Str) }, Str, Str, TagUnionRepr -> { content : Str, seen : List(Str) }
-add_tag_union_aliases_rust = |state, alias, target, tu| {
+add_tag_union_aliases_rust : { content : Str, seen : List(Str) }, Str, Str, AbiLayout -> { content : Str, seen : List(Str) }
+add_tag_union_aliases_rust = |state, alias, target, abi_layout| {
 	with_main_alias = add_type_alias_rust(state, alias, target)
 
-	if tag_union_has_payload_rust(tu) {
+	if abi_layout.tag_union_has_payload() {
 		with_payload_alias = add_type_alias_rust(with_main_alias, "${alias}Payload", "${target}Payload")
 		add_type_alias_rust(with_payload_alias, "${alias}Tag", "${target}Tag")
 	} else {
@@ -587,7 +586,7 @@ generate_platform_type_aliases_rust = |hosted_functions, provides_list, type_tab
 			PlainAlias => add_type_alias_rust($state, plan.alias, target)
 			TagUnionAlias =>
 				match type_table.get(plan.type_id) {
-					RocTagUnion(tu) => add_tag_union_aliases_rust($state, plan.alias, target, tu)
+					RocTagUnion(_) => add_tag_union_aliases_rust($state, plan.alias, target, type_table.layout(plan.type_id))
 					_ => add_type_alias_rust($state, plan.alias, target)
 				}
 			}
@@ -1740,6 +1739,7 @@ generate_rust_release_support =
 	\\    }
 	\\}
 	\\
+
 ## Generate self-contained RocList<T> type (simplified, raw pointer approach)
 generate_rust_roc_list : Str
 generate_rust_roc_list =
@@ -2105,7 +2105,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 	abi_tags = abi_tag_layouts(abi_layout)
 
 	# Check if this is a pure enum (all variants have no payload)
-	is_pure_enum = List.all(abi_tags, |tag| !(abi_tag_has_payload(tag)))
+	is_pure_enum = !abi_layout.tag_union_has_payload()
 
 	if is_pure_enum {
 		# Pure enum: just emit the enum type
@@ -2364,7 +2364,8 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 					} else {
 						"${tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)}Release"
 					}
-			}
+				}
+		RocFunction(_) => "RocErasedCallableRelease"
 		_ => ""
 	}
 }
@@ -2389,10 +2390,10 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 				to_lower_snake_case(name_to_struct_name(rec.name))
 			}
 		RocTagUnion(tu) =>
-			# Mirrors `resolve_tag_union_type_rust`, except a single-variant
-			# union resolves through its payload's fragment: that function can
-			# return a rendered type such as `RocList<RocStr>`, which is not an
-			# identifier.
+		# Mirrors `resolve_tag_union_type_rust`, except a single-variant
+		# union resolves through its payload's fragment: that function can
+		# return a rendered type such as `RocList<RocStr>`, which is not an
+		# identifier.
 			match TypeTable.single_variant_payload(tu) {
 				SinglePayload(payload_id) => type_ident_rust(type_table, duplicate_names, preferred_names, payload_id)
 				SingleNoPayload => "type${U64.to_str(type_id)}"
@@ -2403,6 +2404,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 						"type${U64.to_str(type_id)}"
 					}
 				}
+		RocFunction(_) => "erased_callable"
 		_ => "type${U64.to_str(type_id)}"
 	}
 
@@ -2465,6 +2467,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
+		RocFunction(_) => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 		_ => ""
 	}
 }
@@ -2502,6 +2505,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
+		RocFunction(_) => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 		_ => ""
 	}
 }
@@ -2559,11 +2563,11 @@ generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, str
 	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 }
 
-generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, Str -> Str
-generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag, mode| {
+generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, AbiTagLayout, Str -> Str
+generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, mode| {
 	snake = to_lower_snake_case(tag.name)
 	variant = capitalize_first(tag.name)
-	if List.is_empty(tag.payload) {
+	if !abi_tag_has_payload(abi_tag) {
 		return "        ${struct_name}Tag::${variant} => {},\n"
 	}
 
@@ -2623,28 +2627,30 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 generate_tag_union_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
 	struct_name = tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
-	is_pure_enum = List.all(tu.tags, |tag| List.is_empty(tag.payload))
-
-	if is_pure_enum {
+	if !(type_table.layout(type_id)).tag_union_has_payload() {
 		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 	}
 
 	var $decref_branches = ""
 	var $incref_branches = ""
+	var $decref_moves_payload = Bool.False
+	abi_tags = (type_table.layout(type_id)).tag_layouts()
+	var $tag_index = 0
 	for tag in tu.tags {
-		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "decref"))
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "incref"))
-	}
-	decref_moves_payload = List.any(
-		tu.tags,
-		|tag|
-			List.any(
+		abi_tag = abi_tag_at(abi_tags, $tag_index)
+		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "decref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "incref"))
+		if abi_tag_has_payload(abi_tag) {
+			$decref_moves_payload = $decref_moves_payload or List.any(
 				tag.payload,
 				|payload_id|
 					decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, "payload") != "",
-			),
-	)
-	decref_value_binding = if decref_moves_payload {
+			)
+		}
+		$tag_index = $tag_index + 1
+	}
+
+	decref_value_binding = if $decref_moves_payload {
 		"        let mut value = self;\n"
 	} else {
 		"        let value = self;\n"
@@ -2786,7 +2792,11 @@ direct_arg_name_list_rust = |type_table, arg_type_ids| {
 	arg_shape = ArgShape.from_table(type_table)
 
 	for _arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
-		sep = if $args == "" { "" } else { ", " }
+		sep = if $args == "" {
+			""
+		} else {
+			", "
+		}
 		$args = "${$args}${sep}arg${U64.to_str($idx)}"
 		$idx = $idx + 1
 	}

@@ -12,18 +12,33 @@ if bool {
 # EXPECTED
 MISSING METHOD - if_then_else_simple_block_formatting.md:3:8:3:9
 # PROBLEMS
-── ✗ missing method ──────────────── if_then_else_simple_block_formatting.md:3:8
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-} else 2
-       ^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    [A, ..]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 3 8) (end 3 9))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "if_then_else_simple_block_formatting.md") (start 3 8) (end 3 9) (annotation error) (line-text "} else 2"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[A, ..]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwIf,LowerIdent,OpenCurly,

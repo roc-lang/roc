@@ -413,7 +413,7 @@ test "relocation creation" {
 
     const func = Relocation{ .linked_function = .{
         .offset = 200,
-        .name = "roc_alloc",
+        .name = @import("builtins").shim_symbols.roc_alloc,
     } };
     try std.testing.expectEqual(@as(u64, 200), func.getOffset());
 }

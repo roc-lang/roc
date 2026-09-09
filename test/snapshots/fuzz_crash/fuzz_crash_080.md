@@ -16,38 +16,52 @@ UNDECLARED TYPE - fuzz_crash_080.md:1:5:1:6
 UNBOUND WHERE RECEIVER - fuzz_crash_080.md:3:17:4:23
 DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 # PROBLEMS
-── ✗ undeclared type ───────────────────────────────────── fuzz_crash_080.md:1:5
-
-The type L is not declared in this scope.
-
-c : L
-    ^
-
-── ✗ unbound where receiver ───────────────────────────── fuzz_crash_080.md:3:17
-
-The type variable o is not introduced by this annotation's type or a connected
-method constraint, so this where clause cannot add the h method to it.
-
-o
-.h : a,
-
-A where clause receiver must be introduced by the annotation's type, or by the
-method type of a receiver that is already connected to the annotation. Connect
-o to the annotation, or remove this constraint.
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_080.md:1:1
-
-This declaration has a type annotation but no implementation.
-
-c : L
-        where [
-                o
-                .h : a,
-        ]
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "The type ")
+			(annotated code "L")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_080.md") (start 1 5) (end 1 6) (annotation error) (line-text "c : L"))))
+	(report
+		(severity runtime_error)
+		(title "Unbound Where Receiver")
+		(region (start 3 17) (end 4 23))
+		(headline
+			(reflow "The type variable")
+			(reflow " ")
+			(annotated code "o")
+			(reflow " ")
+			(reflow "is not introduced by this annotation's type or a connected method constraint, so this where clause cannot add the")
+			(reflow " ")
+			(annotated symbol "h")
+			(reflow " ")
+			(reflow "method to it."))
+		(document
+			(source-region (file "fuzz_crash_080.md") (start 3 17) (end 4 23) (annotation error) (line-text "                o\n                .h : a,"))
+			(line-break)
+			(reflow "A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect")
+			(reflow " ")
+			(annotated code "o")
+			(reflow " ")
+			(reflow "to the annotation, or remove this constraint.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 1 1) (end 5 10))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_080.md") (start 1 1) (end 5 10) (annotation error) (line-text "c : L\n        where [\n                o\n                .h : a,\n        ]"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

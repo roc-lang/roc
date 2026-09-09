@@ -15,18 +15,31 @@ outer = |value| {
 # EXPECTED
 UNBOUND WHERE RECEIVER - where_clause_enclosing_rigid_error.md:3:29:3:46
 # PROBLEMS
-── ✗ unbound where receiver ───────── where_clause_enclosing_rigid_error.md:3:29
-
-The type variable a is not introduced by this annotation's type or a connected
-method constraint, so this where clause cannot add the show method to it.
-
-inner : a -> Str where [a.show : a -> Str]
-                        ^^^^^^^^^^^^^^^^^
-
-A where clause receiver must be introduced by the annotation's type, or by the
-method type of a receiver that is already connected to the annotation. Connect
-a to the annotation, or remove this constraint.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unbound Where Receiver")
+		(region (start 3 29) (end 3 46))
+		(headline
+			(reflow "The type variable")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "is not introduced by this annotation's type or a connected method constraint, so this where clause cannot add the")
+			(reflow " ")
+			(annotated symbol "show")
+			(reflow " ")
+			(reflow "method to it."))
+		(document
+			(source-region (file "where_clause_enclosing_rigid_error.md") (start 3 29) (end 3 46) (annotation error) (line-text "    inner : a -> Str where [a.show : a -> Str]"))
+			(line-break)
+			(reflow "A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "to the annotation, or remove this constraint."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,

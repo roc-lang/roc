@@ -8039,7 +8039,7 @@ pub const MonoLlvmCodeGen = struct {
             // Symbol ABI: call the host's runtime symbol directly:
             // roc_dbg(bytes: [*]const u8, len: usize).
             const fn_ty = builder.fnType(.void, &.{ ptr_ty, self.ptrSizedIntType() }, .normal) catch return error.OutOfMemory;
-            const func = try self.declareExternSymbol("roc_dbg", fn_ty);
+            const func = try self.declareExternSymbol(shim_symbols.roc_dbg, fn_ty);
             _ = wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), &.{
                 try self.staticBytes(msg),
                 builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
@@ -11373,9 +11373,9 @@ pub const MonoLlvmCodeGen = struct {
             };
         }
         return switch (callback) {
-            .dbg => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_dbg")),
-            .expect_failed => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_expect_failed")),
-            .crashed => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_crashed")),
+            .dbg => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_dbg)),
+            .expect_failed => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_expect_failed)),
+            .crashed => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_crashed)),
         };
     }
 

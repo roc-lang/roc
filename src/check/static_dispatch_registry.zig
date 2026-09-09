@@ -161,6 +161,8 @@ pub const IteratorKind = enum(u8) {
     drop_first,
     concat,
     append,
+    with_index,
+    step_by,
     forced_dynamic,
 
     /// See `IteratorComponentTopology`. Null for `none` (no minted kind) and
@@ -170,7 +172,7 @@ pub const IteratorKind = enum(u8) {
             .none, .forced_dynamic => null,
             .range, .numeric_until, .numeric_to => .source_without_components,
             .custom, .list, .list_rev, .str, .single => .source_with_components,
-            .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append => .adapter,
+            .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by => .adapter,
         };
     }
 };
@@ -211,6 +213,8 @@ pub const IteratorProcedureId = enum(u8) {
     iter_drop_first,
     iter_concat,
     iter_append,
+    iter_with_index,
+    iter_step_by,
     range_iter,
     numeric_range_delegate,
     numeric_to,
@@ -239,6 +243,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first,
             .iter_concat,
             .iter_append,
+            .iter_with_index,
+            .iter_step_by,
             .range_iter,
             .numeric_range_delegate,
             .numeric_to,
@@ -268,6 +274,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first => .drop_first,
             .iter_concat => .concat,
             .iter_append => .append,
+            .iter_with_index => .with_index,
+            .iter_step_by => .step_by,
             .range_iter => .range,
             .numeric_to => .numeric_to,
             .numeric_until => .numeric_until,
@@ -298,6 +306,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first,
             .iter_concat,
             .iter_append,
+            .iter_with_index,
+            .iter_step_by,
             .range_iter,
             .numeric_range_delegate,
             .numeric_to,
@@ -327,6 +337,10 @@ const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
     .{ "Builtin.Iter.concat", .iter_concat },
     .{ "Builtin.Iter.append", .iter_append },
     .{ "Builtin.Num.Range.iter", .range_iter },
+    .{ "iter_with_index", .iter_with_index },
+    .{ "Builtin.iter_with_index", .iter_with_index },
+    .{ "iter_step_by", .iter_step_by },
+    .{ "Builtin.iter_step_by", .iter_step_by },
     .{ "iter_from_step", .iter_from_step },
     .{ "Builtin.iter_from_step", .iter_from_step },
     .{ "range_done", .range_done },
@@ -1318,6 +1332,9 @@ pub const EvidenceChainIndex = struct {
 /// target identity without sharing the callable instantiation recorded by the
 /// representative slot.
 pub const ConstraintEvidenceRef = struct {
+    /// Composite requirements name their exact owner parameter in the checked
+    /// module's evidence pool, so dictionary ABIs need no lexical type search.
+    scheme_param: ?u32 = null,
     index: EvidenceChainIndex,
     independent_callable: bool = false,
 };
@@ -1347,6 +1364,9 @@ pub const CheckedEvidence = struct {
         /// The checker proved this nested-procedure obligation is the matching
         /// evidence parameter projected from the concrete callable request.
         from_callable,
+        /// The local declaration binds an abstract scheme requirement. A use
+        /// supplies its checked evidence; no codec is instantiated at declaration.
+        from_scheme,
         checked_error,
         /// The edge left this obligation's dispatcher unsolved: no value of that
         /// type can ever reach the dispatch (e.g. the `Ok` payload of a `Try` that
@@ -1448,8 +1468,9 @@ pub const EvidenceParamRecord = struct {
     /// Index of the dispatcher in the owning scheme's quantified-variable
     /// vector (`CheckedProcedureTemplate.scheme_vars` or
     /// `DispatchRefScope.scheme_vars`): the substitution entry this
-    /// obligation's receiver is read from.
-    slot: u32,
+    /// obligation's receiver is read from. Composite scheme requirements are
+    /// supplied by checked evidence and have no quantified-variable slot.
+    slot: ?u32,
     /// Whether this parameter becomes a runtime method dictionary. Literal
     /// defaulting evidence remains an ABI input for descriptor selection but
     /// does not carry method implementations at runtime.
@@ -1466,6 +1487,8 @@ pub const EvidenceParamRecord = struct {
 /// erased row remainder or an explicit default.
 pub const EvidenceParamSource = union(enum) {
     scheme_callable,
+    /// Exact captured codec relation, supplied by the checked call edge.
+    scheme_requirement,
     constraint_callable: ConstraintCallableRoot,
     /// Reachable only through a nested constraint callable, with no
     /// specialization-time default to preserve. Checked use-site evidence
@@ -1503,6 +1526,7 @@ pub const CheckedCallResolution = union(enum) {
     /// The dispatcher is one of the enclosing callable's constrained scheme
     /// vars; each specialization edge supplies the target as evidence.
     evidence_dependent: struct {
+        scheme_param: ?u32 = null,
         index: EvidenceChainIndex,
         /// The evidence slot is shared with another same-name call. It supplies
         /// only target identity; this plan must instantiate that target against
@@ -1583,6 +1607,9 @@ pub const GeneratedCodecCall = struct {
 
 /// Exact checked contract for one compiler-generated codec instantiation.
 pub const GeneratedCodecDerivation = struct {
+    /// Producer-proven equivalence class of the complete codec proof graph.
+    /// Source/frozen roles remain specific to this contract for replay.
+    identity: GeneratedCodecDerivationId,
     kind: GeneratedCodecDerivationKind,
     source_constructor_ty: CheckedTypeId,
     source_runtime_ty: CheckedTypeId,
@@ -1753,8 +1780,9 @@ pub const StaticDispatchPlanTable = struct {
     /// chain-free evidence of the template's root edge: how each of its own
     /// obligations resolves when nothing instantiates it (a compile-time
     /// root, a platform requirement, a const-eval entry). A range into
-    /// `evidence_refs`.
-    template_root_evidence: []const artifact_serialize.Span = &.{},
+    /// `evidence_refs`. Null explicitly marks a scheme-only procedure that
+    /// requires instantiation evidence and cannot be invoked as a bare root.
+    template_root_evidence: []const ?artifact_serialize.Span = &.{},
     /// Exact generated-codec contracts emitted by checking.
     generated_codec_derivations: []GeneratedCodecDerivation = &.{},
     /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
@@ -1777,7 +1805,7 @@ pub const StaticDispatchPlanTable = struct {
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
         site_substitutions: SerializedSlice(CheckedTypeId) = .{},
-        template_root_evidence: SerializedSlice(artifact_serialize.Span) = .{},
+        template_root_evidence: SerializedSlice(?artifact_serialize.Span) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
@@ -2027,6 +2055,7 @@ pub const StaticDispatchPlanTable = struct {
                 });
             }
             try generated_codec_derivations.append(allocator, .{
+                .identity = @enumFromInt(@as(u32, @intCast(generated_codec_derivations.items.len))),
                 .kind = switch (@as(ModuleEnv.GeneratedCodecDerivation.Kind, @enumFromInt(derivation.kind))) {
                     .parser => .parser,
                     .encoder => .encoder,
@@ -2354,7 +2383,8 @@ pub const StaticDispatchPlanTable = struct {
     pub fn templateRootEvidence(self: *const StaticDispatchPlanTable, template: canonical.CheckedProcedureTemplateId) []const CheckedEvidence {
         const raw = @intFromEnum(template);
         if (raw >= self.template_root_evidence.len) return &.{};
-        const span = self.template_root_evidence[raw];
+        std.debug.assert(self.template_root_evidence[raw] != null);
+        const span = self.template_root_evidence[raw].?;
         return self.evidence_refs[span.start .. span.start + span.len];
     }
 

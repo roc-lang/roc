@@ -12,19 +12,50 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const workspace_edit = @import("workspace_edit.zig");
+
+const Position = workspace_edit.Position;
+const TextEdit = workspace_edit.TextEdit;
 
 /// An LSP `InlayHint`.
 const InlayHint = struct {
-    position: struct {
-        line: u32,
-        character: u32,
-    },
+    position: Position,
     label: []const u8,
+    /// What a client applies when the reader accepts this hint, or null where
+    /// the type cannot be written into the source.
+    ///
+    /// A hint reads like an inline annotation, which is how several languages
+    /// spell one - Roc does not, so a reader who retypes what the hint shows
+    /// gets source that does not compile. Carrying the edit turns accepting
+    /// the hint into the two-line form that does.
+    edit: ?TextEdit,
+
     /// 1 = Type, per the protocol's `InlayHintKind`.
-    kind: u32 = 1,
-    /// The label already begins with `: `, so no extra space is wanted.
-    paddingLeft: bool = false,
-    paddingRight: bool = false,
+    const type_kind: u32 = 1;
+
+    /// `textEdits` is left out rather than sent as an empty list where there
+    /// is no edit, so a client offers the gesture only where it does something.
+    pub fn jsonStringify(self: InlayHint, writer: anytype) error{WriteFailed}!void {
+        try writer.beginObject();
+        try writer.objectField("position");
+        try writer.write(self.position);
+        try writer.objectField("label");
+        try writer.write(self.label);
+        try writer.objectField("kind");
+        try writer.write(type_kind);
+        // The label already begins with `: `, so no extra space is wanted.
+        try writer.objectField("paddingLeft");
+        try writer.write(false);
+        try writer.objectField("paddingRight");
+        try writer.write(false);
+        if (self.edit) |edit| {
+            try writer.objectField("textEdits");
+            try writer.beginArray();
+            try writer.write(edit);
+            try writer.endArray();
+        }
+        try writer.endObject();
+    }
 };
 
 /// Read a `line` field out of a position object.
@@ -138,6 +169,10 @@ pub fn handler(comptime ServerType: type) type {
                 try hints.append(self.allocator, .{
                     .position = .{ .line = hint.line, .character = hint.character },
                     .label = hint.label,
+                    .edit = if (hint.edit) |edit| TextEdit{
+                        .range = workspace_edit.toRange(edit.range),
+                        .newText = edit.new_text,
+                    } else null,
                 });
             }
 

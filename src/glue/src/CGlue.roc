@@ -86,7 +86,9 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 				record_struct_name(duplicate_record_names, type_id, rec)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, type_id, tu)
-		RocFunction(_) => "void*"
+		# A function stored inside a value is one erased-callable allocation,
+		# exactly like `Box(fn)`.
+		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "void*"
 	}
 }
@@ -807,7 +809,7 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 	struct_name = tag_union_struct_name(preferred_names, duplicate_tags, type_id, tu)
 	disc_type = c_discriminant_type(abi_layout.discriminant_size())
 	abi_tags = abi_tag_layouts_c(abi_layout)
-	is_pure_enum = List.all(abi_tags, |tag| !(abi_tag_has_payload_c(tag)))
+	is_pure_enum = !abi_layout.tag_union_has_payload()
 
 	var $tag_constants = ""
 	var $tag_index = 0

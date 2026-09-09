@@ -19,17 +19,30 @@ expect sum == 15
 # EXPECTED
 VAR NAME MISSING `$` - for_loop_list_u64.md:3:6:3:12
 # PROBLEMS
-── ● var name missing `$` ───────────────────────────── for_loop_list_u64.md:3:6
-
-The mutable binding total_ is declared with var but its name does not start
-with $.
-
-var total_ = 0
-    ^^^^^^
-
-Rename this binding and all of its uses to $total_. The name is only a
-convention; mutability comes from the var declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 12))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "total_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$total_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_list_u64.md") (start 3 6) (end 3 12) (annotation warning) (line-text "\tvar total_ = 0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

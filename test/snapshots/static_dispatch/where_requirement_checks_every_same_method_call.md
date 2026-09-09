@@ -16,21 +16,34 @@ f = |value| {
 # EXPECTED
 TYPE MISMATCH - where_requirement_checks_every_same_method_call.md:4:21:4:28
 # PROBLEMS
-── ✗ type mismatch ───── where_requirement_checks_every_same_method_call.md:4:21
-
-This expression is used in an unexpected way.
-
-_second = value.convert(1.U64)
-                ^^^^^^^
-
-It has the type:
-
-    a, U64 -> _ret where [a.convert : a, Str -> U64]
-
-But you are trying to use it as:
-
-    a, Str -> U64 where [a.convert : a, Str -> U64]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 21) (end 4 28))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "where_requirement_checks_every_same_method_call.md") (start 4 21) (end 4 28) (annotation error) (line-text "    _second = value.convert(1.U64)"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a, U64 -> _ret where [a.convert : a, Str -> U64]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a, Str -> U64 where [a.convert : a, Str -> U64]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenCurly,CloseCurly,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseSquare,

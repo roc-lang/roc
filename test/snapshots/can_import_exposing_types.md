@@ -91,258 +91,410 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 TYPE MISMATCH - can_import_exposing_types.md:50:22:50:74
 # PROBLEMS
-── ● duplicate definition ───────────────────── can_import_exposing_types.md:1:1
-
-The name Json is being redeclared here:
-
-import json.Json exposing [Value, Error, Config]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-In this scope, Json was already defined in can_import_exposing_types.md:1:1:
-
-import json.Json exposing [Value, Error, Config]
-^
-
-── ✗ undeclared type ───────────────────────── can_import_exposing_types.md:6:24
-
-The type Value is not declared in this scope.
-
-parseJson : Str -> Try(Value, Error)
-                       ^^^^^
-
-── ✗ undeclared type ───────────────────────── can_import_exposing_types.md:6:31
-
-The type Error is not declared in this scope.
-
-parseJson : Str -> Try(Value, Error)
-                              ^^^^^
-
-── ✗ name not in scope ─────────────────────── can_import_exposing_types.md:7:21
-
-Nothing is named parse in this scope.
-
-parseJson = |input| Json.parse(input)
-                    ^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:10:17
-
-The type Request is not declared in this scope.
-
-handleRequest : Request -> Response
-                ^^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:10:28
-
-The type Response is not declared in this scope.
-
-handleRequest : Request -> Response
-                           ^^^^^^^^
-
-── ✗ name not in scope ────────────────────── can_import_exposing_types.md:12:14
-
-Nothing is named decode in this scope.
-
-result = Json.decode(req.body)
-         ^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────── can_import_exposing_types.md:14:22
-
-Nothing is named ok in this scope.
-
-Ok(value) => Http.ok(value)
-             ^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────── can_import_exposing_types.md:15:23
-
-Nothing is named badRequest in this scope.
-
-Err(error) => Http.badRequest(error)
-              ^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:15
-
-The type Config is not declared in this scope.
-
-processData : Config, List(Value) -> Try(List(Value), Error)
-              ^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:28
-
-The type Value is not declared in this scope.
-
-processData : Config, List(Value) -> Try(List(Value), Error)
-                           ^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:47
-
-The type Value is not declared in this scope.
-
-processData : Config, List(Value) -> Try(List(Value), Error)
-                                              ^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:55
-
-The type Error is not declared in this scope.
-
-processData : Config, List(Value) -> Try(List(Value), Error)
-                                                      ^^^^^
-
-── ✗ does not exist ────────────────────────── can_import_exposing_types.md:22:5
-
-List.mapTry does not exist.
-
-List.mapTry(
-^^^^^^^^^^^
-
-List is in scope, but it has no associated mapTry.
-
-── ✗ name not in scope ────────────────────── can_import_exposing_types.md:24:13
-
-Nothing is named validateWith in this scope.
-
-|v| Json.validateWith(config, v),
-    ^^^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:29:18
-
-The type Config is not declared in this scope.
-
-jsonConfig : Config,
-             ^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:30:18
-
-The type Status is not declared in this scope.
-
-httpStatus : Status,
-             ^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:31:23
-
-The type Response is not declared in this scope.
-
-defaultResponse : Response,
-                  ^^^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:35:16
-
-The type Config is not declared in this scope.
-
-createClient : Config -> Http.Client
-               ^^^^^^
-
-── ✗ mod not found ─────────────────────── can_import_exposing_types.md:35:30
-
-This Client type is declared to be in http.Client, which does not exist.
-
-createClient : Config -> Http.Client
-                             ^^^^^^^
-
-── ✗ name not in scope ────────────────────── can_import_exposing_types.md:36:25
-
-Nothing is named clientWith in this scope.
-
-createClient = |config| Http.clientWith(config)
-                        ^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:39:18
-
-The type Response is not declared in this scope.
-
-handleResponse : Response -> Str
-                 ^^^^^^^^
-
-── ✗ name not in scope ────────────────────── can_import_exposing_types.md:42:23
-
-Nothing is named statusToString in this scope.
-
-Ok(status) => Http.statusToString(status)
-              ^^^^^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ does not exist ───────────────────────── can_import_exposing_types.md:43:23
-
-Error.toString does not exist.
-
-Err(error) => Error.toString(error)
-              ^^^^^^^^^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:19
-
-The type Value is not declared in this scope.
-
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-                  ^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:26
-
-The type Error is not declared in this scope.
-
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-                         ^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:34
-
-The type Status is not declared in this scope.
-
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-                                 ^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:48
-
-The type Response is not declared in this scope.
-
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-                                               ^^^^^^^^
-
-── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:58
-
-The type Error is not declared in this scope.
-
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-                                                         ^^^^^
-
-── ✗ name not in scope ────────────────────── can_import_exposing_types.md:50:33
-
-Nothing is named to_str in this scope.
-
-Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
-                        ^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ type mismatch ────────────────────────── can_import_exposing_types.md:50:22
-
-The first branch of this match does not match the previous branch .
-
-Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The first branch is:
-
-    [Ok({ body: Error, status: Error }), ..]
-
-But the previous branch results in:
-
-    Try(Error, Error)
-
-All branches in a match must have compatible types.
-Note: You can wrap branches values in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 1 1) (end 1 49))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Json")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 49) (annotation error) (line-text "import json.Json exposing [Value, Error, Config]"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Json")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_import_exposing_types.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [Value, Error, Config]"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 6 24) (end 6 29))
+		(headline
+			(reflow "The type ")
+			(annotated code "Value")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 6 24) (end 6 29) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 6 31) (end 6 36))
+		(headline
+			(reflow "The type ")
+			(annotated code "Error")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 6 31) (end 6 36) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 7 21) (end 7 31))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "parse")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 7 21) (end 7 31) (annotation error) (line-text "parseJson = |input| Json.parse(input)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 10 17) (end 10 24))
+		(headline
+			(reflow "The type ")
+			(annotated code "Request")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 10 17) (end 10 24) (annotation error) (line-text "handleRequest : Request -> Response"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 10 28) (end 10 36))
+		(headline
+			(reflow "The type ")
+			(annotated code "Response")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 10 28) (end 10 36) (annotation error) (line-text "handleRequest : Request -> Response"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 12 14) (end 12 25))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "decode")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 12 14) (end 12 25) (annotation error) (line-text "    result = Json.decode(req.body)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 14 22) (end 14 29))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ok")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 14 22) (end 14 29) (annotation error) (line-text "        Ok(value) => Http.ok(value)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 15 23) (end 15 38))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "badRequest")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 15 23) (end 15 38) (annotation error) (line-text "        Err(error) => Http.badRequest(error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 20 15) (end 20 21))
+		(headline
+			(reflow "The type ")
+			(annotated code "Config")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 15) (end 20 21) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 20 28) (end 20 33))
+		(headline
+			(reflow "The type ")
+			(annotated code "Value")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 28) (end 20 33) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 20 47) (end 20 52))
+		(headline
+			(reflow "The type ")
+			(annotated code "Value")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 47) (end 20 52) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 20 55) (end 20 60))
+		(headline
+			(reflow "The type ")
+			(annotated code "Error")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 55) (end 20 60) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 22 5) (end 22 16))
+		(headline
+			(annotated code "List.mapTry")
+			(reflow " does not exist."))
+		(document
+			(annotated code "List")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "mapTry")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 22 5) (end 22 16) (annotation error) (line-text "    List.mapTry("))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 24 13) (end 24 30))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "validateWith")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 24 13) (end 24 30) (annotation error) (line-text "        |v| Json.validateWith(config, v),"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 29 18) (end 29 24))
+		(headline
+			(reflow "The type ")
+			(annotated code "Config")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 29 18) (end 29 24) (annotation error) (line-text "    jsonConfig : Config,"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 30 18) (end 30 24))
+		(headline
+			(reflow "The type ")
+			(annotated code "Status")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 30 18) (end 30 24) (annotation error) (line-text "    httpStatus : Status,"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 31 23) (end 31 31))
+		(headline
+			(reflow "The type ")
+			(annotated code "Response")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 31 23) (end 31 31) (annotation error) (line-text "    defaultResponse : Response,"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 35 16) (end 35 22))
+		(headline
+			(reflow "The type ")
+			(annotated code "Config")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 35 16) (end 35 22) (annotation error) (line-text "createClient : Config -> Http.Client"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 35 30) (end 35 37))
+		(headline
+			(text "This ")
+			(annotated code "Client")
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 35 30) (end 35 37) (annotation error) (line-text "createClient : Config -> Http.Client"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 36 25) (end 36 40))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "clientWith")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 36 25) (end 36 40) (annotation error) (line-text "createClient = |config| Http.clientWith(config)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 39 18) (end 39 26))
+		(headline
+			(reflow "The type ")
+			(annotated code "Response")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 39 18) (end 39 26) (annotation error) (line-text "handleResponse : Response -> Str"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 42 23) (end 42 42))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "statusToString")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 42 23) (end 42 42) (annotation error) (line-text "        Ok(status) => Http.statusToString(status)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 43 23) (end 43 37))
+		(headline
+			(annotated symbol-unqualified "Error.toString")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 43 23) (end 43 37) (annotation error) (line-text "        Err(error) => Error.toString(error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 47 19) (end 47 24))
+		(headline
+			(reflow "The type ")
+			(annotated code "Value")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 47 19) (end 47 24) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 47 26) (end 47 31))
+		(headline
+			(reflow "The type ")
+			(annotated code "Error")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 47 26) (end 47 31) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 47 34) (end 47 40))
+		(headline
+			(reflow "The type ")
+			(annotated code "Status")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 47 34) (end 47 40) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 47 48) (end 47 56))
+		(headline
+			(reflow "The type ")
+			(annotated code "Response")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 47 48) (end 47 56) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 47 58) (end 47 63))
+		(headline
+			(reflow "The type ")
+			(annotated code "Error")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 47 58) (end 47 63) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 50 33) (end 50 44))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "to_str")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_exposing_types.md") (start 50 33) (end 50 44) (annotation error) (line-text "        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })"))))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 50 22) (end 50 74))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the previous")
+			(reflow " ")
+			(reflow "branch")
+			(reflow " ")
+			(reflow "."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 50 22) (end 50 74) (annotation error) (line-text "        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "branch is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Ok({ body: Error, status: Error }), ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the previous")
+			(reflow " ")
+			(reflow "branch results")
+			(reflow " ")
+			(reflow "in:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try(Error, Error)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "All branches in a")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "must have compatible types.")
+			(line-break)
+			(annotated underline "Note:")
+			(reflow " ")
+			(reflow "You can wrap branches values in a tag to make them compatible.")
+			(line-break)
+			(reflow "To learn about tags, see")
+			(reflow " ")
+			(link "https://www.roc-lang.org/tutorial#tags"))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

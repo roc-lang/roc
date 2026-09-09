@@ -5378,6 +5378,38 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Known(4)" },
     },
     .{
+        .name = "inspect: Iter.with_index pairs items with their position",
+        .source =
+        \\{
+        \\    iter = ["a", "b", "c"].iter().with_index()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(0, \"a\"), (1, \"b\"), (2, \"c\")]" },
+    },
+    .{
+        // The counter advances only on `One`, so a skipping source still hands
+        // out consecutive indices. Counting skips too would read [(1, 2), (3, 4), (5, 6)].
+        .name = "inspect: Iter.with_index numbers only yielded items",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5, 6].iter().keep_if(|n| n % 2 == 0).with_index()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(0, 2), (1, 4), (2, 6)]" },
+    },
+    .{
+        .name = "inspect: Iter.with_index forwards the source's known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().with_index())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.with_index reports unknown length over a skipping source",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().keep_if(|n| n > 1).with_index())",
+        .expected = .{ .inspect_str = "Unknown" },
+    },
+    .{
         .name = "inspect: Iter.next steps appended iterator in order",
         .source =
         \\{
@@ -7584,4 +7616,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;
+pub const tests = @import("eval_set_tests.zig").tests ++ core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;

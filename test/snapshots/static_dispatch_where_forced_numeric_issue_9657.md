@@ -31,44 +31,117 @@ use_it = {
 TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 # PROBLEMS
-── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
-
-The decode method on Dec has an incompatible type.
-
-transform = make_map(|n| n + 1)
-            ^^^^^^^^
-
-The method decode has the type:
-
-    src, fmt -> (Try(Dec, err), src)
-      where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]
-
-But I need it to have the type:
-
-    I64 -> b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
-    -> b]
-
-Hint: This function expects 1 argument but got 2.
-
-── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
-
-The encode method on Dec has an incompatible type.
-
-transform = make_map(|n| n + 1)
-            ^^^^^^^^
-
-The method encode has the type:
-
-    Dec, fmt -> Try(encoded, err)
-      where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]
-
-But I need it to have the type:
-
-    b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
-    -> b]
-
-Hint: This function expects 1 argument but got 2.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 19 17) (end 19 25))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "decode")
+			(reflow " ")
+			(reflow "method on")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "has an incompatible type."))
+		(document
+			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
+			(line-break)
+			(reflow "The method")
+			(reflow " ")
+			(annotated code "decode")
+			(reflow " ")
+			(reflow "has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "src, fmt -> (Try(Dec, err), src)")
+			(line-break)
+			(indent 1)
+			(text "  where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need it to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "I64 -> b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec -> b]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "2")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 19 17) (end 19 25))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "encode")
+			(reflow " ")
+			(reflow "method on")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "has an incompatible type."))
+		(document
+			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
+			(line-break)
+			(reflow "The method")
+			(reflow " ")
+			(annotated code "encode")
+			(reflow " ")
+			(reflow "has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec, fmt -> Try(encoded, err)")
+			(line-break)
+			(indent 1)
+			(text "  where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need it to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec -> b]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "2")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,OpenRound,UpperIdent,OpArrow,UpperIdent,CloseRound,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,UpperIdent,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

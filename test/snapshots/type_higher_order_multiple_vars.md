@@ -20,96 +20,151 @@ AMBIGUOUS FUNCTION TYPE - type_higher_order_multiple_vars.md:3:43:3:45
 UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:46:3:48
 UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
-── ✗ ambiguous function type ─────────── type_higher_order_multiple_vars.md:3:36
-
-I was parsing a function type, and multiple arrows need parentheses.
-
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-                                   ^^
-
-Use parentheses to say whether the function returns another function or takes a
-function as an argument.
-
-For example:
-    a -> (b -> c)
-    (a -> b) -> c
-
-── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:39
-
-I was parsing a statement, and this token cannot start a statement here.
-
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-                                      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found ( here.
-
-── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:40
-
-I was parsing a statement, and this token cannot start a statement here.
-
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-                                       ^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found _a here.
-
-── ✗ ambiguous function type ─────────── type_higher_order_multiple_vars.md:3:43
-
-I was parsing a function type, and multiple arrows need parentheses.
-
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-                                          ^^
-
-Use parentheses to say whether the function returns another function or takes a
-function as an argument.
-
-For example:
-    a -> (b -> c)
-    (a -> b) -> c
-
-── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:46
-
-I was parsing a statement, and this token cannot start a statement here.
-
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-                                             ^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found _c here.
-
-── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:48
-
-I was parsing a statement, and this token cannot start a statement here.
-
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-                                               ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found ) here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Ambiguous Function Type")
+		(region (start 3 36) (end 3 38))
+		(headline
+			(reflow "I was parsing a function type, and multiple arrows need parentheses."))
+		(document
+			(reflow "Use parentheses to say whether the function returns another function or takes a function as an argument.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a -> (b -> c)")
+			(line-break)
+			(indent 1)
+			(text "(a -> b) -> c")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "type_higher_order_multiple_vars.md") (start 3 36) (end 3 38) (annotation error) (line-text "compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 3 39) (end 3 40))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "(")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_higher_order_multiple_vars.md") (start 3 39) (end 3 40) (annotation error) (line-text "compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 3 40) (end 3 42))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "_a")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_higher_order_multiple_vars.md") (start 3 40) (end 3 42) (annotation error) (line-text "compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Ambiguous Function Type")
+		(region (start 3 43) (end 3 45))
+		(headline
+			(reflow "I was parsing a function type, and multiple arrows need parentheses."))
+		(document
+			(reflow "Use parentheses to say whether the function returns another function or takes a function as an argument.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a -> (b -> c)")
+			(line-break)
+			(indent 1)
+			(text "(a -> b) -> c")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "type_higher_order_multiple_vars.md") (start 3 43) (end 3 45) (annotation error) (line-text "compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 3 46) (end 3 48))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "_c")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_higher_order_multiple_vars.md") (start 3 46) (end 3 48) (annotation error) (line-text "compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 3 48) (end 3 49))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ")")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_higher_order_multiple_vars.md") (start 3 48) (end 3 49) (annotation error) (line-text "compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -687,7 +687,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     };
     var symbols: @import("SymbolTable.zig").Table = .{};
     defer symbols.deinit(scratch);
-    const alloc_symbol = try symbols.intern(scratch, "roc_alloc");
+    const alloc_symbol = try symbols.intern(scratch, @import("builtins").shim_symbols.roc_alloc);
     const answer_symbol = try symbols.intern(scratch, "roc__answer");
     const relocations = [_]Relocation{
         .{ .linked_function = .{ .offset = 1, .symbol = alloc_symbol } },
@@ -768,7 +768,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(@as(usize, relocations.len), view.relocations.len);
     try std.testing.expectEqual(RelocationKind.linked_function, try view.relocations[0].relocationKind());
     try std.testing.expectEqual(@as(u64, 1), view.relocations[0].code_offset);
-    try std.testing.expectEqualStrings("roc_alloc", try view.symbolName(view.relocations[0].symbol));
+    try std.testing.expectEqualStrings(@import("builtins").shim_symbols.roc_alloc, try view.symbolName(view.relocations[0].symbol));
     try std.testing.expectEqual(RelocationKind.linked_data_rel32, try view.relocations[1].relocationKind());
     try std.testing.expectEqual(@as(u64, 2), view.relocations[1].code_offset);
     try std.testing.expectEqualStrings("roc__answer", try view.symbolName(view.relocations[1].symbol));

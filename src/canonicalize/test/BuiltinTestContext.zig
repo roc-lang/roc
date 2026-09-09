@@ -32,6 +32,7 @@ pub const BuiltinTestContext = struct {
                 .builtin_module_env = self.builtin_module.env,
                 .builtin_indices = self.builtin_indices,
             },
+            .is_entry_module = true,
         };
     }
 };

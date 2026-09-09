@@ -93,11 +93,11 @@ generated_type_names_zig = |type_table, duplicate_names| {
 				if List.len(tu.tags) >= 2 and tu.name != "" {
 					struct_name = default_tag_union_struct_name(duplicate_names, $type_id, tu)
 					$names = $names.append(struct_name)
-					if TypeTable.tag_union_has_payload(tu) {
+					if type_info.layout.tag_union_has_payload() {
 						$names = $names.append("${struct_name}Tag")
 						$names = $names.append("${struct_name}Payload")
-						for tag in tu.tags {
-							if List.len(tag.payload) > 1 {
+						for tag in type_info.layout.tag_layouts() {
+							if abi_tag_has_payload(tag) and List.len(tag.payload) > 1 {
 								$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
 							}
 						}
@@ -444,7 +444,9 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 				name_to_struct_name(rec.name)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type(type_table, duplicate_tag_names, preferred_names, type_id, tu)
-		RocFunction(_) => "*anyopaque"
+		# A function stored inside a value is one erased-callable allocation,
+		# exactly like `Box(fn)`.
+		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "*anyopaque"
 	}
 }
@@ -964,7 +966,7 @@ generate_single_tag_union = |type_table, duplicate_tag_names, preferred_names, t
 	abi_tags = abi_tag_layouts(abi_layout)
 
 	# Check if this is a pure enum (all variants have no payload)
-	is_pure_enum = List.all(abi_tags, |tag| !(abi_tag_has_payload(tag)))
+	is_pure_enum = !abi_layout.tag_union_has_payload()
 
 	if is_pure_enum {
 		# Pure enum: just emit the enum type
@@ -1036,8 +1038,7 @@ generate_single_tag_union = |type_table, duplicate_tag_names, preferred_names, t
 		}
 
 		# Comptime assertions
-		method_decls32 = generate_tag_union_refcount_method_delegates(struct_name)
-		method_decls64 = generate_tag_union_refcount_method_delegates(struct_name)
+		method_decls = generate_tag_union_refcount_method_delegates(struct_name)
 		assertions = if abi_layout.size64 > 0 or abi_layout.size32 > 0 {
 			block =
 				\\comptime {
@@ -1070,10 +1071,10 @@ generate_single_tag_union = |type_table, duplicate_tag_names, preferred_names, t
 			\\pub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {
 			\\    payload: [${U64.to_str(abi_discriminant_offset(abi_layout, Pointer32))}]u8 align(${U64.to_str(abi_layout.alignment32)}),
 			\\    tag: ${struct_name}Tag,
-			\\${$accessors32}${method_decls32}} else extern struct {
+			\\${$accessors32}${method_decls}} else extern struct {
 			\\    payload: ${payload_union_name},
 			\\    tag: ${struct_name}Tag,
-			\\${$accessors64}${method_decls64}};
+			\\${$accessors64}${method_decls}};
 		"${$tuple_structs}${decl}\n\n${assertions}"
 	}
 }
@@ -1171,6 +1172,7 @@ release_policy_for_type_id = |type_table, duplicate_tag_names, preferred_names, 
 						"${tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)}Release"
 					}
 				}
+		RocFunction(_) => "RocErasedCallableRelease"
 		_ => ""
 	}
 }
@@ -1209,6 +1211,7 @@ type_ident_zig = |type_table, duplicate_tag_names, preferred_names, type_id|
 						"Type${U64.to_str(type_id)}"
 					}
 				}
+		RocFunction(_) => "ErasedCallable"
 		_ => "Type${U64.to_str(type_id)}"
 	}
 
@@ -1273,6 +1276,7 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 					}
 				}
 			}
+		RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
 		_ => ""
 	}
 }
@@ -1311,6 +1315,7 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 						""
 					}
 				}
+		RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
 		_ => ""
 	}
 }
@@ -1344,12 +1349,12 @@ generate_record_refcount_methods = |type_table, duplicate_tag_names, preferred_n
 	"    /// Recursively decrement Roc-owned fields.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        const value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    pub fn incref(self: @This(), amount: isize) void {\n        const value = self;\n${$incref_body}    }\n"
 }
 
-generate_tag_payload_refcount_branch : TypeTable, List(Str), TypeNamePlan.PreferredNames, TagVariant, Str -> Str
-generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, preferred_names, tag, mode| {
+generate_tag_payload_refcount_branch : TypeTable, List(Str), TypeNamePlan.PreferredNames, TagVariant, AbiTagLayout, Str -> Str
+generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, preferred_names, tag, abi_tag, mode| {
 	snake = to_lower_snake_case(tag.name)
 	variant_ident = name_to_zig_quoted_ident(tag.name)
 
-	if List.is_empty(tag.payload) {
+	if !abi_tag_has_payload(abi_tag) {
 		return "        .${variant_ident} => {},\n"
 	}
 
@@ -1448,11 +1453,6 @@ tag_payload_refcount_uses_param = |type_table, tag, mode| {
 	)
 }
 
-tag_union_refcount_uses_param : TypeTable, TagUnionRepr, Str -> Bool
-tag_union_refcount_uses_param = |type_table, tu, mode| {
-	List.any(tu.tags, |tag| tag_payload_refcount_uses_param(type_table, tag, mode))
-}
-
 generate_tag_union_refcount_method_delegates : Str -> Str
 generate_tag_union_refcount_method_delegates = |struct_name| {
 	"    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        decref${struct_name}(self, roc_host);\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self: @This(), amount: isize) void {\n        incref${struct_name}(self, amount);\n    }\n"
@@ -1463,19 +1463,27 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_tag_names, preferre
 	struct_name = tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)
 	var $decref_branches = ""
 	var $incref_branches = ""
+	var $decref_uses_param = Bool.False
+	var $incref_uses_param = Bool.False
+	abi_tags = (type_table.layout(type_id)).tag_layouts()
+	var $tag_index = 0
 	for tag in tu.tags {
-		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_tag_names, preferred_names, tag, "decref"))
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_tag_names, preferred_names, tag, "incref"))
+		abi_tag = abi_tag_at(abi_tags, $tag_index)
+		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_tag_names, preferred_names, tag, abi_tag, "decref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_tag_names, preferred_names, tag, abi_tag, "incref"))
+		if abi_tag_has_payload(abi_tag) {
+			$decref_uses_param = $decref_uses_param or tag_payload_refcount_uses_param(type_table, tag, "decref")
+			$incref_uses_param = $incref_uses_param or tag_payload_refcount_uses_param(type_table, tag, "incref")
+		}
+		$tag_index = $tag_index + 1
 	}
 
-	decref_uses_param = tag_union_refcount_uses_param(type_table, tu, "decref")
-	incref_uses_param = tag_union_refcount_uses_param(type_table, tu, "incref")
-	decref_unused = if decref_uses_param {
+	decref_unused = if $decref_uses_param {
 		""
 	} else {
 		"    _ = roc_host;\n"
 	}
-	incref_unused = if incref_uses_param {
+	incref_unused = if $incref_uses_param {
 		""
 	} else {
 		"    _ = amount;\n"
@@ -1577,7 +1585,7 @@ generate_refcount_helpers = |type_table, duplicate_tag_names, preferred_names| {
 					}
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" and !List.all(tu.tags, |tag| List.is_empty(tag.payload)) {
+				if List.len(tu.tags) >= 2 and tu.name != "" and type_info.layout.tag_union_has_payload() {
 					struct_name = tag_union_struct_name(preferred_names, duplicate_tag_names, $type_id, tu)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -1639,14 +1647,11 @@ add_type_alias_zig = |state, alias, target| {
 	}
 }
 
-tag_union_has_payload_zig : TagUnionRepr -> Bool
-tag_union_has_payload_zig = |tu| TypeTable.tag_union_has_payload(tu)
-
-add_tag_union_aliases_zig : { content : Str, seen : List(Str) }, Str, Str, TagUnionRepr -> { content : Str, seen : List(Str) }
-add_tag_union_aliases_zig = |state, alias, target, tu| {
+add_tag_union_aliases_zig : { content : Str, seen : List(Str) }, Str, Str, AbiLayout -> { content : Str, seen : List(Str) }
+add_tag_union_aliases_zig = |state, alias, target, abi_layout| {
 	with_main_alias = add_type_alias_zig(state, alias, target)
 
-	if tag_union_has_payload_zig(tu) {
+	if abi_layout.tag_union_has_payload() {
 		with_payload_alias = add_type_alias_zig(with_main_alias, "${alias}Payload", "${target}Payload")
 		add_type_alias_zig(with_payload_alias, "${alias}Tag", "${target}Tag")
 	} else {
@@ -1665,7 +1670,7 @@ generate_platform_type_aliases_zig = |hosted_functions, provides_list, type_tabl
 			PlainAlias => add_type_alias_zig($state, plan.alias, target)
 			TagUnionAlias =>
 				match type_table.get(plan.type_id) {
-					RocTagUnion(tu) => add_tag_union_aliases_zig($state, plan.alias, target, tu)
+					RocTagUnion(_) => add_tag_union_aliases_zig($state, plan.alias, target, type_table.layout(plan.type_id))
 					_ => add_type_alias_zig($state, plan.alias, target)
 				}
 			}

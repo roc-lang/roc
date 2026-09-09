@@ -3679,6 +3679,31 @@ test "issue 11099 boxy dispatches an imported procedure stored in a record" {
     try std.testing.expectEqualStrings("\"hi!\"", output);
 }
 
+test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\render : a -> Str
+        \\render = |value| Str.inspect(value)
+        \\main = render({ boxed: Box.box(U64x2.default().with_lane(1, 9)), vectors: [I64x2.splat(-1)] })
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"{ boxed: Box(U64x2(0, 9)), vectors: [I64x2(-1, -1)] }\"", output);
+}
+
 test "spec constr preserves direct call argument effect order" {
     try expectOptimizedDbgEvents(
         \\State : { n : I64 }
@@ -7679,6 +7704,8 @@ test "iterdiff: coarse custom is_eq set dedup keeps same representative across i
         \\Bucket := { key : I64, tag : I64 }.{
         \\    is_eq : Bucket, Bucket -> Bool
         \\    is_eq = |a, b| a.key == b.key
+        \\    to_hash : Bucket, Hasher -> Hasher
+        \\    to_hash = |value, hasher| value.key.to_hash(hasher)
         \\}
         \\
         \\main : I64

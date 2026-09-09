@@ -23990,12 +23990,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 // Object files call the host's fixed runtime symbol directly:
                 // symbol(bytes: [*]const u8, len: usize).
-                const symbol_name: []const u8 = if (field_offset == @offsetOf(RocOps, "roc_crashed"))
-                    "roc_crashed"
-                else if (field_offset == @offsetOf(RocOps, "roc_expect_failed"))
-                    "roc_expect_failed"
+                const symbol_name: []const u8 = if (field_offset == @offsetOf(RocOps, builtins.shim_symbols.roc_crashed))
+                    builtins.shim_symbols.roc_crashed
+                else if (field_offset == @offsetOf(RocOps, builtins.shim_symbols.roc_expect_failed))
+                    builtins.shim_symbols.roc_expect_failed
                 else
-                    "roc_dbg";
+                    builtins.shim_symbols.roc_dbg;
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, msg_slot);
@@ -24034,7 +24034,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // their declaring module (the host consumes the pending location
             // per expect event; see CompileTimeHost.rocExpectFailed).
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_expect_failed"), "expect failed");
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_expect_failed), "expect failed");
         }
 
         fn emitComptimeBranchTaken(
@@ -24118,7 +24118,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a roc_crashed call via RocOps with a static message.
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
         }
 
         /// Same as `emitRocCrash`, but reuses a per-proc shared msg/args slot.
@@ -24126,7 +24126,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// run (the program exits immediately after).
         fn emitRocCrashShared(self: *Self, msg: []const u8) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
+            try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
         }
 
         fn emitTrap(self: *Self) Allocator.Error!void {

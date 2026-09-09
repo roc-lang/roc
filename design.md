@@ -663,6 +663,11 @@ definition. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
+A resolved lookup's module identity is local to the module owning its expression.
+Consumers visiting imported bodies resolve that identity through the expression
+owner's identity table, then use the target module's definition store. An
+unavailable resolved target is a compiler invariant violation.
+
 The checker memoizes this resolution by alias declaration type variable and
 item, while each use still instantiates the selected method scheme separately.
 `CheckedBodyPayloadCopier.copyExprData` treats any unresolved associated lookup
@@ -732,6 +737,20 @@ layout. This is at least as strict as requiring identical destination const plan
 and layouts, preserves distinct specialized and narrowed representations, and
 prevents equivalent instantiations from rebuilding or repeatedly walking a large
 stored graph.
+
+SpecConstr preserves each static candidate's closed source expression as its
+initializer authority. Its separately memoized constructor view contains no
+generated IR or caller substitutions. Inspecting that view schedules no strict
+work: bindings inside an initializer stay inside it, and binding/control
+expressions remain complete opaque leaves. The view follows explicit constructor
+edges only; recursive values refer to locals, whose bindings it never follows.
+All clone paths reuse the candidate expression. Pattern matching may rebind a
+caller-local copy of the view, but whole-value materialization always returns
+the original candidate. Debug validation checks initializer locals in an empty
+lexical scope. Candidate views are scoped to the specialization pass and keep
+only source-owned identities, so speculative output rewinds cannot invalidate
+them. This avoids cloning a shared initializer at each use while preserving
+constructor evidence for field reads and specialization.
 
 Compile-time evaluation is allowed to fail with user diagnostics only during
 checking. After checking, stored constant data is ordinary checked output. A
@@ -927,6 +946,29 @@ This rule applies everywhere: checked data, lowering data, backend data, cache
 data, ARC data, LirImage data, and test reporting. If code uses a sentinel
 as a placeholder for data that must be produced, stop and redesign the producer
 ownership and presence model.
+
+## Set Storage
+
+`Set(item) :: Dict(item, {})` gives Set its own nominal identity directly over
+Dict, without an additional tag union. The empty-record value carries no runtime
+payload; Set shares Dict's dense entries, hash buckets, load-factor capacity,
+seed-domain metadata, collision handling, and rehashing implementation.
+Set operations remain ordinary Roc functions, with no backend-specific Set
+representation or ownership policy.
+
+Membership and insertion require `item.is_eq` and `item.to_hash`. Equal items
+must hash equally, including when a nominal type defines a custom equality
+method. Insertion performs one dictionary lookup and retains an existing equal
+item, including its representative and position. New items append; removal may
+move the last item into the removed slot, as with Dict. Set equality and hashing
+are independent of iteration order.
+
+Iteration maps the dictionary's entry iterator to its keys without materializing
+a key list. Folds traverse the entries directly. `from_iter` consumes the
+iterator's explicit length hint for initial capacity and inserts each yielded
+item, ignoring `Skip` steps. `reserve` takes an additional item count;
+`capacity` reports the hash table's growth threshold. `clear` preserves that
+capacity, while `release_excess_capacity` rebuilds for the live item count.
 
 ## Source Parsing Boundary
 
@@ -1776,6 +1818,17 @@ erroneous types on nodes Monotype must instantiate. So the relation reports its
 own diagnostic instead of poisoning either operand, and only the constructor's
 own var becomes erroneous.
 
+Pattern checking carries a rejected nominal constructor result through its
+recursive children to the owning checked expression. A lambda with an invalid parameter
+is recorded as an erroneous function-value expression; a match records the
+failure on the match; a binding records it on the initializer. Iterator loops
+retire their own execution and output rejected iterator dispatch plans. The
+independently checked scrutinee or iterable keeps its solved type. These owners
+use the existing checked runtime-error output path, so no malformed
+parameter reaches post-check instantiation and independent definitions remain
+available. This is propagation of the backing relation's explicit result, not a
+later scan of solved pattern types or a change to nominal typing rules.
+
 ### Settled-State Re-Decision
 
 Whether the operand has already lifted to a nominal is decided from its solved
@@ -1800,6 +1853,22 @@ same inline-lambda position—is pinned by
 `test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`.
 
 ## Module Completion Boundary
+
+Deferred tuple accesses retain their exact owning expression identity alongside
+the operand and effective result variables. Resolution reports an explicit
+resolved, pending, or rejected outcome. The item/result relation does not
+poison either operand on failure. Immediate rejection marks the still-owned
+expression result for ordinary cascade suppression; deferred rejection replaces
+the access with a checked runtime error without poisoning shared solved types,
+which may already belong to generalized function signatures. Both ambiguous
+shape and concrete invalid access follow this ownership rule.
+
+The deferred worklist stores the expression identity instead of duplicating its
+source region; diagnostics retrieve that region from CIR. Rejected accesses
+are retired after the resolution pass, with shared traversal scratch and one
+default-metadata compaction before further checking. Error-free passes allocate
+no rejection or retirement storage. A discarded access's pending tuple check is
+retired with its explicit subtree invalidation state.
 
 The compile coordinator records phase progress separately from user diagnostics.
 A source module that reaches checking has no user-error `Failure` outcome. It
@@ -2050,11 +2119,18 @@ flow through one graph relation; the checker never performs a pairwise
 argument scan.
 
 Expected aggregate structure is recursive checking context, not a second owner
-of the expression's root relation. Lists, tuples, records, and tag payloads
-project child slots by relating an aggregate skeleton to a rigids-flexed orphan
-copy of the expected type. Nominal constructors explicitly open their declared
-backing before checking the backing expression, and record updates project each
-supplied field from the base row before checking that field's value. A stored
+of the expression's root relation. A record update passes a borrowed base-row
+and field identity; only an aggregate construction consuming that context
+looks up the field. Ordinary stored-value lookups create no expected-shape copy.
+Lists, tuples, records, and tag payloads project child slots by relating an
+aggregate skeleton to an expected-shape copy. This operation preserves structural
+equalities, field kinds, and aliases, and flexes rigids, but does not copy or
+traverse static-dispatch requirements: those belong to the original type and its
+real scheme-use edges. It records no instantiation, literal, ambiguity, or
+dispatch evidence. Context introduces no independent dispatch requirement.
+Nominal constructors explicitly open their declared backing before checking
+the backing expression; demanded update-field type reads obey the same nominal
+opacity and declaration-substitution rules as record unification. A stored
 child is checked and instantiated first; a successful projected-child relation
 is then committed so sibling checking and dispatch can consume it. A rejected
 projected-child relation records no standalone mismatch: the enclosing aggregate's
@@ -2292,6 +2368,14 @@ or checked-error. `platformRequirementSolutionTableFromInputs` and
 `EvidencePass.run` consume that verdict directly; they never infer success by
 inspecting solved type shape or by comparing the eventual runtime value kind.
 
+A procedure requirement's root evidence follows the complete scheme of its
+recorded app definition, including captured codec requirements. The copied
+platform requirement type supplies the solved interface, not the scheme's
+evidence identity. Checked output validates a direct procedure's root vector
+against the app template's parameter count. Monotype selects this root evidence
+before materializing an edge for a direct call, procedure value, or interface
+relation; downstream specialization receives only that selected edge.
+
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
 that wants to expose an app-provided value to its host defines an explicit
@@ -2442,6 +2526,15 @@ checker selects one pattern-extraction root for each binder, carrying the shared
 right-hand side and complete scrutinee pattern. Those roots are emitted in
 dependency-first order and later lookups resolve through the selected binder,
 never as runtime-local pattern references.
+
+These top-level extraction roots are required binding definitions, not optional
+runtime-body hoists. Post-solve pruning must retain every well-checked top-level
+extraction independently of the optional-hoist dependency predicate. Its full
+checked body uses ordinary top-level constant/callable evaluation rules,
+including `expect`, `dbg`, loops, and mutable intermediate values. CheckedModule
+construction retains each binder's own source scheme and independently decides whether its
+result is context-free or requires specialization; retaining a definition does
+not force its type to be concrete or make a runtime-body expression hoistable.
 
 A non-exhaustive destructure in an unguarded runtime position is itself a strict
 compile-time demand when its right-hand side is top-level-equivalent. This demand
@@ -3017,20 +3110,37 @@ Every live literal-origin record leaves checking with one explicit resolution:
   checked `runtime_error` expression is the failure.
 
 Literal-pattern deferred static-dispatch constraint groups are owned by the
-enclosing match. The checker passes that owner through recursive pattern
-checking and records it in the literal node's checked dispatch plan at
-creation. When the literal's deferred conversion-and-equality group is
-processed, the conversion constraint's raw callable identity selects its exact
-plan and therefore the group's failure owner. If unification merged equivalent
-literal relations, the failure path uses the merged callable class to enumerate
-every explicit occurrence plan and invalidates every owner; a receiver root by
+enclosing match, lambda, loop, binding statement, or top-level definition.
+Pattern polarity and failure ownership are independent: an annotated parameter
+still belongs to its function. A captured lambda records its CIR closure
+wrapper as the owner; function errors enter the existing erroneous-value sweep
+so checking finishes the lambda before replacing its structure. The checker
+passes the exact owner node through recursive pattern checking and records it
+in the literal node's checked dispatch plan at creation. When the literal's
+deferred conversion-and-equality group is processed, the conversion constraint's
+raw callable identity selects its exact plan and therefore the group's failure
+owner. If unification merged equivalent literal relations, the failure path
+uses the merged callable class to enumerate every explicit occurrence plan and invalidates every owner; a receiver root by
 itself is never an occurrence identity. If either constraint is rejected,
-diagnostic recovery replaces the whole match with the checked `runtime_error`;
+diagnostic recovery replaces the owning expression or statement with a checked
+`runtime_error`. A rejected top-level destructure retains its binder identities,
+replaces its literal leaves and RHS with checked errors, marks every name it
+bound erroneous, and invalidates its compile-time extraction/validation work.
+Each bound name keeps an explicit `pattern_error` selected root that outputs
+a typed runtime-error constant, including callable-valued names. This preserves
+the exported binding identity without evaluating the rejected pattern;
 a reachable `checked_error` literal pattern may not enter a checked body. A
 later scheme instantiation still owns failure of its copied static-dispatch
 constraint at the use expression. Ownership is explicit producer data and must
 not be reconstructed from pattern structure. The plan packs its kind and
 resolution into one word, so recording the owner does not increase plan size.
+Discarding a subtree retires its pattern evidence as well as its expression
+evidence. Finalization queues owners of late-rejected patterns and invalidates
+them after sealing the dense plan array, so retirement cannot invalidate its
+iteration. Repeated owners are deduplicated before invalidation. This worklist
+allocates only on failure. `pattern_error` reuses the selected-root body union
+and the existing binder index; it adds no root storage on successful programs.
+No persistent reverse index or owner table is maintained for successful checking.
 
 `unresolved` is construction-only and may not cross the checked boundary.
 Checking finalizes each live record exactly once after constraint solving;
@@ -3423,7 +3533,62 @@ identity. Boxy and Monotype consume the identity directly; they must not find a
 derivation by comparing runtime types or resolve one of its calls by looking up
 the method name in a registry.
 
+The evidence schema of a binding includes its explicitly captured codec
+requirements as well as constraints attached to variables in its callable.
+CheckedModule construction enumerates that complete schema once per owning scheme and reuses
+it for aliases and use sites. A captured codec requirement names its exact
+receiver and callable relation; a composite receiver is not a quantified
+variable and occupies no specialization-substitution slot. Such a requirement
+is supplied by checked use-site evidence, either a validated contract or an
+explicit reference to an enclosing requirement. Evidence resolution consults
+that relation before classifying a structural receiver. The receiver's known
+outer shape is not proof that its generic components have a concrete codec.
+Imported pristine schemes retain these requirements under the same substitution
+that copied their callable, including synthetic scheme roots without CIR nodes.
+
+When a local scheme leaves the solver's active lexical scope, its captured
+codec requirements are retained as checked module data. Retiring solver work
+does not discard the contract of the local procedure's checked body. Synthetic
+imported schemes and ordinary source bindings retain their producer-authored
+classification through serialization and rechecking.
+
+A generic local declaration binds its own composite evidence parameters. Its
+construction recipe records those entries as `from_scheme`, separately from
+checked callable paths and captured enclosing evidence. Checked use edges
+supply those parameters before Monotype or Boxy lowers dispatch; neither
+CheckedModule construction nor lowering may derive a concrete codec from the declaration's generic shape.
+
+A forwarded composite requirement carries both its lexical evidence coordinate
+and the absolute index of its owner parameter in the checked module's evidence
+pool. Monotype uses the lexical coordinate; Boxy uses the owner index to bind
+and capture a dictionary without recovering ownership from a receiver type.
+These source identities transport checked evidence and do not add specialization
+key components. CheckedModule construction caches the complete schema by its checker-authored
+owner; aliases and local scopes share the same evidence and quantified-variable
+pool ranges. Schemes whose checker-authored codec requirements require
+instantiation have no concrete template-root evidence. Selecting one as a root
+requires an explicit instantiated root edge with its own evidence.
+
+Constant-evaluation entry wrappers retain the evaluated value's quantified type
+variables without accepting its dispatch requirements as wrapper arguments.
+Procedure definitions and hoisted source-pattern roots bind evidence chains;
+constant and expression wrappers resolve their bodies without caller-supplied
+evidence. CheckedModule construction and use-site enumeration consume the same
+explicit root classification.
+
+Completed generated codec proof graphs also carry a producer-proven identity
+for specialization reuse. Type-role keys and call metadata select candidates; equality
+compares all source and frozen roles, every method selection and conditional
+edge, and nested evidence and substitutions. One alpha-equivalence bijection
+covers all type roots, including cross-root sharing. Cycles are compared as
+finite proof graphs. Source contracts remain intact for replay; specialization
+equality uses the shared identity rather than the per-use derivation index.
+
 Monotype instantiates a generated-codec contract once at the codec boundary.
+Queued specialization contexts retain both the constructor and the explicit
+public value shape. Both participate in specialization identity. A constructor
+may use the structural generated-body representation, so restoring the contract
+consumes the retained public shape to preserve its nominal boundary.
 While the specialization graph is mutable, codec preparation relates the
 contract's source and frozen constructor roles to that boundary, instantiates
 both its public value shape and its explicitly checker-authored generated-body
@@ -4160,6 +4325,8 @@ const IteratorKind = enum(u8) {
     drop_first,
     concat,
     append,
+    with_index,
+    step_by,
     forced_dynamic,
 };
 
@@ -4523,27 +4690,40 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
 - supply each reachable `continue` edge with the scalar leaves required by the
   loop fixed point.
 
-When the continuation observes only part of a compiler-generated tuple loop
-result, SpecConstr may narrow the loop's exit ABI without narrowing its
-back-edge state. Exit selection is a distinct final clone phase after the
-specialization graph is complete. Ordinary specialization and body-rewrite
-clones never initiate it. The exit-selection clone keeps calls opaque, does not
-rewrite call patterns, and cannot emit callable workers, so it cannot reopen
-the specialization graph through recursive call edges. Its recursive input is
-limited to the selected function's finite, acyclic expression ownership.
+When the continuation observes only part of a tuple loop result, SpecConstr
+may narrow the loop's exit ABI without narrowing its back-edge state. This
+applies equally to source tuples and compiler-generated state tuples; tuple
+type does not imply a statically visible tuple constructor.
 
-That rewrite is lexical: the dedicated full expression clone carries the
-selected exit ABI while cloning the owning loop body, rewrites every `break`
-owned by that loop wherever it occurs (including inside mixed value-producing
-branch arms and statement values), and pushes an explicit null selection while
-cloning a nested loop body. Initial values remain in the enclosing lexical loop
-context. Re-cloned output breaks carry an explicit SpecConstr-owned selected-ABI
-stamp, so the exit-selection clone's internal normalization propagates the
-already completed transfer instead of trying to recognize it from its scalar
-shape.
-It is invalid to change the loop result type after rewriting only a terminating
-spine or a subset of exits; every selected exit must transfer exactly the
-explicitly selected tuple items.
+Exit selection is a distinct final phase after the specialization graph is
+complete. One source-order traversal of each finalized function records loop
+result bindings and all uses of their local identities. The resulting immutable
+demand plan carries source tuple types, component types, and live components.
+A whole-tuple use, including a capture or retained ownership operand, demands
+every component. The analysis visits a continuation once, not once per field.
+Ordinary specialization and body-rewrite clones never initiate exit selection.
+
+The exit rewrite consumes that plan while preserving the established loop
+parameter representation. It neither retries loop scalarization nor feeds its
+completed loops or continuations back through general normalization. Calls stay
+opaque; it cannot discover call patterns, emit workers, or reopen the
+specialization graph. Existing branch structure and shared continuations remain
+shared rather than being distributed into branch arms. Statement suffixes are
+borrowed source spans, not repeatedly copied sequences.
+
+The rewrite is lexical: it carries the selected exit ABI while traversing the
+owning loop body and rewrites every owned `break`, including those in branch
+arms and statement values. A nested loop body pushes an explicit null selection;
+its initial values remain in the enclosing lexical loop context. Completed
+transfers are output once and are never reinterpreted as source tuple exits.
+
+Each exit preserves its complete strict binding chain, including computations
+in discarded tuple components. Known, reusable tuple components transfer
+directly. An opaque tuple producer is evaluated once and supplies exact typed
+reads for only the selected components. Typed representation boundaries remain
+explicit. No tuple shape is guessed, no dead symbolic tuple is reconstructed at
+an exit, and no backend participates in this decision. Every selected exit must
+transfer exactly the components declared by its demand plan.
 
 Iterator classification in this pass consumes the explicit iterator
 representation field (or the checked public `Builtin.Iter` identity). It does
@@ -4783,6 +4963,24 @@ substitution. Cloning never relies on later lowering to reconstruct lexical
 scope from reused local ids: distinct emitted binders are distinct explicit
 identities before Lambda Solved or LIR lowering consumes them.
 
+Every SpecConstr clone reads only source: the expressions that existed when
+the clone began, plus the templates it builds from source parts in order to
+clone them, such as a let-of-case dispatch. Emitted output carries rewrite
+decisions the clone already made. A
+retained call is one an active inline frame declined, and a selected arm is
+one the value evidence resolved; reading output back as source repeats those
+decisions outside the frames and budgets that justified them. A retained
+self-call re-read that way inlines again with no active frame for its callee,
+and only the code-growth fuel ends the cycle. Case-of-case distribution
+therefore consumes the symbolic arm values recorded when each `match` or `if`
+was emitted: it selects outer arms and recurses through branch-built arms from
+those values, keeps an emitted arm's statements as they stand, and leaves an
+arm whose value is opaque as a residual match. Strict bindings introduced by
+distribution join the retained arm statements in the same block, so another
+distribution keeps every binding referenced by the recorded result value.
+A Debug validator rejects any clone-source read of an expression the clone
+emitted.
+
 #### Constant Storage
 
 Compile-time finalization is separate from iterator representation and
@@ -4877,6 +5075,30 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Expected Shape Context
+
+An expected aggregate shape guides construction but introduces no new value
+use. `copyExpectedShape` preserves the expected type's structural equalities
+and field kinds in fresh cells, flexes rigid leaves, and omits static-dispatch
+constraints and off-root scheme requirements. Every omitted requirement remains
+on its source type and is enforced by the ordinary enclosing relation and the
+actual stored-value instantiation. Shape copies never enter literal, dispatch,
+ambiguity, or evidence worklists. The copy and its projected relation belong to
+one commit-probe, so a rejected aggregate relation retains neither the copy nor any
+partial unification. Rejection is diagnosed by the owning full-shape relation.
+
+A record update carries its base variable and supplied field identity as
+borrowed context. A consuming aggregate reads the current row on demand,
+including aliases and extensions; a nominal base requires the same opacity
+capability, declaration substitution, and record backing as record unification.
+No solved-graph memo survives between field checks, which can refine the base.
+Ordinary lookups consume no aggregate context and allocate no expected-shape copy.
+
+The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
+arithmetic remains polymorphic, including heterogeneous user arithmetic;
+nominal and extended rows still guide nested defaulted/optional construction;
+inconsistent shared type variables and unsupported real dispatches still fail.
+
 ### Hosted Try Question Widening
 
 `?` unwraps a `Try` condition and re-raises its error row into the enclosing
@@ -4968,6 +5190,13 @@ closed-to-open rejection; composition does not widen a condition type. The
 checker records distinct checked types for the propagated value and the
 function return; post-check lowering consumes its existing explicit return
 boundary and must not reconstruct or widen either type.
+
+Monotype dispatches on the checked return context: a `try_suffix` return lowers
+its value at the source's checked type and retains the active specialization's
+return cell as the boundary target. Constructor preparation must not propagate
+that wider target into the source error payload. Ordinary returns continue to
+lower with the active return cell as their expected type. Lambda Solved and LIR
+consume the retained source/target relation to convert the returned value.
 
 The accepted side is pinned by
 `test/snapshots/issue/issue_11097_bare_and_wrapped_try_on_shared_error_var.md`
@@ -6447,14 +6676,19 @@ Other solved-graph mutations:
 - `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
-  unifying that node with a fresh error variable.
+  unifying that node with a fresh error variable. Tuple access uses this only
+  for immediate rejection while the expression frame owns the result;
+  deferred rejection follows the expression replacement described under Module
+  Completion Boundary and never poisons either shared solved class.
 - `retireCallLikeExprWithErroneousOperands` / statement-owned iterator plan
   recovery (`markErroneous`, `markStaticDispatchFnRejected`, and the explicit
   `call_operand_type_error_exprs` table)—mechanism: Erroneous Call Operand Retirement
   (above). An operand already owns a reported error, so its call-like parent is
   inserted into both expression sets before any dispatch constraint is
   introduced; a required iterator plan is sealed with rejected callable metadata
-  instead.
+  instead. `checkIteratorForLoop` also consumes an explicit rejected pattern
+  result to retire the loop and reject its iterator plans without poisoning
+  the independently checked iterable.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
@@ -6565,6 +6799,11 @@ Other solved-graph mutations:
   chain pin all sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
+- `copyExpectedShape` / `projectExpectedAggregateShape`—policy: Expected Shape
+  Context (above). Fresh structural context omits dispatch requirements owned by
+  the original type. Only successful ordinary unification with the aggregate
+  skeleton commits the expected-shape relation; the owning relation still checks the actual
+  value against the complete expected type.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
   policy: evidence-param collapse of same-shape requirements as declared in
@@ -6773,6 +7012,15 @@ Procedure-valued lookups are not restored as ordinary constants; they go
 through erased callable construction using the checked procedure template or
 stored `ConstStore` function value that names the callable. A checked lookup
 without a resolved value reference is an invariant failure in boxy lowering.
+
+A local procedure declaration needs a runtime local only when another closure
+captures that binder. Ordinary procedure lookups construct the erased callable
+at their checked, instantiated use, including the procedure's source captures.
+Whether the procedure itself captures values does not require a second,
+unused callable at its declaration. In particular, that unused construction
+must not request descriptors for uninstantiated scheme parameters. Declarations
+whose binders are captured still provide the runtime value required by those
+explicit capture edges.
 
 Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
 the requested checked type. The const node is read from the module that owns the
@@ -7252,6 +7500,24 @@ per-specialization residue of generalized literals.
 
 ### Monotype Instantiation
 
+A generalized local callable alias (`alias = callable`) owns a checked
+instantiation scope, not a runtime monomorphic value cell or a new function
+body. Checking's binding-scheme classification and the declaration's explicit
+lookup edge authorize this plan; CheckedModule construction records it on the
+binder and its resolved procedure uses. Calls and other value-producing computations are not
+alias declarations and retain their original evaluation site.
+
+Every alias use carries its own checked substitution and evidence. Interface
+replay enters the alias scope instead of equating the use with one shared
+binding type. Body lowering installs that substitution in a fresh type-only
+scope and forwards the referenced callable, preserving its identity and
+captures. It does not clone runtime binder tables or create an alias closure,
+wrapper procedure, or specialization family. Monomorphic variables present in
+the substitution retain their existing cells. CheckedModule construction
+compresses alias identity edges to their final callable lookup in linear work without composing
+type graphs. Boxy consumes that target when planning each typed callable use;
+it never materializes an alias at an uninstantiated descriptor.
+
 Monotype lowering is a specialization-time instantiation of checked type graphs.
 This is the same core model as Cor/LSS: each reachable monomorphic
 specialization starts with the checked function/value type graph, creates a
@@ -7282,6 +7548,28 @@ durable specialization record, and contributes its own checked relations.
 Specialization body scheduling may deduplicate global deferred work, but never
 authorizes importing a checked node or root-owned graph state from another
 root.
+
+Instantiation can expose an overlapping tag through a generic extension even
+when the checked call's row was already normalized. Graph row composition
+preserves the checked unifier's head-before-extension precedence: the first
+occurrence supplies the tag's payload and checked-label provenance. Composition
+adds no payload equality; ordinary relations between two rows still relate every
+shared tag's payloads. This is representation normalization of checked data, not
+a relaxation of settled checked-row validation or a new typing rule.
+
+Graph tag heads are unique; row readers establish label order on first use and
+retain that representation-only state in the row. Inserting unrelated graph
+nodes does no sorting work. Flattening gathers an extension chain once, stably
+sorts the combined span, retains its first occurrences, and compresses the root
+while retaining the live residual tail.
+It never repeatedly copies a growing prefix for each chain link. Terminal rows
+need no scratch allocation, ordinary row unification merges sorted spans in one
+pass, and sealing copies already sorted tags directly into durable storage.
+Provisional views use the same normalization without solving new constraints;
+the sealed type store continues to reject duplicate labels.
+Checked-to-specialized interface relations normalize both complete tag rows
+before matching their heads and residual extensions: relating an earlier
+function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.
@@ -7476,6 +7764,33 @@ strings, deriving names, inspecting layouts, or using incidental expression
 shape. It must also not attach a contextual monotype to a checked expression id
 as if that checked expression were a reusable runtime value.
 
+Nested procedure sites carry a compact checked inventory of the quantified type
+bindings their bodies consume, including use-site substitutions whose hidden
+receivers are absent from captured value types. Each binding names its checked
+type, lexical dispatch scope, and substitution slot. The existing nested-site
+walk produces this inventory from checked expression, pattern, and dispatch
+interfaces; it does not add a second body scan. Type visitation is cycle-safe,
+and nested sites propagate their required bindings to their lexical parents.
+Before instantiating a nested body, Monotype installs these exact bindings from
+its selected lexical evidence frames. Locally quantified variables consume that
+nested specialization's own substitution; they never share another request's
+cells. Construction of a new generalized scope imports only bindings owned by
+its enclosing scopes. Work at each specialization is proportional to the
+recorded bindings, not to the size of the enclosing scheme or its type-node map.
+Stored function evidence remains graph-free across root and cache boundaries.
+Entering a restored nested body recreates its lexical substitutions in that
+body's instantiation context, consuming saved callable/capture interfaces and
+retained hidden method contracts. Descendant contexts then use ordinary live
+bindings; decoding stored evidence never attaches graph cells to durable data.
+An initializer template with no requirements derives no method evidence. A use
+of its returned value can still carry a checked recipe for a callable stored
+inside that value; that recipe is separate from the initializer edge.
+Restoring a compile-time evaluation template installs its checked scheme and
+fresh substitution in the body context even when its method evidence is already
+supplied or empty. Pending callable evaluation wrappers install the same frame
+before lowering their bodies, whether the requested callable type is sealed or
+still a graph node. Nested bodies consume that frame's exact type bindings.
+
 Type-only instantiation state is separate from operational body-lowering state.
 Creating a fresh checked-type instance swaps only its exact scope, checked-node
 cache, and nominal declaration-scope stack; it does not construct a parallel
@@ -7553,6 +7868,24 @@ final Monotype body is emitted.
 During active Monotype specialization, unresolved checked variables and row
 extensions remain instantiation graph nodes. They are not represented by
 durable Monotype `TypeId`s.
+
+Open draft specialization indexes retain permanent interface node ids. A lookup
+visits each current union-find class once and probes all its permanent members;
+repeated argument or return positions do not repeat those probes. Candidate
+inspection does not merge existing classes during this scan. Its visited set
+is local to the scan and uses pooled scratch, so a later lookup observes any
+intervening unions. Evidence, capture, and exact interface checks still decide
+whether a candidate may be reused. Probe work is proportional to interface
+positions plus the members of distinct classes, even when many positions share
+one class. The index interns the exact family and evidence-digest prefix once
+per request, using an append-only index-local ID in each interface key. Growing
+the index during recursive lowering does not invalidate those IDs. Request
+kinds remain disjoint, and interning a prefix does not replace exact candidate
+validation. Permanent-node requests use the prefix ID and node ID directly in
+a separate index; only structural type and open-shape requests carry digests.
+Each bucket stores its first candidate inline. Additional candidates occupy
+an append-only table of overflow lists, retaining insertion order and exact
+duplicate detection across index and table growth.
 
 Type-shaped inspection that can escape relation production or become durable
 specialization identity is allowed only for a fully resolved graph node. It
@@ -8426,6 +8759,30 @@ instantiated only after this callable-or-crash gate. The crash branch uses the
 contextual result cell solely to represent the non-returning expression; it
 never instantiates the rejected callable's type or contributes a type relation.
 
+An ordinary function-valued binding whose bound expression is already a checked
+`runtime_error` likewise has no callable target. Initial checked-binding construction
+records `ProcedureBindingBody.checked_error` with that expression's identity, retaining
+the source scheme for diagnostic recovery. It produces no callable-evaluation
+root, entry wrapper, or callable-evaluation template for the rejected value.
+Exported binding metadata retains the same outcome through serialization.
+
+Resolved-value construction consumes this outcome at each binding use and emits
+a checked `runtime_error` there. A call whose callee is an immediate checked
+error becomes the same error: the callee evaluates before its arguments.
+An error-path worklist propagates this outcome along explicit callee and
+callable-binding alias edges, visiting each edge once. Aliases discovered here
+also record `checked_error`; their already-assigned evaluation roots become
+ineligible, and runtime uses never consume their wrappers. Checked-module
+construction refreshes diagnostic, divergence, and inspection-elision metadata
+before collecting specialization relations. Recovery scratch is allocated only
+when checked-module construction consumes a rejected binding or an immediately
+failing callee; successful
+modules gain no additional body traversal or per-expression metadata. The error
+happens when the value is evaluated, including passing it without calling it.
+Independent definitions retain their ordinary roots and runtime behavior.
+Neither lowering strategy instantiates the rejected binding's signature,
+substitutions, or evidence. Closed-row and unique-tag invariants remain intact.
+
 Stored generated parser and encoder runtime functions are the one distinct
 producer proof: ConstStore emits their explicit generated-runtime function kind
 only after compile-time evaluation successfully consumed the constructor
@@ -8493,8 +8850,10 @@ own callable relation.
 
 **Edges supply substitutions.** A scheme's quantified variables are its
 identity variables in identity order (`scheme_vars` on the checked template
-or dispatch scope); each evidence parameter names the slot its dispatcher
-occupies. Checking persists every scheme edge: an ordinary instantiation
+or dispatch scope), with any additional identities from explicit scheme
+requirements appended under the same numbering. An evidence parameter on an
+identity variable names the slot its dispatcher occupies. A composite scheme
+requirement has no such slot and consumes its checked evidence directly. Checking persists every scheme edge: an ordinary instantiation
 records the (pristine var, fresh var) pair of every quantified variable it
 copied (an orphan copy of an annotation or expected type is not a use of any
 scheme: it records no edge of its own and leaves every pending record slot to
@@ -9636,23 +9995,35 @@ call site's expected descriptor. ARC and every consumer use the descriptor
 output attached to the returned value; they do not treat the expected descriptor
 as evidence about bytes returned by a compiler worker.
 
-Checked direct and function-value uses of the generic `Str.inspect` intrinsic
-produce inspect-method demands in the Boxy plan. Each demanded nominal
-representation records its exact `to_inspect` worker, owning checked module,
-and module-local `MethodNameId`. Descriptor construction consumes that identity
+Checked direct and function-value uses of the generic `Str.inspect` intrinsic,
+`dbg`, and `expect_err` produce inspect-method demands in the Boxy plan. Demands
+propagate through the recorded worker/call/operand type substitutions and
+callable-use interfaces before descriptor construction. Each representation is
+marked once; recursive type relations are visited by representation pair. Each
+demanded nominal or SIMD representation records its exact `to_inspect` worker,
+owning checked module, and module-local `MethodNameId`. Descriptor construction consumes that identity
 directly; it does not rediscover a method from the representation's source
 module. It turns the plan into a method slot carrying the worker procedure,
 concrete argument layout and descriptor, hidden descriptor sources, and nested
 dictionaries. Transparent nominals may share their backing storage layout, but
 they retain a distinct checked descriptor identity when they carry an inspect
-method.
+method. Nested vector values retain descriptors even though they contain no
+reference-counted data: their inspection method is part of the descriptor
+contract. Descriptor producers and structural consumers use the same nested
+slot ordering for these vector fields, list items, and payloads.
 Runtime recursive inspection checks this slot before opaque or structural
 rendering, adapts the borrowed value into the worker argument representation,
 and invokes the worker through the registered-procedure ABI. The prepared call
 marks each adapted argument as borrowed or owned so the runtime preserves a
 borrowed source, releases an owned temporary when the worker borrows it, and
 releases an owned returned `Str` after appending its bytes. Backends do not
-resolve method names or select this behavior.
+resolve method names or select this behavior. Record inspection retains
+nested-descriptor spans across custom method calls and reborrows each reference;
+a reentrant method can grow and relocate the runtime descriptor-reference table.
+Tag variant lookups return metadata by value so recursive inspection and value
+adaptation cannot retain pointers into the growable variant table. Residual tag
+construction reserves output capacity before borrowing its source and target
+spans, which may belong to that same table.
 
 For every checked direct call to a known procedure, the lowerer
 emits a direct LIR call to the corresponding private boxy worker and supplies
@@ -10141,6 +10512,14 @@ generated function tag, the builder outputs the mapping from the stage-local
 for `ConstStore` output and static data export. `LirImage` does not store
 function runtime data. It contains only ARC-inserted LIR, committed layouts,
 root proc ids, platform entrypoints, and target usize.
+
+Glue ABI attachment records whether a tag union has nonzero payload storage on
+either pointer width during its existing committed-variant walk. Generated type
+declarations, companion aliases, and reserved names consume that recorded storage flag;
+source-level payload arity does not determine whether payload storage exists.
+Per-variant declarations and ownership helper branches consume the same committed
+payload sizes, so a zero-sized payload never causes a reference to omitted
+payload storage, including inside an otherwise refcounted union.
 
 ### Nominal Record Field Order
 
@@ -11174,6 +11553,30 @@ exists, hash-consed within the procedure, and shared by every alias of the
 summary representative. Release builds compile the certifier away entirely,
 so only debug compiler builds pay, and any certifier slowness is fixed inside
 the certifier, never by weakening what it checks.
+
+Certification boundary checks enumerate the current path's nonzero balances
+and nonempty claim sets, never the procedure's history of abstract value
+identities. Claims still require certification at zero balance and after rebinding has
+removed a value's last local name. A persistent sign index records exactly the
+negative balances and changes only on sign transitions. Deferred claims settle
+in value order; claiming can increase a container balance or spend a positive
+surplus, but cannot create another negative balance. Sparse iteration borrows
+an immutable root and skips empty subtrees; it adds no metadata or update cost
+to the shared snapshot implementation's other consumers.
+
+The certifier's final-LIR read-before-rebind graph also supplies forward
+control-flow components for join scheduling. Pending paths contribute their
+arrivals before queued join bodies run, and loop components reach their fixed
+point before downstream join components run. Changes arriving before a group's
+queued walk are absorbed into that one state. Within a component, queued groups
+run in arrival order and strict refinements continue to schedule checks.
+This changes scheduling, not the entry-state abstraction or checked paths.
+Joins whose alias partitions are unchanged compare their exact balances
+directly. A changed partition creates one variable per class intersection;
+each variable belongs to exactly one sum constraint from each input partition.
+Remaining totals, unknown counts, and the exact two incidence edges propagate
+each solution once. Ambiguous or inconsistent attribution cannot merge the
+entry states. Temporary constraint storage retains capacity between meets.
 
 ### Mode Specialization
 
@@ -13061,6 +13464,20 @@ chooses the output kind; `roc build` produces what the platform declares for
 the selected target, and there is no `--no-link` style flag. `--target` and
 `--output` (the output path) remain per-build choices.
 
+For headerless applications, the synthetic default platform owns the process
+entrypoint. Every native program build path, including embedded interpreter
+builds, links its target-specific process startup object. The generated
+Roc or interpreter wrapper exports the platform's declared entrypoint, which
+receives process arguments from that runtime and returns the exit status.
+The explicit synthetic-platform flag selects these link inputs; builds using
+an application-declared platform consume that platform's own inputs.
+The interpreter archive imports only its runtime dependencies. On Linux it
+uses direct OS operations without libc, so compiler-only libraries cannot
+introduce libc requirements into the freestanding default-platform program.
+Because that startup also supplies no TLS, interpreter execution ownership on
+Linux without libc uses the kernel thread id directly, preserving concurrent
+host calls and same-thread reentrancy without accessing TLS.
+
 Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
 (plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and
 `arm64mingw` (plus `x64v1mingw` and `arm64v1mingw`) select the GNU Windows
@@ -13076,6 +13493,12 @@ libraries declared explicitly by the platform target, together with Roc's
 generated objects. This lets a platform provide a cgo host and its matching
 MinGW runtime without either the compiler or linker reconstructing the host's
 ABI from the archive.
+
+The synthetic default platform declares MinGW startup and library inputs from
+the same inventory used to embed the vendored runtime in the compiler. Default
+app staging writes those files into the selected target's platform directory;
+the linker consumes them as ordinary explicit platform inputs. Baseline CPU
+targets use the same runtime bytes as their matching architecture and ABI.
 
 ```text
 targets: {
@@ -13162,6 +13585,25 @@ interpreter-internal structure (the dev-build translation shim and
 compiler-internal evaluation construct one); it is not part of any host ABI,
 and glue never emits it.
 
+Generated Zig and Rust bindings provide a `RocHost` helper for host-owned
+allocation state. Its fields are exactly the `env` and callback prefix of
+`RocOps`, with callback self pointers referring to `RocHost`. It has no
+`hosted_fns` member: hosted calls use the platform's declared linker symbols.
+This helper is not passed across compiled Roc entrypoints. The glue ABI lock
+compares its complete prefix size, alignment, field offsets, and callback
+signatures with the interpreter types defined by builtins. C bindings call the runtime
+symbols directly. C and Rust declarations generated from builtins are compiled
+alongside generated bindings to lock their runtime value layouts and callback
+signatures; template-local numeric assertions alone do not establish agreement
+with builtins.
+
+The glue script input and output are written using checked runtime record
+schemas and committed LIR layouts. No handwritten Zig extern record mirrors
+stand between `src/glue/platform/*.roc` and the glue runner. Named fields select
+schema logical indices; the layout store supplies their byte offsets and
+layouts. A checked-source schema regression test locks the remaining marshaller
+field names and leaf types.
+
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
 
@@ -13187,6 +13629,17 @@ symbols stay distinct because the platform header that assigns those symbols
 is the data that separates them. `provides` follows the same rule: the
 exported symbol set is part of the platform relation, and two exports remain
 two exports even when they name the same Roc function.
+
+Host compilation selects only `provided_export` procedure roots before lowering.
+Platform requirements remain checked internal bindings reached through ordinary
+procedure references; their ABI category does not grant host visibility. Each
+provided root records its exact dense declaration ID in the checked export table.
+The existing LIR root order retains the checked root identity, and its position
+in the selected root sequence determines the host dispatch ordinal. Native output,
+shims, and images consume that same sequence without independently filtering it.
+Symbol lookup follows the declaration ID directly, never a source-name search.
+Run images copy names because they outlive checked modules; linked output borrows
+them while those modules remain alive.
 
 ### Sealed Roc Object Boundary
 
@@ -14139,6 +14592,22 @@ streaming. Every compiler-backed operation is implemented by LLVM, both native
 dev backends, wasm, the interpreter, and the Lambda Mono evaluator. Compile-time
 evaluation uses the same vector layouts and dev lowering as runtime dev code,
 and `ConstStore` preserves all 16 vector bytes under the checked vector type.
+
+Primitive storage does not imply scalar inspection. The shared primitive
+inspection classification selects scalar low-level formatting, the Bool tag
+union, or a checked builtin `to_inspect` body. Both lowering strategies consume
+that classification. Monotype prepares SIMD method callees before relation
+freeze and consumes those reservations during deferred inspection; Boxy uses
+its planned inspect workers and descriptor method slots. Inspectable nominal
+wrappers are explicitly destructured before calling a backing vector's method.
+Statically known SIMD inspection is an ordinary direct procedure call, with
+normal specialization reuse and inlining decisions.
+
+SIMD inspection appends lane text directly into the result string without
+materializing lane or string lists. Eight- and sixteen-lane results always
+exceed inline string capacity and reserve their maximum decimal size once.
+Two- and four-lane formatters retain the scalar strings, reserve their exact
+combined size, and preserve inline storage whenever the complete result fits.
 
 The exhaustive bit-level SIMD evaluator in `src/builtins/simd.zig` is the
 correctness oracle for the interpreter, Lambda Mono evaluator, and differential

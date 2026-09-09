@@ -17,17 +17,25 @@ main = {
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 # PROBLEMS
-── ✗ type mismatch ─────────────────────────── generalize_alias_in_tuple.md:7:14
-
-This string literal is being used where a non-string type is needed.
-
-(a(1), a("x"), b(2))
-         ^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 7 14) (end 7 17))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "generalize_alias_in_tuple.md") (start 7 14) (end 7 17) (annotation error) (line-text "    (a(1), a(\"x\"), b(2))"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,

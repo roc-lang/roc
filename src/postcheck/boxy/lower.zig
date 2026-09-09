@@ -375,6 +375,12 @@ fn resolveProcedureBinding(
             .synthetic,
             => boxyLowerInvariant("non-checked procedure template reached boxy worker resolution"),
         },
+        .checked_error => |expr| .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
+        },
         .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
 }
@@ -392,6 +398,12 @@ fn resolveImportedProcedureBinding(
             .lifted,
             .synthetic,
             => boxyLowerInvariant("non-checked imported procedure template reached boxy worker resolution"),
+        },
+        .checked_error => |expr| .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
         },
         .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
@@ -424,7 +436,7 @@ fn topLevelProcedureBindingForExpr(
                 .synthetic,
                 => continue,
             },
-            .callable_eval_template => continue,
+            .checked_error, .callable_eval_template => continue,
         };
         const template = module.checked_procedure_templates.get(template_ref.template);
         const body_id = switch (template.body) {
@@ -3984,7 +3996,8 @@ const ProcedureBuilder = struct {
     }
 
     fn layoutNeedsNestedBoxyDesc(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
-        return switch (self.result.layouts.getLayout(layout_idx).tag) {
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        return switch (value_layout.tag) {
             .box,
             .erased_box,
             .list,
@@ -3992,7 +4005,7 @@ const ProcedureBuilder = struct {
             .struct_,
             .tag_union,
             => true,
-            .scalar,
+            .scalar => value_layout.getScalar().tag == .vector,
             .box_of_zst,
             .closure,
             .erased_callable,
@@ -4171,10 +4184,10 @@ const ProcedureBuilder = struct {
             => true,
             .alias => self.repNeedsTagPayloadDesc(self.singleChildRepForDesc(rep_id, .alias_backing) orelse return true),
             .nominal => self.repNeedsTagPayloadDesc(self.singleChildRepForDesc(rep_id, .nominal_backing) orelse return true),
+            .primitive => |primitive| Common.primitiveInspectLowering(primitive) == .builtin_method,
             .in_progress,
             .dynamic,
             .erased_callable,
-            .primitive,
             .empty_record,
             .empty_tag_union,
             => false,
@@ -6610,7 +6623,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated record encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated encode_record call did not have three arguments");
 
@@ -6736,7 +6749,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated sequence encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated sequence encoder call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
@@ -13236,19 +13249,24 @@ const ProcBodyBuilder = struct {
             },
             .run_low_level => |run_low_level| try self.lowerLowLevelInto(target, expr.ty, run_low_level.op, run_low_level.args, next),
             .block => |block| blk: {
-                try self.reserveBlockBindings(block.statements);
+                var live_statements = block.statements;
                 var block_diverges = false;
-                for (block.statements) |statement| {
-                    if (self.module.checked_bodies.statementDiverges(statement, .run)) block_diverges = true;
+                for (block.statements, 0..) |statement, i| {
+                    if (self.module.checked_bodies.statementDiverges(statement, .run)) {
+                        live_statements = block.statements[0 .. i + 1];
+                        block_diverges = true;
+                        break;
+                    }
                 }
+                try self.reserveBlockBindings(live_statements);
                 var continuation = if (block_diverges)
                     try self.parent.result.store.addCFStmt(.runtime_error)
                 else
                     try self.lowerExprInto(target, block.final_expr, next);
-                var index = block.statements.len;
+                var index = live_statements.len;
                 while (index > 0) {
                     index -= 1;
-                    continuation = try self.lowerStatement(block.statements[index], continuation);
+                    continuation = try self.lowerStatement(live_statements[index], continuation);
                 }
                 break :blk continuation;
             },
@@ -17099,7 +17117,7 @@ const ProcBodyBuilder = struct {
         module: ProcedureModuleView,
         ref_id: checked.ResolvedValueRefId,
     ) ?Plan.WorkerSource {
-        const record = resolvedValueRecordInModule(module, ref_id);
+        const record = module.resolved_value_refs.callableTarget(ref_id);
         return switch (record.ref) {
             .local_proc => |local| if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
                 .{ .procedure_binding = binding }
@@ -17143,6 +17161,7 @@ const ProcBodyBuilder = struct {
         const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
         const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
         switch (binding.body) {
+            .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
             .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(module, template)) |source| {
                 return source;
             },
@@ -17981,7 +18000,10 @@ const ProcBodyBuilder = struct {
         defer descriptor_snapshot.deinit(self.parent.allocator);
         defer self.restoreDescriptorBindings(descriptor_snapshot);
 
-        const match = self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
+        const match: DictionaryMethodMatch = if (planned.scheme_requirement) |requirement| .{
+            .requirement = requirement,
+            .slot = self.parent.plan.dictionaries.items[@intFromEnum(requirement)].slot,
+        } else self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a matching dictionary requirement");
         const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a bound dictionary local");
@@ -22052,8 +22074,34 @@ const ProcBodyBuilder = struct {
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
         for (statements) |statement_id| {
             const statement = self.module.checked_bodies.statement(statement_id);
+            const rhs: ?checked.CheckedExprId = switch (statement.data) {
+                .decl => |decl| decl.expr,
+                .var_ => |decl| decl.expr,
+                .reassign => |reassign| reassign.expr,
+                .pending,
+                .var_uninitialized,
+                .crash,
+                .dbg,
+                .expr,
+                .expect,
+                .for_,
+                .while_,
+                .infinite_loop,
+                .breakable_loop,
+                .break_,
+                .return_,
+                .import_,
+                .alias_decl,
+                .where_alias_decl,
+                .nominal_decl,
+                .type_anno,
+                .type_var_alias,
+                .runtime_error,
+                => null,
+            };
+            if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
-                .decl => |decl| if (!self.declBindsUncapturedNestedProc(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
+                .decl => |decl| if (!self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
                 .var_ => |decl| try self.reservePatternBindings(decl.pattern),
                 .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
@@ -22074,7 +22122,7 @@ const ProcBodyBuilder = struct {
         expr_id: checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (self.declBindsUncapturedNestedProc(pattern_id, expr_id)) return next;
+        if (self.declOmitsRuntimeBinding(pattern_id, expr_id)) return next;
 
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const source = switch (pattern.data) {
@@ -22110,7 +22158,7 @@ const ProcBodyBuilder = struct {
         return try self.lowerExprInto(source, expr_id, bound);
     }
 
-    fn declBindsUncapturedNestedProc(
+    fn declOmitsRuntimeBinding(
         self: *ProcBodyBuilder,
         pattern_id: checked.CheckedPatternId,
         expr_id: checked.CheckedExprId,
@@ -22120,18 +22168,14 @@ const ProcBodyBuilder = struct {
             .assign => |binder| binder,
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return false,
         };
-        const callable_expr = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return false;
-        if (!self.nestedCallableExprHasNoCaptures(callable_expr)) return false;
+        if (self.module.checked_bodies.patternBinder(binder).is_scheme_alias) return true;
+        _ = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return false;
+        // Procedure lookups construct the callable at the instantiated use,
+        // including its source captures. Only another closure's capture of
+        // this binder reads the declaration's runtime local. Materializing an
+        // otherwise unread declaration would require descriptors for scheme
+        // parameters before any use has instantiated them.
         return !self.binderCapturedByNestedCallable(binder);
-    }
-
-    fn nestedCallableExprHasNoCaptures(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) bool {
-        const expr = self.module.checked_bodies.expr(expr_id);
-        return switch (expr.data) {
-            .lambda => true,
-            .closure => |closure| closure.captures.len == 0,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable capture check did not reference a lambda or closure"),
-        };
     }
 
     fn binderCapturedByNestedCallable(self: *ProcBodyBuilder, binder: checked.PatternBinderId) bool {
@@ -23948,6 +23992,34 @@ const ProcBodyBuilder = struct {
         defer self.parent.result.store.current_region = saved_region;
         self.parent.result.store.current_region = statement.source_region;
 
+        const rhs: ?checked.CheckedExprId = switch (statement.data) {
+            .decl => |decl| decl.expr,
+            .var_ => |decl| decl.expr,
+            .reassign => |reassign| reassign.expr,
+            .expr => |expr| expr,
+            .pending,
+            .var_uninitialized,
+            .crash,
+            .dbg,
+            .expect,
+            .for_,
+            .while_,
+            .infinite_loop,
+            .breakable_loop,
+            .break_,
+            .return_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => null,
+        };
+        if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
+            return try self.parent.result.store.addCFStmt(.runtime_error);
+        };
         return switch (statement.data) {
             .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
             .var_ => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
@@ -28030,7 +28102,7 @@ const ProcBodyBuilder = struct {
             => try self.assignStringBytesLiteral(target, "<opaque>", next),
             .list => try self.lowerListInspectLocalsInto(target, source, rep_id, next),
             .box => try self.lowerBoxInspectLocalsInto(target, source, rep_id, next),
-            .primitive => |primitive| try self.lowerPrimitiveInspectLocalsInto(target, source, primitive, next),
+            .primitive => |primitive| try self.lowerPrimitiveInspectLocalsInto(target, source, rep_id, primitive, next),
             .bool_tag_union => try self.lowerBoolInspectLocalsInto(target, source, next),
             .empty_record => try self.assignStringBytesLiteral(target, "{}", next),
             .empty_tag_union => try self.parent.result.store.addCFStmt(.{ .crash = .{
@@ -28071,6 +28143,16 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!?LIR.CFStmtId {
         const worker_id = self.parent.methodWorkerForRepByName(rep_id, "to_inspect") orelse return null;
+        return try self.lowerToInspectWorkerInto(target, source, worker_id, next);
+    }
+
+    fn lowerToInspectWorkerInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        worker_id: Plan.WorkerPlanId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         if (worker.hidden_descs.len != 0 or worker.hidden_dicts.len != 0) {
             boxyLowerInvariant("boxy to_inspect method worker carried hidden parameters");
@@ -28140,13 +28222,19 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
         primitive: checked.CheckedPrimitive,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (primitive == .bool) {
-            return try self.lowerBoolInspectLocalsInto(target, source, next);
-        }
-        const op = Common.primitiveInspectLowLevelOp(primitive);
+        const op = switch (Common.primitiveInspectLowering(primitive)) {
+            .low_level => |op| op,
+            .bool_tag_union => return try self.lowerBoolInspectLocalsInto(target, source, next),
+            .builtin_method => {
+                const method = self.parent.plan.inspectMethodForRep(rep_id) orelse
+                    boxyLowerInvariant("primitive inspect had no planned to_inspect worker");
+                return try self.lowerToInspectWorkerInto(target, source, method.worker, next);
+            },
+        };
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,

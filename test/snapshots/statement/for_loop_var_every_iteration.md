@@ -22,28 +22,51 @@ expect result == 55
 VAR NAME MISSING `$` - for_loop_var_every_iteration.md:3:6:3:11
 VAR NAME MISSING `$` - for_loop_var_every_iteration.md:4:6:4:12
 # PROBLEMS
-── ● var name missing `$` ────────────────── for_loop_var_every_iteration.md:3:6
-
-The mutable binding prev_ is declared with var but its name does not start with
-$.
-
-var prev_ = 0
-    ^^^^^
-
-Rename this binding and all of its uses to $prev_. The name is only a
-convention; mutability comes from the var declaration.
-
-── ● var name missing `$` ────────────────── for_loop_var_every_iteration.md:4:6
-
-The mutable binding count_ is declared with var but its name does not start
-with $.
-
-var count_ = 0
-    ^^^^^^
-
-Rename this binding and all of its uses to $count_. The name is only a
-convention; mutability comes from the var declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 11))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "prev_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$prev_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_var_every_iteration.md") (start 3 6) (end 3 11) (annotation warning) (line-text "\tvar prev_ = 0"))))
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 4 6) (end 4 12))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "count_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$count_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_var_every_iteration.md") (start 4 6) (end 4 12) (annotation warning) (line-text "\tvar count_ = 0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

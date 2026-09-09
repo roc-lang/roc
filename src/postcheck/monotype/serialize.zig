@@ -28,6 +28,8 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 17: generated-codec specialization identities retain the explicit
+/// public value shape separately from the constructor representation.
 /// Version 16: generated-codec specialization identities name their complete
 /// derivation boundary and instantiated constructor rather than one grounding
 /// call edge.
@@ -46,7 +48,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 16;
+pub const FORMAT_VERSION: u32 = 17;
 
 const SECTION_COUNT = 43;
 
@@ -469,7 +471,7 @@ fn evidenceVectorEnd(
                     .from_callable => {},
                 }
             },
-            .structural, .from_callable, .unreachable_value, .checked_error => {},
+            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
         }
     }
     return cursor;
@@ -635,7 +637,7 @@ pub const MappedProgramView = struct {
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return false;
             if (spec.identity.codec_contract) |contract| {
-                if (!self.typeRefInBounds(contract.constructor_ty)) return false;
+                if (!self.typeRefInBounds(contract.constructor_ty) or !self.typeRefInBounds(contract.shape_ty)) return false;
             }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return false;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return false;
@@ -1633,6 +1635,7 @@ fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) v
         writeHashU32(hasher, @intFromEnum(contract.derivation));
         writeHashU32(hasher, @intFromEnum(contract.kind));
         writeHashBytes32(hasher, contract.constructor_ty_digest.bytes);
+        writeHashBytes32(hasher, contract.shape_ty_digest.bytes);
     } else {
         writeHashBool(hasher, false);
     }
@@ -2906,9 +2909,13 @@ test "monotype specialization cache validity includes stored specialization iden
         .kind = .encoder,
         .constructor_ty_digest = mono_digest,
         .constructor_ty = spec_ty,
+        .shape_ty_digest = mono_digest,
+        .shape_ty = spec_ty,
     };
     var fifth_spec = fourth_spec;
     fifth_spec.identity.codec_contract.?.derivation = @enumFromInt(13);
+    var sixth_spec = fourth_spec;
+    sixth_spec.identity.codec_contract.?.shape_ty_digest = second_source_digest;
 
     const no_specs = computeValidityId(.{ .root_module = testModuleId(1) });
     const first = computeValidityId(.{
@@ -2932,11 +2939,17 @@ test "monotype specialization cache validity includes stored specialization iden
         .specs = &.{fifth_spec},
     });
 
+    const sixth = computeValidityId(.{
+        .root_module = testModuleId(1),
+        .specs = &.{sixth_spec},
+    });
+
     try std.testing.expect(!std.mem.eql(u8, no_specs[0..], first[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], second[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], third[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], fourth[0..]));
     try std.testing.expect(!std.mem.eql(u8, fourth[0..], fifth[0..]));
+    try std.testing.expect(!std.mem.eql(u8, fourth[0..], sixth[0..]));
 }
 
 fn expectEquivalentProgramViews(

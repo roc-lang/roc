@@ -187,6 +187,7 @@ pub fn extractSemanticTokensWithImports(
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .skip_file_import_contents = true,
     }) catch return error.OutOfMemory;
     defer canonicalizer.deinit();

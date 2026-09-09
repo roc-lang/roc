@@ -180,7 +180,13 @@ pub const Constants = struct {
     /// 82: Literal dispatch plans retain their enclosing pattern-failure
     ///     expression without increasing the serialized plan size.
     /// 83: Where methods retain their complete type annotation in CIR.
-    pub const CACHE_VERSION = 83;
+    /// 84: Literal patterns record their exact failure owner, including
+    ///     statements and definitions as well as expressions.
+    /// 85: Scheme codec requirements retain instantiation and synthetic-owner
+    ///     classifications across checked-environment rechecks.
+    /// 86: Hoisted-root pruning resolves associated lookup identities through
+    ///     the expression's owning module, including imported callable bodies.
+    pub const CACHE_VERSION = 86;
 };
 
 /// Configuration for the Roc cache system.

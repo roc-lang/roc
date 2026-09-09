@@ -321,7 +321,7 @@ pub const LiteralDispatchPlan = extern struct {
     target_var: u32,
     fn_var: u32,
     kind_and_resolution: u32,
-    pattern_failure_expr: u32,
+    pattern_failure_owner: u32,
 
     pub const Kind = enum(u32) {
         numeral,
@@ -350,8 +350,8 @@ pub const LiteralDispatchPlan = extern struct {
         return @enumFromInt(self.kind_and_resolution >> resolution_shift);
     }
 
-    pub fn patternFailureExpr(self: LiteralDispatchPlan) ?u32 {
-        return if (self.pattern_failure_expr == std.math.maxInt(u32)) null else self.pattern_failure_expr;
+    pub fn patternFailureOwner(self: LiteralDispatchPlan) ?u32 {
+        return if (self.pattern_failure_owner == std.math.maxInt(u32)) null else self.pattern_failure_owner;
     }
 
     fn setResolution(self: *LiteralDispatchPlan, resolution: Resolution) void {
@@ -962,17 +962,18 @@ pub fn recordLiteralDispatchPlan(
     kind: LiteralDispatchPlan.Kind,
     target_var: types.Var,
     fn_var: types.Var,
-    pattern_failure_expr: ?u32,
+    pattern_failure_owner: ?u32,
 ) Allocator.Error!void {
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
+    std.debug.assert(narrowNodeTag(PatternNodeTag, node.tag) == null or pattern_failure_owner != null);
 
     var plan = LiteralDispatchPlan{
         .node_idx = @intFromEnum(node_idx),
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
         .kind_and_resolution = LiteralDispatchPlan.packKindAndResolution(kind, .unresolved),
-        .pattern_failure_expr = pattern_failure_expr orelse std.math.maxInt(u32),
+        .pattern_failure_owner = pattern_failure_owner orelse std.math.maxInt(u32),
     };
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one != 0) {
@@ -2200,6 +2201,20 @@ pub fn replaceStatementWithRuntimeError(
     node.setPayload(.{ .diag_single_value = .{
         .value = @intFromEnum(diagnostic_idx),
     } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replace a rejected literal leaf while retaining the surrounding definition
+/// pattern and its binder identities. Retire the leaf's evidence atomically.
+pub fn replacePatternWithRuntimeError(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    _ = store.retireLiteralDispatchPlan(node_idx);
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .pattern_malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx) } });
     store.nodes.set(node_idx, node);
 }
 
@@ -6485,7 +6500,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
     try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
     try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
-    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureExpr());
+    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureOwner());
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
@@ -6536,7 +6551,7 @@ test "literal dispatch plans are retired with their owning nodes" {
 
     const numeral_plan = store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(numeral_expr))).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, numeral_plan.dispatchKind());
-    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureExpr());
+    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureOwner());
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
     try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
 

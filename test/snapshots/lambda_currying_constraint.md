@@ -24,20 +24,50 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 # EXPECTED
 MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
 # PROBLEMS
-── ✗ missing method ───────────────────────── lambda_currying_constraint.md:3:21
-
-The value before this + operator has a type that doesn't have a plus method.
-
-makeAdder = |x| |y| x + y
-                    ^^^^^
-
-The value's type, which does not have a method named plus, is:
-
-    a
-
-Hint: The + operator calls a method named plus on the value preceding it,
-passing the value after the operator as the one argument.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 3 21) (end 3 26))
+		(headline
+			(reflow "The value before this")
+			(reflow " ")
+			(annotated operator "+")
+			(reflow " ")
+			(reflow "operator has a type that doesn't have a")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method."))
+		(document
+			(source-region (file "lambda_currying_constraint.md") (start 3 21) (end 3 26) (annotation error) (line-text "makeAdder = |x| |y| x + y"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "plus")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The")
+			(reflow " ")
+			(annotated operator "+")
+			(reflow " ")
+			(reflow "operator calls a method named")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "on the value preceding it, passing the value after the operator as the one argument."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,
