@@ -13,7 +13,7 @@ generator = map_fn(
 	},
 )
 
-# Keep this an eligible data root so finalization exercises restoration of the
-# erroneous callable value inside the record.
+# Retain the rejected callable inside a data root. Its original diagnostic
+# must suppress redundant compile-time evaluation crashes.
 target : { generator : Gen({ value : U64 }) }
 target = { generator: generator }
