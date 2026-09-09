@@ -103,7 +103,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "xs")))
-			(e-call (constraint-fn-var 284)
+			(e-call (constraint-fn-var 281)
 				(e-lookup-external
 					(builtin))
 				(e-lookup-local

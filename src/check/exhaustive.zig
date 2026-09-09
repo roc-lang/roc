@@ -1018,6 +1018,7 @@ fn openNominalBacking(
         decl,
         args,
         .outermost,
+        .instantiation,
     );
 
     try cache.record(decl_idx, args_start, opened);

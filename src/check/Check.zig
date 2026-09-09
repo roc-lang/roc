@@ -16685,6 +16685,9 @@ const Expected = struct {
     const ExpectedType = struct {
         var_: Var,
         context: problem.Context,
+        /// Borrow a field of `var_` until a construction actually consumes
+        /// this context. Value lookups never need to project the base row.
+        record_field: ?Ident.Idx = null,
     };
 
     fn none() Expected {
@@ -17753,16 +17756,130 @@ fn checkStoredValueExpr(
     };
 }
 
-/// Project an aggregate's child slots from an expected type before checking
-/// those children. The projection is performed against a rigids-flexed orphan
-/// copy: child checking may refine the copy, while the pristine expected var
-/// remains available to the expression that owns the final relation and its
-/// diagnostic.
-///
-/// `shape_var` is a freshly-built aggregate skeleton whose child vars the
-/// caller retains. A non-matching expected constructor is not itself an error
-/// here; the owning relation reports that mismatch after the expression has
-/// checked all of its children.
+/// Copy structural checking context without creating another scheme use.
+/// The source remains the authority on dispatch obligations. In particular,
+/// neither attached constraints nor off-root scheme requirements are copied.
+fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
+    var instantiator = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+        .rank_behavior = .ignore_rank,
+        .purpose = .expected_shape,
+    };
+    self.var_map.clearRetainingCapacity();
+    const fresh_start = self.types.len();
+    const copied = try instantiator.instantiateVar(source);
+    try self.registerExpectedShapeVars(fresh_start, env);
+    return copied;
+}
+
+/// Structural copies need ranks and source regions, but no dispatch,
+/// defaulting, ambiguity, or scheme-use bookkeeping.
+fn registerExpectedShapeVars(self: *Self, fresh_start: u64, env: *Env) Allocator.Error!void {
+    var iterator = self.var_map.iterator();
+    while (iterator.next()) |entry| {
+        const fresh_var = entry.value_ptr.*;
+        // A nominal opening seeds its substitution with borrowed actual args.
+        // Only newly allocated cells need bookkeeping.
+        if (@intFromEnum(fresh_var) < fresh_start) continue;
+        const source_region = self.getRegionAt(entry.key_ptr.*);
+        const rank = self.types.resolveVar(fresh_var).desc.rank;
+        try env.var_pool.addVarToRank(fresh_var, rank);
+        try self.fillInRegionsThrough(fresh_var);
+        self.setRegionAt(fresh_var, source_region);
+    }
+}
+
+/// Borrow an update field from the checked row. Anonymous rows need no copy;
+/// nominal rows open their declaration only when construction demands context.
+/// Row fields are sorted by name, as required by record unification;
+/// extensions use the same left-biased lookup.
+fn borrowExpectedRecordField(self: *Self, base_var: Var, name: Ident.Idx, env: *Env) Allocator.Error!?Var {
+    var current = base_var;
+    var allow_nominal = true;
+    // Brent's cycle detection over the row's single successor (alias backing
+    // or extension). This uses constant space and no per-field hash table.
+    var checkpoint = self.types.resolveVar(base_var).var_;
+    var period: usize = 1;
+    var distance: usize = 0;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        if (distance > 0 and resolved.var_ == checkpoint) return null;
+        if (distance == period) {
+            checkpoint = resolved.var_;
+            period *= 2;
+            distance = 0;
+        }
+        distance += 1;
+        var fields: types_mod.RecordField.SafeMultiList.Range = undefined;
+        var ext: ?Var = null;
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| switch (flat) {
+                .record => |record| {
+                    fields = record.fields;
+                    ext = record.ext;
+                },
+                .record_unbound => |record_fields| fields = record_fields,
+                .nominal_type => |nominal| {
+                    // Record unification opens a nominal only at the outer
+                    // row, requires a record backing, and respects opacity.
+                    if (!allow_nominal or !nominal.canLiftInner(self.cir.selfModuleIdentity())) return null;
+                    const decl_idx = self.types.lookupNominalDecl(nominal) orelse {
+                        std.debug.assert(!nominal.sourceDecl().present);
+                        return null;
+                    };
+                    const decl = self.types.getNominalDecl(decl_idx);
+                    if (!decl.isValid()) return null;
+                    const fresh_start = self.types.len();
+                    const opened = try types_mod.instantiate.instantiateNominalBacking(
+                        self.types,
+                        self.cir.getIdentStoreConst(),
+                        &self.var_map,
+                        decl,
+                        self.types.sliceNominalArgs(nominal),
+                        env.rank(),
+                        .expected_shape,
+                    );
+                    try self.registerExpectedShapeVars(fresh_start, env);
+                    const backing = self.types.resolveVar(opened).desc.content;
+                    if (backing != .structure or backing.structure != .record) return null;
+                    fields = backing.structure.record.fields;
+                    ext = backing.structure.record.ext;
+                },
+                .empty_record, .empty_tag_union, .tag_union, .tuple, .fn_pure, .fn_unbound, .fn_effectful => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+        const field_slice = self.types.getRecordFieldsSlice(fields);
+        const names = field_slice.items(.name);
+        const idents = self.cir.getIdentStoreConst();
+        const wanted = idents.getText(name);
+        var lo: usize = 0;
+        var hi = names.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (std.mem.order(u8, wanted, idents.getText(names[mid]))) {
+                .lt => hi = mid,
+                .gt => lo = mid + 1,
+                .eq => return field_slice.items(.presence)[mid].typeVar(),
+            }
+        }
+        current = ext orelse return null;
+        allow_nominal = false;
+    }
+}
+
+/// Materialize expected structure only when an aggregate consumes it. Shape
+/// copies cannot create executable obligations, and failed projections roll
+/// back their allocations together with the attempted relation. The enclosing
+/// aggregate still owns the ordinary full-shape relation and its diagnostic.
 fn projectExpectedAggregateShape(
     self: *Self,
     expected: Expected,
@@ -17770,19 +17887,21 @@ fn projectExpectedAggregateShape(
     env: *Env,
 ) std.mem.Allocator.Error!bool {
     const aggregate_type = expected.aggregateType() orelse return false;
-    // An erroneous expected graph carries no trustworthy construction shape.
-    // Projecting its Error nodes into an otherwise valid child would make the
-    // child—and then its enclosing lambda or binding—spuriously erroneous.
-    self.var_set.clearRetainingCapacity();
-    const expected_contains_error = try self.varContainsError(aggregate_type.var_, &self.var_set);
-    self.var_set.clearRetainingCapacity();
-    if (expected_contains_error) return false;
-
-    const expected_copy = try self.instantiateVarOrphanFlexed(aggregate_type.var_, env, .use_last_var);
-
     var commit_probe = try self.beginCommitProbe(env);
     var committed = false;
     defer if (!committed) commit_probe.rollback();
+
+    const source = if (aggregate_type.record_field) |name|
+        try self.borrowExpectedRecordField(aggregate_type.var_, name, env) orelse return false
+    else
+        aggregate_type.var_;
+    // Error context is diagnostic recovery, never construction evidence.
+    self.var_set.clearRetainingCapacity();
+    const expected_contains_error = try self.varContainsError(source, &self.var_set);
+    self.var_set.clearRetainingCapacity();
+    if (expected_contains_error) return false;
+
+    const expected_copy = try self.copyExpectedShape(source, env);
     const result = try commit_probe.unifyInContext(expected_copy, shape_var, aggregate_type.context);
     if (!result.isEstablished()) return false;
     committed = true;
@@ -18451,53 +18570,31 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     // the update judgment commits it to required before its
                     // owning generalization boundary.
                     const field_kind_var = try self.fresh(env, expr_region);
-                    const projected_field_value = try self.fresh(env, expr_region);
                     try self.pending_record_updates.append(self.gpa, .{
                         .presence_var = field_kind_var,
                         .region = expr_region,
                     });
 
-                    // Create an unbound record with this field
-                    const single_field_record = try self.freshFromContent(.{
-                        .structure = .{
-                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
-                                .name = field.name,
-                                .presence = .unknown(field_kind_var, projected_field_value),
-                            }}),
-                        },
-                    }, env, expr_region);
-
-                    // Relate the update slot to the base row before checking
-                    // its value, so a nested aggregate sees the field shape
-                    // declared by the base record.
+                    // The child borrows this field's structural context. A
+                    // construction resolves it on demand; a stored lookup
+                    // proceeds directly to the actual update judgment below.
                     const update_context = problem.Context{ .record_update = .{
                         .field_name = field.name,
                         .field_region_idx = @enumFromInt(@intFromEnum(field.value)),
                         .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
                         .record_name = record_being_updated_name,
                     } };
-                    const slot_projected = try self.projectExpectedAggregateShape(
-                        child_expected.withContextualType(.{
-                            .var_ = record_being_updated_var,
-                            .context = update_context,
-                        }),
-                        single_field_record,
-                        env,
-                    );
-
-                    const field_expected = if (slot_projected)
-                        child_expected.withContextualType(.{
-                            .var_ = projected_field_value,
-                            .context = update_context,
-                        })
-                    else
-                        child_expected;
+                    const field_expected = child_expected.withContextualType(.{
+                        .var_ = record_being_updated_var,
+                        .record_field = field.name,
+                        .context = update_context,
+                    });
                     const field_value = try self.checkStoredValueExpr(field.value, env, field_expected);
                     does_fx = field_value.does_fx or does_fx;
 
                     // The base row owns the final update judgment and its
                     // record-aware diagnostic. Use the instantiated stored
-                    // value here; the projection above was context only.
+                    // value here; the borrowed field was context only.
                     const actual_field_record = try self.freshFromContent(.{
                         .structure = .{
                             .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
