@@ -10632,6 +10632,13 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     if (platform_shim_path) |path| {
         try object_files.append(path);
     }
+    if (args.synthetic_default_platform) {
+        if (try writeDefaultPlatformExecutableObject(ctx, build_cache_dir, target)) |runtime_path| {
+            try object_files.append(runtime_path);
+        } else {
+            return error.UnsupportedTarget;
+        }
+    }
     reporter.end();
 
     reporter.begin("Linking");

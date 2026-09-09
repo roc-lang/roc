@@ -733,6 +733,20 @@ and layouts, preserves distinct specialized and narrowed representations, and
 prevents equivalent instantiations from rebuilding or repeatedly walking a large
 stored graph.
 
+SpecConstr preserves each static candidate's closed source expression as its
+initializer authority. Its separately memoized constructor view contains no
+generated IR or caller substitutions. Inspecting that view schedules no strict
+work: bindings inside an initializer stay inside it, and binding/control
+expressions remain complete opaque leaves. The view follows explicit constructor
+edges only; recursive values refer to locals, whose bindings it never follows.
+All clone paths reuse the candidate expression. Pattern matching may rebind a
+caller-local copy of the view, but whole-value materialization always returns
+the original candidate. Debug validation checks initializer locals in an empty
+lexical scope. Candidate views are scoped to the specialization pass and keep
+only source-owned identities, so speculative output rewinds cannot invalidate
+them. This avoids cloning a shared initializer at each use while preserving
+constructor evidence for projection and specialization.
+
 Compile-time evaluation is allowed to fail with user diagnostics only during
 checking. After checking, stored constant data is ordinary checked output. A
 target static-data builder may decide which reachable evaluated values have a
@@ -13278,6 +13292,20 @@ inputs and the output kind the build produces. The application author never
 chooses the output kind; `roc build` produces what the platform declares for
 the selected target, and there is no `--no-link` style flag. `--target` and
 `--output` (the output path) remain per-build choices.
+
+For headerless applications, the synthetic default platform owns the process
+entrypoint. Every executable build path, including embedded interpreter
+builds, links its target-specific executable runtime object. The generated
+Roc or interpreter wrapper exports the platform's declared entrypoint, which
+receives process arguments from that runtime and returns the exit status.
+The explicit synthetic-platform flag selects these link inputs; builds using
+an application-declared platform consume that platform's own inputs.
+The interpreter archive imports only its runtime dependencies. On Linux it
+uses direct OS operations without libc, so compiler-only libraries cannot
+introduce libc requirements into the freestanding default-platform executable.
+Because that startup also supplies no TLS, interpreter execution ownership on
+Linux without libc uses the kernel thread id directly, preserving concurrent
+host calls and same-thread reentrancy without accessing TLS.
 
 Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
 (plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and

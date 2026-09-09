@@ -7568,8 +7568,15 @@ fn addMainExe(
         .linkage = .static,
     });
     configureBackend(interpreter_shim_lib, target);
-    // Add all modules from roc_modules that the shim needs
-    roc_modules.addAll(interpreter_shim_lib);
+    // Keep compiler-only modules out of this runtime archive. In particular,
+    // bundle links libc through zstd even when its source is never imported.
+    interpreter_shim_lib.root_module.addImport("base", roc_modules.base);
+    interpreter_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    interpreter_shim_lib.root_module.addImport("eval", roc_modules.eval);
+    interpreter_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
+    interpreter_shim_lib.root_module.addImport("layout", roc_modules.layout);
+    interpreter_shim_lib.root_module.addImport("lir", roc_modules.lir);
+    if (target.result.os.tag == .linux) interpreter_shim_lib.root_module.link_libc = false;
     interpreter_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     interpreter_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     interpreter_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_interpreter", .{
