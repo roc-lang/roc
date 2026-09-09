@@ -72,8 +72,11 @@ Lambda parameters and destructured fields are left out. They are plain bindings 
 other, and a Roc lambda may spread its parameters over several lines, so a parameter can open
 a line of its own: what declares a binding tells the two apart, the source around it does not.
 The binding must still open its line, which rules out a block written on a single line, since
-anything in front of the binding would be split across the inserted line break. Where a
-selection covers several bindings, the innermost one is annotated.
+anything in front of the binding would be split across the inserted line break. A selection
+covering several bindings is answered with one action per binding, each title naming its own:
+the range does not say which was meant, and no comparison of names or positions recovers it.
+A cursor, which is how the request usually arrives, touches one name and so produces one
+action. A selection covering several functions is answered the same way.
 
 **Generate an expect test for a function** writes an `expect` that calls the function,
 directly after the definition it tests. Each argument and the expected result are placeholder
@@ -85,6 +88,10 @@ the author declared, a tag union, a function argument, or a type variable. It is
 for effectful functions, because `expect` checks a value rather than running effects, for
 functions taking no arguments, and for anything that is not a top-level definition - a
 generated `expect` sits at the top level, where a name bound inside a block cannot be reached.
+
+Both actions write their line breaks the way the open document writes its own, so applying one
+to a CRLF file does not leave a lone LF behind. The compiler rewrites CRLF as it loads a file,
+so this is read from the document the client holds rather than from the module's source.
 
 The inserted annotation is the checker's own rendering of the type, which is worth a read
 before it is kept: an inferred type can be wider than the one the author would write.

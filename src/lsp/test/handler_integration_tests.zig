@@ -347,6 +347,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "code actions offer one annotation per binding a selection reaches", .run = codeActionsOfferOnePerBinding },
     .{ .name = "code actions leave a trailing comment on its own line", .run = codeActionsKeepTrailingComment },
     .{ .name = "code actions offer one test per function a selection reaches", .run = codeActionsOfferOneTestPerFunction },
+    .{ .name = "code actions survive a selection end past the document", .run = codeActionsSurviveOutOfRangeSelectionEnd },
+    .{ .name = "code actions match the document's line endings", .run = codeActionsMatchDocumentLineEndings },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
     .{ .name = "rename refuses a declaration that is not a plain name", .run = renameRefusesNonIsolatedDeclaration },
@@ -5995,4 +5997,113 @@ pub fn codeActionsOfferOneTestPerFunction() integration_spec.SpecError!void {
     const narrow_actions = try narrow_response.result();
     try std.testing.expect((try codeActionByPrefix(narrow_actions, "Generate an expect test for 'first'")) != null);
     try std.testing.expect((try codeActionByPrefix(narrow_actions, "Generate an expect test for 'second'")) == null);
+}
+
+/// Verifies a selection whose end the document does not hold is still answered.
+///
+/// Reported by review on #11069. Both ends of the range were converted with
+/// `positionToOffset`, which rejects a line past the last one and a character
+/// past the end of its line, so the whole request answered with an empty list.
+/// Clients send both: a selection reaching the last line ends at the line
+/// after it, and "the whole line" is spelled by some as a very large column.
+pub fn codeActionsSurviveOutOfRangeSelectionEnd() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_overflow.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\shout = |text| Str.concat(text, "!")
+        \\
+        \\main = shout("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // 4294967295 is the largest line and column a u32 position can name.
+    const past_last_line = try codeActionRequest(allocator, 2, fixture.uri, 2, 0, 4294967295, 0);
+    defer allocator.free(past_last_line);
+    const past_line_end = try codeActionRequest(allocator, 3, fixture.uri, 2, 0, 2, 4294967295);
+    defer allocator.free(past_line_end);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{
+        past_last_line,
+        past_line_end,
+    });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Both ranges cover `shout`, so both offer what it can be given.
+    for ([_]u32{ 2, 3 }) |id| {
+        var response = try responseById(allocator, responses, id);
+        defer response.deinit();
+        const actions = try response.result();
+        try std.testing.expect(actions == .array);
+
+        const annotate = try codeActionByPrefix(actions, "Annotate 'shout'") orelse return error.TestUnexpectedResult;
+        try expectInsertionAt(try codeActionEdit(annotate, fixture.uri), 2, 0, "shout : Str -> Str\n");
+
+        try std.testing.expect(
+            (try codeActionByPrefix(actions, "Generate an expect test for 'shout'")) != null,
+        );
+    }
+}
+
+/// Verifies generated source is written with the document's own line breaks.
+///
+/// Reported by review on #11069. Both actions wrote `\n` whatever the document
+/// used, so applying either to a CRLF file left mixed endings behind for a
+/// formatter, a diff, or an EOL-strict editor to report.
+pub fn codeActionsMatchDocumentLineEndings() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_crlf.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Written out rather than as a multiline literal, which only spells `\n`.
+    const source = try std.fmt.allocPrint(
+        allocator,
+        "app [main] {{ pf: platform \"{s}\" }}\r\n\r\nshout = |text| Str.concat(text, \"!\")\r\n\r\nmain = shout(\"roc\")\r\n",
+        .{platform_path},
+    );
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 2, 0, 2, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const annotate = try codeActionByPrefix(actions, "Annotate 'shout'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(annotate, fixture.uri), 2, 0, "shout : Str -> Str\r\n");
+
+    const generate = try codeActionByPrefix(actions, "Generate an expect test for 'shout'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(
+        try codeActionEdit(generate, fixture.uri),
+        2,
+        36,
+        "\r\n\r\n## TODO Replace these placeholder values with a case worth checking.\r\nexpect shout(\"\") == \"\"",
+    );
 }

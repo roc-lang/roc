@@ -47,24 +47,49 @@ fn specHasName(spec: CIR.BuiltinTypeSpec, name: []const u8) bool {
     return std.mem.eql(u8, name, spec.display_name);
 }
 
+/// The literal one entry in the builtin registry takes, or null when it has
+/// none.
+fn specPlaceholder(spec: CIR.BuiltinTypeSpec) ?[]const u8 {
+    // Every fixed-width number takes a `0`. The SIMD vector types sit in the
+    // same registry without a `num_kind`, and `0` is not one of those.
+    if (spec.num_kind != null) return "0";
+    if (std.mem.eql(u8, spec.qualified_name, "Builtin.Str")) return "\"\"";
+    if (std.mem.eql(u8, spec.qualified_name, "Builtin.Bool")) return "Bool.True";
+    if (std.mem.eql(u8, spec.qualified_name, "Builtin.List")) return "[]";
+    return null;
+}
+
+/// Whether two answers about the same name are the same answer.
+fn placeholdersAgree(left: ?[]const u8, right: ?[]const u8) bool {
+    const known = left orelse return right == null;
+    const other = right orelse return false;
+    return std.mem.eql(u8, known, other);
+}
+
 /// The literal to write for a builtin type, or null when it has none.
 ///
 /// The types are looked up in the compiler's own builtin registry rather than
 /// in a list kept here, so a builtin that is renamed or removed cannot leave a
 /// stale entry behind.
+///
+/// A display name does not pick out one entry: `Hasher` names three types in
+/// the registry and `Digest` two. A name matching several is answered only
+/// where they all give the same literal, so an entry added later cannot make
+/// this quietly write the wrong value for a name it shares. Refusing an
+/// ambiguous name leaves the test ungenerated, which is what any type without
+/// a literal already gets.
 fn builtinPlaceholder(name: []const u8) ?[]const u8 {
+    var answer: ?[]const u8 = null;
+    var matched = false;
     for (CIR.builtin_type_specs) |spec| {
         if (!specHasName(spec, name)) continue;
 
-        // Every fixed-width number takes a `0`. The SIMD vector types sit in
-        // the same registry without a `num_kind`, and `0` is not one of those.
-        if (spec.num_kind != null) return "0";
-        if (std.mem.eql(u8, spec.qualified_name, "Builtin.Str")) return "\"\"";
-        if (std.mem.eql(u8, spec.qualified_name, "Builtin.Bool")) return "Bool.True";
-        if (std.mem.eql(u8, spec.qualified_name, "Builtin.List")) return "[]";
-        return null;
+        const literal = specPlaceholder(spec);
+        if (matched and !placeholdersAgree(answer, literal)) return null;
+        answer = literal;
+        matched = true;
     }
-    return null;
+    return answer;
 }
 
 /// Write a literal value of `type_var` into `out`.
@@ -202,6 +227,8 @@ fn callableFunction(module_env: *const ModuleEnv, type_var: types.Var) ?types.Fu
 /// The text starts with the blank line that separates it from the definition it
 /// is meant to follow, and carries no trailing newline: it is inserted at the
 /// end of that definition, so the source already continues on the next line.
+/// The breaks it does write are `eol`, the ones the document the client holds
+/// uses, so a CRLF file does not come back with mixed endings.
 ///
 /// The caller owns the returned slice.
 pub fn renderExpectTest(
@@ -209,11 +236,12 @@ pub fn renderExpectTest(
     module_env: *const ModuleEnv,
     name: []const u8,
     type_var: types.Var,
+    eol: []const u8,
 ) Allocator.Error!?[]u8 {
     var text: std.ArrayList(u8) = .empty;
     errdefer text.deinit(allocator);
 
-    writeExpectTest(allocator, module_env, name, type_var, &text) catch |err| switch (err) {
+    writeExpectTest(allocator, module_env, name, type_var, eol, &text) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedType => {
             text.deinit(allocator);
@@ -230,13 +258,18 @@ fn writeExpectTest(
     module_env: *const ModuleEnv,
     name: []const u8,
     type_var: types.Var,
+    eol: []const u8,
     out: *std.ArrayList(u8),
 ) PlaceholderError!void {
     const func = callableFunction(module_env, type_var) orelse return error.UnsupportedType;
 
     // The values are placeholders of the right type, not a case anybody chose,
     // so the comment says so rather than claiming the test checks something.
-    try out.appendSlice(allocator, "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect ");
+    try out.appendSlice(allocator, eol);
+    try out.appendSlice(allocator, eol);
+    try out.appendSlice(allocator, "## TODO Replace these placeholder values with a case worth checking.");
+    try out.appendSlice(allocator, eol);
+    try out.appendSlice(allocator, "expect ");
     try out.appendSlice(allocator, name);
     try out.appendSlice(allocator, "(");
     for (module_env.types.sliceVars(func.args), 0..) |arg_var, index| {

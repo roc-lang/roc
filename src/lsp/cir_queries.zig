@@ -1179,26 +1179,28 @@ pub const UnannotatedBinding = struct {
     range: LspRange,
     /// The same span in bytes, so a caller can read the source around it.
     region: Region,
+    /// Whether a definition or a statement declares this binding, rather than
+    /// a lambda parameter or a destructured field binding it.
+    ///
+    /// A type annotation is a line of its own written above the binding it
+    /// names, so only a declaration can take one. Parameters and destructured
+    /// fields are `assign` patterns like any other, and a Roc lambda may
+    /// spread its parameters over several lines, so a parameter can open a
+    /// line of its own - which is why the two are told apart by what declares
+    /// them rather than by the source around them.
+    is_declaration: bool = false,
 };
 
-/// Context for collecting the patterns that carry a written type annotation.
-const CollectAnnotatedContext = struct {
-    allocator: std.mem.Allocator,
-    results: *std.ArrayList(CIR.Pattern.Idx),
-    oom: ?std.mem.Allocator.Error = null,
+/// A set of patterns, for the membership questions asked about every binding.
+const PatternSet = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void);
 
-    fn visitStmtPre(ctx: *CollectAnnotatedContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
-        if (statementAnnotation(stmt) == null) return .continue_traversal;
-        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
-        ctx.results.append(ctx.allocator, pattern_idx) catch |err| {
-            ctx.oom = err;
-            return .stop;
-        };
-        return .continue_traversal;
-    }
-};
-
-/// Context for collecting `assign` patterns inside a byte range.
+/// Context for collecting `assign` patterns inside a byte range, along with
+/// what the module says about the bindings it declares.
+///
+/// The three questions - which patterns a range holds, which of them already
+/// carry an annotation, and which a definition or a statement declares - are
+/// answered on one traversal. Each of them covers the whole module, and
+/// `textDocument/inlayHint` asks all three on every viewport change.
 const CollectBindingsContext = struct {
     store: *const NodeStore,
     module_env: *const ModuleEnv,
@@ -1206,7 +1208,25 @@ const CollectBindingsContext = struct {
     end_offset: u32,
     allocator: std.mem.Allocator,
     results: *std.ArrayList(UnannotatedBinding),
+    /// The patterns that carry a written type annotation.
+    annotated: *PatternSet,
+    /// The patterns a definition or a statement declares.
+    declared: *PatternSet,
     oom: ?std.mem.Allocator.Error = null,
+
+    fn visitStmtPre(ctx: *CollectBindingsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        ctx.declared.put(ctx.allocator, pattern_idx, {}) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        if (statementAnnotation(stmt) == null) return .continue_traversal;
+        ctx.annotated.put(ctx.allocator, pattern_idx, {}) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        return .continue_traversal;
+    }
 
     fn visitPatternPre(ctx: *CollectBindingsContext, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
         const ident = if (pattern == .assign)
@@ -1256,7 +1276,9 @@ const CollectBindingsContext = struct {
 ///
 /// Only plain `assign` patterns qualify: they bind exactly one name, so an
 /// inferred type can be shown against that name. Bindings that already carry a
-/// written annotation are skipped—their type is on screen already.
+/// written annotation are skipped—their type is on screen already. Each of the
+/// rest says whether a definition or a statement declares it, which is what
+/// decides whether an annotation can be written for it.
 ///
 /// Caller owns the returned list.
 pub fn collectUnannotatedBindings(
@@ -1265,32 +1287,13 @@ pub fn collectUnannotatedBindings(
     end_offset: u32,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!std.ArrayList(UnannotatedBinding) {
-    // Which patterns already say their type. Annotations are few even in large
-    // files, so this stays a list that is scanned rather than a keyed map.
-    var annotated: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    // Which patterns already say their type, and which ones a definition or a
+    // statement declares. Both are asked once per binding in the range, so
+    // they are keyed rather than scanned.
+    var annotated: PatternSet = .empty;
     defer annotated.deinit(allocator);
-
-    var annotated_ctx = CollectAnnotatedContext{
-        .allocator = allocator,
-        .results = &annotated,
-    };
-    var annotated_visitor = CirVisitor(CollectAnnotatedContext).init(&annotated_ctx, .{
-        .visit_stmt_pre = CollectAnnotatedContext.visitStmtPre,
-    });
-
-    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        if (def.annotation != null) {
-            try annotated.append(allocator, def.pattern);
-        }
-        annotated_visitor.walkExpr(&module_env.store, def.expr);
-        if (annotated_visitor.stopped) break;
-    }
-    if (!annotated_visitor.stopped) {
-        annotated_visitor.walkModule(&module_env.store, module_env.all_statements);
-    }
-    if (annotated_ctx.oom) |err| return err;
+    var declared: PatternSet = .empty;
+    defer declared.deinit(allocator);
 
     var results: std.ArrayList(UnannotatedBinding) = .empty;
     errdefer results.deinit(allocator);
@@ -1302,13 +1305,22 @@ pub fn collectUnannotatedBindings(
         .end_offset = end_offset,
         .allocator = allocator,
         .results = &results,
+        .annotated = &annotated,
+        .declared = &declared,
     };
     var visitor = CirVisitor(CollectBindingsContext).init(&ctx, .{
+        .visit_stmt_pre = CollectBindingsContext.visitStmtPre,
         .visit_pattern_pre = CollectBindingsContext.visitPatternPre,
     });
 
+    // A top-level definition is not a statement, so what it declares and
+    // whether it is annotated are read off the definition itself; the ones
+    // inside blocks are reached by the walk.
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
+        try declared.put(allocator, def.pattern, {});
+        if (def.annotation != null) try annotated.put(allocator, def.pattern, {});
         visitor.walkPattern(&module_env.store, def.pattern);
         if (visitor.stopped) break;
         visitor.walkExpr(&module_env.store, def.expr);
@@ -1319,77 +1331,17 @@ pub fn collectUnannotatedBindings(
     }
     if (ctx.oom) |err| return err;
 
-    // Drop the annotated ones now that both walks are done.
+    // Both answers are complete only once the walk is, so the annotated
+    // bindings are dropped and the rest marked here rather than as they were
+    // found.
     var kept: usize = 0;
     for (results.items) |binding| {
-        var is_annotated = false;
-        for (annotated.items) |annotated_pattern| {
-            if (@intFromEnum(annotated_pattern) == @intFromEnum(binding.pattern)) {
-                is_annotated = true;
-                break;
-            }
-        }
-        if (is_annotated) continue;
+        if (annotated.contains(binding.pattern)) continue;
         results.items[kept] = binding;
+        results.items[kept].is_declaration = declared.contains(binding.pattern);
         kept += 1;
     }
     results.shrinkRetainingCapacity(kept);
-
-    return results;
-}
-
-/// Context for collecting the patterns that definitions and statements declare.
-const CollectDeclaredContext = struct {
-    allocator: std.mem.Allocator,
-    results: *std.ArrayList(CIR.Pattern.Idx),
-    oom: ?std.mem.Allocator.Error = null,
-
-    fn visitStmtPre(ctx: *CollectDeclaredContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
-        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
-        ctx.results.append(ctx.allocator, pattern_idx) catch |err| {
-            ctx.oom = err;
-            return .stop;
-        };
-        return .continue_traversal;
-    }
-};
-
-/// Collect every pattern that a definition or a statement declares.
-///
-/// A type annotation is written on the line above the binding it names, so it
-/// belongs only to a binding that is what its line declares. Lambda parameters
-/// and destructured fields are `assign` patterns too, and a Roc lambda may
-/// spread its parameters over several lines, so a parameter can open a line of
-/// its own - which is why the two are told apart by what declares them rather
-/// than by what the source around them looks like.
-pub fn collectDeclaredPatterns(
-    module_env: *ModuleEnv,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!std.ArrayList(CIR.Pattern.Idx) {
-    var results: std.ArrayList(CIR.Pattern.Idx) = .empty;
-    errdefer results.deinit(allocator);
-
-    var ctx = CollectDeclaredContext{
-        .allocator = allocator,
-        .results = &results,
-    };
-    var visitor = CirVisitor(CollectDeclaredContext).init(&ctx, .{
-        .visit_stmt_pre = CollectDeclaredContext.visitStmtPre,
-    });
-
-    // A top-level definition is not a statement, so its pattern is taken from
-    // the definition itself; the ones inside blocks are reached by the walk.
-    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        try results.append(allocator, def.pattern);
-        visitor.walkExpr(&module_env.store, def.expr);
-        if (visitor.stopped) break;
-    }
-    if (!visitor.stopped) {
-        visitor.walkModule(&module_env.store, module_env.all_statements);
-    }
-    if (ctx.oom) |err| return err;
 
     return results;
 }
@@ -1399,12 +1351,14 @@ pub fn collectDeclaredPatterns(
 /// Generated source is inserted here so that whatever the author wrote after a
 /// value on the same line -- in practice a comment -- keeps the line it was
 /// written on.
+///
+/// Only `\n` is looked for. The compiler rewrites CRLF as it loads a file, so
+/// a module's source holds no `\r` to stop in front of; what the document the
+/// client holds is written with is a separate question, answered where the
+/// generated text is built.
 fn lineEndAfter(source: []const u8, offset: u32) u32 {
     if (offset >= source.len) return @intCast(source.len);
-    const newline = std.mem.findScalarPos(u8, source, offset, '\n') orelse
-        return @intCast(source.len);
-    if (newline > offset and source[newline - 1] == '\r') return @intCast(newline - 1);
-    return @intCast(newline);
+    return @intCast(std.mem.findScalarPos(u8, source, offset, '\n') orelse source.len);
 }
 
 /// A top-level definition the requested range falls inside.

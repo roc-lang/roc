@@ -54,14 +54,6 @@ const MethodOwnerLookup = struct {
     builtin_origin: bool,
 };
 
-/// Whether a collected list of patterns holds this one.
-fn patternListContains(patterns: []const CIR.Pattern.Idx, pattern: CIR.Pattern.Idx) bool {
-    for (patterns) |candidate| {
-        if (@intFromEnum(candidate) == @intFromEnum(pattern)) return true;
-    }
-    return false;
-}
-
 fn statementTypeAnno(module_env: *const ModuleEnv, statement: CIR.Statement) ?CIR.TypeAnno.Idx {
     return switch (statement) {
         .s_decl => |decl| if (decl.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
@@ -3013,6 +3005,20 @@ pub const SyntaxChecker = struct {
         }
     };
 
+    /// The line break generated source is written with.
+    ///
+    /// It comes from the document the client holds, not from the module: the
+    /// compiler rewrites CRLF to LF as it loads a file, so by the time there
+    /// are types to read there is no `\r` left to find. Writing a lone `\n`
+    /// into a CRLF document would leave mixed endings behind for a formatter,
+    /// a diff, or an EOL-strict editor to report.
+    ///
+    /// A document nobody has open has no text to read, and LF is the answer
+    /// the normalized source would give anyway.
+    fn documentLineEnding(module_env: *ModuleEnv, override_text: ?[]const u8) []const u8 {
+        return pos.lineEnding(override_text orelse module_env.common.source);
+    }
+
     /// An insertion that writes a binding's inferred type above it.
     pub const AnnotationEdit = struct {
         /// Where the text goes. This inserts, so the range is empty.
@@ -3036,6 +3042,7 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         binding: cir_queries.UnannotatedBinding,
         rendered: []const u8,
+        eol: []const u8,
     ) Allocator.Error!?AnnotationEdit {
         const line_starts = module_env.getLineStartsAll();
         if (binding.range.start_line >= line_starts.len) return null;
@@ -3058,7 +3065,7 @@ pub const SyntaxChecker = struct {
                 .end_line = binding.range.start_line,
                 .end_col = 0,
             },
-            .new_text = try std.fmt.allocPrint(self.allocator, "{s}{s} : {s}\n", .{ indent, name, rendered }),
+            .new_text = try std.fmt.allocPrint(self.allocator, "{s}{s} : {s}{s}", .{ indent, name, rendered, eol }),
         };
     }
 
@@ -3109,11 +3116,7 @@ pub const SyntaxChecker = struct {
         var bindings = try cir_queries.collectUnannotatedBindings(module_env, start_offset, end_offset, self.allocator);
         defer bindings.deinit(self.allocator);
 
-        // Which of the hinted bindings could carry a written annotation, so a
-        // reader accepting a hint gets source that compiles rather than the
-        // inline form the hint's shape suggests, which Roc does not have.
-        var declared = try cir_queries.collectDeclaredPatterns(module_env, self.allocator);
-        defer declared.deinit(self.allocator);
+        const eol = documentLineEnding(module_env, override_text);
 
         var hints: std.ArrayList(InlayHint) = .empty;
         errdefer {
@@ -3138,9 +3141,12 @@ pub const SyntaxChecker = struct {
             if (rendered.len == 0) continue;
 
             // The label is cut to keep the line readable; the edit writes the
-            // type in full, because a cut one would not compile.
-            const edit = if (patternListContains(declared.items, binding.pattern))
-                try self.annotationInsertion(module_env, binding, rendered)
+            // type in full, because a cut one would not compile. Only a
+            // binding a definition or a statement declares can carry the edit:
+            // an annotation written above anything else lands where it does
+            // not belong, in a lambda's parameter list most of all.
+            const edit = if (binding.is_declaration)
+                try self.annotationInsertion(module_env, binding, rendered, eol)
             else
                 null;
             errdefer if (edit) |unused| self.allocator.free(unused.new_text);
@@ -3222,8 +3228,13 @@ pub const SyntaxChecker = struct {
         }
 
         const module_env = build.getModuleEnv() orelse return null;
-        const start_offset = pos.positionToOffset(module_env, start_line, start_character) orelse return null;
-        const end_offset = pos.positionToOffset(module_env, end_line, end_character) orelse return null;
+
+        // A selection reaching the last line ends one line past the document,
+        // and some clients spell "the whole line" with a character far past
+        // its length. Either would reject the request outright, answering that
+        // nothing may be done here for a range that covers a whole function.
+        const start_offset = pos.positionToOffsetClamped(module_env, start_line, start_character);
+        const end_offset = pos.positionToOffsetClamped(module_env, end_line, end_character);
         if (end_offset < start_offset) return null;
 
         var actions: std.ArrayList(CodeAction) = .empty;
@@ -3235,8 +3246,9 @@ pub const SyntaxChecker = struct {
             actions.deinit(self.allocator);
         }
 
-        try self.appendAnnotationActions(module_env, start_offset, end_offset, &actions);
-        try self.appendExpectTestActions(module_env, start_offset, end_offset, &actions);
+        const eol = documentLineEnding(module_env, override_text);
+        try self.appendAnnotationActions(module_env, start_offset, end_offset, eol, &actions);
+        try self.appendExpectTestActions(module_env, start_offset, end_offset, eol, &actions);
 
         return CodeActionsResult{
             .actions = try actions.toOwnedSlice(self.allocator),
@@ -3260,27 +3272,27 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         start_offset: u32,
         end_offset: u32,
+        eol: []const u8,
         actions: *std.ArrayList(CodeAction),
     ) Allocator.Error!void {
         var bindings = try cir_queries.collectUnannotatedBindings(module_env, start_offset, end_offset, self.allocator);
         defer bindings.deinit(self.allocator);
         if (bindings.items.len == 0) return;
 
-        // A lambda parameter and a destructured field are bindings too, and an
-        // annotation belongs to neither: it is a line of its own above what
-        // that line declares.
-        var declared = try cir_queries.collectDeclaredPatterns(module_env, self.allocator);
-        defer declared.deinit(self.allocator);
-
         // The walk finds bindings in traversal order; the menu reads better in
         // the order the file writes them.
         std.mem.sort(cir_queries.UnannotatedBinding, bindings.items, {}, bindingPrecedes);
 
-        for (bindings.items) |target| {
-            if (!patternListContains(declared.items, target.pattern)) continue;
+        var type_writer = try module_env.initTypeWriter();
+        defer type_writer.deinit();
 
-            var type_writer = try module_env.initTypeWriter();
-            defer type_writer.deinit();
+        for (bindings.items) |target| {
+            // A lambda parameter and a destructured field are bindings too,
+            // and an annotation belongs to neither: it is a line of its own
+            // above what that line declares.
+            if (!target.is_declaration) continue;
+
+            type_writer.reset();
             type_writer.write(ModuleEnv.varFrom(target.pattern), .one_line) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => continue,
@@ -3289,11 +3301,12 @@ pub const SyntaxChecker = struct {
             const rendered = type_writer.get();
             if (rendered.len == 0) continue;
 
-            const edit = try self.annotationInsertion(module_env, target, rendered) orelse continue;
+            const edit = try self.annotationInsertion(module_env, target, rendered, eol) orelse continue;
             errdefer self.allocator.free(edit.new_text);
 
             const name = module_env.common.source[target.region.start.offset..target.region.end.offset];
             const title = try std.fmt.allocPrint(self.allocator, "Annotate '{s}' with its inferred type", .{name});
+            errdefer self.allocator.free(title);
 
             try actions.append(self.allocator, .{
                 .title = title,
@@ -3324,6 +3337,7 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         start_offset: u32,
         end_offset: u32,
+        eol: []const u8,
         actions: *std.ArrayList(CodeAction),
     ) Allocator.Error!void {
         var definitions = try cir_queries.collectTopLevelDefinitionsInRange(module_env, start_offset, end_offset, self.allocator);
@@ -3335,10 +3349,12 @@ pub const SyntaxChecker = struct {
                 module_env,
                 definition.name,
                 ModuleEnv.varFrom(definition.pattern),
+                eol,
             ) orelse continue;
             errdefer self.allocator.free(new_text);
 
             const title = try std.fmt.allocPrint(self.allocator, "Generate an expect test for '{s}'", .{definition.name});
+            errdefer self.allocator.free(title);
 
             try actions.append(self.allocator, .{
                 .title = title,
