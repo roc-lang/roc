@@ -7455,7 +7455,7 @@ test "RC list payload through aliases preserves a consumed buffer" {
     try testListObservationAfterReserve(.list_get_unsafe);
 }
 
-fn testListObservationAfterReserve(op: LIR.LowLevel) !void {
+fn testListObservationAfterReserve(op: LIR.LowLevel) (Allocator.Error || error{TestExpectedEqual})!void {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const old = try f.local(f.list_i64);

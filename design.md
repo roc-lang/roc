@@ -11102,8 +11102,9 @@ with no allocation-dependent use carries no ownership unit and does not extend
 its source's allocation lifetime. Calls, joins, escaping values, and payload
 reads keep their existing explicit lifetime contracts. Extracting a descriptor
 from a container still requires the container at the extraction; subsequent
-metadata reads of the copied descriptor require only that saved value. Every
-assignment and loop rebinding retains its original value-snapshot semantics.
+metadata reads of the copied descriptor require only that saved value. When
+assignment or loop rebinding replaces a list, existing descriptor copies keep
+their saved values.
 
 The certifier independently permits metadata reads and descriptor copies from
 bound list representations after their units move or die. It preserves their
