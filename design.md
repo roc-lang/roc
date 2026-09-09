@@ -2084,11 +2084,18 @@ flow through one graph relation; the checker never performs a pairwise
 argument scan.
 
 Expected aggregate structure is recursive checking context, not a second owner
-of the expression's root relation. Lists, tuples, records, and tag payloads
-project child slots by relating an aggregate skeleton to a rigids-flexed orphan
-copy of the expected type. Nominal constructors explicitly open their declared
-backing before checking the backing expression, and record updates project each
-supplied field from the base row before checking that field's value. A stored
+of the expression's root relation. A record update passes a borrowed base-row
+and field identity; only an aggregate construction consuming that context
+looks up the field. Ordinary stored-value lookups perform no projection.
+Lists, tuples, records, and tag payloads project child slots by relating an
+aggregate skeleton to an expected-shape copy. This operation preserves structural
+equalities, field kinds, and aliases, and flexes rigids, but does not copy or
+traverse static-dispatch requirements: those belong to the original type and its
+real scheme-use edges. It records no instantiation, literal, ambiguity, or
+dispatch evidence. Context is never an independently executable obligation.
+Nominal constructors explicitly open their declared backing before checking
+the backing expression; demanded update-field projections obey the same nominal
+opacity and declaration-substitution rules as record unification. A stored
 child is checked and instantiated first; a successful projected-child relation
 is then committed so sibling checking and dispatch can consume it. A rejected
 projected-child relation records no standalone mismatch: the enclosing aggregate's
@@ -4941,6 +4948,30 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Expected Shape Context
+
+An expected aggregate shape guides construction but introduces no new value
+use. `copyExpectedShape` preserves the expected type's structural equalities
+and field kinds in fresh cells, flexes rigid leaves, and omits static-dispatch
+constraints and off-root scheme requirements. Every omitted obligation remains
+on its source type and is enforced by the ordinary enclosing relation and the
+actual stored-value instantiation. Shape copies never enter literal, dispatch,
+ambiguity, or evidence worklists. The copy and its projected relation belong to
+one commit-probe, so a rejected projection retains neither the copy nor any
+partial unification. Rejection is diagnosed by the owning full-shape relation.
+
+A record update carries its base variable and supplied field identity as
+borrowed context. A consuming aggregate reads the current row on demand,
+including aliases and extensions; a nominal base requires the same opacity
+capability, declaration substitution, and record backing as record unification.
+No solved-graph memo survives between field checks, which can refine the base.
+Ordinary lookups consume no aggregate context and allocate no projection.
+
+The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
+arithmetic remains polymorphic, including heterogeneous user arithmetic;
+nominal and extended rows still guide nested defaulted/optional construction;
+inconsistent shared type variables and unsupported real dispatches still fail.
+
 ### Hosted Try Question Widening
 
 `?` unwraps a `Try` condition and re-raises its error row into the enclosing
@@ -6631,6 +6662,11 @@ Other solved-graph mutations:
   chain pin all sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
+- `copyExpectedShape` / `projectExpectedAggregateShape`—policy: Expected Shape
+  Context (above). Fresh structural context omits dispatch obligations owned by
+  the original type. Only successful ordinary unification with the aggregate
+  skeleton commits the projection; the owning relation still checks the actual
+  value against the complete expected type.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
   policy: evidence-param collapse of same-shape requirements as declared in

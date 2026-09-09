@@ -153,6 +153,48 @@ test "instantiate - preserves generalized rigid var structure in function" {
     try std.testing.expectEqual(args[0], func.ret);
 }
 
+test "expected shape preserves sharing without copying dispatch-only graphs" {
+    const gpa = std.testing.allocator;
+    inline for (.{ false, true }) |is_rigid| {
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const name = try env.idents.insert(gpa, Ident.for_text("a"));
+        const method_name = try env.idents.insert(gpa, Ident.for_text("method"));
+        const method_arg = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+        const method = try env.types.freshFromContentWithRank(try env.mkFuncPure(&.{method_arg}, method_arg), .generalized);
+        const constraints = try env.types.appendStaticDispatchConstraints(&.{.{
+            .fn_name = method_name,
+            .fn_var = method,
+            .origin = .method_call,
+        }});
+        const source = try env.types.freshFromContentWithRank(if (is_rigid)
+            .{ .rigid = .{ .name = name, .constraints = constraints } }
+        else
+            .{ .flex = .{ .name = name, .constraints = constraints } }, .generalized);
+        const root = try env.types.freshFromContentWithRank(try env.mkFuncPure(&.{source}, source), .generalized);
+
+        var instantiator = Instantiator{
+            .store = &env.types,
+            .idents = &env.idents,
+            .var_map = &env.var_map,
+            .rigid_behavior = .fresh_flex,
+            .rank_behavior = .ignore_rank,
+            .current_rank = .outermost,
+            .purpose = .expected_shape,
+        };
+        const shape = try instantiator.instantiateVar(root);
+        const func = env.types.resolveVar(shape).desc.content.structure.fn_pure;
+        try std.testing.expectEqual(env.types.getVarAt(func.args, 0), func.ret);
+        try std.testing.expect(func.ret != source);
+        try std.testing.expectEqual(@as(usize, 0), env.types.resolveVar(func.ret).desc.content.flex.constraints.len());
+        try std.testing.expect(!env.var_map.contains(method));
+        try std.testing.expect(!env.var_map.contains(method_arg));
+        const original = env.types.resolveVar(source).desc.content;
+        try std.testing.expectEqual(constraints, if (is_rigid) original.rigid.constraints else original.flex.constraints);
+    }
+}
+
 test "instantiate - func with some generalized and some not preserve non-generalized" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);

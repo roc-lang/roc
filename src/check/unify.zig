@@ -1529,6 +1529,7 @@ const Unifier = struct {
             decl,
             args,
             Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .instantiation,
         );
 
         // Every var minted by the instantiation needs the caller's post-unify
