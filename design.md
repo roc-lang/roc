@@ -3492,8 +3492,10 @@ constructs the concrete parser and the hidden `HttpHeaderState.{ raw }` is the
 runtime input state. Formats with no configurable behavior can still use a
 zero-sized internal encoding value.
 
-The error type is inferred from the format methods. All `Try` errors in one
-parse or encode operation unify with the public function's returned error type.
+The error type is inferred from the format methods. A generated parser composes
+each format method's error row into its returned error row, preserving the
+method's own callable type. Encoder error types unify with the public function's
+returned error type.
 When a concrete encode operation cannot fail, its error type is empty, so
 `Json.to_str` can bind the underlying encoder result with an exhaustive
 `Ok(encoded_state) = ...` pattern and return `Str` directly. When a concrete
@@ -5239,6 +5241,40 @@ named rigid record extension).
 
 ### Derived Parser Required-Field Error Composition
 
+Format methods, like custom nominal parsers, retain their own error rows.
+The generated parser requires inclusion of every child error tag with equal
+payload types, rather than equality of child and parent rows. An empty child
+row contributes no errors. This applies to first-order scalar, list, tuple,
+record, and dictionary format methods. `parse_tag_union` receives a
+`ParseTagUnionSpec` whose generated payload parsers execute at the enclosing
+contract row; its callable retains that shared row. This callback dependency
+remains part of its specialization identity. First-order format calls specialize
+from their checked callable and evidence without inheriting the enclosing codec
+contract; unrelated parent errors therefore do not duplicate those callees.
+Composition does not widen ordinary user calls or change ordinary unification.
+Explicit parent rows excluding a
+child error, and incompatible payloads for a shared tag, remain errors.
+
+`constrainDerivedParserErrorRowIncludes` collects a complete child row into
+retained scratch storage and imposes one open-row relation for its known tags.
+Only an unconstrained instantiated child extension may close; constrained or
+rigid extensions remain unsupported. An absent-constructor empty default is
+committed as a closed row on that method instance before publication. Non-row
+format errors, such as `Str`, retain ordinary equality through
+`constrainDerivedParserFormatError`. Checked codec callables preserve child
+types and their shared payload relations with the parent. Lowering calls those
+exact callables and composes errors at the propagation boundary; an infallible
+call needs no error arm and equal rows need no conversion. Specialization
+merges sorted tag rows linearly and retains each sealed source-to-target tag
+correspondence once per emission context; propagation reuses that mapping.
+Differing rows use the ordinary Try sequence's cold error edge with an explicit
+conversion continuation, preserving direct success-record field binding.
+
+Issue #11246 is pinned by
+`test/snapshots/parser_for_derived_list_error_union_issue_11246.md`,
+`test/cli/ParserFormatErrorComposition.roc`, and
+`src/check/test/issue_11246_test.zig` (including rejected parent rows and payloads).
+
 A compiler-derived structural record parser, rather than its input-format
 implementation, owns the failure produced when a required field is absent.
 When a parsed record contains at least one field whose type is not the
@@ -5270,7 +5306,7 @@ type, state type, error row), so two reads of one shape at one row—a nominal
 read on its own and the same nominal read again nested inside another derived
 shape—record the same contract instead of two that disagree about the nested
 parser's error row. `constrainDerivedParserErrorRowIncludes` therefore composes
-custom nominal parsers only. Pinned by
+declared methods only. Pinned by
 test/cli/JsonNestedNominalContract.roc (both reads at one row, at a row wider
 than the shape demands, and at two different rows).
 
@@ -6704,8 +6740,9 @@ Other solved-graph mutations:
   worklist mutation. `JsonParseGenericWrapperErrors.roc` pins the committed
   side, while `ParserRequiredFieldError.roc` pins rollback by declaring an
   incompatible unused method and still reporting the precise generated tag.
-- `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
-  Required-Field Error Composition (above). A custom parser method's
+- `constrainDerivedParserFormatError` /
+  `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
+  Required-Field Error Composition (above). A format or custom parser method's
   instantiated error extension is closed, then its concrete tags gate ordinary
   unification constraints requiring the parent parser row to include them.
 - `processReturnConstraints`—policy: Inferred Try Return-Row Composition

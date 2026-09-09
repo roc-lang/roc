@@ -37289,14 +37289,18 @@ fn validateParseFormatMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
+    // ParseTagUnionSpec executes compiler-generated payload parsers at this
+    // contract's row. Its format callable therefore depends on the enclosing
+    // error row, unlike first-order methods with no generated payload parser.
+    const child_err_var = if (spec_decl == .tag_union) err_var else try self.fresh(env, region);
     const expected_ret = switch (spec_decl) {
-        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, err_var, env, region),
-        .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
-        .list_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Item", "Done", env, region),
-        .list_after_item => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
-        .list_start, .record_start => try self.freshParseCountedStartTryVar(state_var, err_var, env, region),
-        .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
-        .record_after_field => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, child_err_var, env, region),
+        .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, child_err_var), env, region),
+        .list_next => try self.freshParseArrayEventTryVar(state_var, child_err_var, "Item", "Done", env, region),
+        .list_after_item => try self.freshParseArrayEventTryVar(state_var, child_err_var, "Continue", "Done", env, region),
+        .list_start, .record_start => try self.freshParseCountedStartTryVar(state_var, child_err_var, env, region),
+        .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, child_err_var, env, region),
+        .record_after_field => try self.freshParseArrayEventTryVar(state_var, child_err_var, "Continue", "Done", env, region),
     };
     const expected_fn = switch (spec_decl) {
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_after_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
@@ -37327,6 +37331,11 @@ fn validateParseFormatMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    if (spec_decl != .tag_union) switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    };
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
 }
 
@@ -37410,22 +37419,22 @@ fn validateDerivedParseDictMethods(
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     const start_ret = try self.freshParseCountedStartTryVar(state_var, err_var, env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_start", start_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_start", start_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
     const next_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Entry", "Done", env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_next", next_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_next", next_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
     const after_key_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_after_key", after_key_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_after_key", after_key_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
     const after_entry_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_after_entry", after_entry_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_after_entry", after_entry_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
@@ -37434,6 +37443,7 @@ fn validateDerivedParseDictMethods(
 
 fn validateDictProtocolMethod(
     self: *Self,
+    comptime kind: ModuleEnv.GeneratedCodecDerivation.Kind,
     subject_var: Var,
     encoding_var: Var,
     state_var: Var,
@@ -37448,7 +37458,11 @@ fn validateDictProtocolMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
+    const parent_result = self.tryArgsFromVar(expected_ret).?;
+    const is_parser = kind == .parser;
+    const child_err_var = if (is_parser) try self.fresh(env, region) else parent_result.err;
+    const child_ret = if (is_parser) try self.freshFromContent(try self.mkTryContent(parent_result.ok, child_err_var), env, region) else expected_ret;
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, child_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -37456,6 +37470,11 @@ fn validateDictProtocolMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    if (is_parser) switch (try self.constrainDerivedParserFormatError(parent_result.err, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    };
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
 }
 
@@ -37475,7 +37494,8 @@ fn validateParseKeyMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
-    const expected_ret = try self.freshParseResultTryVar(key_var, state_var, err_var, env, region);
+    const child_err_var = try self.fresh(env, region);
+    const expected_ret = try self.freshParseResultTryVar(key_var, state_var, child_err_var, env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
@@ -37484,6 +37504,11 @@ fn validateParseKeyMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    }
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, key_var);
 }
 
@@ -37529,6 +37554,41 @@ fn constrainDerivedParserRequiredFieldError(
     return if (result.isEstablished()) .ok else .reported_error;
 }
 
+/// Format errors need not be tag rows (for example a format may return Str).
+/// Non-row errors retain ordinary equality. Row composition is the declared
+/// relation only for a tag row or an unconstrained absent-error variable.
+fn constrainDerivedParserFormatError(
+    self: *Self,
+    parent: Var,
+    child: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    var current = child;
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |structure| switch (structure) {
+                .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region),
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
+            },
+            .flex => |flex| if (flex.constraints.len() == 0) {
+                return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region);
+            },
+            .rigid, .field_presence => {},
+            .err => return .ok,
+        }
+        const result = try self.unify(parent, child, env);
+        return if (result.isEstablished()) .ok else .reported_error;
+    }
+}
+
+/// Compose one declared parser's complete error row in one unification. Tag
+/// payload ranges already belong to the type store; copying their Var slices
+/// would duplicate storage without changing the shared-payload relation.
 fn constrainDerivedParserErrorRowIncludes(
     self: *Self,
     parent_err_var: Var,
@@ -37536,49 +37596,51 @@ fn constrainDerivedParserErrorRowIncludes(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const resolved = self.types.resolveVar(child_err_var);
-    return switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .empty_tag_union => .ok,
-            .tag_union => |tag_union| blk: {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const copied_tags = try self.gpa.alloc(types_mod.Tag, tags.len);
-                defer self.gpa.free(copied_tags);
-                for (copied_tags, tags.items(.name), tags.items(.args)) |*copied, name, args| {
-                    copied.* = .{ .name = name, .args = args };
-                }
-
-                for (copied_tags) |child_tag| {
-                    const payload_vars = try self.gpa.dupe(Var, self.types.sliceVars(child_tag.args));
-                    defer self.gpa.free(payload_vars);
-                    const required_tag = try self.types.mkTag(child_tag.name, payload_vars);
-                    const parent_ext = try self.fresh(env, region);
-                    const required_parent = try self.freshFromContent(try self.types.mkTagUnion(&.{required_tag}, parent_ext), env, region);
-                    const result = try self.unify(parent_err_var, required_parent, env);
-                    if (!result.isEstablished()) break :blk .reported_error;
-                }
-
-                break :blk try self.constrainDerivedParserErrorRowIncludes(parent_err_var, tag_union.ext, env, region);
+    const mark = self.scratch_tags.top();
+    defer self.scratch_tags.clearFrom(mark);
+    var current = child_err_var;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .empty_tag_union => {
+                    // Inclusion commits the instantiated child's absent-error
+                    // proof. Publication must retain a closed row here, not a
+                    // default awaiting a relation to the parent's wider row.
+                    if (resolved.desc.flags.empty_tag_union_is_default) {
+                        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+                        const result = try self.unify(resolved.var_, empty, env);
+                        if (!result.isEstablished()) return .reported_error;
+                    }
+                    break;
+                },
+                .tag_union => |row| {
+                    const tags = self.types.getTagsSlice(row.tags);
+                    for (tags.items(.name), tags.items(.args)) |name, args| {
+                        try self.scratch_tags.append(.{ .name = name, .args = args });
+                    }
+                    current = row.ext;
+                },
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return .unsupported,
             },
-            .record,
-            .record_unbound,
-            .tuple,
-            .nominal_type,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            => .unsupported,
-        },
-        .alias => |alias| try self.constrainDerivedParserErrorRowIncludes(parent_err_var, self.types.getAliasBackingVar(alias), env, region),
-        .flex => blk: {
-            const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-            const result = try self.unify(resolved.var_, empty, env);
-            break :blk if (result.isEstablished()) .ok else .reported_error;
-        },
-        .rigid, .field_presence => .unsupported,
-        .err => .ok,
-    };
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .flex => |flex| {
+                if (flex.constraints.len() != 0) return .unsupported;
+                const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+                const result = try self.unify(resolved.var_, empty, env);
+                if (!result.isEstablished()) return .reported_error;
+                break;
+            },
+            .rigid, .field_presence => return .unsupported,
+            .err => return .ok,
+        }
+    }
+    const tags = self.scratch_tags.sliceFromStart(mark);
+    if (tags.len == 0) return .ok;
+    const parent_ext = try self.fresh(env, region);
+    const required_parent = try self.freshFromContent(try self.types.mkTagUnion(tags, parent_ext), env, region);
+    const result = try self.unify(parent_err_var, required_parent, env);
+    return if (result.isEstablished()) .ok else .reported_error;
 }
 
 fn validateInvalidValueMethod(
@@ -37663,7 +37725,8 @@ fn validateSkipRecordFieldMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
-    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+    const child_err_var = try self.fresh(env, region);
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, child_err_var), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
@@ -37672,6 +37735,11 @@ fn validateSkipRecordFieldMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    }
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
 }
 
@@ -38484,7 +38552,7 @@ fn validateDerivedParseNominal(
             // format whose key position only holds strings does not implement
             // it, so such a key is rejected there rather than by a rule in the
             // compiler that every format has to share.
-            switch (try self.validateDictProtocolMethod(args.key, encoding_var, state_var, "parse_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, failure_expr)) {
+            switch (try self.validateDictProtocolMethod(.parser, args.key, encoding_var, state_var, "parse_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, failure_expr)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
@@ -39206,7 +39274,7 @@ fn validateDerivedEncodeNominal(
         } else {
             // Mirrors the parse side: `encode_key_start` is what admits a key
             // the format cannot render as a key string.
-            switch (try self.validateDictProtocolMethod(args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null)) {
+            switch (try self.validateDictProtocolMethod(.encoder, args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
