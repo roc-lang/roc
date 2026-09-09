@@ -46,37 +46,7 @@ const windows_cross_targets = [_]CrossTarget{
 /// live in the platform's `targets/<target>/` directory. `test/fx` holds the
 /// checked-in copy (regenerate with `ci/vendor_mingw_runtime.py`) and the build
 /// copies it into the other test platforms rather than committing duplicates.
-const mingw_runtime_files = [_][]const u8{
-    "crt2.obj",
-    "dllcrt2.obj",
-    "libmingw32.lib",
-    "zigc.lib",
-    "compiler_rt.lib",
-    "api-ms-win-crt-conio-l1-1-0.lib",
-    "api-ms-win-crt-convert-l1-1-0.lib",
-    "api-ms-win-crt-environment-l1-1-0.lib",
-    "api-ms-win-crt-filesystem-l1-1-0.lib",
-    "api-ms-win-crt-heap-l1-1-0.lib",
-    "api-ms-win-crt-locale-l1-1-0.lib",
-    "api-ms-win-crt-math-l1-1-0.lib",
-    "api-ms-win-crt-multibyte-l1-1-0.lib",
-    "api-ms-win-crt-private-l1-1-0.lib",
-    "api-ms-win-crt-process-l1-1-0.lib",
-    "api-ms-win-crt-runtime-l1-1-0.lib",
-    "api-ms-win-crt-stdio-l1-1-0.lib",
-    "api-ms-win-crt-string-l1-1-0.lib",
-    "api-ms-win-crt-time-l1-1-0.lib",
-    "api-ms-win-crt-utility-l1-1-0.lib",
-    "advapi32.lib",
-    "kernel32.lib",
-    "ntdll.lib",
-    "shell32.lib",
-    "user32.lib",
-    // The http-headers host calls into Winsock; `/nodefaultlib` drops the
-    // `.drectve /defaultlib:ws2_32` its object carries, so platforms that need
-    // sockets list this explicitly.
-    "ws2_32.lib",
-};
+const mingw_runtime_files = @import("src/echo_platform/mingw_runtime.zig").files;
 
 /// Copies fx's checked-in MinGW C runtime into another test platform's
 /// `platform/targets/<target_name>/` directory, so a `*mingw` link finds every
@@ -7568,8 +7538,15 @@ fn addMainExe(
         .linkage = .static,
     });
     configureBackend(interpreter_shim_lib, target);
-    // Add all modules from roc_modules that the shim needs
-    roc_modules.addAll(interpreter_shim_lib);
+    // Keep compiler-only modules out of this runtime archive. In particular,
+    // bundle links libc through zstd even when its source is never imported.
+    interpreter_shim_lib.root_module.addImport("base", roc_modules.base);
+    interpreter_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    interpreter_shim_lib.root_module.addImport("eval", roc_modules.eval);
+    interpreter_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
+    interpreter_shim_lib.root_module.addImport("layout", roc_modules.layout);
+    interpreter_shim_lib.root_module.addImport("lir", roc_modules.lir);
+    if (target.result.os.tag == .linux) interpreter_shim_lib.root_module.link_libc = false;
     interpreter_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     interpreter_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     interpreter_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_interpreter", .{
@@ -8054,6 +8031,17 @@ fn addMainExe(
             exe.step.dependOn(&copy_default_platform_executable.step);
         }
     }
+
+    const copy_default_mingw_runtime = b.addUpdateSourceFiles();
+    for ([_][]const u8{ "x64mingw", "arm64mingw" }) |target_name| {
+        for (mingw_runtime_files) |filename| {
+            copy_default_mingw_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", target_name, filename })),
+                b.pathJoin(&.{ "src/cli/targets", target_name, filename }),
+            );
+        }
+    }
+    exe.step.dependOn(&copy_default_mingw_runtime.step);
 
     const use_bundled_deps = !use_system_llvm and user_llvm_path == null;
 
