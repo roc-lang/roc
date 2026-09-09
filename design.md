@@ -1840,6 +1840,22 @@ same inline-lambda position—is pinned by
 
 ## Module Completion Boundary
 
+Deferred tuple accesses retain their exact owning expression identity alongside
+the operand and effective result variables. Resolution reports an explicit
+resolved, pending, or rejected outcome. The item/result relation does not
+poison either operand on failure. Immediate rejection marks the still-owned
+expression result for ordinary cascade suppression; deferred rejection replaces
+the access with a checked runtime error without poisoning shared solved types,
+which may already belong to generalized function signatures. Both ambiguous
+shape and concrete invalid access follow this ownership rule.
+
+The deferred worklist stores the expression identity instead of duplicating its
+source region; diagnostics retrieve that region from CIR. Rejected accesses
+are retired after the resolution pass, with shared traversal scratch and one
+default-metadata compaction before further checking. Error-free passes allocate
+no rejection or retirement storage. A discarded access's pending tuple check is
+retired with its explicit subtree invalidation state.
+
 The compile coordinator records phase progress separately from user diagnostics.
 A source module that reaches checking has no user-error `Failure` outcome. It
 must produce its complete `ModuleEnv`, final content identity, and CheckedModule
@@ -6611,7 +6627,10 @@ Other solved-graph mutations:
 - `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
-  unifying that node with a fresh error variable.
+  unifying that node with a fresh error variable. Tuple access uses this only
+  for immediate rejection while the expression frame owns the result;
+  deferred rejection follows the expression replacement described under Module
+  Completion Boundary and never poisons either shared solved class.
 - `retireCallLikeExprWithErroneousOperands` / statement-owned iterator plan
   recovery (`markErroneous`, `markStaticDispatchFnRejected`, and the explicit
   `call_operand_type_error_exprs` table)—mechanism: Erroneous Call Operand Retirement

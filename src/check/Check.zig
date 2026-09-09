@@ -3739,13 +3739,23 @@ fn invalidateExprSubtreeMetadata(self: *Self, root: CIR.Expr.Idx) Allocator.Erro
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
 
-    try self.markHoistInvalidatedExprChildren(root, &work);
+    try self.invalidateExprSubtreeMetadataWithScratch(root, &work);
+    self.retireInvalidatedRecordDefaults(root);
+}
+
+/// Batch callers retain traversal capacity and retire default entries once,
+/// after all replacements and before checking consumes the metadata again.
+fn invalidateExprSubtreeMetadataWithScratch(
+    self: *Self,
+    root: CIR.Expr.Idx,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    work.clearRetainingCapacity();
+    try self.markHoistInvalidatedExprChildren(root, work);
     var next: usize = 0;
     while (next < work.items.len) : (next += 1) {
-        try self.markHoistInvalidatedExprChildren(work.items[next], &work);
+        try self.markHoistInvalidatedExprChildren(work.items[next], work);
     }
-
-    self.retireInvalidatedRecordDefaults(root);
 }
 
 fn retireInvalidatedRecordDefaults(self: *Self, root: ?CIR.Expr.Idx) void {
@@ -4842,8 +4852,10 @@ const PendingTupleAccess = struct {
     tuple_var: Var,
     result_var: Var,
     elem_index: u32,
-    region: Region,
+    expr: CIR.Expr.Idx,
 };
+
+const TupleAccessResolution = enum { resolved, pending, rejected };
 
 // env //
 
@@ -6253,23 +6265,23 @@ fn resolvePendingTupleAccess(
     pending: PendingTupleAccess,
     env: *Env,
     final: bool,
-) Allocator.Error!bool {
+) Allocator.Error!TupleAccessResolution {
     const tuple_resolved = self.types.resolveVar(pending.tuple_var);
     switch (tuple_resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .tuple => |tuple| {
                 const elems = self.types.sliceVars(tuple.elems);
                 if (pending.elem_index < elems.len) {
-                    _ = try self.unify(pending.result_var, elems[pending.elem_index], env);
+                    const result = try self.unifyOwnedRelation(pending.result_var, elems[pending.elem_index], env, .none, .construction);
+                    return if (result.isEstablished()) .resolved else .rejected;
                 } else {
                     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_tuple_access = .{
-                        .region = pending.region,
+                        .region = self.cir.store.getExprRegion(pending.expr),
                         .elem_index = pending.elem_index,
                         .reason = .{ .index_out_of_bounds = @intCast(elems.len) },
                     } });
-                    try self.markErroneous(pending.result_var);
+                    return .rejected;
                 }
-                return true;
             },
             .record,
             .record_unbound,
@@ -6282,12 +6294,11 @@ fn resolvePendingTupleAccess(
             .empty_tag_union,
             => {
                 _ = try self.problems.appendProblem(self.gpa, .{ .invalid_tuple_access = .{
-                    .region = pending.region,
+                    .region = self.cir.store.getExprRegion(pending.expr),
                     .elem_index = pending.elem_index,
                     .reason = .not_tuple,
                 } });
-                try self.markErroneous(pending.result_var);
-                return true;
+                return .rejected;
             },
         },
         .alias => |alias| {
@@ -6296,24 +6307,19 @@ fn resolvePendingTupleAccess(
                 .tuple_var = backing_var,
                 .result_var = pending.result_var,
                 .elem_index = pending.elem_index,
-                .region = pending.region,
+                .expr = pending.expr,
             };
             return try self.resolvePendingTupleAccess(alias_pending, env, final);
         },
-        .err, .field_presence => {
-            try self.markErroneous(pending.result_var);
-            return true;
-        },
+        .err, .field_presence => return .rejected,
         .flex, .rigid => {
-            if (!final) return false;
+            if (!final) return .pending;
 
             _ = try self.problems.appendProblem(self.gpa, .{ .tuple_access_needs_annotation = .{
-                .region = pending.region,
+                .region = self.cir.store.getExprRegion(pending.expr),
                 .elem_index = pending.elem_index,
             } });
-            try self.markErroneous(pending.result_var);
-            try self.markErroneous(pending.tuple_var);
-            return true;
+            return .rejected;
         },
     }
 }
@@ -6323,16 +6329,45 @@ fn resolvePendingTupleAccesses(
     env: *Env,
     final: bool,
 ) Allocator.Error!void {
+    var rejected: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer rejected.deinit(self.gpa);
     var write_i: usize = 0;
     var read_i: usize = 0;
     while (read_i < self.pending_tuple_accesses.items.len) : (read_i += 1) {
         const pending = self.pending_tuple_accesses.items[read_i];
-        if (try self.resolvePendingTupleAccess(pending, env, final)) continue;
+        // Another error may already have discarded this access's subtree.
+        if (self.hoistExprInvalidated(pending.expr) or self.cir.store.getExpr(pending.expr) == .e_runtime_error) continue;
+        switch (try self.resolvePendingTupleAccess(pending, env, final)) {
+            .resolved => continue,
+            .rejected => {
+                try rejected.append(self.gpa, pending.expr);
+                continue;
+            },
+            .pending => {},
+        }
 
         self.pending_tuple_accesses.items[write_i] = pending;
         write_i += 1;
     }
     self.pending_tuple_accesses.shrinkRetainingCapacity(write_i);
+
+    if (rejected.items.len == 0) return;
+    var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer work.deinit(self.gpa);
+    for (rejected.items) |expr| {
+        if (self.hoistExprInvalidated(expr) or self.cir.store.getExpr(expr) == .e_runtime_error) continue;
+        const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(expr),
+        } });
+        // The result and operand may now belong to generalized signatures or
+        // independently used bindings. Retire the access without poisoning
+        // either solved class. No solver work observes the batched retirement.
+        try self.invalidateExprSubtreeMetadataWithScratch(expr, &work);
+        self.cir.store.replaceExprWithRuntimeError(expr, diagnostic);
+    }
+    // Tuple-access roots cannot own omitted record fields; their discarded
+    // descendants were marked above, so one compaction retires the whole batch.
+    self.retireInvalidatedRecordDefaults(null);
 }
 
 // instantiate  //
@@ -18535,10 +18570,14 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 .tuple_var = self.types.resolveVar(tuple_var).var_,
                 .result_var = expr_var,
                 .elem_index = tuple_access.elem_index,
-                .region = expr_region,
+                .expr = expr_idx,
             };
-            if (!try self.resolvePendingTupleAccess(pending, env, false)) {
-                try self.pending_tuple_accesses.append(self.gpa, pending);
+            switch (try self.resolvePendingTupleAccess(pending, env, false)) {
+                .resolved => {},
+                .pending => try self.pending_tuple_accesses.append(self.gpa, pending),
+                // The expression frame still owns its result: preserve early
+                // cascade suppression and let frame completion record the error.
+                .rejected => try self.markErroneous(expr_var),
             }
         },
         // record //
