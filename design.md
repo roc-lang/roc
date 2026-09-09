@@ -1837,7 +1837,7 @@ same inline-lambda position—is pinned by
 
 Deferred tuple accesses retain their exact owning expression identity alongside
 the operand and effective result variables. Resolution reports an explicit
-resolved, pending, or rejected outcome. The element/result relation does not
+resolved, pending, or rejected outcome. The item/result relation does not
 poison either operand on failure. Immediate rejection marks the still-owned
 expression result for ordinary cascade suppression; deferred rejection replaces
 the access with a checked runtime error without poisoning shared solved types,
@@ -1848,7 +1848,7 @@ The deferred worklist stores the expression identity instead of duplicating its
 source region; diagnostics retrieve that region from CIR. Rejected accesses
 are retired after the resolution pass, with shared traversal scratch and one
 default-metadata compaction before further checking. Error-free passes allocate
-no rejection or retirement storage. A discarded access's pending obligation is
+no rejection or retirement storage. A discarded access's pending tuple check is
 retired with its explicit subtree invalidation state.
 
 The compile coordinator records phase progress separately from user diagnostics.
