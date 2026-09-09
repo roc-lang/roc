@@ -76,6 +76,28 @@ pub const ModuleInitContext = struct {
     compiler_version: ?[]const u8 = null,
     /// How this module's compile-time roots are established. See `Validation`.
     validation: Validation = .checking,
+    /// Whether this file is the build's entry module: the file the compiler was
+    /// pointed at, rather than a module discovered inside some package.
+    ///
+    /// Only an entry module may be classified `default_app`, because that
+    /// classification is what injects the synthetic `echo!` hosted lambda. The
+    /// classification is otherwise purely file-local, so without this gate any
+    /// package could ship a headerless module with a valid `main!`, or a
+    /// module carrying a platformless `app` header, and thereby hand itself a
+    /// real host-bound effect: the exact thing the package/platform boundary
+    /// exists to prevent.
+    ///
+    /// Defaults to false so that omitting it fails closed. This is a privilege
+    /// gate, and the cost of the two failure directions is not symmetric: a
+    /// caller that should have said true loses `echo!` and hears about it
+    /// immediately as `Nothing is named echo! in this scope`, whereas a caller
+    /// that should have said false hands out a host-bound effect and says
+    /// nothing at all. Callers that canonicalize the one file they were
+    /// pointed at -- the REPL, the snapshot tool, the language server, the
+    /// playground, direct-canonicalization tests -- set it true explicitly.
+    /// The coordinator is the component that knows a module is *not* the entry
+    /// module, and it is the one that says so.
+    is_entry_module: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -293,6 +315,10 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 compiler_version: ?[]const u8 = null,
 /// How this module's compile-time roots are established. See `Validation`.
 validation: Validation = .checking,
+/// Whether this file is the build's entry module. Defaults to false so an
+/// omission withholds the capability rather than granting it. See
+/// `ModuleInitContext.is_entry_module`.
+is_entry_module: bool = false,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
@@ -762,6 +788,9 @@ fn initInternal(
         .skip_file_import_contents = if (maybe_context) |context| context.skip_file_import_contents else false,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
+        // `initBuiltin` passes no context. A builtin module is never a default
+        // app, and the fail-closed answer is the correct one for it anyway.
+        .is_entry_module = if (maybe_context) |context| context.is_entry_module else false,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
@@ -4382,7 +4411,14 @@ pub fn canonicalizeFile(
             // An app that names no platform gets the built-in Echo platform,
             // the same one a headerless app gets, so it canonicalizes as a
             // default app: `echo!` is in scope and no platform is required.
-            self.env.module_kind = if (h.platform_idx == null) .default_app else .app;
+            //
+            // Gated on the entry module for the same reason the `type_module`
+            // branch below is: `default_app` is what injects the synthetic
+            // `echo!` hosted lambda, so a module shipped inside a package must
+            // not reach the host merely by carrying a platformless `app`
+            // header. Outside the entry module such a file stays an ordinary
+            // `app`, which names no platform and so cannot check.
+            self.env.module_kind = if (h.platform_idx == null and self.is_entry_module) .default_app else .app;
             try self.checkRocVersionPin(h.roc_version);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
@@ -4391,10 +4427,21 @@ pub fn canonicalizeFile(
             try self.createExposedScope(h.provides);
         },
         .type_module => {
-            // Check if file has a main! function, making it a default app
+            // A headerless file with a valid `main!` is a default app, but
+            // only when it is the file the compiler was pointed at. That
+            // classification grants the synthetic `echo!` hosted lambda
+            // below, so a module living inside some package must not earn it
+            // merely by defining `main!`: that would hand any dependency a
+            // real host-bound effect.
+            //
+            // Such a module stays an ordinary type module, and its `main!` an
+            // ordinary top-level definition. Deliberately with no diagnostic:
+            // outside an entry module `main!` is just a name, and an author
+            // who meant it as an entrypoint hears about it through the errors
+            // on whatever effects that module was reaching for.
             // Don't report errors here - validation will handle that
             const main_status = try self.checkMainFunction(false);
-            if (main_status == .valid) {
+            if (main_status == .valid and self.is_entry_module) {
                 self.env.module_kind = .default_app;
             } else {
                 // Set to undefined placeholder - will be properly set during validation

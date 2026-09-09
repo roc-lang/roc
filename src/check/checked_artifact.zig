@@ -1526,6 +1526,7 @@ const CompileTimeRequestScheduler = struct {
     ) Allocator.Error!void {
         switch (body) {
             .direct_template => |direct| try self.collectCallableTemplateDependencies(direct.template),
+            .checked_error => {},
             .callable_eval_template => |template_id| {
                 const template = self.callable_eval_templates.get(template_id);
                 try self.addRootDependency(template.root);
@@ -2422,7 +2423,7 @@ fn procedureTemplateForTopLevelBinding(
             .synthetic => |synthetic| synthetic.template,
             .lifted => checkedArtifactInvariant("checked root binding referenced lifted procedure before post-check lowering", .{}),
         },
-        .callable_eval_template => null,
+        .callable_eval_template, .checked_error => null,
     };
 }
 
@@ -12201,6 +12202,100 @@ pub const CheckedBodyStore = struct {
         }
     }
 
+    /// Propagate terminal callee errors and callable-binding aliases through
+    /// explicit checked edges. Each node becomes an error at most once.
+    fn propagateRejectedCallableBindings(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+        local_module: CheckedModuleArtifactKey,
+        refs: *const ResolvedValueRefTable,
+        bindings: *TopLevelProcedureBindingTable,
+        templates: *const CallableEvalTemplateTable,
+        roots: *const CompileTimeRootTable,
+    ) Allocator.Error!void {
+        const dependents = try allocator.alloc(std.ArrayList(CheckedExprId), self.exprCount());
+        for (dependents) |*items| items.* = .empty;
+        defer {
+            for (dependents) |*items| items.deinit(allocator);
+            allocator.free(dependents);
+        }
+        var work = std.ArrayList(CheckedExprId).empty;
+        defer work.deinit(allocator);
+        for (self.stored_exprs.items, 0..) |stored, i| {
+            const id: CheckedExprId = @enumFromInt(@as(u32, @intCast(i)));
+            if (stored.data == .runtime_error) try work.append(allocator, id);
+            if (stored.data == .call) try dependents[@intFromEnum(stored.data.call.func)].append(allocator, id);
+        }
+        for (refs.records) |record| {
+            const procedure = switch (record.ref) {
+                .top_level_proc, .promoted_top_level_proc => |proc| proc,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .imported_proc,
+                .hosted_proc,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                .platform_required_proc,
+                => continue,
+            };
+            const target = switch (procedure.binding) {
+                .top_level => |target| target,
+                .imported, .hosted, .platform_required => continue,
+            };
+            if (!checkedArtifactKeyEql(target.artifact, local_module)) continue;
+            const binding = bindings.get(target.binding);
+            if (binding.body != .callable_eval_template) continue;
+            const root = roots.root(templates.get(binding.body.callable_eval_template).root);
+            try dependents[@intFromEnum(root.expr)].append(allocator, record.expr);
+        }
+        while (work.pop()) |failed| {
+            for (dependents[@intFromEnum(failed)].items) |dependent| {
+                const stored = &self.stored_exprs.items[@intFromEnum(dependent)];
+                if (stored.data == .runtime_error) continue;
+                stored.data = .runtime_error;
+                try work.append(allocator, dependent);
+            }
+        }
+        for (bindings.bindings.items) |*binding| {
+            if (binding.body != .callable_eval_template) continue;
+            const root = roots.root(templates.get(binding.body.callable_eval_template).root);
+            if (self.stored_exprs.items[@intFromEnum(root.expr)].data == .runtime_error) {
+                binding.body = .{ .checked_error = root.expr };
+            }
+        }
+    }
+
+    /// Rejection discovered when resolving a binding use must reach the same
+    /// checked facts as a source runtime error, before templates collect relations.
+    /// Successful modules never allocate this recovery scratch.
+    fn republishRejectedBindingFacts(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+        checked_types: *const CheckedTypeStore,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) Allocator.Error!void {
+        const operands = try checkedDispatchOperands(allocator, self.exprCount(), plans, null);
+        defer freeCheckedDispatchOperands(allocator, operands);
+        const errors = try allocator.alloc(bool, self.exprCount());
+        defer allocator.free(errors);
+        try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors);
+        for (self.stored_exprs.items, errors) |*stored, contains_error| stored.contains_diagnostic_error = contains_error;
+
+        const exprs = try allocator.alloc(CheckedExpr, self.exprCount());
+        defer allocator.free(exprs);
+        for (exprs, 0..) |*stored, i| stored.* = self.expr(@enumFromInt(i));
+        try publishCheckedInspectEvaluationElision(allocator, exprs, errors);
+        for (self.stored_exprs.items, errors) |*stored, may_elide| stored.evaluation_may_be_elided_for_inspect = may_elide;
+        try self.publishResolvedDispatchDivergence(allocator, plans);
+    }
+
     // --- Shared flat pool accessors (used by materialize functions). ---
 
     pub fn exprIdPool(self: *const CheckedBodyStore) []const CheckedExprId {
@@ -12770,7 +12865,8 @@ pub const CheckedBodyStore = struct {
         imports: []const PublishImportArtifact,
         available_modules: []const ImportedModuleView,
         relation_modules: []const ImportedModuleView,
-    ) void {
+    ) bool {
+        var rejected_binding = false;
         for (refs.records, 0..) |record, i| {
             const ref_id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(i)));
             const indexed = refs.lookupIdByCheckedExpr(record.expr) orelse {
@@ -12784,6 +12880,33 @@ pub const CheckedBodyStore = struct {
             };
             std.debug.assert(ref_id == indexed);
             const data = &self.stored_exprs.items[@intFromEnum(record.expr)].data;
+            const procedure: ?ProcedureUseTemplate = switch (record.ref) {
+                .top_level_proc, .imported_proc, .promoted_top_level_proc => |proc| proc,
+                .platform_required_proc => |required| required.procedure,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .hosted_proc,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                => null,
+            };
+            if (procedure) |proc| {
+                if (procedureUseKind(proc, local_module, local_procedure_bindings, imports, available_modules, relation_modules) == .checked_error) {
+                    // The type remains available for diagnostics. Evaluating this
+                    // exact value use has no callable target or type relation.
+                    data.* = .runtime_error;
+                    rejected_binding = true;
+                    continue;
+                }
+            }
+
             if (data.* == .lookup_local) {
                 const lookup = data.lookup_local;
                 data.* = .{ .lookup_local = .{
@@ -12807,6 +12930,13 @@ pub const CheckedBodyStore = struct {
 
         for (self.stored_exprs.items) |*checked_expr| {
             if (checked_expr.data == .call) {
+                // Evaluating the callee happens before any argument. A checked
+                // error produces neither a callable nor a result type relation.
+                if (self.stored_exprs.items[@intFromEnum(checked_expr.data.call.func)].data == .runtime_error) {
+                    checked_expr.data = .runtime_error;
+                    rejected_binding = true;
+                    continue;
+                }
                 checked_expr.data.call.direct_target = directProcedureTargetForCall(
                     refs,
                     checked_expr.data.call.func,
@@ -12818,6 +12948,7 @@ pub const CheckedBodyStore = struct {
                 );
             }
         }
+        return rejected_binding;
     }
 
     pub fn appendBody(
@@ -13460,6 +13591,47 @@ fn publishCheckedBodyDivergence(
     }
 }
 
+fn checkedDispatchOperands(allocator: Allocator, expr_count: usize, plans: *const static_dispatch.StaticDispatchPlanTable, crashes: ?[]bool) Allocator.Error![][]const CheckedExprId {
+    const dispatch_operands = try allocator.alloc([]const CheckedExprId, expr_count);
+    for (dispatch_operands) |*operands| operands.* = &.{};
+    errdefer freeCheckedDispatchOperands(allocator, dispatch_operands);
+    for (plans.plans) |plan| {
+        const expr_raw = @intFromEnum(plan.expr);
+        if (expr_raw >= expr_count) {
+            checkedArtifactInvariant("static dispatch plan referenced a missing checked expression", .{});
+        }
+
+        if (crashes) |values| values[expr_raw] = values[expr_raw] or dispatchResolutionCrashes(plan.resolution);
+
+        var checked_operand_count: usize = 0;
+        for (plan.argsSlice(plans)) |operand| switch (operand) {
+            .checked_expr => checked_operand_count += 1,
+            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
+        };
+        if (checked_operand_count == 0) continue;
+        if (dispatch_operands[expr_raw].len != 0) {
+            checkedArtifactInvariant("checked expression had more than one static dispatch operand vector", .{});
+        }
+        const operands = try allocator.alloc(CheckedExprId, checked_operand_count);
+        var operand_index: usize = 0;
+        for (plan.argsSlice(plans)) |operand| switch (operand) {
+            .checked_expr => |expr| {
+                operands[operand_index] = expr;
+                operand_index += 1;
+            },
+            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
+        };
+        dispatch_operands[expr_raw] = operands;
+    }
+
+    return dispatch_operands;
+}
+
+fn freeCheckedDispatchOperands(allocator: Allocator, operands: [][]const CheckedExprId) void {
+    for (operands) |items| if (items.len > 0) allocator.free(items);
+    allocator.free(operands);
+}
+
 /// Compute checked-body divergence after static dispatch plans are attached.
 /// `evidence_crashes` is either empty or one bool per checked expression; true
 /// means the specialization's explicit evidence resolves that dispatch to a
@@ -13485,12 +13657,6 @@ pub fn dispatchDivergenceForEvidence(
     defer allocator.free(statements);
     for (statements, 0..) |*statement, raw| statement.* = bodies.statement(@enumFromInt(raw));
 
-    const dispatch_operands = try allocator.alloc([]const CheckedExprId, expr_count);
-    for (dispatch_operands) |*operands| operands.* = &.{};
-    defer {
-        for (dispatch_operands) |operands| if (operands.len > 0) allocator.free(operands);
-        allocator.free(dispatch_operands);
-    }
     const dispatch_crashes = try allocator.alloc(bool, expr_count);
     defer allocator.free(dispatch_crashes);
     if (evidence_crashes.len == 0) {
@@ -13498,34 +13664,8 @@ pub fn dispatchDivergenceForEvidence(
     } else {
         @memcpy(dispatch_crashes, evidence_crashes);
     }
-
-    for (plans.plans) |plan| {
-        const expr_raw = @intFromEnum(plan.expr);
-        if (expr_raw >= expr_count) {
-            checkedArtifactInvariant("static dispatch plan referenced a missing checked expression", .{});
-        }
-        dispatch_crashes[expr_raw] = dispatch_crashes[expr_raw] or dispatchResolutionCrashes(plan.resolution);
-
-        var checked_operand_count: usize = 0;
-        for (plan.argsSlice(plans)) |operand| switch (operand) {
-            .checked_expr => checked_operand_count += 1,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
-        };
-        if (checked_operand_count == 0) continue;
-        if (dispatch_operands[expr_raw].len != 0) {
-            checkedArtifactInvariant("checked expression had more than one static dispatch operand vector", .{});
-        }
-        const operands = try allocator.alloc(CheckedExprId, checked_operand_count);
-        var operand_index: usize = 0;
-        for (plan.argsSlice(plans)) |operand| switch (operand) {
-            .checked_expr => |expr| {
-                operands[operand_index] = expr;
-                operand_index += 1;
-            },
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
-        };
-        dispatch_operands[expr_raw] = operands;
-    }
+    const dispatch_operands = try checkedDispatchOperands(allocator, expr_count, plans, dispatch_crashes);
+    defer freeCheckedDispatchOperands(allocator, dispatch_operands);
 
     const expr_diverges = try allocator.alloc(bool, expr_count);
     errdefer allocator.free(expr_diverges);
@@ -13888,8 +14028,19 @@ fn procedureUseCanBeCalledDirectly(
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) bool {
+    return procedureUseKind(proc, local_module, local_procedure_bindings, imports, available_modules, relation_modules) == .direct_template;
+}
+
+fn procedureUseKind(
+    proc: ProcedureUseTemplate,
+    local_module: CheckedModuleArtifactKey,
+    local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
+    relation_modules: []const ImportedModuleView,
+) std.meta.Tag(ProcedureBindingBody) {
     return switch (proc.binding) {
-        .top_level => |top_level| topLevelProcedureCanBeCalledDirectly(
+        .top_level => |top_level| topLevelProcedureKind(
             top_level,
             local_module,
             local_procedure_bindings,
@@ -13897,9 +14048,9 @@ fn procedureUseCanBeCalledDirectly(
             available_modules,
             relation_modules,
         ),
-        .imported => |imported| importedProcedureCanBeCalledDirectly(imported, imports, available_modules, relation_modules),
-        .hosted => true,
-        .platform_required => |required| topLevelProcedureCanBeCalledDirectly(
+        .imported => |imported| importedProcedureKind(imported, imports, available_modules, relation_modules),
+        .hosted => .direct_template,
+        .platform_required => |required| topLevelProcedureKind(
             .{ .artifact = required.artifact, .binding = required.procedure_binding },
             local_module,
             local_procedure_bindings,
@@ -13910,14 +14061,14 @@ fn procedureUseCanBeCalledDirectly(
     };
 }
 
-fn topLevelProcedureCanBeCalledDirectly(
+fn topLevelProcedureKind(
     top_level: ArtifactTopLevelProcedureBindingRef,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
     imports: []const PublishImportArtifact,
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
-) bool {
+) std.meta.Tag(ProcedureBindingBody) {
     const body = if (checkedArtifactKeyEql(top_level.artifact, local_module))
         local_procedure_bindings.get(top_level.binding).body
     else blk: {
@@ -13925,20 +14076,24 @@ fn topLevelProcedureCanBeCalledDirectly(
             checkedArtifactInvariant("direct-call target referenced an unavailable checked module", .{});
         break :blk view.top_level_procedure_bindings.get(top_level.binding).body;
     };
-    return procedureBodyCanBeCalledDirectly(body);
+    return std.meta.activeTag(body);
 }
 
-fn importedProcedureCanBeCalledDirectly(
+fn importedProcedureKind(
     imported: ImportedProcedureBindingRef,
     imports: []const PublishImportArtifact,
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
-) bool {
+) std.meta.Tag(ProcedureBindingBody) {
     const view = moduleViewForKey(imports, available_modules, relation_modules, imported.artifact) orelse
         checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
     for (view.exported_procedure_bindings.bindings) |binding| {
         if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-            return importedProcedureBodyCanBeCalledDirectly(binding.body);
+            return switch (binding.body) {
+                .direct_template => .direct_template,
+                .callable_eval_template => .callable_eval_template,
+                .checked_error => .checked_error,
+            };
         }
     }
     checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
@@ -13960,20 +14115,6 @@ fn moduleViewForKey(
         if (checkedArtifactKeyEql(view.key, key)) return view;
     }
     return null;
-}
-
-fn procedureBodyCanBeCalledDirectly(body: ProcedureBindingBody) bool {
-    return switch (body) {
-        .direct_template => true,
-        .callable_eval_template => false,
-    };
-}
-
-fn importedProcedureBodyCanBeCalledDirectly(body: ImportedProcedureBindingBody) bool {
-    return switch (body) {
-        .direct_template => true,
-        .callable_eval_template => false,
-    };
 }
 
 const CheckedStringLiteralBuilder = struct {
@@ -15447,6 +15588,8 @@ pub const DirectProcedureBinding = struct {
 pub const ProcedureBindingBody = union(enum) {
     direct_template: DirectProcedureBinding,
     callable_eval_template: CallableEvalTemplateId,
+    /// The binding value was rejected; evaluating it is a terminal checked error.
+    checked_error: CheckedExprId,
 };
 
 /// Public `TopLevelProcedureBinding` declaration.
@@ -15484,6 +15627,20 @@ pub const TopLevelProcedureBindingTable = struct {
                 .proc_value = proc_value,
                 .template = .{ .checked = template },
             } },
+        });
+        return ref;
+    }
+
+    pub fn appendCheckedError(
+        self: *TopLevelProcedureBindingTable,
+        allocator: Allocator,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+        expr: CheckedExprId,
+    ) Allocator.Error!TopLevelProcedureBindingRef {
+        const ref: TopLevelProcedureBindingRef = @enumFromInt(@as(u32, @intCast(self.bindings.items.len)));
+        try self.bindings.append(allocator, .{
+            .source_scheme = source_scheme,
+            .body = .{ .checked_error = expr },
         });
         return ref;
     }
@@ -15821,9 +15978,9 @@ pub const ResolvedValueRefTable = struct {
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@enumFromInt(node_idx));
-            if (tag == .expr_associated_lookup_local or tag == .expr_associated_lookup) {
-                checkedArtifactInvariant("unresolved associated lookup reached resolved value publication", .{});
-            }
+            // Checked source traversal and body copying already reject unresolved
+            // associated lookups in published expressions. Abandoned source nodes
+            // can still contain unresolved lookups and need no value reference.
             if (tag != .expr_var and
                 tag != .expr_external_lookup and
                 tag != .expr_associated_lookup_resolved and
@@ -24548,7 +24705,7 @@ fn exportedProcedureBindingClosureForAppValue(
                 return exportedProcedureTemplateClosureForRef(app_artifact, template_ref);
             }
         },
-        .callable_eval_template => {},
+        .callable_eval_template, .checked_error => {},
     }
     return app_artifact.exported_procedure_bindings.rowClosure(binding);
 }
@@ -25382,6 +25539,7 @@ pub const CompileTimeRootTable = struct {
 
             const source_ty = module.defType(def_idx);
             if (sourceTypeIsFunction(module, source_ty)) {
+                if (def.expr.data == .e_runtime_error) continue;
                 try appendCompileTimeRoot(&roots, allocator, .{
                     .module_idx = module.moduleIndex(),
                     .kind = .callable_binding,
@@ -25966,6 +26124,7 @@ const ExhaustivenessTemplateReachability = struct {
     ) Allocator.Error!void {
         switch (body) {
             .direct_template => |direct| try self.markCallableProcedureTemplate(kind, direct.template),
+            .checked_error => {},
             .callable_eval_template => |template_id| try self.markCallableEvalTemplate(kind, template_id),
         }
     }
@@ -26883,6 +27042,13 @@ pub const TopLevelValueTable = struct {
                 );
                 break :blk .{ .procedure_binding = binding };
             } else if (sourceTypeIsFunction(module, source_ty)) blk: {
+                if (def.expr.data == .e_runtime_error) {
+                    break :blk .{ .procedure_binding = try procedure_bindings.appendCheckedError(
+                        allocator,
+                        source_scheme,
+                        checkedExprIdForSource(checked_bodies, def.expr.idx),
+                    ) };
+                }
                 const root_id = compile_time_roots.lookupIdByPattern(checked_pattern) orelse {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(
@@ -28475,6 +28641,7 @@ const PublicApiClosureDependencyCollector = struct {
     ) Allocator.Error!void {
         switch (body) {
             .direct_template => |direct| try self.appendCallableProcedureTemplateRef(direct.template),
+            .checked_error => {},
             .callable_eval_template => |template| try self.appendCallableEvalTemplateRef(.{
                 .artifact = self.artifact_key,
                 .template = template,
@@ -29271,6 +29438,7 @@ const ImportedTemplateClosureBuilder = struct {
                 };
                 _ = try self.checked_procedure_templates.append(self.allocator, template_ref);
             },
+            .checked_error => {},
             .callable_eval_template => |template_id| {
                 _ = try self.callable_eval_templates.append(self.allocator, .{
                     .artifact = binding.binding.artifact,
@@ -29455,7 +29623,7 @@ const ImportedTemplateClosureBuilder = struct {
         }
         const binding = self.top_level_bindings.get(top_level.binding);
         const template_id = switch (binding.body) {
-            .direct_template => return false,
+            .direct_template, .checked_error => return false,
             .callable_eval_template => |template| template,
         };
         try self.appendCallableEvalBindingTemplate(template_id);
@@ -29514,7 +29682,7 @@ const ImportedTemplateClosureBuilder = struct {
         const binding = self.top_level_bindings.get(binding_ref.binding);
         return switch (binding.body) {
             .direct_template => |direct| checkedTemplateFromCallableTemplateForClosure(direct.template),
-            .callable_eval_template => null,
+            .callable_eval_template, .checked_error => null,
         };
     }
 };
@@ -29653,6 +29821,8 @@ fn deinitPlatformRequiredValueUse(
 pub const ImportedProcedureBindingBody = union(enum) {
     direct_template: DirectProcedureBinding,
     callable_eval_template: CallableEvalTemplateId,
+    /// The binding value was rejected; evaluating it is a terminal checked error.
+    checked_error: CheckedExprId,
 };
 
 /// Public `ImportedProcedureBindingView` declaration.
@@ -29719,6 +29889,7 @@ pub const ExportedProcedureBindingTable = struct {
             const body: ImportedProcedureBindingBody = switch (binding.body) {
                 .direct_template => |direct| .{ .direct_template = direct },
                 .callable_eval_template => |template| .{ .callable_eval_template = template },
+                .checked_error => |expr| .{ .checked_error = expr },
             };
             var template_closure = try buildProcedureBindingClosure(
                 allocator,
@@ -29765,6 +29936,7 @@ pub const ExportedProcedureBindingTable = struct {
             const body: ImportedProcedureBindingBody = switch (binding.body) {
                 .direct_template => |direct| .{ .direct_template = direct },
                 .callable_eval_template => |template| .{ .callable_eval_template = template },
+                .checked_error => |expr| .{ .checked_error = expr },
             };
             var template_closure = try buildProcedureBindingClosure(
                 allocator,
@@ -29893,6 +30065,7 @@ fn buildProcedureBindingClosure(
                 unreachable;
             },
         },
+        .checked_error => .{},
         .callable_eval_template => |template_id| blk: {
             const template = callable_eval_templates.get(template_id);
             const wrapper = entryWrapperForRoot(entry_wrappers, template.root);
@@ -30936,7 +31109,8 @@ pub const CheckedModuleArtifact = struct {
     // Version 91 includes composite scheme requirements in evidence schemas.
     // Version 92 distinguishes generalized callable aliases from runtime
     // value bindings and function-body declarations.
-    const serialized_layout_version: u32 = 92;
+    // Version 93 distinguishes rejected function values from callable templates.
+    const serialized_layout_version: u32 = 93;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -32328,6 +32502,11 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(closure.checked_type_roots.len > 0);
                     std.debug.assert(closure.interface_capabilities.len > 0);
                 },
+                .checked_error => |expr| {
+                    std.debug.assert(self.checked_bodies.expr(expr).data == .runtime_error);
+                    std.debug.assert(closure.checked_procedure_templates.len == 0);
+                    std.debug.assert(closure.callable_eval_templates.len == 0);
+                },
                 .callable_eval_template => |template_id| {
                     std.debug.assert(@intFromEnum(template_id) < self.callable_eval_templates.templates.items.len);
                     std.debug.assert(closure.callable_eval_templates.len > 0);
@@ -32501,6 +32680,7 @@ pub const CheckedModuleArtifact = struct {
                                 ),
                             }
                         },
+                        .checked_error => |expr| std.debug.assert(self.checked_bodies.expr(expr).data == .runtime_error),
                         .callable_eval_template => |template| {
                             std.debug.assert(@intFromEnum(template) < self.callable_eval_templates.templates.items.len);
                         },
@@ -34788,7 +34968,7 @@ pub fn publishFromTypedModule(
         checked_body_builder.syntheticOrigins(),
     );
     errdefer resolved_value_refs.deinit(allocator);
-    checked_bodies.attachResolvedValueRefs(
+    const rejected_bindings = checked_bodies.attachResolvedValueRefs(
         &resolved_value_refs,
         artifact_key,
         &top_level_procedure_bindings,
@@ -34796,6 +34976,12 @@ pub fn publishFromTypedModule(
         inputs.available_artifacts,
         inputs.relation_artifacts,
     );
+
+    if (rejected_bindings) {
+        try checked_bodies.propagateRejectedCallableBindings(allocator, artifact_key, &resolved_value_refs, &top_level_procedure_bindings, &callable_eval_templates, &compile_time_roots);
+        try checked_bodies.republishRejectedBindingFacts(allocator, checked_types, &static_dispatch_plans);
+        try publishCompileTimeRootRequestEligibility(allocator, module, &checked_type_publication, checked_bodies, compile_time_roots.roots);
+    }
 
     var template_iterator_refs = TemplateIteratorRefs{};
     errdefer template_iterator_refs.deinit(allocator);
@@ -35524,7 +35710,7 @@ fn expectProvidedExportKind(
         checked_body_builder.syntheticOrigins(),
     );
     defer resolved_value_refs.deinit(allocator);
-    checked_bodies.attachResolvedValueRefs(
+    _ = checked_bodies.attachResolvedValueRefs(
         &resolved_value_refs,
         artifact_key,
         &top_level_procedure_bindings,
@@ -37473,8 +37659,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x21, 0x6F, 0xBD, 0x37, 0xCB, 0xA9, 0xF5, 0x13, 0x13, 0xE8, 0xA5, 0x08, 0x23, 0x0F, 0x38, 0x58,
-        0x47, 0xE6, 0x62, 0xD1, 0x86, 0x87, 0x6B, 0xAA, 0xE4, 0x5F, 0x1F, 0xF4, 0x35, 0x1A, 0xB6, 0x8C,
+        0xA8, 0x29, 0x31, 0xA7, 0x6F, 0x2A, 0xF0, 0x18, 0x4F, 0x8D, 0xEF, 0xDC, 0x28, 0xCA, 0xB7, 0x35,
+        0xAF, 0x2C, 0x32, 0x0D, 0x48, 0x6E, 0x0C, 0x54, 0x1D, 0x5C, 0xEA, 0x64, 0x62, 0xCF, 0xB5, 0x8A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

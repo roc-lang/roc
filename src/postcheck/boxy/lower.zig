@@ -375,6 +375,12 @@ fn resolveProcedureBinding(
             .synthetic,
             => boxyLowerInvariant("non-checked procedure template reached boxy worker resolution"),
         },
+        .checked_error => |expr| .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
+        },
         .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
 }
@@ -392,6 +398,12 @@ fn resolveImportedProcedureBinding(
             .lifted,
             .synthetic,
             => boxyLowerInvariant("non-checked imported procedure template reached boxy worker resolution"),
+        },
+        .checked_error => |expr| .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
         },
         .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
@@ -424,7 +436,7 @@ fn topLevelProcedureBindingForExpr(
                 .synthetic,
                 => continue,
             },
-            .callable_eval_template => continue,
+            .checked_error, .callable_eval_template => continue,
         };
         const template = module.checked_procedure_templates.get(template_ref.template);
         const body_id = switch (template.body) {
@@ -13237,19 +13249,24 @@ const ProcBodyBuilder = struct {
             },
             .run_low_level => |run_low_level| try self.lowerLowLevelInto(target, expr.ty, run_low_level.op, run_low_level.args, next),
             .block => |block| blk: {
-                try self.reserveBlockBindings(block.statements);
+                var live_statements = block.statements;
                 var block_diverges = false;
-                for (block.statements) |statement| {
-                    if (self.module.checked_bodies.statementDiverges(statement, .run)) block_diverges = true;
+                for (block.statements, 0..) |statement, i| {
+                    if (self.module.checked_bodies.statementDiverges(statement, .run)) {
+                        live_statements = block.statements[0 .. i + 1];
+                        block_diverges = true;
+                        break;
+                    }
                 }
+                try self.reserveBlockBindings(live_statements);
                 var continuation = if (block_diverges)
                     try self.parent.result.store.addCFStmt(.runtime_error)
                 else
                     try self.lowerExprInto(target, block.final_expr, next);
-                var index = block.statements.len;
+                var index = live_statements.len;
                 while (index > 0) {
                     index -= 1;
-                    continuation = try self.lowerStatement(block.statements[index], continuation);
+                    continuation = try self.lowerStatement(live_statements[index], continuation);
                 }
                 break :blk continuation;
             },
@@ -17144,6 +17161,7 @@ const ProcBodyBuilder = struct {
         const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
         const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
         switch (binding.body) {
+            .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
             .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(module, template)) |source| {
                 return source;
             },
@@ -22056,6 +22074,32 @@ const ProcBodyBuilder = struct {
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
         for (statements) |statement_id| {
             const statement = self.module.checked_bodies.statement(statement_id);
+            const rhs: ?checked.CheckedExprId = switch (statement.data) {
+                .decl => |decl| decl.expr,
+                .var_ => |decl| decl.expr,
+                .reassign => |reassign| reassign.expr,
+                .pending,
+                .var_uninitialized,
+                .crash,
+                .dbg,
+                .expr,
+                .expect,
+                .for_,
+                .while_,
+                .infinite_loop,
+                .breakable_loop,
+                .break_,
+                .return_,
+                .import_,
+                .alias_decl,
+                .where_alias_decl,
+                .nominal_decl,
+                .type_anno,
+                .type_var_alias,
+                .runtime_error,
+                => null,
+            };
+            if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
                 .decl => |decl| if (!self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
                 .var_ => |decl| try self.reservePatternBindings(decl.pattern),
@@ -23948,6 +23992,34 @@ const ProcBodyBuilder = struct {
         defer self.parent.result.store.current_region = saved_region;
         self.parent.result.store.current_region = statement.source_region;
 
+        const rhs: ?checked.CheckedExprId = switch (statement.data) {
+            .decl => |decl| decl.expr,
+            .var_ => |decl| decl.expr,
+            .reassign => |reassign| reassign.expr,
+            .expr => |expr| expr,
+            .pending,
+            .var_uninitialized,
+            .crash,
+            .dbg,
+            .expect,
+            .for_,
+            .while_,
+            .infinite_loop,
+            .breakable_loop,
+            .break_,
+            .return_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => null,
+        };
+        if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
+            return try self.parent.result.store.addCFStmt(.runtime_error);
+        };
         return switch (statement.data) {
             .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
             .var_ => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),

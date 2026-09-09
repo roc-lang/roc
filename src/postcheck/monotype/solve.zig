@@ -214,8 +214,12 @@ pub const InstNode = union(enum) {
         ret: NodeId,
     },
     tag_union: struct {
+        /// Unique head tags; row readers establish lexicographic order once.
         tags: []InstTag,
         ext: NodeId,
+        /// Representation-only state, not part of type equality. A new head
+        /// starts unordered unless its producer already normalized the span.
+        tags_sorted: bool = false,
     },
     record: struct {
         fields: []InstField,
@@ -3540,6 +3544,13 @@ pub const InstGraph = struct {
             Common.invariant("instantiation tag-row read had a non-tag-union node");
     }
 
+    /// Normalize a structural tag row before a relation producer reads its
+    /// head and residual extension through `content`. Value consumers use
+    /// `tagRowNodes`, which keeps the extension internal to the graph.
+    pub fn normalizeTagRow(self: *InstGraph, row: NodeId) Allocator.Error!void {
+        _ = try self.flattenTagRow(row);
+    }
+
     /// Return whether a tag row's explicit extension is proven closed. This
     /// preserves the extension as graph-owned evidence while allowing callers
     /// to distinguish a closed marker union from an open row with the same
@@ -4737,6 +4748,22 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Normalize only a head that a row reader actually consumes. This state
+    /// changes neither type meaning nor snapshot dependencies, so recording it
+    /// does not invalidate relation stamps or observable graph snapshots.
+    fn sortTagHead(self: *InstGraph, root: NodeId) void {
+        const row = &self.nodes.items[@intFromEnum(root)].tag_union;
+        if (row.tags_sorted) return;
+        const tags = row.tags;
+        if (!std.sort.isSorted(InstTag, tags, self.name_store, instTagLessThan)) {
+            std.mem.sortUnstable(InstTag, tags, self.name_store, instTagLessThan);
+        }
+        for (tags, 0..) |tag, index| {
+            if (index != 0) std.debug.assert(tags[index - 1].name != tag.name);
+        }
+        row.tags_sorted = true;
+    }
+
     const FlatTagRow = struct {
         tags: []InstTag,
         ext: NodeId,
@@ -4755,6 +4782,17 @@ pub const InstGraph = struct {
         const root_content = self.nodes.items[@intFromEnum(root)];
         if (root_content != .tag_union) Common.invariant("instantiation flattened a non-tag-union row");
         const row = root_content.tag_union;
+        var ext = self.find(row.ext);
+        const ext_content = self.nodes.items[@intFromEnum(ext)];
+        if (ext_content == .unresolved or ext_content == .empty_tag_union) {
+            self.sortTagHead(root);
+            if (row.ext != ext) {
+                const flattened: InstNode = .{ .tag_union = .{ .tags = row.tags, .ext = ext, .tags_sorted = true } };
+                _ = self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+            }
+            return .{ .tags = row.tags, .ext = ext };
+        }
+
         var tags = std.ArrayList(InstTag).empty;
         defer tags.deinit(self.allocator);
         try tags.appendSlice(self.allocator, row.tags);
@@ -4762,16 +4800,6 @@ pub const InstGraph = struct {
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
         try seen.put(root, {});
-
-        var ext = self.find(row.ext);
-        const ext_content = self.nodes.items[@intFromEnum(ext)];
-        if (ext_content == .unresolved or ext_content == .empty_tag_union) {
-            if (row.ext != ext) {
-                const flattened: InstNode = .{ .tag_union = .{ .tags = row.tags, .ext = ext } };
-                _ = self.replaceContentWithoutSnapshotInvalidation(root, flattened);
-            }
-            return .{ .tags = row.tags, .ext = ext };
-        }
 
         while (true) {
             if (seen.contains(ext)) {
@@ -4803,8 +4831,18 @@ pub const InstGraph = struct {
             }
         }
 
-        const flat_tags = try self.arena().dupe(InstTag, tags.items);
-        const flattened: InstNode = .{ .tag_union = .{ .tags = flat_tags, .ext = ext } };
+        // Gather the whole chain before sorting: repeatedly merging a growing
+        // prefix makes a chain of singleton rows quadratic. Stable sorting
+        // preserves the checker's head-before-extension payload precedence.
+        std.mem.sort(InstTag, tags.items, self.name_store, instTagLessThan);
+        var unique: usize = 0;
+        for (tags.items) |tag| {
+            if (unique != 0 and tags.items[unique - 1].name == tag.name) continue;
+            tags.items[unique] = tag;
+            unique += 1;
+        }
+        const flat_tags = try self.arena().dupe(InstTag, tags.items[0..unique]);
+        const flattened: InstNode = .{ .tag_union = .{ .tags = flat_tags, .ext = ext, .tags_sorted = true } };
         _ = self.replaceContentWithoutSnapshotInvalidation(root, flattened);
         return .{ .tags = flat_tags, .ext = ext };
     }
@@ -4904,42 +4942,38 @@ pub const InstGraph = struct {
         var only_right = std.ArrayList(InstTag).empty;
         defer only_right.deinit(self.allocator);
 
-        // Both rows indexed by label text so each side pairs with the other
-        // in one pass; the first row position wins for a repeated label.
-        var right_by_text: std.StringHashMapUnmanaged(usize) = .empty;
-        defer right_by_text.deinit(self.allocator);
-        try right_by_text.ensureTotalCapacity(self.allocator, @intCast(flat_right.tags.len));
-        for (flat_right.tags, 0..) |right_tag, index| {
-            const gop = right_by_text.getOrPutAssumeCapacity(self.tagLabelText(right_tag.name));
-            if (!gop.found_existing) gop.value_ptr.* = index;
-        }
-        var left_texts: std.StringHashMapUnmanaged(void) = .empty;
-        defer left_texts.deinit(self.allocator);
-        try left_texts.ensureTotalCapacity(self.allocator, @intCast(flat_left.tags.len));
-        for (flat_left.tags) |left_tag| {
-            left_texts.putAssumeCapacity(self.tagLabelText(left_tag.name), {});
-        }
-
-        for (flat_left.tags) |left_tag| {
-            var shared = false;
-            if (right_by_text.get(self.tagLabelText(left_tag.name))) |right_index| {
-                const right_tag = flat_right.tags[right_index];
+        // Flattened rows are sorted and unique. Partition
+        // both spans in one pass without building per-relation label indexes.
+        try merged.ensureTotalCapacity(self.allocator, flat_left.tags.len + flat_right.tags.len);
+        var left_index: usize = 0;
+        var right_index: usize = 0;
+        while (left_index < flat_left.tags.len and right_index < flat_right.tags.len) {
+            const left_tag = flat_left.tags[left_index];
+            const right_tag = flat_right.tags[right_index];
+            if (left_tag.name == right_tag.name) {
                 if (left_tag.payloads.len != right_tag.payloads.len) {
                     Common.invariant("instantiation unified one tag at two different payload arities");
                 }
                 for (left_tag.payloads, right_tag.payloads) |left_payload, right_payload| {
                     try pending.append(self.allocator, .{ .left = left_payload, .right = right_payload, .row_width = row_width });
                 }
-                shared = true;
+                merged.appendAssumeCapacity(left_tag);
+                left_index += 1;
+                right_index += 1;
+            } else if (instTagLessThan(self.name_store, left_tag, right_tag)) {
+                merged.appendAssumeCapacity(left_tag);
+                try only_left.append(self.allocator, left_tag);
+                left_index += 1;
+            } else {
+                merged.appendAssumeCapacity(right_tag);
+                try only_right.append(self.allocator, right_tag);
+                right_index += 1;
             }
-            try merged.append(self.allocator, left_tag);
-            if (!shared) try only_left.append(self.allocator, left_tag);
         }
-        for (flat_right.tags) |right_tag| {
-            if (left_texts.contains(self.tagLabelText(right_tag.name))) continue;
-            try merged.append(self.allocator, right_tag);
-            try only_right.append(self.allocator, right_tag);
-        }
+        merged.appendSliceAssumeCapacity(flat_left.tags[left_index..]);
+        merged.appendSliceAssumeCapacity(flat_right.tags[right_index..]);
+        try only_left.appendSlice(self.allocator, flat_left.tags[left_index..]);
+        try only_right.appendSlice(self.allocator, flat_right.tags[right_index..]);
 
         if (self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .tag_union) or
             self.rowAdditionConflicts(flat_right.ext, only_left.items.len, .tag_union))
@@ -4975,6 +5009,7 @@ pub const InstGraph = struct {
         self.setContent(left, .{ .tag_union = .{
             .tags = try self.arena().dupe(InstTag, merged.items),
             .ext = merged_ext,
+            .tags_sorted = true,
         } });
         try self.union_(left, right);
     }
@@ -6169,7 +6204,7 @@ pub const GraphTypeFinals = struct {
                 .payloads = try self.sealNodeSpan(tag.payloads),
             };
         }
-        return try self.graph.types.addTagVariants(self.graph.name_store, tags);
+        return try self.graph.types.addSortedTagVariants(self.graph.name_store, tags);
     }
 
     fn sealStoredTagSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
@@ -6594,6 +6629,10 @@ pub fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Type.Field, 
 
 /// Orders tag union tags by label text for layout-stable sorting.
 pub fn tagLessThan(name_store: *const names.NameStore, lhs: Type.Tag, rhs: Type.Tag) bool {
+    return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
+}
+
+fn instTagLessThan(name_store: *const names.NameStore, lhs: InstTag, rhs: InstTag) bool {
     return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
@@ -9188,6 +9227,184 @@ test "opaque interface relation preserves nested generated-private backing" {
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained_private.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_arg).named.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_arg).named.backing.?.authority);
+}
+
+test "issue 11235: extension normalization preserves head payload and checked label provenance" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const a = try name_store.internTagLabel("A");
+    const head_provenance = try name_store.internTagLabel("HeadA");
+    const head_payload = try graph.newNode(.{ .primitive = .str });
+    const tail_payload = try graph.newNode(.{ .primitive = .u64 });
+    const empty = try graph.newNode(.empty_tag_union);
+    const tail = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = a,
+            .checked_name = a,
+            .payloads = try graph.arena().dupe(NodeId, &.{tail_payload}),
+        }}),
+        .ext = empty,
+    } });
+    const head = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = a,
+            .checked_name = head_provenance,
+            .payloads = try graph.arena().dupe(NodeId, &.{head_payload}),
+        }}),
+        .ext = tail,
+    } });
+
+    // Like the checked unifier's mergeSortedExtensionTags, row composition
+    // retains the head occurrence. It is not equality between the payloads
+    // of a head and a shadowed extension, and must not mutate either payload.
+    const view = try graph.provisionalTypeViewForNode(head);
+    const tags = type_store.tagSpan(type_store.get(view).tag_union);
+    try std.testing.expectEqual(@as(usize, 1), tags.len);
+    const tag = GuardedList.at(tags, 0);
+    try std.testing.expectEqual(head_provenance, tag.checked_name);
+    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(GuardedList.at(type_store.span(tag.payloads), 0)));
+    try std.testing.expectEqual(InstNode{ .primitive = .u64 }, graph.content(tail_payload));
+    try std.testing.expectEqual(tail_payload, graph.content(tail).tag_union.tags[0].payloads[0]);
+}
+
+test "issue 11235: normalized rows retain a shared tail through later extension" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const a = try name_store.internTagLabel("A");
+    const b = try name_store.internTagLabel("B");
+    const other = try name_store.internTagLabel("Other");
+    const shared = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
+    const head = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{ .name = a, .checked_name = a, .payloads = &.{} }}),
+        .ext = shared,
+    } });
+    const sibling = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{ .name = other, .checked_name = other, .payloads = &.{} }}),
+        .ext = shared,
+    } });
+    const before = try graph.provisionalTypeViewForNode(head);
+    const rest = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
+    try graph.unify(shared, try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{ .name = a, .checked_name = a, .payloads = &.{} }}),
+        .ext = rest,
+    } }));
+    const flat = try graph.flattenTagRow(head);
+    try std.testing.expectEqual(@as(usize, 1), flat.tags.len);
+    try std.testing.expectEqual(graph.find(rest), flat.ext);
+    _ = try graph.flattenTagRow(sibling);
+    try graph.unify(rest, try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{ .name = b, .checked_name = b, .payloads = &.{} }}),
+        .ext = try graph.newNode(.empty_tag_union),
+    } }));
+    try graph.freezeRelations();
+    const sealed_head = try graph.sealNode(head);
+    const sealed_sibling = try graph.sealNode(sibling);
+    const head_tags = type_store.tagSpan(type_store.get(sealed_head).tag_union);
+    const sibling_tags = type_store.tagSpan(type_store.get(sealed_sibling).tag_union);
+    try std.testing.expectEqual(@as(usize, 1), type_store.get(before).tag_union.len);
+    try std.testing.expectEqual(@as(usize, 2), head_tags.len);
+    try std.testing.expectEqual(@as(usize, 3), sibling_tags.len);
+    for ([_]names.TagNameId{ a, b }, 0..) |label, index| {
+        try std.testing.expectEqual(label, GuardedList.at(head_tags, index).name);
+        try std.testing.expectEqual(label, GuardedList.at(sibling_tags, index).name);
+    }
+    try std.testing.expectEqual(other, GuardedList.at(sibling_tags, 2).name);
+}
+
+test "issue 11235: long overlapping row chains normalize once and repeated reads allocate nothing" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+
+    const shared = try name_store.internTagLabel("Shared");
+    const empty = try graph.newNode(.empty_tag_union);
+    var root = empty;
+    const count = 512;
+    for (0..count) |index| {
+        var buffer: [32]u8 = undefined;
+        const label = try name_store.internTagLabel(try std.fmt.bufPrint(&buffer, "Tag{d:0>4}", .{index}));
+        root = try graph.newNode(.{ .tag_union = .{
+            .tags = try graph.arena().dupe(InstTag, &.{
+                .{ .name = label, .checked_name = label, .payloads = &.{} },
+                .{ .name = shared, .checked_name = shared, .payloads = &.{} },
+            }),
+            .ext = root,
+        } });
+    }
+    diagnostics = .{};
+    const flat = try graph.flattenTagRow(root);
+    try std.testing.expectEqual(@as(usize, count + 1), flat.tags.len);
+    try std.testing.expectEqual(shared, flat.tags[0].name);
+    try std.testing.expectEqual(empty, flat.ext);
+    try std.testing.expect(diagnostics.union_find_resolutions <= (count + 1) * 3);
+    for (flat.tags[1..], 0..) |tag, index| {
+        var buffer: [32]u8 = undefined;
+        try std.testing.expectEqualStrings(try std.fmt.bufPrint(&buffer, "Tag{d:0>4}", .{index}), name_store.tagLabelText(tag.name));
+    }
+
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    graph.allocator = failing.allocator();
+    defer graph.allocator = gpa;
+    for (0..100) |_| {
+        const repeated = try graph.flattenTagRow(root);
+        try std.testing.expectEqual(flat.tags.ptr, repeated.tags.ptr);
+    }
+    try std.testing.expectEqual(@as(usize, 0), failing.alloc_index);
+}
+
+test "issue 11235: sorted tag row unification retains shared payload equalities" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const a = try name_store.internTagLabel("A");
+    const b = try name_store.internTagLabel("B");
+    const shared = try name_store.internTagLabel("Shared");
+    const payload = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const str = try graph.newNode(.{ .primitive = .str });
+    const left = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{
+            .{ .name = shared, .checked_name = shared, .payloads = try graph.arena().dupe(NodeId, &.{payload}) },
+            .{ .name = a, .checked_name = a, .payloads = &.{} },
+        }),
+        .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
+    } });
+    const right = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{
+            .{ .name = shared, .checked_name = shared, .payloads = try graph.arena().dupe(NodeId, &.{str}) },
+            .{ .name = b, .checked_name = b, .payloads = &.{} },
+        }),
+        .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
+    } });
+    try graph.unify(left, right);
+    try std.testing.expectEqual(graph.find(payload), graph.find(str));
+    const flat = try graph.flattenTagRow(left);
+    try std.testing.expectEqual(@as(usize, 3), flat.tags.len);
+    for ([_]names.TagNameId{ a, b, shared }, flat.tags) |label, tag| {
+        try std.testing.expectEqual(label, tag.name);
+    }
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {

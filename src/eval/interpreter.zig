@@ -689,6 +689,15 @@ pub const Interpreter = struct {
             allocator.destroy(self);
         }
 
+        fn currentThreadId() std.Thread.Id {
+            // Linux default-platform executables have no TLS startup. Zig's
+            // std.Thread caches gettid in TLS, so query the kernel directly.
+            if (comptime builtin.os.tag == .linux and !builtin.link_libc) {
+                return @intCast(std.os.linux.gettid());
+            }
+            return std.Thread.getCurrentId();
+        }
+
         pub fn enter(self: *Retained) void {
             // Freestanding targets have no OS threads, and std.Thread cannot
             // produce an identity for them. Their only possible nesting is
@@ -699,7 +708,7 @@ pub const Interpreter = struct {
                 return;
             }
 
-            const thread_id = std.Thread.getCurrentId();
+            const thread_id = currentThreadId();
             if (self.execution_owner.load(.acquire) == thread_id) {
                 self.execution_depth += 1;
                 return;
@@ -719,9 +728,8 @@ pub const Interpreter = struct {
                 return;
             }
 
-            const thread_id = std.Thread.getCurrentId();
             if (builtin.mode == .Debug) {
-                std.debug.assert(self.execution_owner.load(.acquire) == thread_id);
+                std.debug.assert(self.execution_owner.load(.acquire) == currentThreadId());
                 std.debug.assert(self.execution_depth > 0);
             }
             self.execution_depth -= 1;

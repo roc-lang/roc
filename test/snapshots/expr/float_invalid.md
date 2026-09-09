@@ -38,10 +38,9 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple-access (index "15")
-	(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
+(e-runtime-error (tag "erroneous_value_expr"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_a"))
 ~~~

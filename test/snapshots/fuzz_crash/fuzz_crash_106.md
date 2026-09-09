@@ -61,14 +61,13 @@ a = (0O0).0
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-tuple-access (index "0")
-			(e-num (value "0")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "_b")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "_b"))))
 ~~~

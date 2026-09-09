@@ -416,7 +416,7 @@ fn shapeProofIsProven(proof: ShapeProof) bool {
 }
 
 /// Maximum number of `runtime_anchor.structure` / `nominal.backing` /
-/// `static_data_candidate.runtime` / callable-capture pointer edges any single
+/// `static_data_candidate.structure` / callable-capture pointer edges any single
 /// value-tree strip may follow. A
 /// value can reference itself through those edges when a `.local` resolves
 /// through the substitution maps to an ancestor of a recursive construction,
@@ -451,10 +451,13 @@ const RuntimeAnchorValue = struct {
     structure: *const Value,
 };
 
+/// The closed source expression owns initialization. The symbolic view may be
+/// rebound in a caller, but can never replace that expression's initializer.
 const StaticDataCandidateValue = struct {
     ty: Type.TypeId,
     static_data: Common.StaticDataId,
-    runtime: *const Value,
+    expr: Ast.ExprId,
+    structure: *const Value,
 };
 
 /// Verdict of statically matching one pattern against a symbolic `Value`.
@@ -1026,6 +1029,11 @@ const Pass = struct {
     /// an already-rewritten worker.
     callable_sources: collections.DenseMap(Ast.FnId, Ast.FnId),
     next_join_point: u32,
+    /// Read-only constructor views of closed, source-owned static expressions.
+    /// These contain no generated IR or caller substitutions and survive the
+    /// speculative clones' arena rewinds. Binding expressions remain opaque,
+    /// so initializer-private locals never become caller-visible leaves.
+    static_data_structure: collections.DenseMap(Ast.ExprId, *const Value),
 
     const AnalysisMark = struct {
         program: Ast.Program.SpecConstrAnalysisMark,
@@ -1073,6 +1081,7 @@ const Pass = struct {
             // existing expression arena, so the two producer namespaces
             // cannot collide.
             .next_join_point = @intCast(program.exprCount()),
+            .static_data_structure = .init(allocator),
         };
     }
 
@@ -1080,6 +1089,130 @@ const Pass = struct {
         const id: Ast.JoinPointId = @enumFromInt(self.next_join_point);
         self.next_join_point += 1;
         return id;
+    }
+
+    /// Inspect explicit constructors without cloning or scheduling any work.
+    /// The source expression graph is acyclic: recursive values use local
+    /// references, and this reader never follows bindings or local references.
+    /// Memoization visits each shared expression once. In particular, a list's
+    /// elements need no visit because SpecConstr has no symbolic list shape.
+    fn staticDataStructure(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!*const Value {
+        if (self.static_data_structure.get(expr_id)) |cached| return cached;
+        const arena = self.arena.allocator();
+        const expr = self.program.getExpr(expr_id);
+        const value: Value = switch (expr.data) {
+            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
+                .ty = expr.ty,
+                .static_data = candidate.static_data,
+                .expr = expr_id,
+                .structure = try self.staticDataStructure(candidate.runtime_expr),
+            } },
+            .tag => |tag| blk: {
+                const payloads = try arena.alloc(Value, tag.payloads.len);
+                for (payloads, 0..) |*payload, i| {
+                    payload.* = (try self.staticDataStructure(GuardedList.at(self.program.exprSpan(tag.payloads), i))).*;
+                }
+                break :blk .{ .tag = .{ .ty = expr.ty, .name = tag.name, .payloads = payloads } };
+            },
+            .tuple => |span| blk: {
+                const items = try arena.alloc(Value, span.len);
+                for (items, 0..) |*item, i| {
+                    item.* = (try self.staticDataStructure(GuardedList.at(self.program.exprSpan(span), i))).*;
+                }
+                break :blk .{ .tuple = .{ .ty = expr.ty, .items = items } };
+            },
+            .record => |span| blk: {
+                const fields = try arena.alloc(FieldValue, span.len);
+                for (fields, 0..) |*field, i| {
+                    const source = GuardedList.at(self.program.fieldExprSpan(span), i);
+                    field.* = .{
+                        .name = source.name,
+                        .value = (try self.staticDataStructure(source.value)).*,
+                    };
+                }
+                break :blk .{ .record = .{ .ty = expr.ty, .fields = fields } };
+            },
+            .nominal => |backing| .{ .nominal = .{
+                .ty = expr.ty,
+                .backing = try self.staticDataStructure(backing),
+            } },
+            .fn_ref => |ref| blk: {
+                const captures = try arena.alloc(CaptureValue, ref.captures.len);
+                for (captures, 0..) |*capture, i| {
+                    const source = self.program.captureOperandAt(ref.captures, i);
+                    capture.* = .{
+                        .id = source.id,
+                        .value = (try self.staticDataStructure(source.value)).*,
+                    };
+                }
+                break :blk .{ .callable = .{ .ty = expr.ty, .fn_id = ref.fn_id, .captures = captures } };
+            },
+            // A binding/control expression owns its complete lexical scope.
+            // Retaining it as an opaque leaf preserves its exact evaluation
+            // without exposing initializer-private locals through the view.
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .typed_boundary,
+            .list,
+            .record_update,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .crash,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            => blk: {
+                if (std.debug.runtime_safety) {
+                    var scope: BodyLocalScope = .{
+                        .program = self.program,
+                        .allocator = self.allocator,
+                        .fn_index = null,
+                        .bound = .init(self.allocator),
+                        .joins = .init(self.allocator),
+                    };
+                    defer scope.bound.deinit();
+                    defer scope.joins.deinit();
+                    try scope.walkExpr(expr_id);
+                }
+                break :blk .{ .expr = expr_id };
+            },
+        };
+        const stored = try arena.create(Value);
+        stored.* = value;
+        try self.static_data_structure.put(expr_id, stored);
+        return stored;
     }
 
     fn markAnalysis(self: *Pass) AnalysisMark {
@@ -1114,6 +1247,7 @@ const Pass = struct {
     }
 
     fn deinit(self: *Pass) void {
+        self.static_data_structure.deinit();
         self.callable_sources.deinit();
         self.callable_workers.deinit();
         self.allocator.free(self.whole_body_cloned);
@@ -3422,10 +3556,7 @@ const Pass = struct {
                 .name = tag.name,
                 .payloads = (try self.cloneExprSpanFresh(tag.payloads, renames)) orelse return null,
             } },
-            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
-                .static_data = candidate.static_data,
-                .runtime_expr = (try self.cloneExprFresh(candidate.runtime_expr, renames)) orelse return null,
-            } },
+            .static_data_candidate => return expr_id,
             .typed_boundary => |boundary| .{ .typed_boundary = .{
                 .value = (try self.cloneExprFresh(boundary.value, renames)) orelse return null,
             } },
@@ -3820,7 +3951,7 @@ const Pass = struct {
                 try self.rewriteCallsInFieldExprSpan(update.fields, done);
             },
             .tag => |tag| try self.rewriteCallsInExprSpan(tag.payloads, done),
-            .static_data_candidate => |candidate| try self.rewriteCallsInExpr(candidate.runtime_expr, done),
+            .static_data_candidate => {}, // Its closed source initializer is shared and immutable.
             .typed_boundary => |boundary| try self.rewriteCallsInExpr(boundary.value, done),
             .nominal,
             .dbg,
@@ -4259,7 +4390,7 @@ const Pass = struct {
         return switch (value) {
             .expr => |expr| if (try self.constructorShape(expr)) |shape| .{ .proven = shape } else .disproven,
             .runtime_anchor => |anchor| try self.shapeFromValueBudgeted(anchor.structure.*, budget),
-            .static_data_candidate => |candidate| try self.shapeFromValueBudgeted(candidate.runtime.*, budget),
+            .static_data_candidate => |candidate| try self.shapeFromValueBudgeted(candidate.structure.*, budget),
             .tag => |tag| blk: {
                 const payloads = try self.arena.allocator().alloc(Shape, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
@@ -4696,15 +4827,16 @@ const Cloner = struct {
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
-    /// `static_data_candidate.runtime` pointer edge followed. A loop-carried
+    /// `static_data_candidate.structure` pointer edge followed. A loop-carried
     /// value can reference itself through those edges, so an unbounded strip
     /// would hang; reaching `value_wrapper_strip_cap` declines the static
     /// decision toward a residual runtime match.
     wrapper_strip_depth: usize,
     /// Depth of the wrapper-strip recursion in `materialize`, counting each
-    /// `nominal.backing`/`static_data_candidate.runtime`/callable-capture edge
-    /// followed. `materialize` runs on values proven acyclic by construction—
-    /// a cyclic value is rebound through a plain source clone before it can
+    /// `nominal.backing`/callable-capture edge followed. Static candidates
+    /// materialize their closed source expression without following the view.
+    /// `materialize` runs on values proven acyclic by construction—a cyclic
+    /// value is rebound through a plain source clone before it can
     /// reach here—so reaching `value_wrapper_strip_cap` is a compiler bug.
     materialize_strip_depth: usize,
     inline_calls: InlineCallMode,
@@ -5397,15 +5529,7 @@ const Cloner = struct {
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .local = local } }) };
             },
             .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref, bindings),
-            .static_data_candidate => |candidate| {
-                const runtime = try self.arena.allocator().create(Value);
-                runtime.* = try self.cloneExprValueDemandingShapeInto(candidate.runtime_expr, bindings);
-                return .{ .static_data_candidate = .{
-                    .ty = expr.ty,
-                    .static_data = candidate.static_data,
-                    .runtime = runtime,
-                } };
-            },
+            .static_data_candidate => return (try self.pass.staticDataStructure(expr_id)).*,
             .typed_boundary => |boundary| {
                 const structure = try self.cloneExprValueDemandingShapeInto(boundary.value, bindings);
                 const source = try self.materialize(structure);
@@ -5932,7 +6056,7 @@ const Cloner = struct {
         return switch (value) {
             .expr => |expr| if (self.exprCanSubstitute(expr)) .proven else .disproven,
             .runtime_anchor => |anchor| if (self.exprCanSubstitute(anchor.runtime)) .proven else .disproven,
-            .static_data_candidate => |candidate| self.valueCanSubstituteBudgeted(candidate.runtime.*, budget),
+            .static_data_candidate => .proven,
             .tag => |tag| blk: {
                 var proof = ProofStatus.proven;
                 for (tag.payloads) |payload| {
@@ -5981,7 +6105,7 @@ const Cloner = struct {
             .bytes_lit,
             => true,
             .fn_ref => |fn_ref| self.captureOperandSpanCanSubstitute(fn_ref.captures),
-            .static_data_candidate => |candidate| self.exprCanSubstitute(candidate.runtime_expr),
+            .static_data_candidate => true,
             .typed_boundary => false,
             .field_access => |field| self.exprCanSubstitute(field.receiver),
             .tuple_access => |access| self.exprCanSubstitute(access.tuple),
@@ -6167,10 +6291,7 @@ const Cloner = struct {
                 .name = tag.name,
                 .payloads = try self.cloneExprSpan(tag.payloads),
             } },
-            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
-                .static_data = candidate.static_data,
-                .runtime_expr = try self.cloneExpr(candidate.runtime_expr),
-            } },
+            .static_data_candidate => return expr_id,
             .typed_boundary => |boundary| .{ .typed_boundary = .{
                 .value = try self.cloneExpr(boundary.value),
             } },
@@ -6354,7 +6475,7 @@ const Cloner = struct {
                 const source = expr.data.static_data_candidate;
                 break :blk candidate.ty == expr.ty and
                     candidate.static_data == source.static_data and
-                    self.valueMatchesSourceExpr(candidate.runtime.*, source.runtime_expr, depth + 1);
+                    candidate.expr == expr_id;
             },
             .tag => |tag| blk: {
                 if (expr.data != .tag) break :blk false;
@@ -6813,7 +6934,7 @@ const Cloner = struct {
         const candidate = switch (value) {
             .expr => |expr| expr,
             .runtime_anchor => |anchor| anchor.runtime,
-            .static_data_candidate => |static_candidate| switch (static_candidate.runtime.*) {
+            .static_data_candidate => |static_candidate| switch (static_candidate.structure.*) {
                 .expr => |runtime| runtime,
                 .runtime_anchor => |anchor| anchor.runtime,
                 .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => return null,
@@ -9033,13 +9154,11 @@ const Cloner = struct {
         body: Ast.ExprId,
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
-        const runtime = try self.arena.allocator().create(Value);
-        runtime.* = (try self.bindPatToMatchValueStripped(pat_id, candidate.runtime.*, body, bindings)) orelse return null;
-        return Value{ .static_data_candidate = .{
-            .ty = candidate.ty,
-            .static_data = candidate.static_data,
-            .runtime = runtime,
-        } };
+        const structure = try self.arena.allocator().create(Value);
+        structure.* = (try self.bindPatToMatchValueStripped(pat_id, candidate.structure.*, body, bindings)) orelse return null;
+        var prepared = candidate;
+        prepared.structure = structure;
+        return Value{ .static_data_candidate = prepared };
     }
 
     /// Recurse into a nominal backing or static-data runtime while binding a
@@ -9159,7 +9278,7 @@ const Cloner = struct {
         return switch (value) {
             .expr => .{ .exact = 0 },
             .runtime_anchor => |anchor| self.knownConstructorSizeBudgeted(anchor.structure.*, budget),
-            .static_data_candidate => |candidate| self.knownConstructorSizeBudgeted(candidate.runtime.*, budget),
+            .static_data_candidate => |candidate| self.knownConstructorSizeBudgeted(candidate.structure.*, budget),
             .tag => |tag| blk: {
                 var count = ConstructorSize{ .exact = 1 };
                 for (tag.payloads) |payload| count = count.plus(self.knownConstructorSizeBudgeted(payload, budget));
@@ -10087,7 +10206,7 @@ const Cloner = struct {
                 defer self.wrapper_strip_depth -= 1;
                 return switch (value) {
                     .runtime_anchor => |anchor| try self.bindPatToValue(pat_id, anchor.structure.*),
-                    .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.runtime.*),
+                    .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.structure.*),
                     .nominal => |nominal| try self.bindPatToValue(backing_pat, nominal.backing.*),
                     .expr => .unknown,
                     .tag, .record, .tuple, .callable => Common.invariant("nominal pattern matched an unwrapped constructor value"),
@@ -10201,7 +10320,7 @@ const Cloner = struct {
                 defer self.wrapper_strip_depth -= 1;
                 return switch (value) {
                     .runtime_anchor => |anchor| try self.bindPatToFlowValue(pat_id, anchor.structure.*),
-                    .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.runtime.*),
+                    .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.structure.*),
                     .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
                     .expr, .tag, .record, .tuple, .callable => false,
                 };
@@ -10503,7 +10622,7 @@ const Cloner = struct {
         switch (value) {
             .expr => |expr| try self.appendRetainedExprLocal(expr, retained, seen),
             .runtime_anchor => |anchor| try self.appendRetainedExprLocal(anchor.runtime, retained, seen),
-            .static_data_candidate => |candidate| try self.appendRetainedValueLocals(candidate.runtime.*, retained, seen, depth + 1),
+            .static_data_candidate => {}, // Closed static values retain no caller locals.
             .tag => |tag| for (tag.payloads) |payload| try self.appendRetainedValueLocals(payload, retained, seen, depth),
             .record => |record| for (record.fields) |field| try self.appendRetainedValueLocals(field.value, retained, seen, depth),
             .tuple => |tuple| for (tuple.items) |item| try self.appendRetainedValueLocals(item, retained, seen, depth),
@@ -10594,7 +10713,7 @@ const Cloner = struct {
             .runtime_anchor => |anchor| !self.exprCanSubstitute(anchor.runtime) or
                 try bindings.referencedByExpr(self.pass.program, anchor.runtime) or
                 try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, anchor.structure.*, budget),
-            .static_data_candidate => |candidate| try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, candidate.runtime.*, budget),
+            .static_data_candidate => false,
             .tag => |tag| blk: {
                 for (tag.payloads) |payload| {
                     if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, payload, budget)) break :blk true;
@@ -11038,17 +11157,7 @@ const Cloner = struct {
         switch (value) {
             .expr => |expr| return expr,
             .runtime_anchor => |anchor| return anchor.runtime,
-            .static_data_candidate => |candidate| {
-                if (self.materialize_strip_depth >= value_wrapper_strip_cap) {
-                    Common.invariant("materialize followed a static-data runtime chain past the strip cap; a cyclic value reached materialization");
-                }
-                self.materialize_strip_depth += 1;
-                defer self.materialize_strip_depth -= 1;
-                return try self.addExpr(.{ .ty = candidate.ty, .data = .{ .static_data_candidate = .{
-                    .static_data = candidate.static_data,
-                    .runtime_expr = try self.materialize(candidate.runtime.*),
-                } } });
-            },
+            .static_data_candidate => |candidate| return candidate.expr,
             .tag => |tag| {
                 const payloads = try self.pass.allocator.alloc(Ast.ExprId, tag.payloads.len);
                 defer self.pass.allocator.free(payloads);
@@ -11558,16 +11667,20 @@ const Cloner = struct {
 const BodyLocalScope = struct {
     program: *const Ast.Program,
     allocator: Allocator,
-    fn_index: usize,
+    fn_index: ?usize,
     bound: collections.DenseMap(Ast.LocalId, u32),
     joins: collections.DenseMap(Ast.JoinPointId, u32),
 
     fn checkUse(self: *BodyLocalScope, local: Ast.LocalId) void {
         if (self.bound.contains(local)) return;
-        const func = self.program.getFnAt(self.fn_index);
+        const fn_index = self.fn_index orelse Common.invariantFmt(
+            "static initializer references local {d} (`{s}`) bound outside its own scope",
+            .{ @intFromEnum(local), self.program.localName(local) },
+        );
+        const func = self.program.getFnAt(fn_index);
         Common.invariantFmt(
             "rewritten fn {d} (symbol {d}) references local {d} (`{s}`) bound by no enclosing scope, argument, or capture",
-            .{ self.fn_index, @intFromEnum(func.symbol), @intFromEnum(local), self.program.localName(local) },
+            .{ fn_index, @intFromEnum(func.symbol), @intFromEnum(local), self.program.localName(local) },
         );
     }
 
@@ -13452,7 +13565,7 @@ fn structuralValueStripping(value: Value, strip_depth: usize) Value {
     }
     return switch (value) {
         .runtime_anchor => |anchor| structuralValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| structuralValueStripping(candidate.runtime.*, strip_depth + 1),
+        .static_data_candidate => |candidate| structuralValueStripping(candidate.structure.*, strip_depth + 1),
         .expr, .tag, .record, .tuple, .nominal, .callable => value,
     };
 }
@@ -13648,7 +13761,7 @@ fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual
 // following that chain to the read field, item, or tag terminates by
 // construction. A value that references itself through the
 // `runtime_anchor.structure`/`nominal.backing`/
-// `static_data_candidate.runtime` pointer edges would loop, so each reader
+// `static_data_candidate.structure` pointer edges would loop, so each reader
 // counts the edges it follows and treats reaching `value_wrapper_strip_cap` as
 // a compiler bug.
 fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId) ?Value {
@@ -13682,7 +13795,7 @@ fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: name
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("fieldFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
         .runtime_anchor => |anchor| fieldFromValueStripping(program, anchor.structure.*, name, strip_depth + 1),
-        .static_data_candidate => |candidate| fieldFromValueStripping(program, candidate.runtime.*, name, strip_depth + 1),
+        .static_data_candidate => |candidate| fieldFromValueStripping(program, candidate.structure.*, name, strip_depth + 1),
         .record => |record| fieldFromRecord(program, record, name),
         .nominal => |nominal| fieldFromValueStripping(program, nominal.backing.*, name, strip_depth + 1),
         .expr, .tag, .tuple, .callable => null,
@@ -13722,7 +13835,7 @@ fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("itemFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
         .runtime_anchor => |anchor| itemFromValueStripping(anchor.structure.*, index, strip_depth + 1),
-        .static_data_candidate => |candidate| itemFromValueStripping(candidate.runtime.*, index, strip_depth + 1),
+        .static_data_candidate => |candidate| itemFromValueStripping(candidate.structure.*, index, strip_depth + 1),
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
         .nominal => |nominal| itemFromValueStripping(nominal.backing.*, index, strip_depth + 1),
         .expr, .tag, .record, .callable => null,
@@ -13737,7 +13850,7 @@ fn tagFromValueStripping(value: Value, strip_depth: usize) ?TagValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tagFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
         .runtime_anchor => |anchor| tagFromValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| tagFromValueStripping(candidate.runtime.*, strip_depth + 1),
+        .static_data_candidate => |candidate| tagFromValueStripping(candidate.structure.*, strip_depth + 1),
         .tag => |tag| tag,
         .nominal => |nominal| tagFromValueStripping(nominal.backing.*, strip_depth + 1),
         .expr, .record, .tuple, .callable => null,
@@ -13752,7 +13865,7 @@ fn recordFromValueStripping(value: Value, strip_depth: usize) ?RecordValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("recordFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
         .runtime_anchor => |anchor| recordFromValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| recordFromValueStripping(candidate.runtime.*, strip_depth + 1),
+        .static_data_candidate => |candidate| recordFromValueStripping(candidate.structure.*, strip_depth + 1),
         .record => |record| record,
         .nominal => |nominal| recordFromValueStripping(nominal.backing.*, strip_depth + 1),
         .expr, .tag, .tuple, .callable => null,
@@ -13767,7 +13880,7 @@ fn tupleFromValueStripping(value: Value, strip_depth: usize) ?TupleValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tupleFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
         .runtime_anchor => |anchor| tupleFromValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| tupleFromValueStripping(candidate.runtime.*, strip_depth + 1),
+        .static_data_candidate => |candidate| tupleFromValueStripping(candidate.structure.*, strip_depth + 1),
         .tuple => |tuple| tuple,
         .nominal => |nominal| tupleFromValueStripping(nominal.backing.*, strip_depth + 1),
         .expr, .tag, .record, .callable => null,
@@ -13826,6 +13939,115 @@ test "SpecConstr analysis rewind discards field access segments" {
     program.rewindSpecConstrAnalysis(before);
 
     try std.testing.expectEqualDeep(before, program.markSpecConstrAnalysis());
+}
+
+fn addStaticDataIdentityForTest(program: *Ast.Program) Allocator.Error!Common.StaticDataId {
+    const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(program.static_data_values.len())));
+    // SpecConstr transports and compares the allocated ID but never reads the
+    // checked request. These tests stop before static-data lowering consumes it.
+    try program.static_data_values.append(program.allocator, undefined);
+    return id;
+}
+
+test "static candidate clones share closed initializers without emitting caller work" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const item_ty = try program.types.add(.{ .primitive = .u8 });
+    const list_ty = try program.types.add(.{ .list = item_ty });
+    const item = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
+    const list = try program.addExpr(.{ .ty = list_ty, .data = .{ .list = try program.addExprSpan(&.{item}) } });
+    const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
+        .static_data = try addStaticDataIdentityForTest(&program),
+        .runtime_expr = list,
+    } } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const before = program.markSpecConstrAnalysis();
+    for (0..64) |_| {
+        var rewrite = Cloner.initForRewrite(&pass);
+        defer rewrite.deinit();
+        var exit = Cloner.initForLoopExitSelection(&pass);
+        defer exit.deinit();
+        const cloned = try exit.cloneExprValueDemandingShape(candidate);
+        try std.testing.expect(cloned.bindings.isEmpty());
+        try std.testing.expectEqual(candidate, try exit.materialize(cloned.value));
+        try std.testing.expectEqual(candidate, try rewrite.cloneExpr(candidate));
+        try std.testing.expectEqual(candidate, try rewrite.cloneExprPlain(candidate));
+        var renames = collections.DenseMap(Ast.LocalId, Ast.LocalId).init(allocator);
+        defer renames.deinit();
+        try std.testing.expectEqual(candidate, (try pass.cloneExprFresh(candidate, &renames)).?);
+    }
+    try std.testing.expectEqualDeep(before, program.markSpecConstrAnalysis());
+    // The shape reader treats the list as opaque; its element needs no view.
+    try std.testing.expectEqual(@as(usize, 2), pass.static_data_structure.count());
+}
+
+test "static candidate constructor views are linear in shared source graph size" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    var ty = try program.types.add(.{ .primitive = .u8 });
+    var expr = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
+    const depth = 24;
+    for (0..depth) |_| {
+        ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
+        expr = try program.addExpr(.{ .ty = ty, .data = .{ .tuple = try program.addExprSpan(&.{ expr, expr }) } });
+    }
+    const candidate = try program.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
+        .static_data = try addStaticDataIdentityForTest(&program),
+        .runtime_expr = expr,
+    } } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const mark = pass.markAnalysis();
+    const first = try pass.staticDataStructure(candidate);
+    pass.rewindAnalysis(mark);
+    try std.testing.expect(first == try pass.staticDataStructure(candidate));
+    try std.testing.expectEqual(@as(usize, depth + 2), pass.static_data_structure.count());
+    try std.testing.expectEqualDeep(mark.program, program.markSpecConstrAnalysis());
+    // The shared graph denotes 2^24 leaves, but only its 26 distinct nodes
+    // need storage. The view also survives output rewinds and cloner lifetimes.
+}
+
+test "static candidate match rebinding preserves the initializer and its private scope" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.{ .primitive = .u8 });
+    const local = try program.addLocal(@enumFromInt(1), ty);
+    const local_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = local } });
+    const literal = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
+    const read = try program.addExpr(.{ .ty = ty, .data = .{ .local = local } });
+    const private = try program.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
+        .bind = local_pat,
+        .value = literal,
+        .rest = read,
+    } } });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{private}) } });
+    const candidate = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .static_data_candidate = .{
+        .static_data = try addStaticDataIdentityForTest(&program),
+        .runtime_expr = tuple,
+    } } });
+    const field_local = try program.addLocal(@enumFromInt(2), ty);
+    const field_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = field_local } });
+    const pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&.{field_pat}) } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const cloned = try cloner.cloneExprValue(candidate);
+    try std.testing.expect(cloned.bindings.isEmpty());
+    try std.testing.expectEqual(private, itemFromValue(cloned.value, 0).?.expr);
+    var bindings: BindingChain = .{};
+    const prepared = (try cloner.bindPatToMatchValue(pat, cloned.value, literal, &bindings)).?;
+    try std.testing.expect(!bindings.isEmpty());
+    try std.testing.expectEqual(candidate, try cloner.materialize(prepared));
+    try std.testing.expectEqual(private, itemFromValue(cloned.value, 0).?.expr);
+    const selected = try cloner.materialize(itemFromValue(prepared, 0).?);
+    try std.testing.expect(program.getExpr(selected).data.local != local);
+    try std.testing.expectEqual(tuple, program.getExpr(candidate).data.static_data_candidate.runtime_expr);
 }
 
 test "loop exit selection clone is isolated from ordinary rewrites" {
@@ -15055,7 +15277,7 @@ test "static value matchers bound wrapper strips over a cyclic value" {
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
     const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
 
-    // A static-data-candidate value whose runtime edge points back at itself:
+    // A static-data-candidate value whose symbolic edge points back at itself:
     // the fixpoint shape a recursively-constructed value takes when a `.local`
     // resolves through the substitution maps to an ancestor of its own
     // construction. Stripping the wrapper never reaches a constructor.
@@ -15063,17 +15285,16 @@ test "static value matchers bound wrapper strips over a cyclic value" {
     cyclic = .{
         .static_data_candidate = .{
             .ty = union_ty,
-            // Never read: every walk this test exercises follows the runtime edge
-            // and declines before any materialization would consume the id.
+            // Never read: matching follows only the symbolic edge, and whole
+            // static-value substitution does not inspect the initializer.
             .static_data = undefined,
-            .runtime = &cyclic,
+            .expr = undefined,
+            .structure = &cyclic,
         },
     };
 
-    // The substitution check answers "cannot substitute" on exhaustion—the
-    // conservative direction, and correct, since a self-referential value
-    // cannot be substituted.
-    try std.testing.expectEqual(ProofStatus.unknown_budget_exhausted, cloner.valueCanSubstitute(cyclic));
+    // A cyclic symbolic view does not prevent reuse of the closed initializer.
+    try std.testing.expectEqual(ProofStatus.proven, cloner.valueCanSubstitute(cyclic));
 
     // A nominal pattern strips the wrapper chain looking for its backing. The
     // static-data case keeps the same pattern, so the strip would loop forever

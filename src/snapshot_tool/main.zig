@@ -1032,6 +1032,7 @@ fn processSnapshotContent(
                     .builtin_module_env = builtin_env,
                     .builtin_indices = config.builtin_indices,
                 },
+                .is_entry_module = true,
             });
             defer czer.deinit();
             try czer.canonicalizeFile();
@@ -1049,6 +1050,7 @@ fn processSnapshotContent(
                     .builtin_module_env = builtin_env,
                     .builtin_indices = config.builtin_indices,
                 },
+                .is_entry_module = true,
             });
             defer czer.deinit();
 
@@ -2893,6 +2895,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
             .builtin_module_env = builtin_env,
             .builtin_indices = config.builtin_indices,
         },
+        .is_entry_module = true,
     }) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
         return false;
@@ -4692,6 +4695,7 @@ fn renderSnapshotReplTypeProblems(
             .builtin_module_env = builtin_env,
             .builtin_indices = config.builtin_indices,
         },
+        .is_entry_module = true,
     });
     defer czer.deinit();
 
