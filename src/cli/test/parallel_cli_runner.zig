@@ -9685,10 +9685,13 @@ fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const C
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
     // The payload struct is one pointer-sized erased callable at both widths,
-    // the entrypoint returns a pointer to it, and releasing the returned box
-    // composes the box policy over the payload's policy.
+    // the entrypoint returns a pointer to it, releasing the returned box
+    // composes the box policy over the payload's policy, and the payload's
+    // own decref and incref release and retain the callable.
     for ([_][]const u8{
-        "    @\"first\": *anyopaque,",
+        "    @\"first\": RocErasedCallable,",
+        "        decrefErasedCallable(value.@\"first\", roc_host);",
+        "        increfErasedCallable(value.@\"first\", amount);",
         "if (@sizeOf(Value) != 8) @compileError",
         "if (@sizeOf(Value) != 4) @compileError",
         "pub extern fn shape(arg0: *anyopaque) callconv(.c) *Value;",
@@ -10578,8 +10581,8 @@ fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *con
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
     for ([_][]const u8{
-        "@\"init!\": *anyopaque",
-        "@\"render!\": *anyopaque",
+        "@\"init!\": RocErasedCallable",
+        "@\"render!\": RocErasedCallable",
         "pub const HostSet_mouseArgs = if (@sizeOf(usize) == 4) extern struct",
         "pub extern fn roc_host_set_mouse(arg0: HostSet_mouseArgs) callconv(.c) void;",
     }) |needle| {
