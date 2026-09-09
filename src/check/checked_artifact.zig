@@ -15793,9 +15793,9 @@ pub const ResolvedValueRefTable = struct {
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@enumFromInt(node_idx));
-            if (tag == .expr_associated_lookup_local or tag == .expr_associated_lookup) {
-                checkedArtifactInvariant("unresolved associated lookup reached resolved value publication", .{});
-            }
+            // Checked source traversal and body copying already reject unresolved
+            // associated lookups in published expressions. Abandoned source nodes
+            // can still contain unresolved lookups and need no value reference.
             if (tag != .expr_var and
                 tag != .expr_external_lookup and
                 tag != .expr_associated_lookup_resolved and
