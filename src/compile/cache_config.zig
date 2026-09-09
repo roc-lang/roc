@@ -184,7 +184,9 @@ pub const Constants = struct {
     ///     statements and definitions as well as expressions.
     /// 85: Scheme codec requirements retain instantiation and synthetic-owner
     ///     classifications across checked-environment rechecks.
-    pub const CACHE_VERSION = 85;
+    /// 86: Hoisted-root pruning resolves associated lookup identities through
+    ///     the expression's owning module, including imported callable bodies.
+    pub const CACHE_VERSION = 86;
 };
 
 /// Configuration for the Roc cache system.

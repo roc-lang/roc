@@ -663,6 +663,11 @@ definition. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
+A resolved lookup's module identity is local to the module owning its expression.
+Consumers visiting imported bodies resolve that identity through the expression
+owner's identity table, then use the target module's definition store. An
+unavailable resolved target is a compiler invariant violation.
+
 The checker memoizes this resolution by alias declaration type variable and
 item, while each use still instantiates the selected method scheme separately.
 `CheckedBodyPayloadCopier.copyExprData` treats any unresolved associated lookup
@@ -6911,6 +6916,15 @@ through erased callable construction using the checked procedure template or
 stored `ConstStore` function value that names the callable. A checked lookup
 without a resolved value reference is an invariant failure in boxy lowering.
 
+A local procedure declaration needs a runtime local only when another closure
+captures that binder. Ordinary procedure lookups construct the erased callable
+at their checked, instantiated use, including the procedure's source captures.
+Whether the procedure itself captures values does not require a second,
+unused callable at its declaration. In particular, that unused construction
+must not request descriptors for uninstantiated scheme parameters. Declarations
+whose binders are captured still provide the runtime value required by those
+explicit capture edges.
+
 Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
 the requested checked type. The const node is read from the module that owns the
 stored value, while checked type interpretation uses the module named by the
@@ -7388,6 +7402,24 @@ satisfies the literal's dispatch constraints), and Monotype commits only the
 per-specialization residue of generalized literals.
 
 ### Monotype Instantiation
+
+A generalized local callable alias (`alias = callable`) owns a checked
+instantiation scope, not a runtime monomorphic value cell or a new function
+body. Checking's binding-scheme classification and the declaration's explicit
+lookup edge authorize this plan; CheckedModule construction records it on the
+binder and its resolved procedure uses. Calls and other value-producing computations are not
+alias declarations and retain their original evaluation site.
+
+Every alias use carries its own checked substitution and evidence. Interface
+replay enters the alias scope instead of equating the use with one shared
+binding type. Body lowering installs that substitution in a fresh type-only
+scope and forwards the referenced callable, preserving its identity and
+captures. It does not clone runtime binder tables or create an alias closure,
+wrapper procedure, or specialization family. Monomorphic variables present in
+the substitution retain their existing cells. CheckedModule construction
+compresses alias identity edges to their final callable lookup in linear work without composing
+type graphs. Boxy consumes that target when planning each typed callable use;
+it never materializes an alias at an uninstantiated descriptor.
 
 Monotype lowering is a specialization-time instantiation of checked type graphs.
 This is the same core model as Cor/LSS: each reachable monomorphic

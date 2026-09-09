@@ -23302,6 +23302,7 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| {
                     const request_fn_node = try self.activeNodeFromType(ty);
+                    if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
                     const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                     const fn_id = try self.lowerDraftLocalProcAtNode(
                         local,
@@ -32694,6 +32695,7 @@ const BodyContext = struct {
             => Common.invariant("local lookup reached Monotype without a current local binding"),
             .local_proc => |local| blk: {
                 const request_fn_node = try self.activeNodeFromType(ty);
+                if (local.is_alias) break :blk try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
                     local,
@@ -32739,6 +32741,35 @@ const BodyContext = struct {
             Common.invariant("checked type closure query referenced a missing root");
         }
         return !self.view.types.roots[raw].contains_identity_variables;
+    }
+
+    /// A checked callable alias is a scheme-use edge, not a new function or
+    /// runtime local. Install its exact substitution in a fresh type-only
+    /// scope and forward the original callable value. Runtime binder and
+    /// declaration-context tables remain shared with the enclosing body.
+    fn lowerSchemeAliasAtNode(
+        self: *BodyContext,
+        alias: checked.LocalProcedureBinding,
+        use_expr: checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const scope_id = alias.dispatch_scope orelse
+            Common.invariant("generalized callable alias has no checked scheme scope");
+        const edge = try self.evidenceForUseSiteAtNode(use_expr, expected_node);
+        const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        const scope = self.view.templates.dispatch_scopes[@intFromEnum(scope_id)];
+        const previous_instantiation = self.instantiation;
+        const previous_evidence = self.evidence;
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.evidence = evidence;
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.evidence = previous_evidence;
+        }
+        try self.seedSubstitution(evidence.schema.?, edge.subst);
+        try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), expected_node);
+        return try self.lowerExprAtTypeCell(alias.expr, DraftTypeCell.fromGraphNode(expected_node));
     }
 
     fn lowerLookupExprAtNode(
@@ -32803,6 +32834,7 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| {
+                if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, expected_node);
                 const checked_ty = self.view.bodies.expr(checked_expr).ty;
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
@@ -53524,6 +53556,8 @@ const BodyContext = struct {
             .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .decl => |decl| blk: {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
+                    const binder = self.localProcBinder(decl.pattern);
+                    if (self.view.bodies.patternBinder(binder).is_scheme_alias) return .{ .stmt = null, .termination = .none };
                     try self.registerLocalProc(decl.pattern, decl.expr, statement_id);
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
@@ -54057,7 +54091,9 @@ const BodyContext = struct {
     ) bool {
         // A local procedure declaration has a named binder. A lambda assigned
         // to an ignored or erroneous pattern remains an ordinary value.
-        if (self.view.bodies.pattern(pattern_id).data != .assign) return false;
+        const pattern = self.view.bodies.pattern(pattern_id);
+        if (pattern.data != .assign) return false;
+        if (self.view.bodies.patternBinder(pattern.data.assign).is_scheme_alias) return true;
         return switch (self.view.bodies.expr(expr_id).data) {
             .lambda, .closure => true,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
