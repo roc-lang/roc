@@ -290,6 +290,7 @@ pub fn canonicalizeAndTypeCheckModule(
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = module_envs_out,
     });
     czer.source_dir = source_dir;
@@ -425,6 +426,7 @@ pub fn canonicalizeModuleWithSiblings(
     additional_known_modules: []const KnownModule,
     pre_resolved_imports: []const messages.CanonicalizeImport,
     validation: Can.Validation,
+    is_entry_module: bool,
 ) Allocator.Error!void {
     const gpa = roc_ctx.gpa;
 
@@ -550,6 +552,7 @@ pub fn canonicalizeModuleWithSiblings(
         .imported_modules = &module_envs_map,
         .compiler_version = build_options.compiler_version,
         .validation = validation,
+        .is_entry_module = is_entry_module,
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();
