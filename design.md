@@ -2086,15 +2086,15 @@ argument scan.
 Expected aggregate structure is recursive checking context, not a second owner
 of the expression's root relation. A record update passes a borrowed base-row
 and field identity; only an aggregate construction consuming that context
-looks up the field. Ordinary stored-value lookups perform no projection.
+looks up the field. Ordinary stored-value lookups create no expected-shape copy.
 Lists, tuples, records, and tag payloads project child slots by relating an
 aggregate skeleton to an expected-shape copy. This operation preserves structural
 equalities, field kinds, and aliases, and flexes rigids, but does not copy or
 traverse static-dispatch requirements: those belong to the original type and its
 real scheme-use edges. It records no instantiation, literal, ambiguity, or
-dispatch evidence. Context is never an independently executable obligation.
+dispatch evidence. Context introduces no independent dispatch requirement.
 Nominal constructors explicitly open their declared backing before checking
-the backing expression; demanded update-field projections obey the same nominal
+the backing expression; demanded update-field type reads obey the same nominal
 opacity and declaration-substitution rules as record unification. A stored
 child is checked and instantiated first; a successful projected-child relation
 is then committed so sibling checking and dispatch can consume it. A rejected
@@ -4953,11 +4953,11 @@ probe-then-mutate rewrite requires a declared rule in this document first;
 An expected aggregate shape guides construction but introduces no new value
 use. `copyExpectedShape` preserves the expected type's structural equalities
 and field kinds in fresh cells, flexes rigid leaves, and omits static-dispatch
-constraints and off-root scheme requirements. Every omitted obligation remains
+constraints and off-root scheme requirements. Every omitted requirement remains
 on its source type and is enforced by the ordinary enclosing relation and the
 actual stored-value instantiation. Shape copies never enter literal, dispatch,
 ambiguity, or evidence worklists. The copy and its projected relation belong to
-one commit-probe, so a rejected projection retains neither the copy nor any
+one commit-probe, so a rejected aggregate relation retains neither the copy nor any
 partial unification. Rejection is diagnosed by the owning full-shape relation.
 
 A record update carries its base variable and supplied field identity as
@@ -4965,7 +4965,7 @@ borrowed context. A consuming aggregate reads the current row on demand,
 including aliases and extensions; a nominal base requires the same opacity
 capability, declaration substitution, and record backing as record unification.
 No solved-graph memo survives between field checks, which can refine the base.
-Ordinary lookups consume no aggregate context and allocate no projection.
+Ordinary lookups consume no aggregate context and allocate no expected-shape copy.
 
 The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
 arithmetic remains polymorphic, including heterogeneous user arithmetic;
@@ -6663,9 +6663,9 @@ Other solved-graph mutations:
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 - `copyExpectedShape` / `projectExpectedAggregateShape`—policy: Expected Shape
-  Context (above). Fresh structural context omits dispatch obligations owned by
+  Context (above). Fresh structural context omits dispatch requirements owned by
   the original type. Only successful ordinary unification with the aggregate
-  skeleton commits the projection; the owning relation still checks the actual
+  skeleton commits the expected-shape relation; the owning relation still checks the actual
   value against the complete expected type.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—

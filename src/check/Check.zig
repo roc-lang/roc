@@ -17779,7 +17779,7 @@ fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
 
 /// Structural copies need ranks and source regions, but no dispatch,
 /// defaulting, ambiguity, or scheme-use bookkeeping.
-fn registerExpectedShapeVars(self: *Self, fresh_start: usize, env: *Env) Allocator.Error!void {
+fn registerExpectedShapeVars(self: *Self, fresh_start: u64, env: *Env) Allocator.Error!void {
     var iterator = self.var_map.iterator();
     while (iterator.next()) |entry| {
         const fresh_var = entry.value_ptr.*;
