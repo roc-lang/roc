@@ -157,13 +157,16 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10991_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11103_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11062_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11088_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11098_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11132_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11130_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11131_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11188_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11209_test.zig"));
     std.testing.refAllDecls(@import("test/wide_capture_arc_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11158_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11199_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11175_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));

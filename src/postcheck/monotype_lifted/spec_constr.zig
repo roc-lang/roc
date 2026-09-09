@@ -227,6 +227,7 @@ const Type = @import("../monotype/type.zig");
 const check = @import("check");
 const names = @import("check").CheckedNames;
 
+const ExitDemand = @import("loop_exit_demand.zig");
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
 
@@ -768,26 +769,21 @@ const SuppliedSlot = struct {
     demoted: bool,
 };
 
-/// Exact live items passed from a loop's compiler-generated state result to the
+/// Exact live items passed from a loop's typed tuple result to the
 /// continuation that consumes it. Back-edge state is deliberately unaffected:
 /// a one-item exit breaks with that existing item type, while a multi-item exit
 /// jumps to a typed shared continuation.
 const LoopExitSelection = struct {
+    source_ty: Type.TypeId,
     source_arity: usize,
+    kept_types: []const Type.TypeId,
     kept_indices: []const u32,
-    result_ty: Type.TypeId,
     transfer: union(enum) {
         break_value,
         jump: struct {
             target: Ast.JoinPointId,
-            sites: *std.ArrayList(Ast.ExprId),
         },
     },
-};
-
-const LoopExitSiteChange = struct {
-    sites: *std.ArrayList(Ast.ExprId),
-    previous_len: usize,
 };
 
 /// A function currently being inlined, with the number of known-constructor
@@ -2209,118 +2205,6 @@ const Pass = struct {
         }
     }
 
-    /// Find a partially used tuple or aggregate loop result in one traversal.
-    /// Sequential spans use a cursor rather than one pending item per statement.
-    fn bodyHasProjectableLoopResult(self: *Pass, expr_id: Ast.ExprId) Common.LowerError!bool {
-        const Work = union(enum) {
-            expr: Ast.ExprId,
-            statements: struct {
-                span: Ast.Span(Ast.StmtId),
-                cursor: u32 = 0,
-                final_expr: ?Ast.ExprId,
-            },
-        };
-        var work = std.ArrayList(Work).empty;
-        defer work.deinit(self.allocator);
-        try work.append(self.allocator, .{ .expr = expr_id });
-        while (work.pop()) |item| {
-            const current = switch (item) {
-                .expr => |expr| expr,
-                .statements => |sequence| {
-                    const statements = self.program.stmtSpan(sequence.span);
-                    if (sequence.cursor == statements.len) {
-                        if (sequence.final_expr) |final| try work.append(self.allocator, .{ .expr = final });
-                        continue;
-                    }
-                    const stmt = self.program.getStmt(GuardedList.at(statements, sequence.cursor));
-                    try work.append(self.allocator, .{ .statements = .{
-                        .span = sequence.span,
-                        .cursor = sequence.cursor + 1,
-                        .final_expr = sequence.final_expr,
-                    } });
-                    switch (stmt) {
-                        .let_ => |let_| {
-                            if (sequence.final_expr) |final| {
-                                if (self.program.getExpr(let_.value).data == .loop_ and
-                                    (self.tuplePatternIsPartiallyUsedInBlockTail(let_.pat, statements, sequence.cursor + 1, final) or
-                                        try self.aggregateLoopBindingIsPartiallyUsedInBlockTail(let_.pat, let_.value, statements, sequence.cursor + 1, final))) return true;
-                            }
-                            try work.append(self.allocator, .{ .expr = let_.value });
-                        },
-                        .expr, .expect, .dbg => |expr| try work.append(self.allocator, .{ .expr = expr }),
-                        .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
-                        .uninitialized, .crash => {},
-                    }
-                    continue;
-                },
-            };
-            switch (self.program.getExpr(current).data) {
-                .let_ => |let_| {
-                    if (self.program.getExpr(let_.value).data == .loop_ and
-                        (self.tuplePatternIsPartiallyUsedInExpr(let_.bind, let_.rest) or
-                            try self.aggregateLoopBindingIsPartiallyUsedInExpr(let_.bind, let_.value, let_.rest))) return true;
-                    try work.append(self.allocator, .{ .expr = let_.rest });
-                    try work.append(self.allocator, .{ .expr = let_.value });
-                },
-                .block => |block| try work.append(self.allocator, .{ .statements = .{ .span = block.statements, .final_expr = block.final_expr } }),
-                .if_ => |if_| {
-                    try work.append(self.allocator, .{ .expr = if_.final_else });
-                    const branches = self.program.ifBranchSpan(if_.branches);
-                    var index = branches.len;
-                    while (index > 0) {
-                        index -= 1;
-                        const branch = GuardedList.at(branches, index);
-                        try work.append(self.allocator, .{ .expr = branch.body });
-                        try work.append(self.allocator, .{ .expr = branch.cond });
-                    }
-                },
-                .match_ => |match| {
-                    const branches = self.program.branchSpan(match.branches);
-                    var index = branches.len;
-                    while (index > 0) {
-                        index -= 1;
-                        const branch = GuardedList.at(branches, index);
-                        try work.append(self.allocator, .{ .expr = branch.body });
-                        if (branch.guard) |guard| try work.append(self.allocator, .{ .expr = guard });
-                        try work.append(self.allocator, .{ .statements = .{ .span = branch.bindings, .final_expr = null } });
-                    }
-                    try work.append(self.allocator, .{ .expr = match.scrutinee });
-                },
-                .loop_ => |loop| try work.append(self.allocator, .{ .expr = loop.body }),
-                .typed_boundary => |boundary| try work.append(self.allocator, .{ .expr = boundary.value }),
-                .nominal, .dbg, .expect => |child| try work.append(self.allocator, .{ .expr = child }),
-                .comptime_branch_taken => |taken| try work.append(self.allocator, .{ .expr = taken.body }),
-                .join_point => |join| {
-                    try work.append(self.allocator, .{ .expr = join.remainder });
-                    try work.append(self.allocator, .{ .expr = join.body });
-                },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .list, .tuple, .record, .record_update, .tag, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .break_, .continue_, .jump, .return_, .crash, .comptime_exhaustiveness_failed, .expect_err => {},
-            }
-        }
-        return false;
-    }
-
-    fn aggregateLoopBindingIsPartiallyUsedInExpr(
-        self: *Pass,
-        pat_id: Ast.PatId,
-        loop_id: Ast.ExprId,
-        rest: Ast.ExprId,
-    ) Allocator.Error!bool {
-        const pat_data = self.program.getPat(pat_id).data;
-        if (pat_data != .bind) return false;
-        const local = pat_data.bind;
-        const loop_type = self.program.types.get(self.program.getExpr(loop_id).ty);
-        if (loop_type != .tuple) return false;
-        const items = self.program.types.span(loop_type.tuple);
-        if (items.len < 2) return false;
-        const used = try self.allocator.alloc(bool, items.len);
-        defer self.allocator.free(used);
-        @memset(used, false);
-        if (!collectTupleLocalDemandInExpr(self.program, local, rest, used)) return false;
-        const used_count = std.mem.count(bool, used, &.{true});
-        return used_count != 0 and used_count != items.len;
-    }
-
     fn aggregateLoopBindingIsPartiallyUsedInBlockTail(
         self: *Pass,
         pat_id: Ast.PatId,
@@ -2345,21 +2229,6 @@ const Pass = struct {
         if (!collectTupleLocalDemandInExpr(self.program, local, final_expr, used)) return false;
         const used_count = std.mem.count(bool, used, &.{true});
         return used_count != 0 and used_count != items.len;
-    }
-
-    fn tuplePatternIsPartiallyUsedInExpr(self: *Pass, pat_id: Ast.PatId, rest: Ast.ExprId) bool {
-        const pat_data = self.program.getPat(pat_id).data;
-        if (pat_data != .tuple) return false;
-        const items = self.program.patSpan(pat_data.tuple);
-        if (items.len < 2) return false;
-        var used: usize = 0;
-        for (0..items.len) |index| {
-            const item_data = self.program.getPat(GuardedList.at(items, index)).data;
-            if (item_data != .bind) return false;
-            const local = item_data.bind;
-            if (localUseCountInExpr(self.program, local, rest) != 0) used += 1;
-        }
-        return used != 0 and used != items.len;
     }
 
     fn tuplePatternIsPartiallyUsedInBlockTail(
@@ -3855,10 +3724,14 @@ const Pass = struct {
                 .roc => |body| body,
                 .hosted => continue,
             };
-            if (!try self.bodyHasProjectableLoopResult(body)) continue;
+            var demands = ExitDemand.Inventory.init(self.allocator, self.program);
+            defer demands.deinit();
+            try demands.collect(body);
+            if (!demands.hasSelection()) continue;
 
             var cloner = Cloner.initForLoopExitSelection(self);
             defer cloner.deinit();
+            cloner.exit_demands = &demands;
             const cloned = try cloner.cloneExpr(body);
             self.program.setFn(fn_id, .{
                 .symbol = fn_.symbol,
@@ -4727,17 +4600,8 @@ const Cloner = struct {
     /// innermost last. A null frame preserves that loop's source exit ABI and
     /// shadows any selection owned by an enclosing loop.
     loop_exit_stack: std.ArrayList(?LoopExitSelection),
-    /// Exact provenance for break nodes already rewritten to a selected loop
-    /// result. Normalization can re-clone output nodes while the owning loop
-    /// selection remains active; propagating this stamp makes that clone
-    /// idempotent without inferring provenance from expression shape.
-    selected_loop_exit_tys: collections.DenseMap(Ast.ExprId, Type.TypeId),
-    /// Insertions into `selected_loop_exit_tys`, in order, so a rejected loop
-    /// fixed-point attempt can discard provenance for its discarded expressions.
-    selected_loop_exit_changes: std.ArrayList(Ast.ExprId),
-    /// Every selected-loop exit-site append, including appends to enclosing
-    /// selections, so rejected nested attempts cannot leave stale expression ids.
-    loop_exit_site_changes: std.ArrayList(LoopExitSiteChange),
+    exit_demands: ?*const ExitDemand.Inventory = null,
+    exit_tuple_items: collections.DenseMap(Ast.LocalId, []?Ast.ExprId),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. That rewrite re-clones each arm's body against the small
@@ -4831,9 +4695,7 @@ const Cloner = struct {
             .inline_stack = .empty,
             .loop_stack = .empty,
             .loop_exit_stack = .empty,
-            .selected_loop_exit_tys = collections.DenseMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
-            .selected_loop_exit_changes = .empty,
-            .loop_exit_site_changes = .empty,
+            .exit_tuple_items = .init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
@@ -4868,9 +4730,7 @@ const Cloner = struct {
             .inline_stack = .empty,
             .loop_stack = .empty,
             .loop_exit_stack = .empty,
-            .selected_loop_exit_tys = collections.DenseMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
-            .selected_loop_exit_changes = .empty,
-            .loop_exit_site_changes = .empty,
+            .exit_tuple_items = .init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
@@ -4912,9 +4772,7 @@ const Cloner = struct {
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
         self.loop_exit_stack.deinit(self.pass.allocator);
-        self.selected_loop_exit_tys.deinit();
-        self.selected_loop_exit_changes.deinit(self.pass.allocator);
-        self.loop_exit_site_changes.deinit(self.pass.allocator);
+        self.exit_tuple_items.deinit();
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
         self.active_recursive_value_locals.deinit();
@@ -5551,11 +5409,13 @@ const Cloner = struct {
             .let_ => |let_| return try self.cloneLetValue(let_, bindings),
             .loop_ => |loop| return try self.cloneLoopValue(expr.ty, loop, bindings, null),
             .block => |block| {
+                if (self.purpose == .loop_exit_selection) return try self.cloneExitBlockValue(expr.ty, block, bindings);
                 if (try self.cloneBlockValue(block, bindings)) |value| return value;
                 return .{ .expr = try self.cloneExprPlain(expr_id) };
             },
             .field_access => |field| return try self.cloneFieldAccessValue(expr_id, expr.ty, field, bindings),
             .tuple_access => |access| {
+                if (self.selectedTupleItem(access)) |item| return .{ .expr = item };
                 const binding_mark = bindings.mark();
                 const receiver = try self.cloneExprValueDemandingShapeInto(access.tuple, bindings);
                 if (itemFromValue(receiver, access.elem_index)) |value| return value;
@@ -5574,7 +5434,9 @@ const Cloner = struct {
                 const scrutinee = try self.cloneExprValueDemandingShapeInto(match.scrutinee, bindings);
                 if (try self.simplifyKnownMatchValue(scrutinee, match.branches, bindings)) |value| return value;
                 const scrutinee_expr = try self.materialize(scrutinee);
-                if (try self.cloneCaseOfCaseValue(expr.ty, scrutinee_expr, match.branches)) |value| return value;
+                if (self.purpose != .loop_exit_selection) {
+                    if (try self.cloneCaseOfCaseValue(expr.ty, scrutinee_expr, match.branches)) |value| return value;
+                }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .match_ = .{
                     .scrutinee = scrutinee_expr,
                     .branches = try self.cloneBranchSpan(match.branches),
@@ -5678,6 +5540,16 @@ const Cloner = struct {
     }
 
     fn cloneExprValueDemandingShapeInto(self: *Cloner, expr_id: Ast.ExprId, bindings: *BindingChain) Common.LowerError!Value {
+        if (self.purpose == .loop_exit_selection) {
+            const value = try self.cloneExprValueInto(expr_id, bindings);
+            // Finish a constructor child's strict work before visiting the
+            // next child, whose block may contribute its own binding chain.
+            // A typed runtime anchor must also keep its boundary evaluation.
+            return try self.makeReusableForMatch(if (value == .runtime_anchor)
+                .{ .expr = value.runtime_anchor.runtime }
+            else
+                value, bindings);
+        }
         const expr = self.pass.program.getExpr(expr_id);
         return switch (expr.data) {
             .call_proc => |call| blk: {
@@ -6187,17 +6059,6 @@ const Cloner = struct {
             },
             .break_ => |maybe| blk: {
                 if (self.currentLoopExitSelection()) |selection| {
-                    if (self.selected_loop_exit_tys.get(expr_id)) |selected_ty| {
-                        if (selected_ty != selection.result_ty) {
-                            Common.invariant("selected break was re-cloned under a different loop exit ABI");
-                        }
-                        const projected = try self.addExpr(.{
-                            .ty = expr.ty,
-                            .data = .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
-                        });
-                        try self.recordSelectedLoopExitTy(projected, selected_ty);
-                        return projected;
-                    }
                     const value = maybe orelse Common.invariant("selected value-producing loop had a valueless break");
                     return try self.cloneSelectedLoopExit(expr.ty, value, selection);
                 }
@@ -6208,21 +6069,6 @@ const Cloner = struct {
             .jump => |jump| blk: {
                 if (self.letCaseJoinFor(jump.target)) |join| {
                     return try self.captureLetCaseJump(expr.ty, join, jump);
-                }
-                if (self.selectedExitJumpSites(jump.target)) |sites| {
-                    // A loop-exit transfer site minted by an active selection is
-                    // being duplicated (an enclosing arm rewrite is re-cloning
-                    // the region). The target is already in this clone's id
-                    // space, and the selection must see every surviving copy of
-                    // its exit, so keep the target and register the duplicate.
-                    const duplicated = try self.addExpr(.{ .ty = expr.ty, .data = .{ .jump = .{
-                        .target = jump.target,
-                        .args = try self.cloneExprSpan(jump.args),
-                        .loop_params = try self.cloneLoopUpdateParams(jump.loop_params),
-                        .loop_values = try self.cloneExprSpan(jump.loop_values),
-                    } } });
-                    try self.recordLoopExitSite(sites, duplicated);
-                    return duplicated;
                 }
                 break :blk .{ .jump = .{
                     .target = self.clonedJoinTarget(jump.target),
@@ -6486,8 +6332,8 @@ const Cloner = struct {
         }
         // Not being remapped: the join's definition encloses the region being
         // cloned rather than sitting inside it. Rewrites re-clone regions of
-        // already-emitted output in place (arm transfers, loop exit
-        // selection), and a jump out of such a region must keep aiming at the
+        // already-emitted output in place (arm transfers), and a jump out of
+        // such a region must keep aiming at the
         // enclosing definition. Join ids are minted from one pass-wide
         // counter, so the id cannot collide with a different join.
         return source;
@@ -6495,14 +6341,14 @@ const Cloner = struct {
 
     fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
         if (self.purpose == .loop_exit_selection) {
-            if (try self.loopWithSelectedExitValues(let_)) |selected| return try self.cloneExprValueInto(selected, bindings);
+            if (try self.loopWithSelectedExitValues(let_)) |selected| return .{ .expr = selected };
         }
 
         var value_bindings: BindingChain = .{};
         const value = try self.cloneExprValueInto(let_.value, &value_bindings);
         bindings.appendChain(value_bindings);
         const value_expr = try self.materialize(value);
-        if (self.caseExprFromValue(value)) |case_expr| {
+        if (if (self.purpose == .loop_exit_selection) null else self.caseExprFromValue(value)) |case_expr| {
             if (try self.cloneLetOfCase(let_, case_expr)) |data| {
                 const rest_ty = self.pass.program.getExpr(let_.rest).ty;
                 return .{ .expr = try self.addExpr(.{ .ty = rest_ty, .data = data }) };
@@ -6523,7 +6369,7 @@ const Cloner = struct {
         }
         // A branch-built value that cannot bind as one value transfers each
         // branch result to one shared continuation.
-        if (self.caseExprFromValue(value)) |case_expr| {
+        if (if (self.purpose == .loop_exit_selection) null else self.caseExprFromValue(value)) |case_expr| {
             if (try self.cloneLetOfCase(let_, case_expr)) |data| {
                 const rest_ty = self.pass.program.getExpr(let_.rest).ty;
                 return .{ .expr = try self.addExpr(.{ .ty = rest_ty, .data = data }) };
@@ -6543,151 +6389,73 @@ const Cloner = struct {
         } } }) };
     }
 
-    /// Remove dead values from a loop's exit ABI using the exact binding pattern
-    /// and continuation that consume it. The loop still carries its complete
-    /// state through every `continue`; exits transfer only the live values to the
-    /// unchanged continuation. Returns null when the binding is not a
-    /// compiler-generated tuple state or when every value remains live.
+    /// Consume the immutable function demand plan. This returns completed
+    /// output: neither the loop nor its continuation is cloned a second time.
     fn loopWithSelectedExitValues(self: *Cloner, let_: anytype) Common.LowerError!?Ast.ExprId {
+        const demands = self.exit_demands orelse return null;
+        const plan = demands.get(let_.bind) orelse return null;
         const loop_expr = self.pass.program.getExpr(let_.value);
-        if (loop_expr.data != .loop_) return null;
-        const loop = loop_expr.data.loop_;
+        if (loop_expr.data != .loop_) Common.invariant("planned exit binding lost its loop");
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
 
-        var kept_indices = std.ArrayList(u32).empty;
-        defer kept_indices.deinit(self.pass.allocator);
-        var kept_params = std.ArrayList(Ast.TypedLocal).empty;
-        defer kept_params.deinit(self.pass.allocator);
-        var source_arity: usize = 0;
-        var aggregate_local: ?Ast.LocalId = null;
-        var aggregate_tys: ?[]Type.TypeId = null;
-        defer if (aggregate_tys) |tys| self.pass.allocator.free(tys);
-        var selected_locals: ?[]?Ast.LocalId = null;
-        defer if (selected_locals) |locals| self.pass.allocator.free(locals);
-
-        switch (self.pass.program.getPat(let_.bind).data) {
-            .tuple => |items_span| {
-                const source_items = try GuardedList.dupe(self.pass.allocator, Ast.PatId, self.pass.program.patSpan(items_span));
-                defer self.pass.allocator.free(source_items);
-                if (source_items.len < 2) return null;
-                source_arity = source_items.len;
-                for (source_items, 0..) |pat_id, index| {
-                    const pat = self.pass.program.getPat(pat_id);
-                    if (pat.data != .bind) return null;
-                    const local = pat.data.bind;
-                    if (localUseCountInExpr(self.pass.program, local, let_.rest) == 0) continue;
-                    try kept_indices.append(self.pass.allocator, @intCast(index));
-                    try kept_params.append(self.pass.allocator, .{ .local = local, .ty = pat.ty });
-                }
-            },
-            .bind => |local| {
-                const loop_type = self.pass.program.types.get(loop_expr.ty);
-                if (loop_type != .tuple) return null;
-                const type_span = loop_type.tuple;
-                const source_tys = try GuardedList.dupe(self.pass.allocator, Type.TypeId, self.pass.program.types.span(type_span));
-                aggregate_tys = source_tys;
-                if (source_tys.len < 2) return null;
-                source_arity = source_tys.len;
-
-                const used = try self.pass.allocator.alloc(bool, source_arity);
-                defer self.pass.allocator.free(used);
-                @memset(used, false);
-                if (!collectTupleLocalDemandInExpr(self.pass.program, local, let_.rest, used)) return null;
-
-                const locals = try self.pass.allocator.alloc(?Ast.LocalId, source_arity);
-                selected_locals = locals;
-                @memset(locals, null);
-                aggregate_local = local;
-                for (source_tys, used, 0..) |ty, is_used, index| {
-                    if (!is_used) continue;
-                    const selected_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
-                    locals[index] = selected_local;
-                    try kept_indices.append(self.pass.allocator, @intCast(index));
-                    try kept_params.append(self.pass.allocator, .{ .local = selected_local, .ty = ty });
-                }
-            },
-            .wildcard,
-            .as,
-            .record,
-            .list,
-            .tag,
-            .nominal,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            .str_pattern,
-            => return null,
+        const count = plan.used_count;
+        const kept = try self.arena.allocator().alloc(u32, count);
+        const types = try self.arena.allocator().alloc(Type.TypeId, count);
+        const params = try self.arena.allocator().alloc(Ast.TypedLocal, count);
+        const tuple_items = if (plan.aggregate != null)
+            try self.arena.allocator().alloc(?Ast.ExprId, plan.items.len)
+        else
+            null;
+        if (tuple_items) |items| @memset(items, null);
+        var index: usize = 0;
+        for (plan.items, 0..) |item, source_index| {
+            if (!item.used) continue;
+            kept[index] = @intCast(source_index);
+            types[index] = item.ty;
+            params[index] = .{ .ty = item.ty, .local = try self.pass.program.addLocal(self.pass.symbols.fresh(), item.ty) };
+            index += 1;
         }
-        if (kept_indices.items.len == 0 or kept_indices.items.len == source_arity) return null;
-        var selected_rest = let_.rest;
-        if (aggregate_local) |local| {
-            const source_tys = aggregate_tys orelse Common.invariant("loop exit selection had no source tuple types");
-            const locals = selected_locals orelse Common.invariant("loop exit selection had no selected locals");
-            const items = try self.arena.allocator().alloc(Value, source_arity);
-            for (source_tys, locals, 0..) |ty, maybe_local, index| {
-                const item_expr = if (maybe_local) |selected_local|
-                    try self.addExpr(.{ .ty = ty, .data = .{ .local = selected_local } })
-                else
-                    try self.addExpr(.{ .ty = ty, .data = .@"unreachable" });
-                items[index] = .{ .expr = item_expr };
-            }
-
-            const change_start = self.subst.watermark();
-            errdefer self.subst.restore(change_start);
-            try self.subst.put(self.pass.program, local, .{ .tuple = .{
-                .ty = loop_expr.ty,
-                .items = items,
-            } });
-            selected_rest = try self.cloneExpr(let_.rest);
-            self.subst.restore(change_start);
-        }
-
-        const kept = try self.arena.allocator().dupe(u32, kept_indices.items);
-        if (kept_params.items.len == 1) {
-            const selected = kept_params.items[0];
-            const selection = LoopExitSelection{
-                .source_arity = source_arity,
-                .kept_indices = kept,
-                .result_ty = selected.ty,
-                .transfer = .break_value,
-            };
-            const selected_loop = try self.cloneLoopWithSelectedExit(selected.ty, loop, selection);
-            const bind = try self.pass.program.addPat(.{ .ty = selected.ty, .data = .{ .bind = selected.local } });
-            return try self.addExpr(.{ .ty = self.pass.program.getExpr(selected_rest).ty, .data = .{ .let_ = .{
-                .bind = bind,
-                .value = selected_loop,
-                .rest = selected_rest,
-                .comptime_site = let_.comptime_site,
-            } } });
-        }
-
-        const result_ty = self.pass.program.getExpr(selected_rest).ty;
-        const target = self.pass.freshJoinPoint();
-        var exit_sites = std.ArrayList(Ast.ExprId).empty;
-        defer exit_sites.deinit(self.pass.allocator);
+        const rest_ty = self.pass.program.getExpr(let_.rest).ty;
+        const result_ty = if (count == 1) params[0].ty else rest_ty;
+        const target = if (count == 1) null else self.pass.freshJoinPoint();
         const selection = LoopExitSelection{
-            .source_arity = source_arity,
+            .source_ty = plan.source_ty,
+            .source_arity = plan.items.len,
+            .kept_types = types,
             .kept_indices = kept,
-            .result_ty = result_ty,
-            .transfer = .{ .jump = .{
-                .target = target,
-                .sites = &exit_sites,
-            } },
+            .transfer = if (target) |join| .{ .jump = .{ .target = join } } else .break_value,
         };
-        const remainder = try self.cloneLoopWithSelectedExit(result_ty, loop, selection);
-
-        if (exit_sites.items.len == 0) return null;
-        if (exit_sites.items.len == 1 and !exprContainsFreeLoopControl(self.pass.program, selected_rest, 0)) {
-            try self.inlineLoopExitAtSite(exit_sites.items[0], kept_params.items, selected_rest, target);
-            return remainder;
+        // Initial values are in the enclosing scope, before result bindings.
+        const loop = try self.cloneLoopWithSelectedExit(result_ty, loop_expr.data.loop_, selection);
+        index = 0;
+        for (plan.items, 0..) |item, source_index| {
+            if (!item.used) continue;
+            const ref = Value{ .expr = try self.addExpr(.{ .ty = item.ty, .data = .{ .local = params[index].local } }) };
+            if (item.local) |local| try self.subst.put(self.pass.program, local, ref);
+            if (tuple_items) |items| items[source_index] = ref.expr;
+            index += 1;
         }
-
-        return try self.addExpr(.{ .ty = result_ty, .data = .{ .join_point = .{
-            .id = target,
-            .params = try self.pass.program.addTypedLocalSpan(kept_params.items),
-            .body = selected_rest,
-            .remainder = remainder,
+        if (plan.aggregate) |local| {
+            if (self.exit_tuple_items.contains(local)) Common.invariant("loop exit selection rebound an active aggregate");
+            try self.exit_tuple_items.put(local, tuple_items.?);
+        }
+        defer if (plan.aggregate) |local| {
+            _ = self.exit_tuple_items.remove(local);
+        };
+        const rest = try self.cloneExpr(let_.rest);
+        if (target) |join| return try self.addExpr(.{ .ty = rest_ty, .data = .{ .join_point = .{
+            .id = join,
+            .params = try self.pass.program.addTypedLocalSpan(params),
+            .body = rest,
+            .remainder = loop,
+        } } });
+        const bind = try self.pass.program.addPat(.{ .ty = result_ty, .data = .{ .bind = params[0].local } });
+        return try self.addExpr(.{ .ty = rest_ty, .data = .{ .let_ = .{
+            .bind = bind,
+            .value = loop,
+            .rest = rest,
+            .comptime_site = let_.comptime_site,
         } } });
     }
 
@@ -6712,99 +6480,35 @@ const Cloner = struct {
         return try self.cloneExpr(body);
     }
 
-    fn recordSelectedLoopExitTy(
-        self: *Cloner,
-        expr: Ast.ExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!void {
-        try self.selected_loop_exit_changes.ensureUnusedCapacity(self.pass.allocator, 1);
-        const entry = try self.selected_loop_exit_tys.getOrPut(expr);
-        if (entry.found_existing) {
-            Common.invariant("selected loop-exit expression received duplicate provenance");
-        }
-        entry.value_ptr.* = ty;
-        self.selected_loop_exit_changes.appendAssumeCapacity(expr);
-    }
-
-    fn recordLoopExitSite(
-        self: *Cloner,
-        sites: *std.ArrayList(Ast.ExprId),
-        expr: Ast.ExprId,
-    ) Allocator.Error!void {
-        try self.loop_exit_site_changes.ensureUnusedCapacity(self.pass.allocator, 1);
-        const previous_len = sites.items.len;
-        try sites.append(self.pass.allocator, expr);
-        self.loop_exit_site_changes.appendAssumeCapacity(.{
-            .sites = sites,
-            .previous_len = previous_len,
-        });
-    }
-
     const LoopAttemptMark = struct {
         analysis: Pass.AnalysisMark,
         callable_workers: usize,
-        selected_loop_exit_changes: usize,
-        loop_exit_site_changes: usize,
         rebased_inline_scope_changes: usize,
         let_case_depth: usize,
-        active_exit_selection: bool,
     };
 
-    fn markLoopAttempt(
-        self: *Cloner,
-        exit_selection: ?LoopExitSelection,
-    ) LoopAttemptMark {
-        var active_exit_selection = exit_selection != null;
-        if (!active_exit_selection) {
-            for (self.loop_exit_stack.items) |selection| {
-                if (selection != null) {
-                    active_exit_selection = true;
-                    break;
-                }
-            }
-        }
-
+    fn markLoopAttempt(self: *Cloner) LoopAttemptMark {
+        std.debug.assert(self.purpose != .loop_exit_selection);
         return .{
             .analysis = self.pass.markAnalysis(),
             .callable_workers = self.pass.callable_workers.count(),
-            .selected_loop_exit_changes = self.selected_loop_exit_changes.items.len,
-            .loop_exit_site_changes = self.loop_exit_site_changes.items.len,
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes.items.len,
             .let_case_depth = self.let_case_builds.items.len,
-            .active_exit_selection = active_exit_selection,
         };
     }
 
     /// Rewind a rejected loop attempt when all of its output is still private to
-    /// that attempt. Callable workers, active let-of-case joins, and selected
-    /// loop exits can retain or mutate references outside the append-only program
-    /// suffix, so those rare attempts keep their unreachable output.
+    /// that attempt. Callable workers and active let-of-case joins can retain
+    /// or mutate references outside the append-only program suffix, so those
+    /// attempts keep their unreachable output. Exit selection never retries.
     fn rewindLoopAttempt(
         self: *Cloner,
         mark: LoopAttemptMark,
     ) void {
         if (mark.let_case_depth != 0 or
-            mark.active_exit_selection or
             self.pass.callable_workers.count() != mark.callable_workers)
         {
             return;
-        }
-
-        while (self.loop_exit_site_changes.items.len > mark.loop_exit_site_changes) {
-            const change = self.loop_exit_site_changes.pop() orelse
-                Common.invariant("loop exit-site change log underflow");
-            if (change.sites.items.len < change.previous_len) {
-                Common.invariant("loop exit-site list shrank before attempt rollback");
-            }
-            change.sites.shrinkRetainingCapacity(change.previous_len);
-        }
-
-        while (self.selected_loop_exit_changes.items.len > mark.selected_loop_exit_changes) {
-            const expr = self.selected_loop_exit_changes.pop() orelse
-                Common.invariant("selected loop-exit change log underflow");
-            if (!self.selected_loop_exit_tys.remove(expr)) {
-                Common.invariant("selected loop-exit change had no provenance entry");
-            }
         }
 
         while (self.rebased_inline_scope_changes.items.len > mark.rebased_inline_scope_changes) {
@@ -6825,23 +6529,6 @@ const Cloner = struct {
         return self.loop_exit_stack.items[self.loop_exit_stack.items.len - 1];
     }
 
-    /// The live site list of the active selection that owns this jump target,
-    /// if any. Exit-transfer jumps are minted in the clone's own id space, so a
-    /// jump to a selection's target can only be one of that selection's sites
-    /// being cloned again.
-    fn selectedExitJumpSites(self: *Cloner, target: Ast.JoinPointId) ?*std.ArrayList(Ast.ExprId) {
-        var index = self.loop_exit_stack.items.len;
-        while (index > 0) {
-            index -= 1;
-            const selection = self.loop_exit_stack.items[index] orelse continue;
-            switch (selection.transfer) {
-                .break_value => {},
-                .jump => |jump_transfer| if (jump_transfer.target == target) return jump_transfer.sites,
-            }
-        }
-        return null;
-    }
-
     fn cloneSelectedLoopExit(
         self: *Cloner,
         break_ty: Type.TypeId,
@@ -6849,10 +6536,30 @@ const Cloner = struct {
         selection: LoopExitSelection,
     ) Common.LowerError!Ast.ExprId {
         var bindings: BindingChain = .{};
-        const exit_value = try self.cloneExprValueDemandingShapeInto(value_expr, &bindings);
-        const tuple = tupleFromValue(exit_value) orelse Common.invariant("selected loop exit did not carry compiler-generated tuple state");
-        if (tuple.items.len != selection.source_arity) {
-            Common.invariant("selected loop exit tuple arity differed from its source ABI");
+        // Exit selection discards tuple construction, never strict work. Name every
+        // opaque leaf, including unselected components, in source order.
+        const reusable = try self.cloneExprValueDemandingShapeInto(value_expr, &bindings);
+        const args = try self.pass.allocator.alloc(Ast.ExprId, selection.kept_indices.len);
+        defer self.pass.allocator.free(args);
+        if (reusable == .tuple and reusable.tuple.ty == selection.source_ty) {
+            if (reusable.tuple.items.len != selection.source_arity) {
+                Common.invariant("selected loop exit tuple arity differed from its source ABI");
+            }
+            for (selection.kept_indices, args) |index, *out| out.* = try self.materialize(reusable.tuple.items[index]);
+        } else {
+            // Runtime tuples and typed boundaries have exact typed tuple reads
+            // too. Keep their runtime representation boundary and
+            // evaluate the producer once, without building symbolic dead items.
+            const receiver = try self.materialize(try self.makeReusableForMatch(
+                .{ .expr = try self.materialize(reusable) },
+                &bindings,
+            ));
+            for (selection.kept_indices, selection.kept_types, args) |index, ty, *out| {
+                out.* = try self.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{
+                    .tuple = receiver,
+                    .elem_index = index,
+                } } });
+            }
         }
 
         const projected = switch (selection.transfer) {
@@ -6860,15 +6567,11 @@ const Cloner = struct {
                 if (selection.kept_indices.len != 1) Common.invariant("direct loop exit selection did not contain one value");
                 const projected_expr = try self.addExpr(.{
                     .ty = break_ty,
-                    .data = .{ .break_ = try self.materialize(tuple.items[selection.kept_indices[0]]) },
+                    .data = .{ .break_ = args[0] },
                 });
-                try self.recordSelectedLoopExitTy(projected_expr, selection.result_ty);
                 break :blk projected_expr;
             },
             .jump => |jump_transfer| blk: {
-                const args = try self.pass.allocator.alloc(Ast.ExprId, selection.kept_indices.len);
-                defer self.pass.allocator.free(args);
-                for (selection.kept_indices, args) |index, *out| out.* = try self.materialize(tuple.items[index]);
                 const jump = try self.addExpr(.{
                     .ty = break_ty,
                     .data = .{ .jump = .{
@@ -6876,38 +6579,11 @@ const Cloner = struct {
                         .args = try self.pass.program.addExprSpan(args),
                     } },
                 });
-                try self.recordLoopExitSite(jump_transfer.sites, jump);
                 break :blk jump;
             },
         };
 
         return try self.wrapBindings(bindings, projected);
-    }
-
-    fn inlineLoopExitAtSite(
-        self: *Cloner,
-        site: Ast.ExprId,
-        params: []const Ast.TypedLocal,
-        continuation: Ast.ExprId,
-        target: Ast.JoinPointId,
-    ) Common.LowerError!void {
-        const site_data = self.pass.program.getExpr(site).data;
-        if (site_data != .jump) Common.invariant("loop exit site was not a jump");
-        const jump = site_data.jump;
-        if (jump.target != target) Common.invariant("loop exit site targeted a different continuation");
-        const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(jump.args));
-        defer self.pass.allocator.free(args);
-        if (args.len != params.len) Common.invariant("loop exit argument count differed from continuation parameter count");
-
-        const change_start = self.subst.watermark();
-        defer self.subst.restore(change_start);
-        for (params, args) |param, arg| try self.subst.put(self.pass.program, param.local, .{ .expr = arg });
-        const body = try self.cloneExpr(continuation);
-        // The site is a diverging loop exit: lexically-following loop code is
-        // only dead while it stays one. Inlining the continuation bare would
-        // fall through into that code and discard the result, so the site
-        // becomes a break carrying the continuation's value out of the loop.
-        self.pass.program.setExprData(site, .{ .break_ = body });
     }
 
     /// Dissolve a binding while retaining every opaque leaf in the strict
@@ -7965,6 +7641,10 @@ const Cloner = struct {
         for (params) |param| try self.pinSourceLocal(param.local);
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingShapeInto(initial, bindings);
+            if (self.purpose == .loop_exit_selection) {
+                shapes[index] = .{ .any = params[index].ty };
+                continue;
+            }
             switch (try self.pass.shapeFromValue(values[index])) {
                 .proven => |shape| {
                     shapes[index] = shape;
@@ -8039,9 +7719,9 @@ const Cloner = struct {
         // Shape splitting is proved only by the local `continue` edges below.
         // A `return` exits the enclosing function outside that fixed point, so
         // a loop containing one must retain its whole runtime slots.
-        if (exprContainsReturn(self.pass.program, loop.body)) has_constructor = false;
+        if (has_constructor and exprContainsReturn(self.pass.program, loop.body)) has_constructor = false;
         while (has_constructor) {
-            const attempt_mark = self.markLoopAttempt(exit_selection);
+            const attempt_mark = self.markLoopAttempt();
 
             var new_params = std.ArrayList(Ast.TypedLocal).empty;
             defer new_params.deinit(self.pass.allocator);
@@ -8233,7 +7913,80 @@ const Cloner = struct {
         return final;
     }
 
+    /// Exit selection traverses a statement span once. A selected binding owns
+    /// the remaining source span directly, avoiding copied suffixes and the
+    /// general block cloner's speculative normalization/re-cloning.
+    fn cloneExitBlock(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Ast.ExprId {
+        var bindings: BindingChain = .{};
+        const value = try self.cloneExitBlockValue(ty, block, &bindings);
+        return try self.wrapBindings(bindings, try self.materialize(value));
+    }
+
+    fn cloneExitBlockValue(self: *Cloner, ty: Type.TypeId, block: anytype, bindings: *BindingChain) Common.LowerError!Value {
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
+        var block_bindings: BindingChain = .{};
+        var statements = std.ArrayList(Ast.StmtId).empty;
+        defer statements.deinit(self.pass.allocator);
+        var final: ?Ast.ExprId = null;
+        for (0..block.statements.len) |index| {
+            const stmt_id = GuardedList.at(self.pass.program.stmtSpan(block.statements), index);
+            const stmt = self.pass.program.getStmt(stmt_id);
+            if (stmt == .expr) {
+                _ = try self.cloneExprValueDemandingShapeInto(stmt.expr, &block_bindings);
+                continue;
+            }
+            if (stmt == .let_ and !stmt.let_.recursive) {
+                if (self.exit_demands) |demands| {
+                    if (demands.get(stmt.let_.pat) != null) {
+                        const tail = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
+                            .statements = .{
+                                .start = block.statements.start + @as(u32, @intCast(index)) + 1,
+                                .len = block.statements.len - @as(u32, @intCast(index)) - 1,
+                            },
+                            .final_expr = block.final_expr,
+                        } } });
+                        final = (try self.loopWithSelectedExitValues(.{
+                            .bind = stmt.let_.pat,
+                            .value = stmt.let_.value,
+                            .rest = tail,
+                            .comptime_site = stmt.let_.comptime_site,
+                        })) orelse Common.invariant("planned loop selection was not consumed");
+                        break;
+                    }
+                }
+            }
+            const cloned = try self.cloneStmt(stmt_id);
+            block_bindings.appendChain(cloned.bindings);
+            if (cloned.stmt) |out| {
+                if (self.pass.program.getStmt(out) == .let_) {
+                    try block_bindings.appendStatement(self.arena.allocator(), out);
+                } else {
+                    try self.appendBindingStmts(block_bindings, &statements);
+                    block_bindings = .{};
+                    try statements.append(self.pass.allocator, out);
+                }
+            }
+        }
+        const value = if (final) |expr| Value{ .expr = expr } else try self.cloneExprValueInto(block.final_expr, &block_bindings);
+        if (statements.items.len != 0) {
+            try self.appendBindingStmts(block_bindings, &statements);
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
+                .statements = try self.pass.program.addStmtSpan(statements.items),
+                .final_expr = try self.materialize(value),
+            } } }) };
+        }
+        // A terminating statement owns its unreachable final marker. Keep
+        // that block intact instead of exposing the marker as an ordinary value.
+        if (final == null and self.pass.program.getExpr(block.final_expr).data == .@"unreachable") {
+            return .{ .expr = try self.wrapBindings(block_bindings, try self.materialize(value)) };
+        }
+        bindings.appendChain(block_bindings);
+        return value;
+    }
+
     fn cloneBlock(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Ast.ExprId {
+        if (self.purpose == .loop_exit_selection) return try self.cloneExitBlock(ty, block);
         const change_start = self.subst.watermark();
         defer self.subst.restore(change_start);
 
@@ -8680,7 +8433,19 @@ const Cloner = struct {
         return try self.wrapBindings(bindings, try self.materialize(value));
     }
 
+    /// A narrowed aggregate binding has only these source-proven field uses.
+    /// It has no runtime whole-tuple local and no fabricated dead components.
+    fn selectedTupleItem(self: *Cloner, access: anytype) ?Ast.ExprId {
+        if (self.purpose != .loop_exit_selection) return null;
+        const source = self.pass.program.getExpr(access.tuple).data;
+        if (source != .local) return null;
+        const items = self.exit_tuple_items.get(source.local) orelse return null;
+        if (access.elem_index >= items.len) Common.invariant("selected tuple access exceeded its source type");
+        return items[access.elem_index] orelse Common.invariant("continuation read an unselected tuple item");
+    }
+
     fn cloneTupleAccess(self: *Cloner, original_expr: Ast.ExprId, ty: Type.TypeId, access: anytype) Common.LowerError!Ast.ExprId {
+        if (self.selectedTupleItem(access)) |item| return item;
         const receiver = try self.cloneExprValueDemandingShape(access.tuple);
         if (itemFromValue(receiver.value, access.elem_index)) |value| {
             return try self.wrapBindings(receiver.bindings, try self.materialize(value));
@@ -15322,5 +15087,252 @@ test "SpecConstr loop projection scan is stack safe on deep sequential expressio
     }
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    try std.testing.expect(!try pass.bodyHasProjectableLoopResult(body));
+    var demand = ExitDemand.Inventory.init(allocator, &program);
+    defer demand.deinit();
+    try demand.collect(body);
+    try std.testing.expect(!demand.hasSelection());
+}
+
+// These fixtures exercise the exit ABI independently of front-end inlining.
+fn testExitProducer(program: *Ast.Program, ty: Type.TypeId, symbol: u32) std.mem.Allocator.Error!Ast.ExprId {
+    const fn_id = try program.addFn(.{
+        .symbol = @enumFromInt(symbol),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .hosted,
+        .ret = ty,
+    });
+    return program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = fn_id }, .args = .empty() } } });
+}
+
+test "loop exit projection evaluates an opaque producer once for multiple fields" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.{ .primitive = .u8 });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty, ty }) });
+    const producer = try testExitProducer(&program, tuple_ty, 1);
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForLoopExitSelection(&pass);
+    defer cloner.deinit();
+    const exit_join = pass.freshJoinPoint();
+    const result = try cloner.cloneSelectedLoopExit(ty, producer, .{
+        .source_ty = tuple_ty,
+        .source_arity = 3,
+        .kept_indices = &.{ 2, 0 },
+        .kept_types = &.{ ty, ty },
+        .transfer = .{ .jump = .{
+            .target = exit_join,
+        } },
+    });
+    const block = program.getExpr(result).data.block;
+    try std.testing.expectEqual(@as(u32, 1), block.statements.len);
+    const binding = program.getStmt(GuardedList.at(program.stmtSpan(block.statements), 0)).let_;
+    try std.testing.expectEqualDeep(program.getExpr(producer).data.call_proc.callee, program.getExpr(binding.value).data.call_proc.callee);
+    try std.testing.expectEqual(@as(u32, 0), program.getExpr(binding.value).data.call_proc.args.len);
+    const local = program.getPat(binding.pat).data.bind;
+    const jump = program.getExpr(block.final_expr).data.jump;
+    try std.testing.expectEqual(exit_join, jump.target);
+    try std.testing.expectEqual(@as(u32, 2), jump.args.len);
+    for ([_]u32{ 2, 0 }, 0..) |field, i| {
+        const read = program.getExpr(GuardedList.at(program.exprSpan(jump.args), i));
+        try std.testing.expectEqual(ty, read.ty);
+        try std.testing.expectEqual(field, read.data.tuple_access.elem_index);
+        try std.testing.expectEqual(local, program.getExpr(read.data.tuple_access.tuple).data.local);
+    }
+}
+
+test "loop exit projection preserves discarded strict components in evaluation order" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.{ .primitive = .u8 });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty, ty }) });
+    const producers = [_]Ast.ExprId{
+        try testExitProducer(&program, ty, 1),
+        try testExitProducer(&program, ty, 2),
+        try testExitProducer(&program, ty, 3),
+    };
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&producers) } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForLoopExitSelection(&pass);
+    defer cloner.deinit();
+    const result = try cloner.cloneSelectedLoopExit(ty, tuple, .{
+        .source_ty = tuple_ty,
+        .source_arity = 3,
+        .kept_indices = &.{1},
+        .kept_types = &.{ty},
+        .transfer = .break_value,
+    });
+    const block = program.getExpr(result).data.block;
+    try std.testing.expectEqual(@as(u32, 3), block.statements.len);
+    for (producers, 0..) |producer, i| {
+        const binding = program.getStmt(GuardedList.at(program.stmtSpan(block.statements), i)).let_;
+        try std.testing.expectEqualDeep(program.getExpr(producer).data.call_proc.callee, program.getExpr(binding.value).data.call_proc.callee);
+        try std.testing.expectEqual(@as(u32, 0), program.getExpr(binding.value).data.call_proc.args.len);
+    }
+    const selected = program.getStmt(GuardedList.at(program.stmtSpan(block.statements), 1)).let_;
+    const value = program.getExpr(block.final_expr).data.break_.?;
+    try std.testing.expectEqual(program.getPat(selected.pat).data.bind, program.getExpr(value).data.local);
+}
+
+test "loop exit demand is linear in tuple width and rejects whole tuple uses" {
+    const allocator = std.testing.allocator;
+    for ([_]usize{ 8, 128 }) |width| {
+        var program = emptyLiftedProgramForTest(allocator);
+        defer program.deinit();
+        const ty = try program.types.add(.zst);
+        const tys = try allocator.alloc(Type.TypeId, width);
+        defer allocator.free(tys);
+        @memset(tys, ty);
+        const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(tys) });
+        const input = try program.addLocal(@enumFromInt(1), tuple_ty);
+        const ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = input } });
+        const exit = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .break_ = ref } });
+        const loop = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .loop_ = .{
+            .params = .empty(),
+            .initial_values = .empty(),
+            .body = exit,
+        } } });
+        const pats = try allocator.alloc(Ast.PatId, width);
+        defer allocator.free(pats);
+        for (pats, 0..) |*pat, i| pat.* = try program.addPat(.{
+            .ty = ty,
+            .data = .{ .bind = try program.addLocal(@enumFromInt(@as(u32, @intCast(i)) + 2), ty) },
+        });
+        const pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(pats) } });
+        const uses = try allocator.alloc(Ast.ExprId, width);
+        defer allocator.free(uses);
+        for (uses) |*use| use.* = try program.addExpr(.{ .ty = ty, .data = .{ .local = program.getPat(pats[0]).data.bind } });
+        const rest = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(uses) } });
+        const body = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .let_ = .{ .bind = pat, .value = loop, .rest = rest } } });
+        var demand = ExitDemand.Inventory.init(allocator, &program);
+        defer demand.deinit();
+        try demand.collect(body);
+        try std.testing.expect(demand.get(pat) != null);
+        // One body walk, independent of how many locals the pattern defines.
+        try std.testing.expectEqual(width + 5, demand.expr_visits);
+
+        const aggregate = try program.addLocal(@enumFromInt(@as(u32, @intCast(width)) + 2), tuple_ty);
+        const aggregate_pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .bind = aggregate } });
+        const aggregate_ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = aggregate } });
+        const whole_use = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .let_ = .{
+            .bind = aggregate_pat,
+            .value = loop,
+            .rest = aggregate_ref,
+        } } });
+        var whole = ExitDemand.Inventory.init(allocator, &program);
+        defer whole.deinit();
+        try whole.collect(whole_use);
+        try std.testing.expect(!whole.hasSelection());
+    }
+}
+
+test "loop exit projection retains typed boundaries around known tuples" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.zst);
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
+    const unit = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{ unit, unit }) } });
+    const boundary = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .typed_boundary = .{ .value = tuple } } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForLoopExitSelection(&pass);
+    defer cloner.deinit();
+    const result = try cloner.cloneSelectedLoopExit(ty, boundary, .{
+        .source_ty = tuple_ty,
+        .source_arity = 2,
+        .kept_indices = &.{0},
+        .kept_types = &.{ty},
+        .transfer = .break_value,
+    });
+    const block = program.getExpr(result).data.block;
+    try std.testing.expectEqual(@as(u32, 1), block.statements.len);
+    const binding = program.getStmt(GuardedList.at(program.stmtSpan(block.statements), 0)).let_;
+    try std.testing.expect(program.getExpr(binding.value).data == .typed_boundary);
+    const read = program.getExpr(program.getExpr(block.final_expr).data.break_.?).data.tuple_access;
+    try std.testing.expectEqual(program.getPat(binding.pat).data.bind, program.getExpr(read.tuple).data.local);
+}
+
+test "loop exit projection preserves nested exits and established tuple parameters" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.zst);
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
+    const unit = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{ unit, unit }) } });
+    const param = try program.addLocal(@enumFromInt(1), tuple_ty);
+    const param_ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = param } });
+    const nested_exit = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .break_ = tuple } });
+    const nested = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .loop_ = .{
+        .params = .empty(),
+        .initial_values = .empty(),
+        .body = nested_exit,
+    } } });
+    const statement = try program.addStmt(.{ .expr = nested });
+    const exit = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .break_ = param_ref } });
+    const body = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{statement}),
+        .final_expr = exit,
+    } } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForLoopExitSelection(&pass);
+    defer cloner.deinit();
+    const result = try cloner.cloneLoopWithSelectedExit(ty, Mono.LoopExpr{
+        .params = try program.addTypedLocalSpan(&.{.{ .local = param, .ty = tuple_ty }}),
+        .initial_values = try program.addExprSpan(&.{tuple}),
+        .body = body,
+    }, .{ .source_ty = tuple_ty, .source_arity = 2, .kept_indices = &.{0}, .kept_types = &.{ty}, .transfer = .break_value });
+    const loop = program.getExpr(result).data.loop_;
+    try std.testing.expectEqual(@as(u32, 1), loop.params.len);
+    try std.testing.expectEqual(tuple_ty, GuardedList.at(program.typedLocalSpan(loop.params), 0).ty);
+    const block = program.getExpr(loop.body).data.block;
+    const nested_out = program.getExpr(program.getStmt(GuardedList.at(program.stmtSpan(block.statements), 0)).let_.value).data.loop_;
+    try std.testing.expectEqual(tuple_ty, program.getExpr(program.getExpr(nested_out.body).data.break_.?).ty);
+    const selected = program.getExpr(program.getExpr(block.final_expr).data.break_.?);
+    try std.testing.expectEqual(ty, selected.ty);
+    try std.testing.expectEqual(@as(u32, 0), selected.data.tuple_access.elem_index);
+    try std.testing.expectEqual(GuardedList.at(program.typedLocalSpan(loop.params), 0).local, program.getExpr(selected.data.tuple_access.tuple).data.local);
+}
+
+test "loop exit projection orders an earlier opaque item before a later block chain" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.zst);
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
+    const calls = [_]Ast.ExprId{
+        try testExitProducer(&program, ty, 1),
+        try testExitProducer(&program, ty, 2),
+        try testExitProducer(&program, ty, 3),
+    };
+    const stmt = try program.addStmt(.{ .expr = calls[1] });
+    const block = try program.addExpr(.{ .ty = ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{stmt}),
+        .final_expr = calls[2],
+    } } });
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{ calls[0], block }) } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForLoopExitSelection(&pass);
+    defer cloner.deinit();
+    const result = try cloner.cloneSelectedLoopExit(ty, tuple, .{
+        .source_ty = tuple_ty,
+        .source_arity = 2,
+        .kept_indices = &.{1},
+        .kept_types = &.{ty},
+        .transfer = .break_value,
+    });
+    const out = program.getExpr(result).data.block;
+    try std.testing.expectEqual(@as(u32, 3), out.statements.len);
+    for (calls, 0..) |call, i| {
+        const binding = program.getStmt(GuardedList.at(program.stmtSpan(out.statements), i)).let_;
+        try std.testing.expectEqualDeep(program.getExpr(call).data.call_proc.callee, program.getExpr(binding.value).data.call_proc.callee);
+    }
 }

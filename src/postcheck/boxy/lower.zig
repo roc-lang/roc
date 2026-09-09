@@ -6611,7 +6611,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated record encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated encode_record call did not have three arguments");
 
@@ -6737,7 +6737,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated sequence encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated sequence encoder call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
@@ -17982,7 +17982,10 @@ const ProcBodyBuilder = struct {
         defer descriptor_snapshot.deinit(self.parent.allocator);
         defer self.restoreDescriptorBindings(descriptor_snapshot);
 
-        const match = self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
+        const match: DictionaryMethodMatch = if (planned.scheme_requirement) |requirement| .{
+            .requirement = requirement,
+            .slot = self.parent.plan.dictionaries.items[@intFromEnum(requirement)].slot,
+        } else self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a matching dictionary requirement");
         const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a bound dictionary local");

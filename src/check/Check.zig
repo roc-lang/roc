@@ -429,6 +429,9 @@ pending_predeclared_scheme_uses: std.ArrayListUnmanaged(PendingPredeclaredScheme
 /// requirements not structurally reachable from the type root. Requirements
 /// are copied under the same substitution as the root at every use.
 type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty,
+/// Local schemes leave the solver's active scope before module publication.
+/// Preserve their codec contracts for checked local-procedure bodies.
+retired_binding_scheme_codec_requirements: std.ArrayListUnmanaged(ModuleEnv.BindingSchemeCodecRequirement) = .empty,
 /// Active scheme lookup by stable source vars. Union-find representatives are
 /// deliberately not identities: unification may replace one at any time. Each
 /// binding explicitly registers its expression, pattern, and definition vars
@@ -2471,6 +2474,8 @@ fn initAssumePrepared(
     // A checked environment can be deserialized and checked again. Initialize
     // its checker-local TypeScheme index from the producer-authored codec table
     // before any source checking or finalization can consume it.
+    var synthetic_binding_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    errdefer synthetic_binding_schemes.deinit(gpa);
     var rehydrated_type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty;
     errdefer {
         for (rehydrated_type_schemes.items) |*scheme| {
@@ -2485,6 +2490,7 @@ fn initAssumePrepared(
         const scheme_root: Var = @enumFromInt(serialized_requirement.scheme_root);
         const indexed_var: Var = @enumFromInt(serialized_requirement.node_idx);
         const receiver_var: Var = @enumFromInt(serialized_requirement.receiver_var);
+        if (serialized_requirement.is_synthetic != 0) try synthetic_binding_schemes.put(gpa, indexed_var, {});
         std.debug.assert(@intFromEnum(scheme_root) < types.len());
         std.debug.assert(@intFromEnum(indexed_var) < types.len());
         std.debug.assert(@intFromEnum(receiver_var) < types.len());
@@ -2523,7 +2529,7 @@ fn initAssumePrepared(
             .receiver_var = receiver_var,
             .constraint = constraint,
             .deferred_generated_codec = true,
-            .pristine_codec_is_scheme_only = true,
+            .pristine_codec_is_scheme_only = serialized_requirement.requires_instantiation != 0,
             .failure_expr = null,
             .structural_origin = .{
                 .receiver_var = receiver_var,
@@ -2618,6 +2624,7 @@ fn initAssumePrepared(
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .binding_scheme_nodes = binding_scheme_nodes,
+        .synthetic_binding_schemes = synthetic_binding_schemes,
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_reassignments = .empty,
@@ -2723,6 +2730,7 @@ pub fn deinit(self: *Self) void {
     self.type_scheme_by_var.deinit(self.gpa);
     self.binding_scheme_nodes.deinit(self.gpa);
     self.synthetic_binding_schemes.deinit(self.gpa);
+    self.retired_binding_scheme_codec_requirements.deinit(self.gpa);
     self.binding_scheme_classification_seen.deinit(self.gpa);
     self.binding_scheme_classification_stack.deinit(self.gpa);
     self.settled_static_dispatch_constraint_fns.deinit(self.gpa);
@@ -8810,7 +8818,13 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
         const intrinsic = (root.body == .pattern_error or !self.hoistExprInvalidated(root.expr)) and try self.hoistedRootIsIntrinsicallyKept(root);
-        const deps = intrinsic and (root.body == .pattern_error or try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root.*)));
+        // Top-level extractions define names; they are not optional hoists.
+        // Like ordinary top-level constants, their complete checked bodies
+        // enter constant/callable publication even when runtime-body hoisting
+        // would reject an expect, dbg, loop, or mutable intermediate.
+        const deps = intrinsic and (self.selectedHoistedRootIsTopLevel(root.*) or
+            root.body == .pattern_error or
+            try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle));
         if (!intrinsic) continue;
         if (!deps) continue;
 
@@ -8959,8 +8973,11 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
             std.debug.assert(self.cir.store.getExpr(root.expr) == .e_runtime_error);
             continue;
         }
+        // Required definitions use ordinary top-level evaluation rules, not
+        // the optional-hoist dependency predicate.
+        if (self.selectedHoistedRootIsTopLevel(root)) continue;
         keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root))) {
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) {
             hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
         }
     }
@@ -9163,11 +9180,6 @@ const HoistedCallableState = enum {
 const HoistedDependencyContext = struct {
     bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
     callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
-    /// Whether the root materializes a top-level binding. A lambda inside a
-    /// top-level value is part of that value, like the lambda in
-    /// `r = { g: |x| x }`, whereas a lambda inside an expression hoisted out
-    /// of a function body would need that body's environment.
-    top_level_value: bool = false,
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
@@ -9264,9 +9276,8 @@ fn hoistedRootDependenciesAreKept(
     self: *Self,
     expr: CIR.Expr.Idx,
     keep_oracle: *const HoistedRootKeepOracle,
-    top_level_value: bool,
 ) Allocator.Error!bool {
-    var context = HoistedDependencyContext{ .top_level_value = top_level_value };
+    var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
     return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
 }
@@ -9296,20 +9307,6 @@ fn hoistedRootDependenciesAreKeptInternal(
 
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
-        // A lambda's body is not walked: a top-level binder is globally
-        // resolvable, so a lambda inside a top-level value captures only the
-        // block-local bindings of that value's own expression, and those are
-        // in `context` (staging treats lambdas as leaves, so a capture never
-        // has a staged dependency root to consult).
-        .e_lambda => context.top_level_value,
-        .e_closure => |closure| blk: {
-            if (!context.top_level_value) break :blk false;
-            for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
-                const capture = self.cir.store.getCapture(capture_idx);
-                if (!self.patternIsTopLevel(capture.pattern_idx) and !context.contains(capture.pattern_idx)) break :blk false;
-            }
-            break :blk true;
-        },
         .e_lookup_external,
         .e_lookup_associated_local,
         .e_lookup_associated,
@@ -9331,6 +9328,8 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_runtime_error,
         => true,
         .e_lookup_required,
+        .e_lambda,
+        .e_closure,
         .e_ellipsis,
         .e_anno_only,
         .e_derived_method,
@@ -27824,6 +27823,10 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
             // sibling module-level group checked one rank deeper inside this
             // boundary (resolving a pending dispatch target) owns live
             // module-level schemes that this boundary must leave intact.
+            for (scheme.dispatch_requirements.items) |requirement| {
+                if (requirement.deferred_generated_codec and !self.staticDispatchConstraintIsInactive(requirement.constraint))
+                    try self.publishBindingSchemeCodecRequirement(scheme, requirement, .retired);
+            }
             self.removeTypeSchemeAt(scheme_idx);
             continue;
         }
@@ -27875,18 +27878,31 @@ fn publishBindingSchemeCodecRequirement(
     self: *Self,
     scheme: *const TypeScheme,
     requirement: SchemeDispatchRequirement,
+    destination: enum { active, retired },
 ) Allocator.Error!void {
     const range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
     const constraint_index: u32 = @intFromEnum(range.start);
     for (scheme.indexed_vars.items) |indexed_var| {
         const raw_var: usize = @intFromEnum(indexed_var);
-        if (raw_var >= self.binding_scheme_nodes.bit_length) continue;
-        if (!self.binding_scheme_nodes.isSet(raw_var)) continue;
+        if (!self.isBindingSchemeVar(indexed_var)) continue;
+        if (destination == .retired) {
+            try self.retired_binding_scheme_codec_requirements.append(self.gpa, .{
+                .node_idx = @intCast(raw_var),
+                .scheme_root = @intFromEnum(scheme.root_var),
+                .receiver_var = @intFromEnum(requirement.receiver_var),
+                .constraint_index = constraint_index,
+                .requires_instantiation = @intFromBool(requirement.pristine_codec_is_scheme_only),
+                .is_synthetic = @intFromBool(self.synthetic_binding_schemes.contains(indexed_var)),
+            });
+            continue;
+        }
         try self.cir.recordBindingSchemeCodecRequirement(
             @enumFromInt(raw_var),
             scheme.root_var,
             requirement.receiver_var,
             constraint_index,
+            requirement.pristine_codec_is_scheme_only,
+            self.synthetic_binding_schemes.contains(indexed_var),
         );
     }
 }
@@ -27901,6 +27917,16 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
     self.retireResolvedTypeSchemeRequirements();
 
     self.cir.binding_scheme_codec_requirements.items.clearRetainingCapacity();
+    for (self.retired_binding_scheme_codec_requirements.items) |requirement| {
+        try self.cir.recordBindingSchemeCodecRequirement(
+            @enumFromInt(requirement.node_idx),
+            @enumFromInt(requirement.scheme_root),
+            @enumFromInt(requirement.receiver_var),
+            requirement.constraint_index,
+            requirement.requires_instantiation != 0,
+            requirement.is_synthetic != 0,
+        );
+    }
 
     for (self.type_schemes.items) |scheme| {
         const scheme_is_err = self.types.resolveVar(scheme.root_var).desc.content == .err;
@@ -27908,7 +27934,7 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
             if (self.staticDispatchConstraintIsInactive(requirement.constraint)) continue;
 
             if (requirement.deferred_generated_codec) {
-                try self.publishBindingSchemeCodecRequirement(&scheme, requirement);
+                try self.publishBindingSchemeCodecRequirement(&scheme, requirement, .active);
                 continue;
             }
 

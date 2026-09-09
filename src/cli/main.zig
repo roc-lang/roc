@@ -8388,18 +8388,19 @@ fn nativeBuildEntrypoints(
         unreachable;
     }
 
-    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
-    errdefer entrypoints.deinit(ctx.gpa);
+    const entrypoints = try ctx.gpa.alloc(backend.Entrypoint, root_procs.len);
+    errdefer ctx.gpa.free(entrypoints);
 
-    for (root_procs, root_metadata) |root_proc, metadata| {
-        if (metadata.abi != .platform or metadata.exposure != .exported) continue;
+    for (root_procs, root_metadata, entrypoints) |root_proc, metadata, *entrypoint| {
+        std.debug.assert(metadata.kind == .provided_export);
+        std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("native build invariant violated: missing root request order {d}", .{metadata.order});
             }
             unreachable;
         };
-        if (root.kind != .provided_export) continue;
+        std.debug.assert(root.kind == .provided_export);
 
         const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
         const arg_locals = lowered.lir_result.store.getLocalSpan(proc_spec.args);
@@ -8409,22 +8410,21 @@ fn nativeBuildEntrypoints(
             arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
         }
 
-        try entrypoints.append(ctx.gpa, .{
-            .symbol_name = try nativeEntrypointSymbolName(ctx, root_artifact, root),
+        entrypoint.* = .{
+            .symbol_name = nativeEntrypointSymbolName(root_artifact, root),
             .proc = root_proc,
             .arg_layouts = arg_layouts,
             .ret_layout = proc_spec.ret_layout,
-        });
+        };
     }
 
-    return try entrypoints.toOwnedSlice(ctx.gpa);
+    return entrypoints;
 }
 
 fn nativeEntrypointSymbolName(
-    ctx: *CliCtx,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
-) Allocator.Error![]const u8 {
+) []const u8 {
     const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
@@ -8434,7 +8434,7 @@ fn nativeEntrypointSymbolName(
         }
         unreachable;
     };
-    return try ctx.arena.dupe(u8, entrypoint_name);
+    return entrypoint_name;
 }
 
 const PlatformLinkInputs = struct {
@@ -11769,10 +11769,10 @@ fn inlineExpectModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineExpe
 
 /// Which checked root definitions become LIR roots for a backend.
 const CheckedLirRoots = union(enum) {
-    /// Provided exports plus platform-required bindings: LIR consumed by host
+    /// Provided exports: LIR consumed by host
     /// shims and interpreters (run, embedded builds, hot reload, glue).
     platform_entrypoints: PlatformEntrypointArtifact,
-    /// Provided exports plus platform-required bindings, with static data
+    /// Provided exports, with static data
     /// exports materialized: LIR for linked outputs (native/LLVM builds).
     linked_output,
     /// Pre-selected expect/test roots with their plan metadata (roc test).
