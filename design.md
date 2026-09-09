@@ -5149,6 +5149,13 @@ checker records distinct checked types for the propagated value and the
 function return; post-check lowering consumes its existing explicit return
 boundary and must not reconstruct or widen either type.
 
+Monotype dispatches on the checked return context: a `try_suffix` return lowers
+its value at the source's checked type and retains the active specialization's
+return cell as the boundary target. Constructor preparation must not propagate
+that wider target into the source error payload. Ordinary returns continue to
+lower with the active return cell as their expected type. Lambda Solved and LIR
+consume the retained source/target relation to convert the returned value.
+
 The accepted side is pinned by
 `test/snapshots/issue/issue_11097_bare_and_wrapped_try_on_shared_error_var.md`
 and `test/snapshots/issue/issue_11097_try_return_composition_controls.md`,
@@ -7499,6 +7506,28 @@ durable specialization record, and contributes its own checked relations.
 Specialization body scheduling may deduplicate global deferred work, but never
 authorizes importing a checked node or root-owned graph state from another
 root.
+
+Instantiation can expose an overlapping tag through a generic extension even
+when the checked call's row was already normalized. Graph row composition
+preserves the checked unifier's head-before-extension precedence: the first
+occurrence supplies the tag's payload and checked-label provenance. Composition
+adds no payload equality; ordinary relations between two rows still relate every
+shared tag's payloads. This is representation normalization of checked data, not
+a relaxation of settled checked-row validation or a new typing rule.
+
+Graph tag heads are unique; row readers establish label order on first use and
+retain that representation-only state in the row. Inserting unrelated graph
+nodes does no sorting work. Flattening gathers an extension chain once, stably
+sorts the combined span, retains its first occurrences, and compresses the root
+while retaining the live residual tail.
+It never repeatedly copies a growing prefix for each chain link. Terminal rows
+need no scratch allocation, ordinary row unification merges sorted spans in one
+pass, and sealing copies already sorted tags directly into durable storage.
+Provisional views use the same normalization without solving new constraints;
+the sealed type store continues to reject duplicate labels.
+Checked-to-specialized interface relations normalize both complete tag rows
+before matching their heads and residual extensions: relating an earlier
+function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.
