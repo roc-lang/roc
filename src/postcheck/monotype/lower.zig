@@ -6002,12 +6002,7 @@ const Builder = struct {
         // still be joined by later body/evidence relations, so it must not be
         // promoted to a durable TypeId before the single final seal.
         var selection = DraftOpenCandidateSelection{};
-        const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
-            try source_ctx.activeTypeFromNode(request_fn_node)
-        else if (try source_ctx.graph.typeIsSpecializationDefaultable(request_fn_node))
-            try source_ctx.graph.specializationTypeViewForNode(request_fn_node)
-        else
-            null;
+        const resolved_request_ty: ?Type.TypeId = try source_ctx.specializationLookupTypeForNode(request_fn_node);
         // Closed requests—and requests whose only open cells have the explicit
         // required field-kind default—key on an immutable structural view, so
         // a repeat skips the graph-native recursive lookup below. The latter
@@ -6029,9 +6024,7 @@ const Builder = struct {
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                     if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                    const spec_request = draftTemplateSpecLookupRequestNode(spec);
-                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec_request)) continue;
-                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec_request);
+                    const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -6103,9 +6096,7 @@ const Builder = struct {
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                     if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                    const spec_request = draftTemplateSpecLookupRequestNode(spec);
-                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec_request)) continue;
-                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec_request);
+                    const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -6155,18 +6146,22 @@ const Builder = struct {
                     .prefix_proof = try source_ctx.currentRuntimeImpossibilityProof(null),
                 });
             }
+            // The closed address memoizes this hit only when the join left
+            // the request's lookup type unchanged: `resolved_request_ty` is
+            // the pre-join view, the selected specialization's is the
+            // post-join one. A partial recursive join can leave that
+            // interface with open cells the lookup view does not admit, in
+            // which case the memo is simply skipped and later requests take
+            // the open-interface and resolved scans.
             if (resolved_lookup_address) |address| {
-                const spec_lookup_node = draftTemplateSpecLookupRequestNode(spec);
-                const active_spec_fn_ty = if (try source_ctx.graph.typeIsResolved(spec_lookup_node))
-                    try source_ctx.activeTypeFromNode(spec_lookup_node)
-                else
-                    try source_ctx.graph.specializationTypeViewForNode(spec_lookup_node);
-                if (try source_ctx.typeStore().typeEql(
-                    source_ctx.nameStore(),
-                    active_spec_fn_ty,
-                    resolved_request_ty.?,
-                )) {
-                    try registerTemplateSpecLookup(source_ctx.draft, address, raw_spec);
+                if (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) |active_spec_fn_ty| {
+                    if (try source_ctx.typeStore().typeEql(
+                        source_ctx.nameStore(),
+                        active_spec_fn_ty,
+                        resolved_request_ty.?,
+                    )) {
+                        try registerTemplateSpecLookup(source_ctx.draft, address, raw_spec);
+                    }
                 }
             }
             return .{ .local = .{ .draft = spec.fn_id } };
@@ -17345,6 +17340,18 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         return try self.graph.activeTypeViewForNode(node);
+    }
+
+    /// The immutable type a specialization request or a recorded
+    /// specialization keys on: the active type of a resolved interface, the
+    /// required-defaulted view of an interface whose only open cells are
+    /// undetermined field kinds, and nothing for an interface still carrying
+    /// other open evidence. Every draft-specialization lookup and memo reads
+    /// both sides of a comparison through this one policy.
+    fn specializationLookupTypeForNode(self: *BodyContext, node: NodeId) Allocator.Error!?Type.TypeId {
+        if (try self.graph.typeIsResolved(node)) return try self.activeTypeFromNode(node);
+        if (try self.graph.typeIsSpecializationDefaultable(node)) return try self.graph.specializationTypeViewForNode(node);
+        return null;
     }
 
     fn activeTypeFromCell(self: *BodyContext, cell: DraftTypeCell) Allocator.Error!Type.TypeId {
@@ -31902,11 +31909,13 @@ const BodyContext = struct {
     /// anonymous tag union that the callee's body completes to a nominal.
     /// Relating the callee's interface before answering makes the result
     /// class carry that completion, so a consumer that seals the type from
-    /// this cell agrees with the type the lowered call produces. Calls that
-    /// lowering never routes through a callee template (a divergent callee
-    /// or argument expression, a generated iterator `next`, `Str.inspect`,
-    /// or an argument proven uninhabited) answer with the request cell,
-    /// exactly as their lowering does.
+    /// this cell agrees with the type the lowered call produces. The
+    /// arguments are related to the request first and the callee is drafted
+    /// after, in the order lowering itself follows, and the calls lowering
+    /// never routes through a callee template (a divergent callee or
+    /// argument expression, an argument proven uninhabited, `Iter.next` on
+    /// generated iterator evidence, or `Str.inspect`) answer with the
+    /// request cell, exactly as their lowering does.
     fn directCallCompletedResultNode(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -31919,13 +31928,16 @@ const BodyContext = struct {
         for (call.args) |arg| {
             if (self.checkedExprDivergesInLoweredRuntime(arg)) return fn_nodes.ret;
         }
-        if (self.iteratorProcedureForResolvedTarget(target) != null or self.resolvedTargetIsStrInspect(target)) {
-            return fn_nodes.ret;
-        }
+        try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
         for (fn_nodes.args) |arg_node| {
             if (try self.nodeIsProvenUninhabited(arg_node)) return fn_nodes.ret;
         }
-        try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
+        if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
+            if (procedure == .iter_next and fn_nodes.args.len == 1 and self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) {
+                return fn_nodes.ret;
+            }
+        }
+        if (self.resolvedTargetIsStrInspect(target)) return fn_nodes.ret;
         const callee = try self.fnTemplateForDirectCallAtNode(
             target,
             source_fn_ty,

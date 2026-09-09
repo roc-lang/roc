@@ -234,9 +234,12 @@ const ProcArcDomain = struct {
     }
 
     /// Commit the field domains of the owned-only containers this emission
-    /// actually dismantles. A parameter this emission binds borrowed keeps
-    /// no residual field domain: its takes are skipped, so the whole value
-    /// is released together and no field-by-field release may name it.
+    /// actually dismantles. A container whose activating parameter this
+    /// emission binds borrowed keeps no residual field domain: its takes are
+    /// skipped, so the whole value is released together and no
+    /// field-by-field release may name it. Membership in
+    /// `owned_binding_override` is defined only for this frame's locals, so
+    /// the frame check must come first.
     fn installOwnedOnlyResidualDomains(
         self: *ProcArcDomain,
         solution: *const arc_solve.Solution,
@@ -246,7 +249,7 @@ const ProcArcDomain = struct {
         var owned_only = dismantles.owned_only_containers.iterator();
         while (owned_only.next()) |entry| {
             const local = entry.key_ptr.*;
-            if (!self.ownsFrameLocal(local)) continue;
+            if (!self.frameContainsLocal(local)) continue;
             if (!owned_binding_override.contains(local)) continue;
             self.installResidualDomain(solution, local, entry.value_ptr.full_mask);
         }
@@ -255,14 +258,14 @@ const ProcArcDomain = struct {
     /// Whether `local` belongs to the frame this domain describes. The
     /// dismantle tables span every procedure, so each frame installs only
     /// its own containers.
-    fn ownsFrameLocal(self: *const ProcArcDomain, local: LIR.LocalId) bool {
+    fn frameContainsLocal(self: *const ProcArcDomain, local: LIR.LocalId) bool {
         const local_index = @intFromEnum(local);
         if (local_index >= self.global_local_index.len) return false;
         return self.global_local_index[local_index] != no_proc_local_index;
     }
 
     fn installResidualDomain(self: *ProcArcDomain, solution: *const arc_solve.Solution, local: LIR.LocalId, full_mask: u64) void {
-        if (!self.ownsFrameLocal(local)) return;
+        if (!self.frameContainsLocal(local)) return;
         const unit = solution.unitLocalOf(local);
         const bit = self.resourceBitOf(unit) orelse arcInvariant("ARC residual aggregate has no ownership resource");
         const prior = self.resource_full_masks[bit];
@@ -1378,11 +1381,15 @@ const Inserter = struct {
     dismantle_temps: *std.ArrayList(LIR.LocalId) = undefined,
     /// Mode-specialized variant table (shared across the emission worklist).
     variants: *VariantTable = undefined,
-    /// Parameter locals whose borrowed solved binding is overridden to owned
-    /// for the variant currently being emitted.
+    /// Locals whose borrowed solved binding is overridden to owned for the
+    /// variant currently being emitted. A membership set: it is populated
+    /// before the owned-only residual field domains are committed, so the
+    /// residual masks its entries carry are meaningless and only `contains`
+    /// is ever consulted.
     owned_binding_override: *OwnedSet = undefined,
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
+    /// A membership set in the same sense as `owned_binding_override`.
     unique_param_override: *OwnedSet = undefined,
     /// Exact resource and liveness bit domain of the proc currently emitted.
     /// It is built directly from that proc's explicit `frame_locals` span.
