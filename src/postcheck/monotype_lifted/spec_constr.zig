@@ -746,6 +746,47 @@ const ClonedValue = struct {
     value: Value,
 };
 
+/// An emitted arm body together with the symbolic value of its result. The
+/// value is what case-of-case distribution reads later, so the arm never has
+/// to be re-derived from its emitted expression.
+const ClonedArm = struct {
+    body: Ast.ExprId,
+    value: Value,
+};
+
+/// A cloned expression before its strict chain is placed: either the source
+/// expression reused as it stands, or the chain and value to emit.
+const ClonedParts = struct {
+    reused: ?Ast.ExprId,
+    bindings: BindingChain,
+    value: Value,
+};
+
+const ClonedBranches = struct {
+    span: Ast.Span(Ast.Branch),
+    /// One result value per branch, in branch order.
+    values: []const Value,
+};
+
+const ClonedIfBranches = struct {
+    span: Ast.Span(Ast.IfBranch),
+    /// One result value per conditional branch, in branch order; the final
+    /// else is cloned separately by the caller.
+    values: []const Value,
+};
+
+/// One entry of a clone's recorded-value change log.
+const RecordedValueKey = union(enum) {
+    arm_values: Ast.ExprId,
+    block_tail: Ast.ExprId,
+};
+
+/// Half-open range of expression ids `[start, end)`.
+const ExprIdRange = struct {
+    start: usize,
+    end: usize,
+};
+
 const ClonedStmt = struct {
     bindings: BindingChain = .{},
     stmt: ?Ast.StmtId,
@@ -4604,18 +4645,44 @@ const Cloner = struct {
     exit_tuple_items: collections.DenseMap(Ast.LocalId, []?Ast.ExprId),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
-    /// process. That rewrite re-clones each arm's body against the small
-    /// dispatch, and a re-cloned arm can contain further let-of-case values,
-    /// so unbounded application compounds on recursively generated code
-    /// (derived parsers) until the compiler overflows its stack. When the
-    /// budget runs out the rewrite retains the plain shared join, which never
-    /// re-clones arm bodies.
+    /// process. Each arm receives its own clone of the small dispatch, so on
+    /// recursively generated code (derived parsers) the dispatch copies
+    /// compound; this budget bounds them. When it runs out the rewrite
+    /// retains the plain shared join, which clones no dispatch.
     let_case_shape_growth: CodeGrowthBudget,
     /// Active let-of-case join rewrites, innermost last. Cloning a jump whose
     /// target belongs to one of these frames records the jump site's symbolic
     /// argument values for later parameter decomposition instead of cloning
     /// the argument expressions directly.
     let_case_builds: std.ArrayList(*LetCaseBuild),
+    /// Expression ids below this count existed before this clone began and
+    /// are the only ids the clone may read as source. Every id at or above it
+    /// was emitted by this clone, and emitted output carries rewrite decisions
+    /// the inline stack and the growth budgets already made: a retained call
+    /// is one an active frame declined, a selected arm is one the value
+    /// evidence resolved. Reading output back as source would repeat those
+    /// decisions outside the frames that justified them.
+    output_start: usize,
+    /// Expression ranges this clone built from source parts in order to
+    /// clone them (a let-of-case dispatch, a `let` over a block's remaining
+    /// statements, the block after a planned loop exit): the one kind of
+    /// emitted expression the clone reads as source.
+    clone_templates: std.ArrayList(ExprIdRange),
+    /// The symbolic result value of every arm of each `match` or `if` this
+    /// clone emitted from cloned arms, keyed by the emitted expression.
+    /// Case-of-case distribution consumes these recorded values, so it never
+    /// re-derives an arm by cloning emitted output.
+    arm_values: collections.DenseMap(Ast.ExprId, []const Value),
+    /// The symbolic value of the tail of each block this clone emitted
+    /// statement by statement, keyed by the emitted block. A rewrite that
+    /// reads an emitted arm's structure looks through such a block to its
+    /// tail value while keeping the block's statements as they stand.
+    block_tail_values: collections.DenseMap(Ast.ExprId, Value),
+    /// Keys recorded into `arm_values` and `block_tail_values`, in order, for
+    /// rejected loop attempt rollback. The rewind reuses the attempt's
+    /// expression ids, so values recorded during the attempt must not
+    /// outlive it.
+    recorded_value_keys: std.ArrayList(RecordedValueKey),
     /// Fresh output locals bound by the recursive let statement whose value is
     /// currently cloning. A callable worker created while filling such a value
     /// must capture the recursive slot itself, not a field projected from it,
@@ -4648,9 +4715,9 @@ const Cloner = struct {
     /// Production clones reserve callable workers through the pass-wide table.
     emit_callable_workers: bool,
     /// Work left for case-of-case distribution in this clone. Each produced
-    /// branch body spends one unit before it is cloned, so nested distribution
-    /// cannot multiply the expression store or recurse without spending this
-    /// total growth budget.
+    /// branch body spends one unit before its arm value is distributed, so
+    /// nested distribution cannot multiply the expression store or recurse
+    /// without spending this total growth budget.
     case_of_case_growth: CodeGrowthBudget,
     /// Remaining source-body work that this clone may inline. The per-function
     /// body-size gate bounds one expansion, but a small acyclic wrapper graph
@@ -4699,6 +4766,11 @@ const Cloner = struct {
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
+            .output_start = pass.program.exprCount(),
+            .clone_templates = .empty,
+            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(pass.allocator),
+            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(pass.allocator),
+            .recorded_value_keys = .empty,
             .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
             .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
@@ -4734,6 +4806,11 @@ const Cloner = struct {
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
+            .output_start = pass.program.exprCount(),
+            .clone_templates = .empty,
+            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(pass.allocator),
+            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(pass.allocator),
+            .recorded_value_keys = .empty,
             .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
             .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
@@ -4775,12 +4852,67 @@ const Cloner = struct {
         self.exit_tuple_items.deinit();
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
+        self.clone_templates.deinit(self.pass.allocator);
+        self.arm_values.deinit();
+        self.block_tail_values.deinit();
+        self.recorded_value_keys.deinit(self.pass.allocator);
         self.active_recursive_value_locals.deinit();
         self.rebased_inline_scopes.deinit();
         self.inline_scope_origins.deinit();
         self.rebased_inline_scope_changes.deinit(self.pass.allocator);
         self.subst.deinit();
         self.arena.deinit();
+    }
+
+    /// Debug validator for the clone-source invariant described on
+    /// `output_start`: a clone reads only expressions that existed when it
+    /// began, plus its own registered clone templates.
+    fn assertSourceExpr(self: *const Cloner, expr_id: Ast.ExprId) void {
+        if (!std.debug.runtime_safety) return;
+        const raw = @intFromEnum(expr_id);
+        if (raw < self.output_start) return;
+        for (self.clone_templates.items) |range| {
+            if (raw >= range.start and raw < range.end) return;
+        }
+        Common.invariant("SpecConstr clone read an expression it emitted as source");
+    }
+
+    /// Register the expressions added since `start` as a template this clone
+    /// built from source parts in order to clone it, so `assertSourceExpr`
+    /// admits reading them.
+    fn registerCloneTemplate(self: *Cloner, start: usize) Allocator.Error!void {
+        try self.clone_templates.append(self.pass.allocator, .{
+            .start = start,
+            .end = self.pass.program.exprCount(),
+        });
+    }
+
+    /// Remember the result value of every arm of an emitted `match` or `if`
+    /// so case-of-case distribution can consume it without re-deriving the
+    /// arm from output.
+    fn recordArmValues(self: *Cloner, emitted: Ast.ExprId, values: []const Value) Allocator.Error!void {
+        if (@intFromEnum(emitted) < self.output_start) {
+            Common.invariant("arm values were recorded for an expression this clone did not emit");
+        }
+        try self.arm_values.putNoClobber(emitted, values);
+        try self.recorded_value_keys.append(self.pass.allocator, .{ .arm_values = emitted });
+    }
+
+    /// Remember the tail value of a block emitted statement by statement.
+    fn recordBlockTailValue(self: *Cloner, emitted: Ast.ExprId, value: Value) Allocator.Error!void {
+        if (@intFromEnum(emitted) < self.output_start) {
+            Common.invariant("a block tail value was recorded for an expression this clone did not emit");
+        }
+        try self.block_tail_values.putNoClobber(emitted, value);
+        try self.recorded_value_keys.append(self.pass.allocator, .{ .block_tail = emitted });
+    }
+
+    /// The structure an emitted arm contributes to a rewrite: its recorded
+    /// value, read through an emitted block to the tail value recorded for
+    /// that block.
+    fn emittedArmStructure(self: *const Cloner, arm_body: Ast.ExprId, recorded: Value) Value {
+        if (recorded != .expr or recorded.expr != arm_body) return recorded;
+        return self.block_tail_values.get(arm_body) orelse recorded;
     }
 
     fn admitInlineBodyGrowth(self: *Cloner, body_size: BodySize) bool {
@@ -5160,6 +5292,26 @@ const Cloner = struct {
     }
 
     fn cloneExpr(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
+        return (try self.cloneExprKeepingValue(expr_id)).body;
+    }
+
+    /// Clone an expression to output and also return the symbolic value of
+    /// its result, for callers that emit the result as a branch arm and must
+    /// record that value for case-of-case distribution.
+    fn cloneExprKeepingValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!ClonedArm {
+        const parts = try self.cloneExprParts(expr_id);
+        if (parts.reused) |reused| return .{ .body = reused, .value = parts.value };
+        return .{
+            .body = try self.wrapBindings(parts.bindings, try self.materialize(parts.value)),
+            .value = parts.value,
+        };
+    }
+
+    /// Clone an expression and hand back its strict chain unplaced, for a
+    /// caller that places the chain in its own statement list so the value's
+    /// leaves stay in that list's scope.
+    fn cloneExprParts(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!ClonedParts {
+        self.assertSourceExpr(expr_id);
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -5173,13 +5325,14 @@ const Cloner = struct {
         if (!expr_region.isEmpty()) self.current_region = expr_region;
 
         const cloned = try self.cloneExprValue(expr_id);
-        if (cloned.bindings.isEmpty() and
+        const reused = cloned.bindings.isEmpty() and
             self.canReuseOriginalExpr(expr_id) and
-            self.valueMatchesSourceExpr(cloned.value, expr_id, 0))
-        {
-            return expr_id;
-        }
-        return try self.wrapBindings(cloned.bindings, try self.materialize(cloned.value));
+            self.valueMatchesSourceExpr(cloned.value, expr_id, 0);
+        return .{
+            .reused = if (reused) expr_id else null,
+            .bindings = cloned.bindings,
+            .value = cloned.value,
+        };
     }
 
     fn cloneExprWithoutSourceReuse(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
@@ -5207,6 +5360,7 @@ const Cloner = struct {
     }
 
     fn cloneExprValueInto(self: *Cloner, expr_id: Ast.ExprId, bindings: *BindingChain) Common.LowerError!Value {
+        self.assertSourceExpr(expr_id);
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -5437,11 +5591,14 @@ const Cloner = struct {
                 if (self.purpose != .loop_exit_selection) {
                     if (try self.cloneCaseOfCaseValue(expr.ty, scrutinee_expr, match.branches)) |value| return value;
                 }
-                return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .match_ = .{
+                const branches = try self.cloneBranchSpan(match.branches);
+                const residual = try self.addExpr(.{ .ty = expr.ty, .data = .{ .match_ = .{
                     .scrutinee = scrutinee_expr,
-                    .branches = try self.cloneBranchSpan(match.branches),
+                    .branches = branches.span,
                     .comptime_site = match.comptime_site,
-                } } }) };
+                } } });
+                try self.recordArmValues(residual, branches.values);
+                return .{ .expr = residual };
             },
             .call_value => |call| {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
@@ -5909,6 +6066,7 @@ const Cloner = struct {
     }
 
     fn cloneExprPlain(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
+        self.assertSourceExpr(expr_id);
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -6047,10 +6205,21 @@ const Cloner = struct {
                 .hasher = try self.cloneExpr(h.hasher),
             } },
             .match_ => |match| return try self.cloneMatch(expr.ty, match),
-            .if_ => |if_| .{ .if_ = .{
-                .branches = try self.cloneIfBranchSpan(if_.branches),
-                .final_else = try self.cloneExpr(if_.final_else),
-            } },
+            .if_ => |if_| {
+                const branches = try self.cloneIfBranchSpan(if_.branches);
+                const final_else = try self.cloneExprKeepingValue(if_.final_else);
+                const if_data: Ast.ExprData = .{ .if_ = .{
+                    .branches = branches.span,
+                    .final_else = final_else.body,
+                } };
+                if (std.meta.eql(expr.data, if_data) and self.canReuseOriginalExpr(expr_id)) return expr_id;
+                const cloned = try self.addExpr(.{ .ty = expr.ty, .data = if_data });
+                const values = try self.arena.allocator().alloc(Value, branches.values.len + 1);
+                @memcpy(values[0..branches.values.len], branches.values);
+                values[branches.values.len] = final_else.value;
+                try self.recordArmValues(cloned, values);
+                return cloned;
+            },
             .block => |block| return try self.cloneBlock(expr.ty, block),
             .loop_ => |loop| {
                 var bindings: BindingChain = .{};
@@ -6331,11 +6500,11 @@ const Cloner = struct {
             if (join_point.source == source) return join_point.target;
         }
         // Not being remapped: the join's definition encloses the region being
-        // cloned rather than sitting inside it. Rewrites re-clone regions of
-        // already-emitted output in place (arm transfers), and a jump out of
-        // such a region must keep aiming at the
-        // enclosing definition. Join ids are minted from one pass-wide
-        // counter, so the id cannot collide with a different join.
+        // cloned rather than sitting inside it. A let-of-case dispatch
+        // template jumps to joins that rewrite defines around every copy of
+        // the template, and such a jump must keep aiming at the enclosing
+        // definition. Join ids are minted from one pass-wide counter, so the
+        // id cannot collide with a different join.
         return source;
     }
 
@@ -6484,6 +6653,8 @@ const Cloner = struct {
         analysis: Pass.AnalysisMark,
         callable_workers: usize,
         rebased_inline_scope_changes: usize,
+        recorded_value_keys: usize,
+        clone_templates: usize,
         let_case_depth: usize,
     };
 
@@ -6493,6 +6664,8 @@ const Cloner = struct {
             .analysis = self.pass.markAnalysis(),
             .callable_workers = self.pass.callable_workers.count(),
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes.items.len,
+            .recorded_value_keys = self.recorded_value_keys.items.len,
+            .clone_templates = self.clone_templates.items.len,
             .let_case_depth = self.let_case_builds.items.len,
         };
     }
@@ -6520,6 +6693,19 @@ const Cloner = struct {
                 Common.invariant("inline-scope rebase change had no origin entry");
             }
         }
+
+        // The rewind reuses the attempt's expression ids: every value recorded
+        // for them, and every template range covering them, must go with it.
+        while (self.recorded_value_keys.items.len > mark.recorded_value_keys) {
+            const key = self.recorded_value_keys.pop() orelse
+                Common.invariant("recorded value change log underflow");
+            const removed = switch (key) {
+                .arm_values => |emitted| self.arm_values.remove(emitted),
+                .block_tail => |emitted| self.block_tail_values.remove(emitted),
+            };
+            if (!removed) Common.invariant("recorded value change had no map entry");
+        }
+        self.clone_templates.shrinkRetainingCapacity(mark.clone_templates);
 
         self.pass.rewindAnalysis(mark.analysis);
     }
@@ -6664,6 +6850,14 @@ const Cloner = struct {
         const value_data = self.pass.program.getExpr(value_expr).data;
         if (value_data != .match_ and value_data != .if_) return null;
 
+        // The arms are read through the values recorded when the case was
+        // emitted. The only emitted cases without recorded values are join
+        // dispatches, whose arms transfer control and produce no value to
+        // bind. A source case reused unchanged by this clone is re-read as
+        // source.
+        const recorded = self.arm_values.get(value_expr);
+        if (recorded == null and @intFromEnum(value_expr) >= self.output_start) return null;
+
         const arm_count: usize = if (value_data == .match_)
             self.pass.program.branchSpan(value_data.match_.branches).len
         else
@@ -6677,12 +6871,16 @@ const Cloner = struct {
         const rest_ty = self.pass.program.getExpr(let_.rest).ty;
 
         // The probe stands for "this arm's result value" while an arm clones
-        // the dispatch: each arm substitutes it with its own known value.
+        // the dispatch: each arm substitutes it with its own known value. The
+        // dispatch is a template this clone builds to clone repeatedly, so its
+        // expressions are registered as clone sources.
+        const template_start = self.pass.program.exprCount();
         const probe = try self.pass.program.addLocal(self.pass.symbols.fresh(), value_ty);
         const probe_ref = try self.addExpr(.{ .ty = value_ty, .data = .{ .local = probe } });
 
         const joins = try self.letCaseJoinPlan(let_, arena);
         const dispatch = try self.letCaseDispatchExpr(let_, joins, probe_ref, rest_ty);
+        try self.registerCloneTemplate(template_start);
 
         var build = LetCaseBuild{ .joins = joins };
         const frame_index = self.let_case_builds.items.len;
@@ -6697,9 +6895,12 @@ const Cloner = struct {
                 defer self.pass.allocator.free(rewritten);
                 for (branches, 0..) |branch, index| {
                     const change_start = self.subst.watermark();
-                    try self.shadowPatLocals(branch.pat);
-                    try self.shadowStmtSpanLocals(branch.bindings);
-                    const body = (try self.cloneLetOfCaseArmBody(probe, dispatch, branch.body)) orelse {
+                    const recorded_value: ?Value = if (recorded) |values| values[index] else null;
+                    if (recorded_value == null) {
+                        try self.shadowPatLocals(branch.pat);
+                        try self.shadowStmtSpanLocals(branch.bindings);
+                    }
+                    const body = (try self.cloneLetOfCaseArmBody(probe, dispatch, branch.body, recorded_value)) orelse {
                         self.subst.restore(change_start);
                         return null;
                     };
@@ -6725,10 +6926,20 @@ const Cloner = struct {
                 for (branches, 0..) |branch, index| {
                     rewritten[index] = .{
                         .cond = branch.cond,
-                        .body = (try self.cloneLetOfCaseArmBody(probe, dispatch, branch.body)) orelse return null,
+                        .body = (try self.cloneLetOfCaseArmBody(
+                            probe,
+                            dispatch,
+                            branch.body,
+                            if (recorded) |values| values[index] else null,
+                        )) orelse return null,
                     };
                 }
-                const final_else = (try self.cloneLetOfCaseArmBody(probe, dispatch, if_.final_else)) orelse return null;
+                const final_else = (try self.cloneLetOfCaseArmBody(
+                    probe,
+                    dispatch,
+                    if_.final_else,
+                    if (recorded) |values| values[branches.len] else null,
+                )) orelse return null;
                 break :blk .{ .if_ = .{
                     .branches = try self.pass.program.addIfBranchSpan(rewritten),
                     .final_else = final_else,
@@ -7083,9 +7294,41 @@ const Cloner = struct {
     /// rewrite inside them a second time, which compounded across nesting
     /// levels and drained the pass-wide growth budgets on copies that were
     /// then discarded.
-    fn cloneLetOfCaseArmBody(self: *Cloner, probe: Ast.LocalId, dispatch: Ast.ExprId, branch_body: Ast.ExprId) Common.LowerError!?Ast.ExprId {
+    /// Clone the dispatch into one arm of the let's case. `recorded_value` is
+    /// the arm's result value recorded when the arm was emitted; the emitted
+    /// arm keeps its statements as they stand and only its tail changes, so
+    /// no emitted expression is ever re-derived. Only a source arm reused
+    /// unchanged by this clone has no recorded value, and re-reading it is
+    /// reading source.
+    fn cloneLetOfCaseArmBody(
+        self: *Cloner,
+        probe: Ast.LocalId,
+        dispatch: Ast.ExprId,
+        branch_body: Ast.ExprId,
+        recorded_value: ?Value,
+    ) Common.LowerError!?Ast.ExprId {
         const dispatch_ty = self.pass.program.getExpr(dispatch).ty;
         const branch_expr = self.pass.program.getExpr(branch_body);
+        if (recorded_value) |recorded| {
+            const structure = self.emittedArmStructure(branch_body, recorded);
+            const statements: ?Ast.Span(Ast.StmtId) = if (branch_expr.data == .block) branch_expr.data.block.statements else null;
+            const tail_expr = if (branch_expr.data == .block) branch_expr.data.block.final_expr else branch_body;
+            const final = if (structure == .expr)
+                (try self.divergentTailAtType(tail_expr, dispatch_ty, .emitted)) orelse return null
+            else blk: {
+                const change_start = self.subst.watermark();
+                defer self.subst.restore(change_start);
+                try self.subst.put(self.pass.program, probe, structure);
+                break :blk try self.cloneExpr(dispatch);
+            };
+            if (statements) |stmts| {
+                return try self.addExpr(.{ .ty = dispatch_ty, .data = .{ .block = .{
+                    .statements = stmts,
+                    .final_expr = final,
+                } } });
+            }
+            return final;
+        }
         switch (branch_expr.data) {
             .block => |block| {
                 // A branch-built or looping tail always derives an opaque
@@ -7154,7 +7397,7 @@ const Cloner = struct {
 
                 const final = try self.cloneExprValue(block.final_expr);
                 if (final.value == .expr) {
-                    if (try self.cloneDivergentAtType(block.final_expr, dispatch_ty)) |divergent| {
+                    if (try self.divergentTailAtType(block.final_expr, dispatch_ty, .source)) |divergent| {
                         self.subst.restore(change_start);
                         try self.appendBindingStmts(final.bindings, &statements);
                         return try self.addExpr(.{ .ty = dispatch_ty, .data = .{ .block = .{
@@ -7226,7 +7469,7 @@ const Cloner = struct {
                 const branch = try self.cloneExprValue(branch_body);
                 const change_start = self.subst.watermark();
                 if (branch.value == .expr) {
-                    if (try self.cloneDivergentAtType(branch_body, dispatch_ty)) |divergent| {
+                    if (try self.divergentTailAtType(branch_body, dispatch_ty, .source)) |divergent| {
                         self.subst.restore(change_start);
                         return try self.wrapBindings(branch.bindings, divergent);
                     }
@@ -7241,14 +7484,23 @@ const Cloner = struct {
         }
     }
 
-    fn cloneDivergentAtType(self: *Cloner, expr_id: Ast.ExprId, ty: Type.TypeId) Common.LowerError!?Ast.ExprId {
+    /// Where a divergent tail lives: a source tail's operands are cloned,
+    /// while an emitted tail is dead once its arm is rebuilt, so its operands
+    /// move into the retyped tail as they stand.
+    const DivergentTailOrigin = enum { source, emitted };
+
+    /// Emit a divergent tail at `ty` when `expr_id` is one, otherwise null.
+    fn divergentTailAtType(self: *Cloner, expr_id: Ast.ExprId, ty: Type.TypeId, origin: DivergentTailOrigin) Common.LowerError!?Ast.ExprId {
         const expr = self.pass.program.getExpr(expr_id);
         return switch (expr.data) {
             .@"unreachable" => try self.addExpr(.{ .ty = ty, .data = .@"unreachable" }),
             .crash => |msg| try self.addExpr(.{ .ty = ty, .data = .{ .crash = msg } }),
             .comptime_exhaustiveness_failed => |site| try self.addExpr(.{ .ty = ty, .data = .{ .comptime_exhaustiveness_failed = site } }),
             .return_ => |ret| try self.addExpr(.{ .ty = ty, .data = .{ .return_ = .{
-                .value = try self.cloneExpr(ret.value),
+                .value = switch (origin) {
+                    .source => try self.cloneExpr(ret.value),
+                    .emitted => ret.value,
+                },
                 .target = ret.target,
             } } }),
             .local,
@@ -7939,6 +8191,9 @@ const Cloner = struct {
             if (stmt == .let_ and !stmt.let_.recursive) {
                 if (self.exit_demands) |demands| {
                     if (demands.get(stmt.let_.pat) != null) {
+                        // The remaining block is a template built from
+                        // source parts for this clone to read as source.
+                        const template_start = self.pass.program.exprCount();
                         const tail = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
                             .statements = .{
                                 .start = block.statements.start + @as(u32, @intCast(index)) + 1,
@@ -7946,6 +8201,7 @@ const Cloner = struct {
                             },
                             .final_expr = block.final_expr,
                         } } });
+                        try self.registerCloneTemplate(template_start);
                         final = (try self.loopWithSelectedExitValues(.{
                             .bind = stmt.let_.pat,
                             .value = stmt.let_.value,
@@ -8019,6 +8275,9 @@ const Cloner = struct {
                                     block.final_expr,
                                 )))))
                 {
+                    // The synthetic `let` is a template built from source
+                    // parts for this clone to read as source.
+                    const template_start = self.pass.program.exprCount();
                     const tail = try self.pass.program.addExpr(.{ .ty = ty, .data = .{ .block = .{
                         .statements = try self.pass.program.addStmtSpan(source[index + 1 ..]),
                         .final_expr = block.final_expr,
@@ -8029,10 +8288,8 @@ const Cloner = struct {
                         .rest = tail,
                         .comptime_site = let_.comptime_site,
                     } } });
-                    return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
-                        .statements = try self.pass.program.addStmtSpan(statements.items),
-                        .final_expr = try self.cloneExpr(synthetic),
-                    } } });
+                    try self.registerCloneTemplate(template_start);
+                    return try self.emitBlockWithTail(ty, &statements, try self.cloneExprParts(synthetic));
                 },
                 .uninitialized, .expr, .expect, .dbg, .return_, .crash => {},
             }
@@ -8041,10 +8298,29 @@ const Cloner = struct {
             if (cloned.stmt) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
         }
 
-        return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
+        return try self.emitBlockWithTail(ty, &statements, try self.cloneExprParts(block.final_expr));
+    }
+
+    /// Emit a block from cloned statements and its cloned tail. The tail's
+    /// strict chain joins the statements rather than nesting in a block of
+    /// its own, so the recorded tail value stays in scope of the statements
+    /// a rewrite keeps when it replaces the tail.
+    fn emitBlockWithTail(
+        self: *Cloner,
+        ty: Type.TypeId,
+        statements: *std.ArrayList(Ast.StmtId),
+        tail: ClonedParts,
+    ) Common.LowerError!Ast.ExprId {
+        const final_expr = tail.reused orelse blk: {
+            try self.appendBindingStmts(tail.bindings, statements);
+            break :blk try self.materialize(tail.value);
+        };
+        const emitted = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
             .statements = try self.pass.program.addStmtSpan(statements.items),
-            .final_expr = try self.cloneExpr(block.final_expr),
+            .final_expr = final_expr,
         } } });
+        try self.recordBlockTailValue(emitted, tail.value);
+        return emitted;
     }
 
     fn cloneContinue(self: *Cloner, ty: Type.TypeId, continue_: anytype) Common.LowerError!Ast.ExprId {
@@ -8472,22 +8748,28 @@ const Cloner = struct {
             // scrutinee, finite by construction, rather than materializing a
             // possibly self-referential value. The discarded clone owns its
             // bindings, so the plain re-clone is the only emitted evaluation.
-            return try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
-                .scrutinee = try self.cloneExprPlain(match.scrutinee),
-                .branches = try self.cloneBranchSpan(match.branches),
+            const plain_scrutinee = try self.cloneExprPlain(match.scrutinee);
+            const branches = try self.cloneBranchSpan(match.branches);
+            const residual = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+                .scrutinee = plain_scrutinee,
+                .branches = branches.span,
                 .comptime_site = match.comptime_site,
             } } });
+            try self.recordArmValues(residual, branches.values);
+            return residual;
         }
         if (try self.simplifyKnownMatch(scrutinee.value, match.branches, &scrutinee.bindings)) |body| {
             return try self.wrapBindings(scrutinee.bindings, body);
         }
 
         const scrutinee_expr = try self.materialize(scrutinee.value);
+        const branches = try self.cloneBranchSpan(match.branches);
         const residual = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
             .scrutinee = scrutinee_expr,
-            .branches = try self.cloneBranchSpan(match.branches),
+            .branches = branches.span,
             .comptime_site = match.comptime_site,
         } } });
+        try self.recordArmValues(residual, branches.values);
         return try self.wrapBindings(scrutinee.bindings, residual);
     }
 
@@ -9155,6 +9437,13 @@ const Cloner = struct {
         }
     }
 
+    /// Distribute an outer match over an emitted `match` or `if` scrutinee so
+    /// the outer arms land where each inner arm's constructor is known. The
+    /// inner arms are read through the values recorded when the scrutinee was
+    /// emitted (`arm_values`); an emitted scrutinee without recorded values is
+    /// opaque. A scrutinee that is a source expression reused unchanged by
+    /// this clone has no recorded values and is re-read as source, which is
+    /// the same read that produced it.
     fn cloneCaseOfCaseValue(
         self: *Cloner,
         ty: Type.TypeId,
@@ -9221,6 +9510,8 @@ const Cloner = struct {
             .expect,
             => return null,
         };
+        const recorded = self.arm_values.get(scrutinee_expr);
+        if (recorded == null and @intFromEnum(scrutinee_expr) >= self.output_start) return null;
         if (self.case_of_case_growth.admit(@max(branch_work, 1)) != .admitted) return null;
 
         switch (scrutinee_data) {
@@ -9230,29 +9521,32 @@ const Cloner = struct {
 
                 var rewritten = try self.pass.allocator.alloc(Ast.Branch, inner_branches.len);
                 defer self.pass.allocator.free(rewritten);
+                const values = try self.arena.allocator().alloc(Value, inner_branches.len);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    const change_start = self.subst.watermark();
-                    try self.shadowPatLocals(inner_branch.pat);
-                    try self.shadowStmtSpanLocals(inner_branch.bindings);
-                    const body = (try self.distributeMatchOverArmBody(ty, inner_branch.body, outer_branches_span)) orelse {
-                        self.subst.restore(change_start);
-                        return null;
-                    };
+                    const arm = (try self.distributeMatchOverArm(
+                        ty,
+                        inner_branch.body,
+                        if (recorded) |arm_values| arm_values[index] else null,
+                        .{ .pat = inner_branch.pat, .bindings = inner_branch.bindings },
+                        outer_branches_span,
+                    )) orelse return null;
                     rewritten[index] = .{
                         .pat = inner_branch.pat,
                         .bindings = inner_branch.bindings,
                         .guard = inner_branch.guard,
-                        .body = body,
+                        .body = arm.body,
                     };
-                    self.subst.restore(change_start);
+                    values[index] = arm.value;
                 }
 
-                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+                const distributed = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
                     .scrutinee = inner_match.scrutinee,
                     .branches = try self.pass.program.addBranchSpan(rewritten),
                     .comptime_site = inner_match.comptime_site,
-                } } }) };
+                } } });
+                try self.recordArmValues(distributed, values);
+                return .{ .expr = distributed };
             },
             .if_ => |inner_if| {
                 const inner_branches = try GuardedList.dupe(self.pass.allocator, Ast.IfBranch, self.pass.program.ifBranchSpan(inner_if.branches));
@@ -9260,21 +9554,38 @@ const Cloner = struct {
 
                 var rewritten = try self.pass.allocator.alloc(Ast.IfBranch, inner_branches.len);
                 defer self.pass.allocator.free(rewritten);
+                const values = try self.arena.allocator().alloc(Value, inner_branches.len + 1);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    const body = (try self.distributeMatchOverArmBody(ty, inner_branch.body, outer_branches_span)) orelse return null;
+                    const arm = (try self.distributeMatchOverArm(
+                        ty,
+                        inner_branch.body,
+                        if (recorded) |arm_values| arm_values[index] else null,
+                        null,
+                        outer_branches_span,
+                    )) orelse return null;
                     rewritten[index] = .{
                         .cond = inner_branch.cond,
-                        .body = body,
+                        .body = arm.body,
                     };
+                    values[index] = arm.value;
                 }
 
-                const final_else = (try self.distributeMatchOverArmBody(ty, inner_if.final_else, outer_branches_span)) orelse return null;
+                const final_else = (try self.distributeMatchOverArm(
+                    ty,
+                    inner_if.final_else,
+                    if (recorded) |arm_values| arm_values[inner_branches.len] else null,
+                    null,
+                    outer_branches_span,
+                )) orelse return null;
+                values[inner_branches.len] = final_else.value;
 
-                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .if_ = .{
+                const distributed = try self.addExpr(.{ .ty = ty, .data = .{ .if_ = .{
                     .branches = try self.pass.program.addIfBranchSpan(rewritten),
-                    .final_else = final_else,
-                } } }) };
+                    .final_else = final_else.body,
+                } } });
+                try self.recordArmValues(distributed, values);
+                return .{ .expr = distributed };
             },
             .local,
             .unit,
@@ -9327,147 +9638,53 @@ const Cloner = struct {
         }
     }
 
-    /// Distribute the outer match over one inner arm. The arm is
-    /// already-cloned output with fresh ids referenced nowhere else, so a
-    /// block arm keeps its statements as they stand and only the tail
-    /// expression is re-derived for its symbolic value; a tail that is
-    /// itself branch-built recurses structurally without any re-clone.
-    /// Re-cloning whole arm bodies here compounded across nested
-    /// case-of-case levels.
-    fn distributeMatchOverArmBody(
+    /// The pattern scope of a source match arm re-read during distribution.
+    const SourceArmScope = struct {
+        pat: Ast.PatId,
+        bindings: Ast.Span(Ast.StmtId),
+    };
+
+    /// Distribute the outer match over one inner arm. `recorded_value` is the
+    /// arm's result value recorded when the arm was emitted; the emitted arm
+    /// keeps its statements as they stand and only its tail changes, so no
+    /// emitted expression is ever re-derived. Only a source arm reused
+    /// unchanged by this clone has no recorded value, and re-reading it is
+    /// reading source.
+    fn distributeMatchOverArm(
         self: *Cloner,
         ty: Type.TypeId,
         arm_body: Ast.ExprId,
+        recorded_value: ?Value,
+        source_scope: ?SourceArmScope,
         outer_branches_span: Ast.Span(Ast.Branch),
-    ) Common.LowerError!?Ast.ExprId {
-        const arm_expr = self.pass.program.getExpr(arm_body);
-        switch (arm_expr.data) {
-            .block => |block| {
-                const tail = block.final_expr;
-                var branch_bindings: BindingChain = .{};
-                const inner_value: Value = switch (self.pass.program.getExpr(tail).data) {
-                    // Branch-built and looping tails recurse (or decline)
-                    // through the distribution itself, without re-deriving
-                    // the expression.
-                    .match_, .if_, .loop_ => .{ .expr = tail },
-                    .local,
-                    .unit,
-                    .@"unreachable",
-                    .int_lit,
-                    .frac_f32_lit,
-                    .frac_f64_lit,
-                    .dec_lit,
-                    .str_lit,
-                    .bytes_lit,
-                    .static_data_candidate,
-                    .typed_boundary,
-                    .list,
-                    .tuple,
-                    .record,
-                    .record_update,
-                    .tag,
-                    .nominal,
-                    .block,
-                    .let_,
-                    .lambda,
-                    .def_ref,
-                    .fn_def,
-                    .fn_ref,
-                    .call_value,
-                    .call_proc,
-                    .low_level,
-                    .field_access,
-                    .tuple_access,
-                    .structural_eq,
-                    .structural_hash,
-                    .uninitialized,
-                    .uninitialized_payload,
-                    .if_initialized_payload,
-                    .try_sequence,
-                    .try_record_sequence,
-                    .break_,
-                    .continue_,
-                    .join_point,
-                    .jump,
-                    .return_,
-                    .crash,
-                    .comptime_branch_taken,
-                    .comptime_exhaustiveness_failed,
-                    .dbg,
-                    .expect_err,
-                    .expect,
-                    => try self.cloneExprValueInto(tail, &branch_bindings),
-                };
-                const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+    ) Common.LowerError!?ClonedArm {
+        var branch_bindings: BindingChain = .{};
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
 
-                var statements = std.ArrayList(Ast.StmtId).empty;
-                defer statements.deinit(self.pass.allocator);
-                const source = self.pass.program.stmtSpan(block.statements);
-                for (0..GuardedList.borrowLen(source)) |index| {
-                    try statements.append(self.pass.allocator, GuardedList.at(source, index));
-                }
-                return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
-                    .statements = try self.pass.program.addStmtSpan(statements.items),
-                    .final_expr = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
-                } } });
-            },
-            .match_, .if_, .loop_ => {
-                var branch_bindings: BindingChain = .{};
-                const outer_value = (try self.distributeMatchOverValue(ty, .{ .expr = arm_body }, outer_branches_span, &branch_bindings)) orelse return null;
-                return try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
-            },
-            .local,
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .static_data_candidate,
-            .typed_boundary,
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .tag,
-            .nominal,
-            .let_,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .fn_ref,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .field_access,
-            .tuple_access,
-            .structural_eq,
-            .structural_hash,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .return_,
-            .crash,
-            .comptime_branch_taken,
-            .comptime_exhaustiveness_failed,
-            .dbg,
-            .expect_err,
-            .expect,
-            => {
-                var branch_bindings: BindingChain = .{};
-                const inner_value = try self.cloneExprValueInto(arm_body, &branch_bindings);
-                const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
-                return try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
-            },
+        const inner_value = if (recorded_value) |recorded| self.emittedArmStructure(arm_body, recorded) else blk: {
+            if (source_scope) |scope| {
+                try self.shadowPatLocals(scope.pat);
+                try self.shadowStmtSpanLocals(scope.bindings);
+            }
+            break :blk try self.cloneExprValueInto(arm_body, &branch_bindings);
+        };
+        const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+        const tail = try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
+
+        if (recorded_value != null) {
+            const arm_data = self.pass.program.getExpr(arm_body).data;
+            if (arm_data == .block) {
+                return .{
+                    .body = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
+                        .statements = arm_data.block.statements,
+                        .final_expr = tail,
+                    } } }),
+                    .value = outer_value,
+                };
+            }
         }
+        return .{ .body = tail, .value = outer_value };
     }
 
     /// Collapse an outer match against one inner-branch result: a known
@@ -10765,42 +10982,56 @@ const Cloner = struct {
         return try self.pass.program.addRecordDestructSpan(values);
     }
 
-    fn cloneBranchSpan(self: *Cloner, span: Ast.Span(Ast.Branch)) Common.LowerError!Ast.Span(Ast.Branch) {
+    fn cloneBranchSpan(self: *Cloner, span: Ast.Span(Ast.Branch)) Common.LowerError!ClonedBranches {
         const source = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(span));
         defer self.pass.allocator.free(source);
 
-        const values = try self.pass.allocator.alloc(Ast.Branch, source.len);
-        defer self.pass.allocator.free(values);
+        const branches = try self.pass.allocator.alloc(Ast.Branch, source.len);
+        defer self.pass.allocator.free(branches);
+        const values = try self.arena.allocator().alloc(Value, source.len);
         for (source, 0..) |branch, index| {
             const change_start = self.subst.watermark();
             const pat = try self.clonePat(branch.pat, .bind_runtime);
-            values[index] = .{
+            const bindings = try self.cloneStmtSpan(branch.bindings);
+            const guard = if (branch.guard) |guard| try self.cloneExpr(guard) else null;
+            const body = try self.cloneExprKeepingValue(branch.body);
+            branches[index] = .{
                 .pat = pat,
-                .bindings = try self.cloneStmtSpan(branch.bindings),
-                .guard = if (branch.guard) |guard| try self.cloneExpr(guard) else null,
-                .body = try self.cloneExpr(branch.body),
+                .bindings = bindings,
+                .guard = guard,
+                .body = body.body,
             };
+            values[index] = body.value;
             self.subst.restore(change_start);
         }
-        return try self.pass.program.addBranchSpan(values);
+        return .{
+            .span = try self.pass.program.addBranchSpan(branches),
+            .values = values,
+        };
     }
 
-    fn cloneIfBranchSpan(self: *Cloner, span: Ast.Span(Ast.IfBranch)) Common.LowerError!Ast.Span(Ast.IfBranch) {
+    fn cloneIfBranchSpan(self: *Cloner, span: Ast.Span(Ast.IfBranch)) Common.LowerError!ClonedIfBranches {
         const source = try GuardedList.dupe(self.pass.allocator, Ast.IfBranch, self.pass.program.ifBranchSpan(span));
         defer self.pass.allocator.free(source);
 
-        const values = try self.pass.allocator.alloc(Ast.IfBranch, source.len);
-        defer self.pass.allocator.free(values);
+        const branches = try self.pass.allocator.alloc(Ast.IfBranch, source.len);
+        defer self.pass.allocator.free(branches);
+        const values = try self.arena.allocator().alloc(Value, source.len);
         var unchanged = self.source_reuse == .original_body;
         for (source, 0..) |branch, index| {
-            values[index] = .{
-                .cond = try self.cloneExpr(branch.cond),
-                .body = try self.cloneExpr(branch.body),
+            const cond = try self.cloneExpr(branch.cond);
+            const body = try self.cloneExprKeepingValue(branch.body);
+            branches[index] = .{
+                .cond = cond,
+                .body = body.body,
             };
-            unchanged = unchanged and std.meta.eql(values[index], branch);
+            values[index] = body.value;
+            unchanged = unchanged and std.meta.eql(branches[index], branch);
         }
-        if (unchanged) return span;
-        return try self.pass.program.addIfBranchSpan(values);
+        return .{
+            .span = if (unchanged) span else try self.pass.program.addIfBranchSpan(branches),
+            .values = values,
+        };
     }
 
     fn materialize(self: *Cloner, value: Value) Common.LowerError!Ast.ExprId {
@@ -13654,6 +13885,8 @@ test "only original-body rewrites reuse unchanged source expressions" {
         .ty = unit_ty,
         .data = .{ .tuple_access = .{ .tuple = tuple_ref, .elem_index = 0 } },
     });
+    // This source was built after the clone began, so mark it as source.
+    original_body.output_start = program.exprCount();
     try std.testing.expectEqual(source_ref, try original_body.cloneExpr(source_ref));
     try std.testing.expectEqual(uninitialized, try original_body.cloneExpr(uninitialized));
     try std.testing.expectEqual(dbg, try original_body.cloneExpr(dbg));
@@ -14867,6 +15100,8 @@ test "SpecConstr pattern clones bind fresh local identities" {
     const source_pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .bind = source_local } });
     const source_ref = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = source_local } });
     const source_payload_ref = try program.addExpr(.{ .ty = u8_ty, .data = .{ .uninitialized_payload = .{ .condition = source_local } } });
+    // This source was built after the clone began, so mark it as source.
+    cloner.output_start = program.exprCount();
 
     const first_change = cloner.subst.watermark();
     const first_pat = try cloner.clonePat(source_pat, .bind_runtime);
@@ -14997,6 +15232,8 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
         .rest = null,
     } } });
     const body = try program.addExpr(.{ .ty = u8_ty, .data = .unit });
+    // This source was built after the clone began, so mark it as source.
+    cloner.output_start = program.exprCount();
 
     // An undecidable branch before any definite match aborts the fold: the
     // residual match stays in the output.
