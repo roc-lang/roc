@@ -5259,8 +5259,8 @@ child error, and incompatible payloads for a shared tag, remain errors.
 retained scratch storage and imposes one open-row relation for its known tags.
 Only an unconstrained instantiated child extension may close; constrained or
 rigid extensions remain unsupported. An absent-constructor empty default is
-committed as a closed row on that method instance before publication. Non-row
-format errors, such as `Str`, retain ordinary equality through
+committed as a closed row on that method instance before CheckedModule output.
+Non-row format errors, such as `Str`, retain ordinary equality through
 `constrainDerivedParserFormatError`. Checked codec callables preserve child
 types and their shared payload relations with the parent. Lowering calls those
 exact callables and composes errors at the propagation boundary; an infallible
