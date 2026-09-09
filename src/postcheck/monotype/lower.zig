@@ -4179,13 +4179,16 @@ const Builder = struct {
             const callee, const completed_fn = dispatch: {
                 var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
                 defer dispatch_timing_scope.end();
+                const edge = if (request.root_evidence) |root_evidence|
+                    try ctx.checkedProcedureEdgeAtRequest(template_ref, root_evidence, root_node, .body_lowering)
+                else
+                    EdgeEvidence{ .subst = &.{}, .vector = &.{} };
                 const selected = try ctx.draftFnSlotForProcedureUseAtNode(
                     procedure,
                     request.checked_type,
                     procedure.source_fn_ty_template,
                     root_node,
-                    .{ .subst = &.{}, .vector = &.{} },
-                    request.root_evidence,
+                    edge,
                     false,
                 );
                 const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
@@ -20745,10 +20748,7 @@ const BodyContext = struct {
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
-        const partial_edge = if (root_evidence) |producer_evidence|
-            try self.checkedProcedureEdgeAtRequest(template_ref, producer_evidence, request_fn_node, .specialization_interface)
-        else
-            try self.evidenceForUseSiteForPurposeAtNode(record.expr, .specialization_interface, request_fn_node);
+        const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .specialization_interface);
         var edge = if (partial_edge.vector.len == template.evidence_params.len)
             partial_edge
         else
@@ -31957,7 +31957,6 @@ const BodyContext = struct {
             Common.invariant("checked direct call target is outside resolved value table");
         }
         const record = self.view.resolved_refs.records[raw];
-        const evidence = try self.evidenceForUseSiteAtNode(record.expr, request_fn_node);
         return switch (record.ref) {
             .local_proc => |local| .{ .local = try self.lowerDraftLocalProcAtNode(
                 local,
@@ -31966,7 +31965,7 @@ const BodyContext = struct {
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
-                evidence,
+                try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
                 record.recursive_reference,
                 null,
             ) },
@@ -31974,14 +31973,20 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null, record.recursive_reference),
+            => |proc| try self.draftFnSlotForProcedureUseAtNode(
+                proc,
+                source_fn_ty,
+                source_fn_key,
+                request_fn_node,
+                try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
+                record.recursive_reference,
+            ),
             .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(
                 proc.procedure,
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
-                evidence,
-                proc.root_evidence,
+                try self.evidenceForProcedureUseAtNode(proc.procedure, record.expr, proc.root_evidence, request_fn_node, .body_lowering),
                 record.recursive_reference,
             ),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
@@ -31995,21 +32000,16 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         edge: EdgeEvidence,
-        root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftFnSlot {
         const template_ref = self.builder.templateRefForProcedureUse(proc);
-        const requested_edge = if (root_evidence) |producer_evidence|
-            try self.checkedProcedureEdgeAtRequest(template_ref, producer_evidence, request_fn_node, .body_lowering)
-        else
-            edge;
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
             source_fn_ty,
             source_fn_key,
             request_fn_node,
-            requested_edge,
+            edge,
             if (recursive_reference) .recursive_reference else .instantiation,
             if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
             null,
@@ -32983,7 +32983,7 @@ const BodyContext = struct {
                 edge.vector,
             );
         }
-        const edge = try self.evidenceForProcedureValueAtNode(proc, site_expr, request_fn_node);
+        const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
         const source_fn_ty = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
         const slot = try self.draftFnSlotForProcedureUseAtNode(
@@ -32992,7 +32992,6 @@ const BodyContext = struct {
             proc.source_fn_ty_template,
             request_fn_node,
             edge,
-            root_evidence,
             recursive_reference,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
@@ -40234,23 +40233,22 @@ const BodyContext = struct {
         return out;
     }
 
-    /// Materialize a procedure value's checked construction recipe together
-    /// with the exact substitution recorded for that use. Callable-reachable
-    /// entries remain symbolic until the concrete function request can resolve
-    /// their checker-authored paths.
-    fn evidenceForProcedureValueAtNode(
+    /// Select the producer-authored edge before materializing any evidence.
+    /// Platform requirements carry app-owned root evidence; ordinary procedure
+    /// uses carry their checked call-site or construction evidence. Direct calls,
+    /// procedure values, and interface specialization share this selection.
+    fn evidenceForProcedureUseAtNode(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
         expr: checked.CheckedExprId,
+        root_evidence: ?checked.CheckedEvidenceSpan,
         request_fn_node: NodeId,
+        purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!EdgeEvidence {
-        const edge = try self.evidenceForUseSiteAtNode(expr, request_fn_node);
-        const refs = self.view.static_dispatch_plans.siteEvidence(expr) orelse return edge;
-        const schema = self.procedureUseSchema(proc);
-        if (refs.len != schema.params.len or edge.vector.len != refs.len) {
-            Common.invariant("procedure value evidence recipe length differed from its checked scheme");
+        if (root_evidence) |evidence| {
+            return try self.checkedProcedureEdgeAtRequest(self.builder.templateRefForProcedureUse(proc), evidence, request_fn_node, purpose);
         }
-        return edge;
+        return try self.evidenceForUseSiteForPurposeAtNode(expr, purpose, request_fn_node);
     }
 
     /// Resolve every symbolic callable-path entry whose dispatcher is already
@@ -40863,6 +40861,9 @@ const BodyContext = struct {
         site_refs: ?[]const static_dispatch.CheckedEvidence,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
+        // An initializer with no requirements derives no method evidence.
+        // Its value's use may still have a checked recipe for a callable
+        // stored inside that value; that recipe is not an initializer edge.
         if (schema.params.len == 0) return &.{};
         if (site_refs) |refs| {
             if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
