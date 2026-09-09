@@ -7762,6 +7762,9 @@ Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
 retained hidden method contracts. Descendant contexts then use ordinary live
 bindings; decoding stored evidence never attaches graph cells to durable data.
+An initializer template with no requirements derives no method evidence. A use
+of its returned value can still carry a checked recipe for a callable stored
+inside that value; that recipe is separate from the initializer edge.
 Restoring a compile-time evaluation template installs its checked scheme and
 fresh substitution in the body context even when its method evidence is already
 supplied or empty. Pending callable evaluation wrappers install the same frame

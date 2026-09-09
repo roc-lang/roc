@@ -40861,10 +40861,13 @@ const BodyContext = struct {
         site_refs: ?[]const static_dispatch.CheckedEvidence,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
+        // An initializer with no requirements derives no method evidence.
+        // Its value's use may still have a checked recipe for a callable
+        // stored inside that value; that recipe is not an initializer edge.
+        if (schema.params.len == 0) return &.{};
         if (site_refs) |refs| {
             if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
         }
-        if (schema.params.len == 0) return &.{};
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, schema.params.len);
         const derived = try self.allocator.alloc(bool, schema.params.len);
