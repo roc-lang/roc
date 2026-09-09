@@ -15,9 +15,32 @@ testFunc = |input| {
 }
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - can_var_scoping_var_idents.md:4:6:4:10
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 4 6) (end 4 10))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "sum_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$sum_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "can_var_scoping_var_idents.md") (start 4 6) (end 4 10) (annotation warning) (line-text "\tvar sum_ = input * 2 # Var with underscore - should not conflict")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
@@ -74,29 +97,29 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "input"))))
 				(s-var
-					(p-assign (ident "sum_"))
-					(e-dispatch-call (method "times") (constraint-fn-var 227)
+					(p-var-assign (ident "sum_"))
+					(e-dispatch-call (method "times") (constraint-fn-var 228)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "input"))))
 						(args
 							(e-num (value "2")))))
 				(s-reassign
-					(p-assign (ident "sum_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 229)
+					(p-var-assign (ident "sum_"))
+					(e-dispatch-call (method "plus") (constraint-fn-var 230)
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "sum_"))))
+								(p-var-assign (ident "sum_"))))
 						(args
 							(e-lookup-local
 								(p-assign (ident "sum"))))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 231)
+				(e-dispatch-call (method "plus") (constraint-fn-var 232)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "sum"))))
 					(args
 						(e-lookup-local
-							(p-assign (ident "sum_")))))))))
+							(p-var-assign (ident "sum_")))))))))
 ~~~
 # TYPES
 ~~~clojure

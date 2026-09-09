@@ -106,7 +106,7 @@ over the corpus).
 
 ## Related projects
 
-- [../big/one-report-renderer.md](../big/one-report-renderer.md)—
-  the rendering half of the same pipeline; independent but adjacent.
+- One report renderer (completed; plan removed)—the rendering half of
+  the same pipeline, now covered by the shared walker and parity tests.
 - [lsp-and-docs-truth-reuse.md](lsp-and-docs-truth-reuse.md)—the
   editor-side consumers of the same classification.

@@ -13,4 +13,7 @@ generator = map_fn(
 	},
 )
 
+# Retain the rejected callable inside a data root. Its original diagnostic
+# must suppress redundant compile-time evaluation crashes.
+target : { generator : Gen({ value : U64 }) }
 target = { generator: generator }

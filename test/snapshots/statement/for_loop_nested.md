@@ -19,9 +19,32 @@ product = {
 expect product == 180
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_nested.md:3:6:3:13
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 13))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "result_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$result_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_nested.md") (start 3 6) (end 3 13) (annotation warning) (line-text "\tvar result_ = 0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -90,7 +113,7 @@ NO CHANGE
 		(p-assign (ident "product"))
 		(e-block
 			(s-var
-				(p-assign (ident "result_"))
+				(p-var-assign (ident "result_"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "i"))
@@ -108,13 +131,13 @@ NO CHANGE
 								(e-num (value "20"))))
 						(e-block
 							(s-reassign
-								(p-assign (ident "result_"))
-								(e-dispatch-call (method "plus") (constraint-fn-var 360)
+								(p-var-assign (ident "result_"))
+								(e-dispatch-call (method "plus") (constraint-fn-var 361)
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "result_"))))
+											(p-var-assign (ident "result_"))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 358)
+										(e-dispatch-call (method "times") (constraint-fn-var 359)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "i"))))
@@ -124,7 +147,7 @@ NO CHANGE
 							(e-empty_record)))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "result_"))))
+				(p-var-assign (ident "result_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

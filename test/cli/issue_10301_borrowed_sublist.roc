@@ -19,18 +19,18 @@ main! = || {
 			},
 	)
 
-	var sum = 0.U64
+	var $sum = 0.U64
 	for chunk in chunks {
-		var index = 0.U64
-		while index < chunk.len() {
-			match chunk.get(index) {
+		var $index = 0.U64
+		while $index < chunk.len() {
+			match chunk.get($index) {
 				Ok(byte) => {
-					sum = sum + byte.to_u64()
+					$sum = $sum + byte.to_u64()
 				}
 				Err(_) => {}
 			}
-			index = index + 1
+			$index = $index + 1
 		}
 	}
-	Stdout.line!(sum.to_str())
+	Stdout.line!($sum.to_str())
 }

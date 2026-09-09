@@ -10,15 +10,22 @@ add2 = x +      2
 # EXPECTED
 NAME NOT IN SCOPE - add_var_with_spaces.md:1:8:1:9
 # PROBLEMS
-── ✗ name not in scope ────────────────────────────── add_var_with_spaces.md:1:8
-
-Nothing is named x in this scope.
-
-add2 = x +      2
-       ^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 8) (end 1 9))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "x")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "add_var_with_spaces.md") (start 1 8) (end 1 9) (annotation error) (line-text "add2 = x +      2")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,OpPlus,Int,

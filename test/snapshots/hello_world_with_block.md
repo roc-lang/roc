@@ -22,25 +22,36 @@ main! = |_| {
 NAME NOT IN SCOPE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-── ✗ name not in scope ────────────────────────── hello_world_with_block.md:11:2
-
-Nothing is named line! in this scope.
-
-Stdout.line!("Hello, world!")
-^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ───────────────────────────── hello_world_with_block.md:9:2
-
-Variable world is defined here and then never used:
-
-world = "World"
-^^^^^
-
-If you don't need this variable, prefix it with an underscore like _world to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 11 2) (end 11 14))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "hello_world_with_block.md") (start 11 2) (end 11 14) (annotation error) (line-text "\tStdout.line!(\"Hello, world!\")"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 9 2) (end 9 7))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "world")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_world")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "hello_world_with_block.md") (start 9 2) (end 9 7) (annotation error) (line-text "\tworld = \"World\"")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

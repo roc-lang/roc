@@ -41,9 +41,9 @@ EndOfFile,
 				(ty (name "U64")))
 			(where
 				(method (mod-of "a") (name "to_u64")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "U64")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "U64"))))))
 		(s-decl
 			(p-ident (raw "function"))
 			(e-lambda
@@ -87,7 +87,7 @@ _ = function(value)
 			(args
 				(p-assign (ident "convertible")))
 			(e-block
-				(e-dispatch-call (method "to_u64") (constraint-fn-var 239)
+				(e-dispatch-call (method "to_u64") (constraint-fn-var 238)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "convertible"))))
@@ -98,9 +98,9 @@ _ = function(value)
 				(ty-lookup (name "U64") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_u64")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "U64") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "U64") (builtin)))))))
 	(d-let
 		(p-assign (ident "value"))
 		(e-num (value "123"))
@@ -108,7 +108,7 @@ _ = function(value)
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-underscore)
-		(e-call (constraint-fn-var 255)
+		(e-call (constraint-fn-var 254)
 			(e-lookup-local
 				(p-assign (ident "function")))
 			(e-lookup-local

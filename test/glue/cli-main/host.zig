@@ -1,8 +1,14 @@
+const shim_io = @import("shim_io");
+pub const std_options = shim_io.std_options_static_archive;
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
+const backing = std.heap.c_allocator;
+const host_alloc = @import("host_alloc");
+const shim_symbols = @import("shim_symbols");
 const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 
-extern fn malloc(size: usize) callconv(.c) ?*anyopaque;
-extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 extern fn write(fd: c_int, buf: [*]const u8, count: usize) callconv(.c) isize;
 extern fn exit(code: c_int) callconv(.c) noreturn;
 
@@ -97,15 +103,15 @@ const ContractEnv = struct {
         }
 
         const total = canary_size + alignment - 1 + length + canary_size;
-        const raw_any = malloc(total) orelse {
-            self.allocatorFail("malloc failed length={} alignment={}", .{ length, alignment });
+        const raw_any = host_alloc.alloc(backing, total, alignment) orelse {
+            self.allocatorFail("allocation failed length={} alignment={}", .{ length, alignment });
             return null;
         };
         const raw: [*]u8 = @ptrCast(raw_any);
         const user_addr = std.mem.alignForward(usize, @intFromPtr(raw) + canary_size, alignment);
         const user: [*]u8 = @ptrFromInt(user_addr);
         if (user_addr % alignment != 0) {
-            free(raw_any);
+            host_alloc.dealloc(backing, raw_any, alignment);
             self.allocatorFail("returned pointer is not aligned to {}", .{alignment});
             return null;
         }
@@ -118,7 +124,7 @@ const ContractEnv = struct {
             }
         }
         const allocation = slot orelse {
-            free(raw_any);
+            host_alloc.dealloc(backing, raw_any, alignment);
             self.allocatorFail("allocation table exhausted", .{});
             return null;
         };
@@ -151,7 +157,7 @@ const ContractEnv = struct {
         }
         _ = self.checkCanaries(allocation);
         @memset(allocation.user.?[0..allocation.length], 0xDD);
-        free(@ptrCast(allocation.raw.?));
+        host_alloc.dealloc(backing, @ptrCast(allocation.raw.?), allocation.alignment);
         allocation.live = false;
         self.dealloc_count += 1;
         self.live_alloc_count -= 1;
@@ -241,28 +247,28 @@ fn hostCrashed(roc_host_ptr: *abi.RocHost, bytes: [*]const u8, len: usize) callc
     exit(1);
 }
 
-export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return contract_env.alloc(length, alignment);
 }
 
-export fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
+fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
     contract_env.dealloc(ptr, alignment);
 }
 
-export fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return contract_env.realloc(ptr, new_length, alignment);
 }
 
-export fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
     writeStderrLine(bytes[0..len]);
 }
 
-export fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void {
+fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void {
     writeStderrLine(bytes[0..len]);
     contract_env.fail("roc_expect_failed", .{});
 }
 
-export fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void {
     writeStderrLine(bytes[0..len]);
     contract_env.fail("roc_crashed", .{});
     exit(1);
@@ -392,4 +398,15 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
     stderrPrint("PASS glue-runtime cli-main ZigGlue native alloc={} dealloc={}\n", .{ contract_env.alloc_count, contract_env.dealloc_count });
     return 0;
+}
+
+comptime {
+    shim_symbols.exportRuntimeFns(.{
+        .alloc = &roc_alloc,
+        .dealloc = &roc_dealloc,
+        .realloc = &roc_realloc,
+        .dbg = &roc_dbg,
+        .expect_failed = &roc_expect_failed,
+        .crashed = &roc_crashed,
+    }, .default);
 }

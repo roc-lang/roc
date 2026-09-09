@@ -10,14 +10,23 @@ if 5 > 3 1 else 2
 # EXPECTED
 UNCONDITIONAL CONDITION - if_numeric_comparison.md:1:4:1:9
 # PROBLEMS
-── ● unconditional condition ────────────────────── if_numeric_comparison.md:1:4
-
-This if condition is known at compile time, so this conditional will always
-make the same choice.
-
-if 5 > 3 1 else 2
-   ^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 1 4) (end 1 9))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "if condition")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this conditional will always make the same choice."))
+		(document
+			(source-region (file "if_numeric_comparison.md") (start 1 4) (end 1 9) (annotation warning) (line-text "if 5 > 3 1 else 2")))))
+~~~
 # TOKENS
 ~~~zig
 KwIf,Int,OpGreaterThan,Int,Int,KwElse,Int,

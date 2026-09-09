@@ -11,27 +11,46 @@ R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
 UNDECLARED TYPE VARIABLE - fuzz_crash_110.md:1:25:1:26
 MISSING METHOD - fuzz_crash_110.md:1:61:1:62
 # PROBLEMS
-── ✗ undeclared type variable ─────────────────────────── fuzz_crash_110.md:1:25
-
-The type variable o is not declared in this scope.
-
-R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
-                        ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ missing method ───────────────────────────────────── fuzz_crash_110.md:1:61
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
-                                                            ^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    ({}) -> _ret
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 1 25) (end 1 26))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "o")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_110.md") (start 1 25) (end 1 26) (annotation error) (line-text "R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 61) (end 1 62))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_110.md") (start 1 61) (end 1 62) (annotation error) (line-text "R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "({}) -> _ret")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,OpenCurly,OpBar,OpBar,OpenCurly,KwMatch,Int,OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,CloseRound,OpFatArrow,Int,CloseCurly,CloseCurly,NoSpaceOpenRound,CloseRound,CloseCurly,CloseCurly,

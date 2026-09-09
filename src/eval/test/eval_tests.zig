@@ -21,6 +21,59 @@ const simd_tests = @import("eval_simd_tests.zig");
 /// Every value-producing test is observed solely through `Str.inspect(...)`.
 const core_tests = [_]TestCase{
     .{
+        .name = "issue 11024: implicit empty nominal records materialize defaults at every site",
+        .source_kind = .module,
+        .source =
+        \\Foo := { bar : U64 ?? 3, baz : U64 ?? 7 }
+        \\top : Foo
+        \\top = {}
+        \\make : U64 -> Foo
+        \\make = |n| if n == 0 {} else { bar: n }
+        \\main = {
+        \\    local : Foo
+        \\    local = {}
+        \\    xs : List(Foo)
+        \\    xs = [{}, {}]
+        \\    total = List.fold(xs, 0, |sum, foo| sum + foo.bar + foo.baz)
+        \\    top.bar + top.baz + local.bar + local.baz + make(0).bar + make(5).bar + total
+        \\}
+        ,
+        .expected = .{ .inspect_str = "48" },
+    },
+    .{
+        .name = "issue 11024: implicit empty record mixes missing optional and heap defaults",
+        .source_kind = .module,
+        .source =
+        \\Foo := { text : Str ?? "a heap-allocated default string longer than the inline capacity", count ?: U64 }
+        \\make : {} -> Foo
+        \\make = |_| {}
+        \\main = {
+        \\    first = make({})
+        \\    second = make({})
+        \\    if (first.text == second.text) and ((first.?count ?? 9) == 9) first.text else "wrong"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a heap-allocated default string longer than the inline capacity\"" },
+    },
+    .{
+        .name = "issue 11024: imported implicit empty records materialize callable defaults",
+        .source_kind = .module,
+        .imports = &.{.{ .name = "Cfg", .source = "Cfg := { f : U8 -> U8 ?? |n| n + 5 }\n" }},
+        .source =
+        \\import Cfg
+        \\cfg : Cfg.Cfg
+        \\cfg = {}
+        \\make : {} -> Cfg.Cfg
+        \\make = |_| {}
+        \\main = {
+        \\    first = cfg.f
+        \\    second = make({}).f
+        \\    first(1) + second(2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
         .name = "defaulted record field: omitted at construction materializes the default",
         .source_kind = .module,
         .source =
@@ -1258,7 +1311,12 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(3, 3, 2, 2, 2, 2.0, 2.0, Ok(2.0), Ok(2.0))" },
     },
     .{
-        .name = "pipe RHS includes its postfix method chain",
+        .name = "pipe inserts lhs as first explicit method argument",
+        .source = "([1, 2, 3] |> [1].concat(), 1 |> 1.plus(), \"roc \" |> \"and roll\".with_prefix())",
+        .expected = .{ .inspect_str = "([1.0, 1.0, 2.0, 3.0], 2.0, \"roc and roll\")" },
+    },
+    .{
+        .name = "grouped pipe method target calls the method result",
         .source_kind = .module,
         .source =
         \\Holder := { n : I64 }.{
@@ -1269,9 +1327,30 @@ const core_tests = [_]TestCase{
         \\bar : I64 -> Holder
         \\bar = |n| Holder.{ n: n }
         \\
-        \\main = 2 |> bar(3).blah()
+        \\main = 2 |> (bar(3).blah())
         ,
         .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "pipe supplies the first explicit method argument",
+        .source_kind = .module,
+        .source =
+        \\Holder := { n : I64 }.{
+        \\    add : Holder, I64 -> I64
+        \\    add = |holder, value| holder.n + value
+        \\
+        \\    sum : Holder, I64, I64 -> I64
+        \\    sum = |holder, left, right| holder.n + left + right
+        \\
+        \\    make_adder : Holder -> (I64 -> I64)
+        \\    make_adder = |holder| |value| holder.n + value
+        \\}
+        \\
+        \\holder = Holder.{ n: 3 }
+        \\
+        \\main = (2 |> holder.add(), 2 |> holder.sum(4), 2 |> holder.sum(4) + 1, 2 |> holder.make_adder()())
+        ,
+        .expected = .{ .inspect_str = "(5, 9, 10, 5)" },
     },
     .{
         .name = "whitespace-separated postfix applies to completed pipe",
@@ -1586,6 +1665,31 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: decimal literal", .source = "1.5", .expected = .{ .inspect_str = "1.5" } },
     .{ .name = "inspect: boolean true", .source = "True", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: boolean false", .source = "False", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: unary not true", .source = "!True", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: unary not false", .source = "!False", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: unary not inferred parameter", .source = "{ negate = |value| !value\n (negate(True), negate(False)) }", .expected = .{ .inspect_str = "(False, True)" } },
+    .{
+        .name = "inspect: unary not mutable flag in loop issue 11157",
+        .source =
+        \\{
+        \\    run = |values| {
+        \\        var $swapped = False
+        \\        var $iterations = 0.U64
+        \\        while True {
+        \\            for value in values {
+        \\                if value > 0 and $iterations == 0 { $swapped = True }
+        \\            }
+        \\            $iterations = $iterations + 1
+        \\            if !$swapped { break }
+        \\            $swapped = False
+        \\        }
+        \\        $iterations
+        \\    }
+        \\    (run([0, 0]), run([1, 0]))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1, 2)" },
+    },
     .{ .name = "inspect: string literal", .source = "\"hello\"", .expected = .{ .inspect_str = "\"hello\"" } },
     .{ .name = "inspect: standalone callable syntax", .source = "|value| value", .expected = .{ .inspect_str = "<function>" } },
     .{
@@ -2017,6 +2121,32 @@ const core_tests = [_]TestCase{
         \\}
         \\
         \\main = (describe(force('a')), describe(force('b')))
+        ,
+        .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
+    },
+    .{
+        .name = "inspect: typed custom from_numeral codepoint literals convert in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Code(numeral.digits_before_pt()))
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    'a'.Code => "letter a"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force('a'.Code)), describe(force('b'.Code)))
         ,
         .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
     },
@@ -7486,4 +7616,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;
+pub const tests = @import("eval_set_tests.zig").tests ++ core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;

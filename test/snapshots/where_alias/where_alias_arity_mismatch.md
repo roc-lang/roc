@@ -13,13 +13,31 @@ encode_once = |value| value.encode("")
 # EXPECTED
 TOO FEW ARGS - where_alias_arity_mismatch.md:3:31:3:42
 # PROBLEMS
-── ✗ too few args ─────────────────────────── where_alias_arity_mismatch.md:3:31
-
-The type Encodable expects 1 argument, but got 0 instead.
-
-encode_once : a -> Str where [a.Encodable]
-                              ^^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Too Few Args")
+		(region (start 3 31) (end 3 42))
+		(headline
+			(reflow "The type")
+			(reflow " ")
+			(annotated type "Encodable")
+			(reflow " ")
+			(reflow "expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument,")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "0")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "where_alias_arity_mismatch.md") (start 3 31) (end 3 42) (annotation error) (line-text "encode_once : a -> Str where [a.Encodable]")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,CloseSquare,
@@ -39,9 +57,9 @@ EndOfFile,
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "encode")
-					(args
-						(ty-var (raw "fmt")))
-					(ty-var (raw "fmt")))))
+					(ty-fn
+						(ty-var (raw "fmt"))
+						(ty-var (raw "fmt"))))))
 		(s-type-anno (name "encode_once")
 			(ty-fn
 				(ty-var (raw "a"))
@@ -89,9 +107,9 @@ encode_once = |value| value.encode("")
 		(ty-rigid-var (name "a"))
 		(where
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "encode")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))))))
 ~~~
 # TYPES
 ~~~clojure

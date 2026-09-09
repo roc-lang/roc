@@ -87,3 +87,16 @@ test "multiple ordinary specialization epochs lower deterministically in paralle
 test "prepared finite capture-free direct calls lower in deterministic discovery waves" {
     try expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir();
 }
+
+test "self-tail proofs survive deterministic parallel body handoff" {
+    try expectSpecializationParallelismDeterministicLir(
+        \\walk : U64, U64 -> U64
+        \\walk = |n, acc| if n == 0 { acc } else { walk(n - 1, acc + n) }
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |_args| {
+        \\    echo!(walk(2000, 0).to_str())
+        \\    Ok({})
+        \\}
+    );
+}

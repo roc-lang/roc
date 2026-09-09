@@ -12,36 +12,67 @@ B : A
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:1:1:1:6
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 # PROBLEMS
-── ✗ mutually recursive type aliases ─── canon_revamp_mutual_type_aliases.md:1:1
-
-The type alias A and B form a recursive cycle.
-
-A : B
-^^^^^
-
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
-
-
-And it references B declared in canon_revamp_mutual_type_aliases.md:2:1:
-
-B : A
-^^^^^
-
-── ✗ mutually recursive type aliases ─── canon_revamp_mutual_type_aliases.md:2:1
-
-The type alias B and A form a recursive cycle.
-
-B : A
-^^^^^
-
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
-
-
-And it references A declared in canon_revamp_mutual_type_aliases.md:1:1:
-
-A : B
-^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mutually Recursive Type Aliases")
+		(region (start 1 1) (end 1 6))
+		(headline
+			(reflow "The type alias ")
+			(annotated code "A")
+			(reflow " and ")
+			(annotated code "B")
+			(reflow " form a recursive cycle."))
+		(document
+			(reflow "Type aliases are transparent synonyms and cannot be mutually recursive. ")
+			(reflow "If you need recursive types, use nominal types (")
+			(annotated code ":=")
+			(reflow ") instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "canon_revamp_mutual_type_aliases.md") (start 1 1) (end 1 6) (annotation error) (line-text "A : B"))
+			(line-break)
+			(reflow "And it references ")
+			(annotated type "B")
+			(reflow " declared in ")
+			(source-location
+				(file "canon_revamp_mutual_type_aliases.md")
+				(line 2)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "canon_revamp_mutual_type_aliases.md") (start 2 1) (end 2 6) (annotation dim) (line-text "B : A"))))
+	(report
+		(severity runtime_error)
+		(title "Mutually Recursive Type Aliases")
+		(region (start 2 1) (end 2 6))
+		(headline
+			(reflow "The type alias ")
+			(annotated code "B")
+			(reflow " and ")
+			(annotated code "A")
+			(reflow " form a recursive cycle."))
+		(document
+			(reflow "Type aliases are transparent synonyms and cannot be mutually recursive. ")
+			(reflow "If you need recursive types, use nominal types (")
+			(annotated code ":=")
+			(reflow ") instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "canon_revamp_mutual_type_aliases.md") (start 2 1) (end 2 6) (annotation error) (line-text "B : A"))
+			(line-break)
+			(reflow "And it references ")
+			(annotated type "A")
+			(reflow " declared in ")
+			(source-location
+				(file "canon_revamp_mutual_type_aliases.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "canon_revamp_mutual_type_aliases.md") (start 1 1) (end 1 6) (annotation dim) (line-text "A : B")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

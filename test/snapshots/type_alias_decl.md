@@ -54,44 +54,65 @@ OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
-── ● builtin type shadowed ────────────────────────────── type_alias_decl.md:7:1
-
-The type Try shadows a builtin type.
-
-Try(ok, err) : [Ok(ok), Err(err)]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This may make the builtin type inaccessible in this scope.
-
-── ✗ open ext not allowed in type declaration ───────── type_alias_decl.md:22:18
-
-You cannot use a .. inside a type declaration.
-
-Letters : [A, B, ..]
-                 ^^
-
-Hint: You need a named variable, like ..others, to use this here.
-
-── ● unused variable ─────────────────────────────────── type_alias_decl.md:36:5
-
-Variable person is defined here and then never used:
-
-person = { name: "Alice", age: 30 }
-^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _person to
-suppress this warning.
-
-── ● unused variable ─────────────────────────────────── type_alias_decl.md:39:5
-
-Variable color is defined here and then never used:
-
-color = Red
-^^^^^
-
-If you don't need this variable, prefix it with an underscore like _color to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Builtin Type Shadowed")
+		(region (start 7 1) (end 7 34))
+		(headline
+			(text "The type ")
+			(annotated symbol-unqualified "Try")
+			(text " shadows a builtin type."))
+		(document
+			(reflow "This may make the builtin type inaccessible in this scope.")
+			(line-break)
+			(source-region (file "type_alias_decl.md") (start 7 1) (end 7 34) (annotation warning) (line-text "Try(ok, err) : [Ok(ok), Err(err)]"))))
+	(report
+		(severity runtime_error)
+		(title "Open Ext Not Allowed In Type Declaration")
+		(region (start 22 18) (end 22 20))
+		(headline
+			(text "You cannot use a ")
+			(annotated code "..")
+			(reflow " inside a type declaration."))
+		(document
+			(source-region (file "type_alias_decl.md") (start 22 18) (end 22 20) (annotation error) (line-text "Letters : [A, B, ..]"))
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " You need a named variable, like ")
+			(annotated code "..others")
+			(reflow ", to use this here.")))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 36 5) (end 36 11))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "person")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_person")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_alias_decl.md") (start 36 5) (end 36 11) (annotation error) (line-text "    person = { name: \"Alice\", age: 30 }"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 39 5) (end 39 10))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "color")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_color")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_alias_decl.md") (start 39 5) (end 39 10) (annotation error) (line-text "    color = Red")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -142,11 +142,11 @@ pub const Generalizer = struct {
     /// Borrowed reference to the type store
     store: *TypesStore,
     /// Tracks which variables we've already adjusted (for handling recursive types)
-    rank_adjusted_vars: std.AutoHashMap(Var, void),
+    rank_adjusted_vars: @import("collections").DenseMap(Var, void),
     /// Temporary pool for processing variables during rank adjustment
     tmp_var_pool: VarPool,
     /// Map of which variables we are generalizing this pass
-    vars_to_generalized: std.AutoHashMap(Var, void),
+    vars_to_generalized: @import("collections").DenseMap(Var, void),
     /// Suspended steps of rank adjustment, innermost last. The walk descends
     /// on this heap stack rather than the native one, so the depth it can
     /// reach is bounded only by available memory.
@@ -163,8 +163,8 @@ pub const Generalizer = struct {
             .gpa = gpa,
             .store = store,
             .tmp_var_pool = try VarPool.init(gpa),
-            .rank_adjusted_vars = std.AutoHashMap(Var, void).init(gpa),
-            .vars_to_generalized = std.AutoHashMap(Var, void).init(gpa),
+            .rank_adjusted_vars = @import("collections").DenseMap(Var, void).init(gpa),
+            .vars_to_generalized = @import("collections").DenseMap(Var, void).init(gpa),
             .rank_frames = .empty,
             .pending_ranks = .empty,
         };

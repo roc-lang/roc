@@ -12,15 +12,22 @@ main = MyJson.decode
 # EXPECTED
 NAME NOT IN SCOPE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
-── ✗ name not in scope ──────────────────────────── can_import_with_alias.md:3:8
-
-Nothing is named decode in this scope.
-
-main = MyJson.decode
-       ^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 3 8) (end 3 21))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "decode")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_with_alias.md") (start 3 8) (end 3 21) (annotation error) (line-text "main = MyJson.decode")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

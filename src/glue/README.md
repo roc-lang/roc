@@ -156,6 +156,36 @@ time. Generated C and Rust files carry matching `offsetof`/`offset_of!` static
 assertions, which their compile controls and the native/wasm runtime matrix
 verify per target.
 
+`test/glue/generate_abi_lock.zig` reflects the canonical builtins declarations
+into target-independent C and Rust reference declarations. C includes the
+resulting `canonical_host_abi.h`; Rust compiles a copy of its generated bindings
+with canonical reference structs, layout assertions, and type assignments
+appended. The foreign compilers determine each target's physical layout. C
+locks strings, lists, and erased-callable callbacks; Zig and Rust also lock the
+runtime symbol signatures and the helper-only `RocHost` callback prefix.
+`RocHost` deliberately excludes interpreter-only hosted dispatch tables and is
+never passed across compiled Roc entrypoints.
+
+## Glue platform marshalling
+
+`glue.zig` materializes glue input and reads its result through the checked
+platform's runtime schemas and committed LIR layouts. The old
+`platform/host.zig` extern records have been removed; alphabetical field order
+is no longer a handwritten ABI assumption. `GlueRocValueWriter.recordField`
+uses the schema's logical field index and the layout store's physical offset.
+
+The `glue platform marshalling schema matches checked Roc records` test compiles
+`DebugGlue.roc` and locks the complete marshalling protocol against the actual
+checked platform, including nested list elements, records, tag payloads, and
+scalar leaf types.
+A second test copies the platform sources into isolated temporary directories,
+mutates field names, field sets, scalar types, nested record types, and tag
+payloads. All nine mutated checked schemas must fail the same lock. Run both with:
+
+```sh
+zig build run-test-zig-module-glue -- --test-filter 'glue platform'
+```
+
 ## ABI Risk Register and Roc Glue Runtime Controls
 
 Every risk in this section must be covered by at least one Roc glue test

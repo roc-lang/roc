@@ -901,6 +901,9 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         getName: *const fn (Spec) []const u8,
         /// Override the parent watchdog and child-visible timeout for one spec.
         getTimeoutMs: ?*const fn (Spec, u64) u64 = null,
+        /// Index in the complete runner case list when this pool receives a
+        /// slice of that list. Re-executed workers reconstruct the full list.
+        getWorkerIndex: ?*const fn (Spec) usize = null,
         /// Use setsid() + kill(-pid) for process group cleanup.
         /// Enable when children spawn subprocesses (e.g., roc build).
         use_process_groups: bool = false,
@@ -1462,7 +1465,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
                 const test_timeout_ms = timeoutForSpec(state.specs[idx], state.timeout_ms);
 
-                state.results[idx] = switch (spawnSingleWorker(state.io, state.gpa, state.template, idx, &.{}, test_timeout_ms)) {
+                const runner_index = if (cfg.getWorkerIndex) |getIndex| getIndex(state.specs[idx]) else idx;
+                state.results[idx] = switch (spawnSingleWorker(state.io, state.gpa, state.template, runner_index, &.{}, test_timeout_ms)) {
                     .ok => |result| result,
                     .timed_out => cfg.timeout_result,
                     .crashed => cfg.default_result,
@@ -1538,7 +1542,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 };
                 state.slots_mutex.unlock(io);
 
-                const cmd = std.fmt.allocPrint(gpa, "{d}\n", .{idx}) catch {
+                const runner_index = if (cfg.getWorkerIndex) |getIndex| getIndex(state.specs[idx]) else idx;
+                const cmd = std.fmt.allocPrint(gpa, "{d}\n", .{runner_index}) catch {
                     state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 };

@@ -41,12 +41,12 @@ EndOfFile,
 				(ty (name "U32")))
 			(where
 				(method (mod-of "a") (name "to_u32_try")
-					(args
-						(ty-var (raw "a")))
-					(ty-apply
-						(ty (name "Try"))
-						(ty (name "U32"))
-						(_)))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-apply
+							(ty (name "Try"))
+							(ty (name "U32"))
+							(_))))))
 		(s-decl
 			(p-ident (raw "function"))
 			(e-lambda
@@ -109,11 +109,11 @@ _ = function(value)
 				(ty-lookup (name "U32") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_u32_try")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-apply (name "Try") (builtin)
-						(ty-lookup (name "U32") (builtin))
-						(ty-underscore))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-apply (name "Try") (builtin)
+							(ty-lookup (name "U32") (builtin))
+							(ty-underscore)))))))
 	(d-let
 		(p-assign (ident "value"))
 		(e-num (value "123"))

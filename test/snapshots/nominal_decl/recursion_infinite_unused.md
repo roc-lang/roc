@@ -12,20 +12,37 @@ main = 0
 # EXPECTED
 INVALID RECURSIVE TYPE - recursion_infinite_unused.md:1:1:1:14
 # PROBLEMS
-── ✗ invalid recursive type ─────────────────── recursion_infinite_unused.md:1:1
-
-The nominal type T refers to itself in a way that would make it infinite.
-
-T := (T, U64)
-^^^^^^^^^^^^^
-
-Its definition is:
-
-    (T, U64)
-
-Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Recursive Type")
+		(region (start 1 1) (end 1 14))
+		(headline
+			(reflow "The nominal type")
+			(reflow " ")
+			(annotated type "T")
+			(reflow " ")
+			(reflow "refers to itself in a way that would make it infinite."))
+		(document
+			(source-region (file "recursion_infinite_unused.md") (start 1 1) (end 1 14) (annotation error) (line-text "T := (T, U64)"))
+			(line-break)
+			(reflow "Its definition is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(T, U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Recursion in a nominal type is only allowed inside a tag union payload or record field—for example")
+			(reflow " ")
+			(annotated code "ConsList(a) := [Nil, Cons(a, ConsList(a))]")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,

@@ -11,15 +11,19 @@ e={0#
 # EXPECTED
 UNRECOGNIZED SYNTAX - fuzz_crash_104.md:1:4:2:6
 # PROBLEMS
-── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_104.md:1:4
-
-I don't recognize this syntax.
-
-e={0#
-.0.{} }
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 1 4) (end 2 6))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "fuzz_crash_104.md") (start 1 4) (end 2 6) (annotation error) (line-text "e={0#\n.0.{} }"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,Int,

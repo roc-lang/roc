@@ -13,15 +13,22 @@ foo = ...
 # EXPECTED
 INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:2:1:2:10
 # PROBLEMS
-── ✗ invalid statement ───────────────── dbg_stmt_not_permitted_top_level.md:2:1
-
-The statement dbg is not allowed at the top level.
-
-dbg "foo"
-^^^^^^^^^
-
-Only definitions, type annotations, and imports are allowed at the top level.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Statement")
+		(region (start 2 1) (end 2 10))
+		(headline
+			(reflow "The statement ")
+			(annotated code "dbg")
+			(reflow " is not allowed at the top level."))
+		(document
+			(reflow "Only definitions, type annotations, and imports are allowed at the top level.")
+			(line-break)
+			(line-break)
+			(source-region (file "dbg_stmt_not_permitted_top_level.md") (start 2 1) (end 2 10) (annotation error) (line-text "dbg \"foo\"")))))
+~~~
 # TOKENS
 ~~~zig
 KwDbg,StringStart,StringPart,StringEnd,

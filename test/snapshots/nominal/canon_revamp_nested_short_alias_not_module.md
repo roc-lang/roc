@@ -24,13 +24,18 @@ good2 = Parent2.Nested.val
 # EXPECTED
 DOES NOT EXIST - canon_revamp_nested_short_alias_not_mod.md:13:7:13:17
 # PROBLEMS
-── ✗ does not exist ───────── canon_revamp_nested_short_alias_not_mod.md:13:7
-
-Nested.val does not exist.
-
-bad = Nested.val
-      ^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 13 7) (end 13 17))
+		(headline
+			(annotated symbol-unqualified "Nested.val")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "canon_revamp_nested_short_alias_not_mod.md") (start 13 7) (end 13 17) (annotation error) (line-text "bad = Nested.val")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

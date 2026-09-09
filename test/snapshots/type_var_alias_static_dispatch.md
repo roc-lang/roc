@@ -124,8 +124,8 @@ EndOfFile,
 				(ty-var (raw "thing")))
 			(where
 				(method (mod-of "thing") (name "default")
-					(args)
-					(ty-var (raw "thing")))))
+					(ty-fn
+						(ty-var (raw "thing"))))))
 		(s-decl
 			(p-ident (raw "call_default"))
 			(e-lambda
@@ -146,9 +146,9 @@ EndOfFile,
 				(ty-var (raw "a")))
 			(where
 				(method (mod-of "a") (name "from_b")
-					(args
-						(ty-var (raw "b")))
-					(ty-var (raw "a")))))
+					(ty-fn
+						(ty-var (raw "b"))
+						(ty-var (raw "a"))))))
 		(s-decl
 			(p-ident (raw "combine"))
 			(e-lambda
@@ -170,13 +170,13 @@ EndOfFile,
 				(ty-var (raw "val")))
 			(where
 				(method (mod-of "val") (name "transform")
-					(args
-						(ty-var (raw "val")))
-					(ty-var (raw "val")))
+					(ty-fn
+						(ty-var (raw "val"))
+						(ty-var (raw "val"))))
 				(method (mod-of "val") (name "validate")
-					(args
-						(ty-var (raw "val")))
-					(ty (name "Bool")))))
+					(ty-fn
+						(ty-var (raw "val"))
+						(ty (name "Bool"))))))
 		(s-decl
 			(p-ident (raw "process_value"))
 			(e-lambda
@@ -206,12 +206,12 @@ EndOfFile,
 				(ty-var (raw "x")))
 			(where
 				(method (mod-of "x") (name "second")
-					(args
-						(ty-var (raw "x")))
-					(ty-var (raw "x")))
+					(ty-fn
+						(ty-var (raw "x"))
+						(ty-var (raw "x"))))
 				(method (mod-of "x") (name "first")
-					(args)
-					(ty-var (raw "x")))))
+					(ty-fn
+						(ty-var (raw "x"))))))
 		(s-decl
 			(p-ident (raw "chain_methods"))
 			(e-lambda
@@ -239,13 +239,13 @@ EndOfFile,
 					(ty-var (raw "b"))))
 			(where
 				(method (mod-of "a") (name "convert")
-					(args
-						(ty-var (raw "a")))
-					(ty-var (raw "a")))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-var (raw "a"))))
 				(method (mod-of "b") (name "convert")
-					(args
-						(ty-var (raw "b")))
-					(ty-var (raw "b")))))
+					(ty-fn
+						(ty-var (raw "b"))
+						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "multi_alias"))
 			(e-lambda
@@ -276,10 +276,10 @@ EndOfFile,
 				(ty-var (raw "t")))
 			(where
 				(method (mod-of "t") (name "create")
-					(args
+					(ty-fn
 						(ty (name "Str"))
-						(ty (name "U64")))
-					(ty-var (raw "t")))))
+						(ty (name "U64"))
+						(ty-var (raw "t"))))))
 		(s-decl
 			(p-ident (raw "method_with_args"))
 			(e-lambda
@@ -302,9 +302,9 @@ EndOfFile,
 				(ty-var (raw "thing")))
 			(where
 				(method (mod-of "thing") (name "from_str")
-					(args
-						(ty (name "Str")))
-					(ty-var (raw "thing")))))
+					(ty-fn
+						(ty (name "Str"))
+						(ty-var (raw "thing"))))))
 		(s-decl
 			(p-ident (raw "from_str"))
 			(e-lambda
@@ -327,7 +327,7 @@ EndOfFile,
 # alias and call methods on that type.
 
 # Simple example: calling a method on a type variable
-call_default : {} -> thing where [thing.default : thing]
+call_default : {} -> thing where [thing.default : () -> thing]
 call_default = |_| {
 	Thing : thing
 	Thing.default()
@@ -352,7 +352,7 @@ process_value = |input| {
 }
 
 # Chaining method results - pass result of one dispatch to another
-chain_methods : x -> x where [x.second : x -> x, x.first : x]
+chain_methods : x -> x where [x.second : x -> x, x.first : () -> x]
 chain_methods = |_| {
 	X : x
 	initial = X.first()
@@ -392,7 +392,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "Thing") (type-var "thing")
 					(ty-rigid-var (name "thing")))
-				(e-type-dispatch-call (method "default") (type-dispatch-stmt 10) (constraint-fn-var 406)
+				(e-type-dispatch-call (method "default") (type-dispatch-stmt 11) (constraint-fn-var 405)
 					(args))))
 		(annotation
 			(ty-fn (effectful false)
@@ -400,8 +400,8 @@ from_str = |str| {
 				(ty-rigid-var (name "thing")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "thing"))) (name "default")
-					(args)
-					(ty-rigid-var-lookup (ty-rigid-var (name "thing")))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "thing"))))))))
 	(d-let
 		(p-assign (ident "combine"))
 		(e-lambda
@@ -411,7 +411,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-type-dispatch-call (method "from_b") (type-dispatch-stmt 27) (constraint-fn-var 414)
+				(e-type-dispatch-call (method "from_b") (type-dispatch-stmt 29) (constraint-fn-var 412)
 					(args
 						(e-lookup-local
 							(p-assign (ident "second")))))))
@@ -422,9 +422,9 @@ from_str = |str| {
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "from_b")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "process_value"))
 		(e-lambda
@@ -436,12 +436,12 @@ from_str = |str| {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-type-dispatch-call (method "validate") (type-dispatch-stmt 47) (constraint-fn-var 429)
+							(e-type-dispatch-call (method "validate") (type-dispatch-stmt 51) (constraint-fn-var 425)
 								(args
 									(e-lookup-local
 										(p-assign (ident "input")))))
 							(e-block
-								(e-type-dispatch-call (method "transform") (type-dispatch-stmt 47) (constraint-fn-var 432)
+								(e-type-dispatch-call (method "transform") (type-dispatch-stmt 51) (constraint-fn-var 428)
 									(args
 										(e-lookup-local
 											(p-assign (ident "input"))))))))
@@ -455,13 +455,13 @@ from_str = |str| {
 				(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "val"))) (name "transform")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "val")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "val")))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "val"))) (name "validate")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
-					(ty-lookup (name "Bool") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "val")))
+						(ty-lookup (name "Bool") (builtin)))))))
 	(d-let
 		(p-assign (ident "chain_methods"))
 		(e-lambda
@@ -472,9 +472,9 @@ from_str = |str| {
 					(ty-rigid-var (name "x")))
 				(s-let
 					(p-assign (ident "initial"))
-					(e-type-dispatch-call (method "first") (type-dispatch-stmt 73) (constraint-fn-var 441)
+					(e-type-dispatch-call (method "first") (type-dispatch-stmt 79) (constraint-fn-var 435)
 						(args)))
-				(e-type-dispatch-call (method "second") (type-dispatch-stmt 73) (constraint-fn-var 443)
+				(e-type-dispatch-call (method "second") (type-dispatch-stmt 79) (constraint-fn-var 437)
 					(args
 						(e-lookup-local
 							(p-assign (ident "initial")))))))
@@ -484,12 +484,12 @@ from_str = |str| {
 				(ty-rigid-var-lookup (ty-rigid-var (name "x"))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "x"))) (name "second")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "x"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "x"))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "x")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "x")))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "x"))) (name "first")
-					(args)
-					(ty-rigid-var-lookup (ty-rigid-var (name "x")))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "x"))))))))
 	(d-let
 		(p-assign (ident "multi_alias"))
 		(e-lambda
@@ -503,11 +503,11 @@ from_str = |str| {
 					(ty-rigid-var (name "b")))
 				(e-tuple
 					(elems
-						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 100) (constraint-fn-var 454)
+						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 108) (constraint-fn-var 446)
 							(args
 								(e-lookup-local
 									(p-assign (ident "x")))))
-						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 101) (constraint-fn-var 456)
+						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 109) (constraint-fn-var 448)
 							(args
 								(e-lookup-local
 									(p-assign (ident "y")))))))))
@@ -520,13 +520,13 @@ from_str = |str| {
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "convert")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
 		(p-assign (ident "method_with_args"))
 		(e-lambda
@@ -536,7 +536,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "T") (type-var "t")
 					(ty-rigid-var (name "t")))
-				(e-type-dispatch-call (method "create") (type-dispatch-stmt 123) (constraint-fn-var 475)
+				(e-type-dispatch-call (method "create") (type-dispatch-stmt 132) (constraint-fn-var 466)
 					(args
 						(e-lookup-local
 							(p-assign (ident "name")))
@@ -548,10 +548,10 @@ from_str = |str| {
 				(ty-rigid-var-lookup (ty-rigid-var (name "t"))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "t"))) (name "create")
-					(args
+					(ty-fn (effectful false)
 						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "U64") (builtin)))
-					(ty-rigid-var-lookup (ty-rigid-var (name "t")))))))
+						(ty-lookup (name "U64") (builtin))
+						(ty-rigid-var-lookup (ty-rigid-var (name "t"))))))))
 	(d-let
 		(p-assign (ident "from_str"))
 		(e-lambda
@@ -560,7 +560,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "Thing") (type-var "thing")
 					(ty-rigid-var (name "thing")))
-				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 140) (constraint-fn-var 486)
+				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 150) (constraint-fn-var 476)
 					(args
 						(e-lookup-local
 							(p-assign (ident "str")))))))
@@ -570,9 +570,9 @@ from_str = |str| {
 				(ty-rigid-var (name "thing")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "thing"))) (name "from_str")
-					(args
-						(ty-lookup (name "Str") (builtin)))
-					(ty-rigid-var-lookup (ty-rigid-var (name "thing"))))))))
+					(ty-fn (effectful false)
+						(ty-lookup (name "Str") (builtin))
+						(ty-rigid-var-lookup (ty-rigid-var (name "thing")))))))))
 ~~~
 # TYPES
 ~~~clojure

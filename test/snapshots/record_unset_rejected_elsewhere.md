@@ -14,45 +14,67 @@ UNEXPECTED EXPRESSION SYNTAX - record_unset_rejected_elsewhere.md:1:5:1:6
 UNEXPECTED EXPRESSION SYNTAX - record_unset_rejected_elsewhere.md:3:10:3:11
 UNRECOGNIZED SYNTAX - record_unset_rejected_elsewhere.md:1:5:1:6
 # PROBLEMS
-── ✗ unexpected expression syntax ─────── record_unset_rejected_elsewhere.md:1:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-x = _
-    ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found _ here.
-
-── ✗ unexpected expression syntax ────── record_unset_rejected_elsewhere.md:3:10
-
-I was parsing an expression, and this token cannot start an expression here.
-
-y = { a: _ + 1 }
-         ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found _ here.
-
-── ✗ unrecognized syntax ──────────────── record_unset_rejected_elsewhere.md:1:5
-
-I don't recognize this syntax.
-
-x = _
-    ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "_")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_unset_rejected_elsewhere.md") (start 1 5) (end 1 6) (annotation error) (line-text "x = _"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 3 10) (end 3 11))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "_")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_unset_rejected_elsewhere.md") (start 3 10) (end 3 11) (annotation error) (line-text "y = { a: _ + 1 }"))))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "record_unset_rejected_elsewhere.md") (start 1 5) (end 1 6) (annotation error) (line-text "x = _"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Underscore,

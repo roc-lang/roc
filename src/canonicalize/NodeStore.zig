@@ -105,7 +105,6 @@ const ExprNodeTag = enum {
     expr_dbg,
     expr_expect_err,
     expr_unary_minus,
-    expr_unary_not,
     expr_static_dispatch,
     expr_apply,
     expr_record_update,
@@ -133,10 +132,11 @@ const ExprNodeTag = enum {
     malformed,
 };
 
-const WhereNodeTag = enum { where_method, where_method_effectful, where_alias, where_malformed };
+const WhereNodeTag = enum { where_method, where_alias, where_malformed };
 
 const PatternNodeTag = enum {
     pattern_identifier,
+    pattern_var_identifier,
     pattern_as,
     pattern_applied_tag,
     pattern_nominal,
@@ -206,6 +206,7 @@ const DiagnosticNodeTag = enum {
     diag_if_expr_without_else,
     diag_var_across_function_boundary,
     diag_shadowing_warning,
+    diag_binding_name_does_not_match_mutability,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_type_alias_but_needed_nominal,
@@ -319,8 +320,8 @@ pub const LiteralDispatchPlan = extern struct {
     node_idx: u32,
     target_var: u32,
     fn_var: u32,
-    kind: u32,
-    resolution: u32,
+    kind_and_resolution: u32,
+    pattern_failure_owner: u32,
 
     pub const Kind = enum(u32) {
         numeral,
@@ -335,14 +336,34 @@ pub const LiteralDispatchPlan = extern struct {
         checked_error,
     };
 
+    const resolution_shift = 1;
+
+    fn packKindAndResolution(kind: Kind, resolution: Resolution) u32 {
+        return @intFromEnum(kind) | (@intFromEnum(resolution) << resolution_shift);
+    }
+
     pub fn dispatchKind(self: LiteralDispatchPlan) Kind {
-        return @enumFromInt(self.kind);
+        return @enumFromInt(self.kind_and_resolution & 1);
     }
 
     pub fn dispatchResolution(self: LiteralDispatchPlan) Resolution {
-        return @enumFromInt(self.resolution);
+        return @enumFromInt(self.kind_and_resolution >> resolution_shift);
+    }
+
+    pub fn patternFailureOwner(self: LiteralDispatchPlan) ?u32 {
+        return if (self.pattern_failure_owner == std.math.maxInt(u32)) null else self.pattern_failure_owner;
+    }
+
+    fn setResolution(self: *LiteralDispatchPlan, resolution: Resolution) void {
+        self.kind_and_resolution = packKindAndResolution(self.dispatchKind(), resolution);
     }
 };
+
+comptime {
+    if (@sizeOf(LiteralDispatchPlan) != 5 * @sizeOf(u32)) {
+        @compileError("LiteralDispatchPlan must remain five words");
+    }
+}
 
 /// Canonical and checked data owned by a compiler-created interpolation expression.
 /// Optional type variables use zero for null and otherwise store `@intFromEnum(var) + 1`.
@@ -750,15 +771,15 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 96;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 97;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 59;
+pub const MODULEENV_EXPR_NODE_COUNT = 58;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 21;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 18;
+pub const MODULEENV_PATTERN_NODE_COUNT = 19;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -941,20 +962,22 @@ pub fn recordLiteralDispatchPlan(
     kind: LiteralDispatchPlan.Kind,
     target_var: types.Var,
     fn_var: types.Var,
+    pattern_failure_owner: ?u32,
 ) Allocator.Error!void {
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
+    std.debug.assert(narrowNodeTag(PatternNodeTag, node.tag) == null or pattern_failure_owner != null);
 
     var plan = LiteralDispatchPlan{
         .node_idx = @intFromEnum(node_idx),
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
-        .kind = @intFromEnum(kind),
-        .resolution = @intFromEnum(LiteralDispatchPlan.Resolution.unresolved),
+        .kind_and_resolution = LiteralDispatchPlan.packKindAndResolution(kind, .unresolved),
+        .pattern_failure_owner = pattern_failure_owner orelse std.math.maxInt(u32),
     };
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one != 0) {
-        plan.resolution = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).resolution;
+        plan.setResolution(store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).dispatchResolution());
         store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
         return;
     }
@@ -984,7 +1007,7 @@ pub fn finalizeLiteralDispatchResolution(
             .{ @intFromEnum(node_idx), @tagName(previous), @tagName(resolution) },
         );
     }
-    plan.resolution = @intFromEnum(resolution);
+    plan.setResolution(resolution);
     store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
 }
 
@@ -1012,17 +1035,18 @@ pub fn literalDispatchPlans(store: *const NodeStore) []const LiteralDispatchPlan
     return store.literal_dispatch_plans.items.items;
 }
 
-/// Retire the literal plan owned by `node_idx`, if any. Error recovery calls
-/// this for every expression discarded with a replaced subtree, so no plan can
-/// outlive the source node that would execute it.
-pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
+/// Retire and return the literal plan owned by `node_idx`, if any. Error
+/// recovery calls this for every expression discarded with a replaced subtree,
+/// so no live plan can outlive the source node that would execute it.
+pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) ?LiteralDispatchPlan {
     const node = store.nodes.get(node_idx);
     const plan_plus_one = literalDispatchPlanPlusOne(node);
-    if (plan_plus_one == 0) return;
+    if (plan_plus_one == 0) return null;
 
     const plan_index: usize = plan_plus_one - 1;
     const plans = &store.literal_dispatch_plans.items;
     std.debug.assert(plans.items[plan_index].node_idx == @intFromEnum(node_idx));
+    const retired = plans.items[plan_index];
     const last_index = plans.items.len - 1;
     setLiteralDispatchPlanPlusOne(store, node_idx, 0);
     if (plan_index != last_index) {
@@ -1031,6 +1055,7 @@ pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
         setLiteralDispatchPlanPlusOne(store, @enumFromInt(moved.node_idx), @intCast(plan_index + 1));
     }
     _ = plans.pop();
+    return retired;
 }
 
 /// Helper function to get a region by pattern index
@@ -1088,9 +1113,9 @@ fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region:
 }
 
 // Bidirectional u32 encoding for `CIR.Expr.SurfaceOrigin` in `MethodCallData`.
-// Binop ops are offset past the three unit tags so every `Binop.Op` value has
+// Binop ops are offset past the two unit tags so every `Binop.Op` value has
 // a distinct slot.
-const surface_origin_binop_offset: u32 = 3;
+const surface_origin_binop_offset: u32 = 2;
 comptime {
     // The binop range starts after the unit (payload-less) tags; keep the offset
     // in sync so a new unit variant can't collide with a `Binop.Op` slot.
@@ -1106,7 +1131,6 @@ pub fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
     return switch (origin) {
         .method_call => 0,
         .unary_minus => 1,
-        .unary_not => 2,
         .binop => |op| surface_origin_binop_offset + @as(u32, @intFromEnum(op)),
     };
 }
@@ -1116,7 +1140,6 @@ pub fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
     return switch (encoded) {
         0 => .method_call,
         1 => .unary_minus,
-        2 => .unary_not,
         else => .{ .binop = @enumFromInt(encoded - surface_origin_binop_offset) },
     };
 }
@@ -1696,12 +1719,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .expr = @enumFromInt(p.expr),
             } };
         },
-        .expr_unary_not => {
-            const p = payload.expr_unary;
-            return CIR.Expr{ .e_unary_not = .{
-                .expr = @enumFromInt(p.expr),
-            } };
-        },
         .expr_static_dispatch,
         .expr_apply,
         .expr_record_update,
@@ -2164,11 +2181,40 @@ pub fn replaceExprWithRuntimeError(
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    store.retireLiteralDispatchPlan(node_idx);
+    _ = store.retireLiteralDispatchPlan(node_idx);
     var node = Node.init(.malformed);
     node.setPayload(.{ .diag_single_value = .{
         .value = @intFromEnum(diagnostic_idx),
     } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing statement with an in-place runtime error node after
+/// checking has rejected the statement and recorded its diagnostic.
+pub fn replaceStatementWithRuntimeError(
+    store: *NodeStore,
+    stmt_idx: CIR.Statement.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .diag_single_value = .{
+        .value = @intFromEnum(diagnostic_idx),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replace a rejected literal leaf while retaining the surrounding definition
+/// pattern and its binder identities. Retire the leaf's evidence atomically.
+pub fn replacePatternWithRuntimeError(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    _ = store.retireLiteralDispatchPlan(node_idx);
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .pattern_malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx) } });
     store.nodes.set(node_idx, node);
 }
 
@@ -2255,20 +2301,12 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     const tag = narrowNodeTag(WhereNodeTag, node.tag) orelse
         std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
     switch (tag) {
-        .where_method, .where_method_effectful => {
+        .where_method => {
             const p = payload.where_clause;
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
-            const method_name = @as(Ident.Idx, @bitCast(p.name));
-
-            // Retrieve args span and ret from span_with_node_data
-            const args_ret = store.span_with_node_data.items.items[p.args_ret_idx];
-
             return CIR.WhereClause{ .w_method = .{
-                .var_ = var_,
-                .method_name = method_name,
-                .args = .{ .span = .{ .start = args_ret.start, .len = args_ret.len } },
-                .ret = @enumFromInt(args_ret.node),
-                .effectful = node.tag == .where_method_effectful,
+                .var_ = @enumFromInt(p.var_idx),
+                .method_name = @bitCast(p.name),
+                .anno = @enumFromInt(p.anno),
             } };
         },
         .where_alias => {
@@ -2317,6 +2355,14 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const p = payload.pattern_identifier;
             return CIR.Pattern{
                 .assign = .{
+                    .ident = @bitCast(p.ident),
+                },
+            };
+        },
+        .pattern_var_identifier => {
+            const p = payload.pattern_var_identifier;
+            return CIR.Pattern{
+                .var_assign = .{
                     .ident = @bitCast(p.ident),
                 },
             };
@@ -3415,12 +3461,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .expr = @intFromEnum(e.expr),
             } });
         },
-        .e_unary_not => |e| {
-            node.tag = .expr_unary_not;
-            node.setPayload(.{ .expr_unary = .{
-                .expr = @intFromEnum(e.expr),
-            } });
-        },
         .e_block => |e| {
             node.tag = .expr_block;
             node.setPayload(.{ .expr_block = .{
@@ -3576,18 +3616,11 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
 
     switch (whereClause) {
         .w_method => |where_method| {
-            node.tag = if (where_method.effectful) .where_method_effectful else .where_method;
-            const args_ret_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = where_method.args.span.start,
-                .len = where_method.args.span.len,
-                .node = @intFromEnum(where_method.ret),
-            });
+            node.tag = .where_method;
             node.setPayload(.{ .where_clause = .{
                 .var_idx = @intFromEnum(where_method.var_),
                 .name = @bitCast(where_method.method_name),
-                .args_ret_idx = args_ret_idx,
-                .effectful = @intFromBool(where_method.effectful),
+                .anno = @intFromEnum(where_method.anno),
             } });
         },
         .w_alias => |where_alias| {
@@ -3621,6 +3654,12 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .assign => |p| {
             node.tag = .pattern_identifier;
             node.setPayload(.{ .pattern_identifier = .{
+                .ident = @bitCast(p.ident),
+            } });
+        },
+        .var_assign => |p| {
+            node.tag = .pattern_var_identifier;
+            node.setPayload(.{ .pattern_var_identifier = .{
                 .ident = @bitCast(p.ident),
             } });
         },
@@ -4127,8 +4166,7 @@ fn annotationContainsUnderscore(store: *const NodeStore, anno_idx: CIR.TypeAnno.
             switch (store.getWhereClause(where_idx)) {
                 .w_method => |method| {
                     if (store.typeAnnoContainsUnderscore(method.var_)) return true;
-                    if (store.anyTypeAnnoContainsUnderscore(method.args)) return true;
-                    if (store.typeAnnoContainsUnderscore(method.ret)) return true;
+                    if (store.typeAnnoContainsUnderscore(method.anno)) return true;
                 },
                 .w_alias, .w_malformed => {},
             }
@@ -4622,10 +4660,7 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
         switch (store.getWhereClause(where_idx)) {
             .w_method => |method| {
                 try store.collectIntroducedRigidVars(method.var_, &locally_declared);
-                for (store.sliceTypeAnnos(method.args)) |arg| {
-                    try store.collectIntroducedRigidVars(arg, &locally_declared);
-                }
-                try store.collectIntroducedRigidVars(method.ret, &locally_declared);
+                try store.collectIntroducedRigidVars(method.anno, &locally_declared);
             },
             .w_alias => |alias| {
                 try store.collectIntroducedRigidVars(alias.var_, &locally_declared);
@@ -4661,10 +4696,7 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
         for (grouped.get(owner).?.items) |where_idx| {
             switch (store.getWhereClause(where_idx)) {
                 .w_method => |method| {
-                    for (store.sliceTypeAnnos(method.args)) |arg| {
-                        try store.collectReferencedRigidVars(arg, &dependencies);
-                    }
-                    try store.collectReferencedRigidVars(method.ret, &dependencies);
+                    try store.collectReferencedRigidVars(method.anno, &dependencies);
                 },
                 // A where alias reaches the type variables its arguments name.
                 .w_alias => |alias| try store.collectReferencedRigidVars(alias.alias, &dependencies),
@@ -5349,6 +5381,14 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.ident), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
+        .binding_name_does_not_match_mutability => |r| {
+            node.tag = .diag_binding_name_does_not_match_mutability;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{
+                .ident1 = @bitCast(r.ident),
+                .ident2 = @intFromEnum(r.mutability),
+            } });
+        },
         .type_redeclared => |r| {
             node.tag = .diag_type_redeclared;
             region = r.redeclared_region;
@@ -5744,6 +5784,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                     .start = .{ .offset = p.region_start },
                     .end = .{ .offset = p.region_end },
                 },
+            } };
+        },
+        .diag_binding_name_does_not_match_mutability => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .binding_name_does_not_match_mutability = .{
+                .ident = @bitCast(p.ident1),
+                .mutability = @enumFromInt(p.ident2),
+                .region = store.getRegionAt(node_idx),
             } };
         },
         .diag_type_redeclared => {
@@ -6400,7 +6448,7 @@ test "NodeStore basic CompactWriter roundtrip" {
         },
     });
     const node1_idx = try original.nodes.append(gpa, node1);
-    try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9));
+    try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9), 11);
     original.finalizeLiteralDispatchResolution(node1_idx, .builtin_direct);
 
     // Add a region
@@ -6452,6 +6500,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
     try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
     try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
+    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureOwner());
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
@@ -6481,12 +6530,14 @@ test "literal dispatch plans are retired with their owning nodes" {
         .quote,
         @enumFromInt(1),
         @enumFromInt(2),
+        null,
     );
     try store.recordLiteralDispatchPlan(
         @enumFromInt(@intFromEnum(numeral_expr)),
         .numeral,
         @enumFromInt(3),
         @enumFromInt(4),
+        17,
     );
     try testing.expectEqual(@as(usize, 2), store.literalDispatchPlans().len);
 
@@ -6500,6 +6551,7 @@ test "literal dispatch plans are retired with their owning nodes" {
 
     const numeral_plan = store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(numeral_expr))).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, numeral_plan.dispatchKind());
+    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureOwner());
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
     try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
 

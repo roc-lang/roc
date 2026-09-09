@@ -127,9 +127,9 @@ EndOfFile,
 				(ty (name "Str")))
 			(where
 				(method (mod-of "a") (name "get_value")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "extract"))
 			(e-lambda
@@ -148,12 +148,12 @@ EndOfFile,
 				(ty-var (raw "a")))
 			(where
 				(method (mod-of "a") (name "transform")
-					(args
+					(ty-fn
 						(ty-var (raw "a"))
 						(ty-fn
 							(ty (name "Str"))
-							(ty (name "Str"))))
-					(ty-var (raw "a")))))
+							(ty (name "Str")))
+						(ty-var (raw "a"))))))
 		(s-decl
 			(p-ident (raw "modify"))
 			(e-lambda
@@ -271,7 +271,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "get_value") (constraint-fn-var 441)
+			(e-dispatch-call (method "get_value") (constraint-fn-var 440)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -282,16 +282,16 @@ NO CHANGE
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "get_value")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "modify"))
 		(e-lambda
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "fn")))
-			(e-dispatch-call (method "transform") (constraint-fn-var 458)
+			(e-dispatch-call (method "transform") (constraint-fn-var 456)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -308,13 +308,13 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "transform")
-					(args
+					(ty-fn (effectful false)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-parens
 							(ty-fn (effectful false)
 								(ty-lookup (name "Str") (builtin))
-								(ty-lookup (name "Str") (builtin)))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+								(ty-lookup (name "Str") (builtin))))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "container"))
 		(e-nominal (nominal "Container")
@@ -335,7 +335,7 @@ NO CHANGE
 			(ty-lookup (name "Container") (local))))
 	(d-let
 		(p-assign (ident "directCall"))
-		(e-dispatch-call (method "get_value") (constraint-fn-var 514)
+		(e-dispatch-call (method "get_value") (constraint-fn-var 512)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "myContainer"))))
@@ -344,7 +344,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result1"))
-		(e-call (constraint-fn-var 524)
+		(e-call (constraint-fn-var 522)
 			(e-lookup-local
 				(p-assign (ident "extract")))
 			(e-lookup-local
@@ -353,7 +353,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-call (constraint-fn-var 555)
+		(e-call (constraint-fn-var 553)
 			(e-lookup-local
 				(p-assign (ident "modify")))
 			(e-lookup-local
@@ -366,7 +366,7 @@ NO CHANGE
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "s"))))
-					(e-interpolation (constraint-fn-var 553) (dispatcher-var 116)
+					(e-interpolation (constraint-fn-var 551) (dispatcher-var 118)
 						(first
 							(e-literal (string "")))
 						(parts
@@ -383,7 +383,7 @@ NO CHANGE
 					(p-assign (ident "directCall")))
 				(e-lookup-local
 					(p-assign (ident "result1")))
-				(e-call (constraint-fn-var 580)
+				(e-call (constraint-fn-var 578)
 					(e-lookup-local
 						(p-assign (ident "extract")))
 					(e-lookup-local

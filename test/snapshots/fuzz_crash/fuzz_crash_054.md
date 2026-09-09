@@ -11,13 +11,19 @@ f]
 # EXPECTED
 MOD NOT FOUND - fuzz_crash_054.md:1:20:2:3
 # PROBLEMS
-── ✗ mod not found ─────────────────────────────────── fuzz_crash_054.md:1:20
-
-The mod S was not found in this Roc project.
-
-app[]{f:platform""}import S exposing[c as
-f]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 20) (end 2 3))
+		(headline
+			(text "The mod ")
+			(annotated code "S")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_054.md") (start 1 20) (end 2 3) (annotation error) (line-text "app[]{f:platform\"\"}import S exposing[c as\nf]")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,UpperIdent,KwExposing,OpenSquare,LowerIdent,KwAs,

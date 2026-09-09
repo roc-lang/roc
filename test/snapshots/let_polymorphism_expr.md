@@ -12,14 +12,23 @@ match [] {
 # EXPECTED
 UNCONDITIONAL CONDITION - let_polymorphism_expr.md:1:7:1:9
 # PROBLEMS
-── ● unconditional condition ────────────────────── let_polymorphism_expr.md:1:7
-
-This match value is known at compile time, so this match will always inspect
-the same value.
-
-match [] {
-      ^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 1 7) (end 1 9))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "match value")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this match will always inspect the same value."))
+		(document
+			(source-region (file "let_polymorphism_expr.md") (start 1 7) (end 1 9) (annotation warning) (line-text "match [] {")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,OpenSquare,CloseSquare,OpenCurly,

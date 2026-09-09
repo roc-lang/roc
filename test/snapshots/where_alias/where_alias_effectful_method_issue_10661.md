@@ -43,10 +43,10 @@ EndOfFile,
 				(args))
 			(ty-var (raw "a"))
 			(where
-				(method (mod-of "a") (name "run!") (effectful true)
-					(args
-						(ty-var (raw "a")))
-					(ty-record))))
+				(method (mod-of "a") (name "run!")
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-record)))))
 		(s-type-decl
 			(header (name "Task")
 				(args))
@@ -157,10 +157,10 @@ main! = |_| go!(Task.Task)
 		(ty-header (name "Runner"))
 		(ty-rigid-var (name "a"))
 		(where
-			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "run!") (effectful true)
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-record))))
+			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "run!")
+				(ty-fn (effectful true)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-record)))))
 	(s-nominal-decl
 		(ty-header (name "Task"))
 		(ty-tag-union

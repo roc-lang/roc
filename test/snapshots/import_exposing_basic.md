@@ -19,36 +19,56 @@ DUPLICATE DEFINITION - import_exposing_basic.md:1:1:1:43
 NAME NOT IN SCOPE - import_exposing_basic.md:5:15:5:21
 NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
-── ● duplicate definition ───────────────────────── import_exposing_basic.md:1:1
-
-The name Json is being redeclared here:
-
-import json.Json exposing [decode, to_str]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-In this scope, Json was already defined in import_exposing_basic.md:1:1:
-
-import json.Json exposing [decode, to_str]
-^
-
-── ✗ name not in scope ─────────────────────────── import_exposing_basic.md:5:15
-
-Nothing is named to_str in this scope.
-
-encoded = to_str(data)
-          ^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────────── import_exposing_basic.md:6:15
-
-Nothing is named decode in this scope.
-
-decoded = decode(encoded)
-          ^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 1 1) (end 1 43))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Json")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "import_exposing_basic.md") (start 1 1) (end 1 43) (annotation error) (line-text "import json.Json exposing [decode, to_str]"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Json")
+			(reflow " was already defined in ")
+			(source-location
+				(file "import_exposing_basic.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "import_exposing_basic.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [decode, to_str]"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 5 15) (end 5 21))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "to_str")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "import_exposing_basic.md") (start 5 15) (end 5 21) (annotation error) (line-text "    encoded = to_str(data)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 6 15) (end 6 21))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "decode")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "import_exposing_basic.md") (start 6 15) (end 6 21) (annotation error) (line-text "    decoded = decode(encoded)")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,

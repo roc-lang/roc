@@ -12,15 +12,22 @@ main = Mod.something
 # EXPECTED
 NAME NOT IN SCOPE - can_import_mod_not_found.md:3:8:3:21
 # PROBLEMS
-── ✗ name not in scope ────────────────────── can_import_mod_not_found.md:3:8
-
-Nothing is named something in this scope.
-
-main = Mod.something
-       ^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 3 8) (end 3 21))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "something")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_mod_not_found.md") (start 3 8) (end 3 21) (annotation error) (line-text "main = Mod.something")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

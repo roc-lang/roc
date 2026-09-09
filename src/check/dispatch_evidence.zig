@@ -85,6 +85,10 @@ pub const EvidenceParam = struct {
     /// Producer-authored origin from which a specialization must obtain the
     /// dispatcher's concrete type. `path` is relative to this source.
     source: Source,
+    /// Producer-authored scheme-only codec; no uninstantiated root contract.
+    requires_instantiation: bool = false,
+    /// Assigned once when the owner schema is frozen into the checked pool.
+    published_index: ?u32 = null,
     /// Semantic steps from the scheme root to the dispatcher's first
     /// occurrence. Empty when no path over the normalized callable exists:
     /// dispatchers reachable only through a constraint's fn type, and open-row
@@ -103,6 +107,8 @@ pub const EvidenceParam = struct {
         /// callable containing this parameter.
         constraint_callable: ConstraintCallableSource,
         erased_row_remainder,
+        /// An explicit composite codec relation owned by the binding scheme.
+        scheme_requirement,
     };
 };
 
@@ -181,10 +187,43 @@ pub fn enumerateEvidenceParams(
     scratch: *Scratch,
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
+    return enumerateEvidenceParamsWithRequirements(gpa, store, root, &.{}, scratch, out);
+}
+
+/// Captured codec requirement retaining its receiver, callable constraint, and
+/// checker-authored need for instantiation before selecting a concrete codec.
+pub const SchemeRequirement = struct {
+    receiver: Var,
+    constraint: StaticDispatchConstraint,
+    requires_instantiation: bool,
+};
+
+/// Append the complete scheme contract. Explicit requirements retain producer
+/// order and exact callable identity, even when their receivers share a type.
+pub fn enumerateEvidenceParamsWithRequirements(
+    gpa: Allocator,
+    store: *const types_mod.Store,
+    root: Var,
+    requirements: []const SchemeRequirement,
+    scratch: *Scratch,
+    out: *std.ArrayListUnmanaged(EvidenceParam),
+) Allocator.Error!void {
     scratch.clear();
 
     const out_base = out.items.len;
     try walk(gpa, store, root, .scheme_callable, scratch, out);
+    for (requirements) |requirement| {
+        try out.append(gpa, .{
+            .dispatcher_var = store.resolveVar(requirement.receiver).var_,
+            .constraint = requirement.constraint,
+            .source = .scheme_requirement,
+            .requires_instantiation = requirement.requires_instantiation,
+        });
+        try scratch.fn_var_queue.append(gpa, .{
+            .var_ = requirement.constraint.fn_var,
+            .intro_expr = requirement.constraint.provenance.intro_expr.get(),
+        });
+    }
     // Constraint fn types can bind further constrained vars; the queue holds
     // every emitted constraint's fn var in emission order. `walk` may grow the
     // queue while we drain it—index-based drain keeps that sound. Params

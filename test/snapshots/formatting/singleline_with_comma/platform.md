@@ -18,56 +18,72 @@ EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 EXPOSED BUT NOT DEFINED - platform.md:3:15:3:17
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
-── ✗ exposed but not defined ────────────────────────────────── platform.md:5:13
-
-The mod header says that pr1 is exposed, but it is not defined anywhere in
-this mod.
-
-provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-You can fix this by either defining pr1 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ────────────────────────────────── platform.md:5:41
-
-The mod header says that pr2 is exposed, but it is not defined anywhere in
-this mod.
-
-provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
-                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-You can fix this by either defining pr2 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ────────────────────────────────── platform.md:3:11
-
-The mod header says that E1 is exposed, but it is not defined anywhere in
-this mod.
-
-exposes [E1, E2,]
-         ^^
-
-You can fix this by either defining E1 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ────────────────────────────────── platform.md:3:15
-
-The mod header says that E2 is exposed, but it is not defined anywhere in
-this mod.
-
-exposes [E1, E2,]
-             ^^
-
-You can fix this by either defining E2 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ invalid hosted section ────────────────────────────────────────────────────
-
-The platform header uses the linker symbol roc_not implemented, but linker
-symbols in platform headers must be valid C identifiers: start with a letter or
-underscore, followed by only letters, digits, and underscores.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 5 13) (end 5 39))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "pr1")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 5 13) (end 5 39) (annotation error) (line-text "\tprovides { \"roc_not implemented\": pr1, \"roc_not implemented\": pr2 }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "pr1")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 5 41) (end 5 67))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "pr2")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 5 41) (end 5 67) (annotation error) (line-text "\tprovides { \"roc_not implemented\": pr1, \"roc_not implemented\": pr2 }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "pr2")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 3 11) (end 3 13))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "E1")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 3 11) (end 3 13) (annotation error) (line-text "\texposes [E1, E2,]"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "E1")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 3 15) (end 3 17))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "E2")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 3 15) (end 3 17) (annotation error) (line-text "\texposes [E1, E2,]"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "E2")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Invalid Hosted Section")
+		(headline
+			(reflow "The platform header uses the linker symbol")
+			(reflow " ")
+			(annotated code "roc_not implemented")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but linker symbols in platform headers must be valid C identifiers: start with a letter or underscore, followed by only letters, digits, and underscores."))
+		(document)))
+~~~
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

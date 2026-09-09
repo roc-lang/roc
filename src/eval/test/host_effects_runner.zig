@@ -385,7 +385,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
-            static_strings.entries,
+            static_strings.view(),
             lowered.view.boxy_erased_arg_desc_offsets,
             lowered.view.boxy_erased_arg_desc_params,
             lowered.view.boxy_worker_procs,

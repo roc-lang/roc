@@ -49,9 +49,29 @@ fn testRocCrashed(_: *host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) vo
 }
 
 test "embedding API: full canonical sequence on simple_success app" {
-    // Path is resolved relative to the cwd at test time, which is the repo
-    // root for `zig build run-test-zig-module-compile`.
-    const app_path = "test/cli/simple_success.roc";
+    try runEmbeddingSequence("test/cli/simple_success.roc", &.{"roc_main"}, true);
+}
+
+test "embedding API: distinct provides aliases retain their names and image ordinals" {
+    try runEmbeddingSequence(
+        "test/cli/issue_11220_required_main_host_entry/app_aliases.roc",
+        &.{ "another_string_export", "roc_process_string" },
+        false,
+    );
+}
+
+const EmbeddingSequenceError = eval.BuiltinModules.InitError || std.Thread.SpawnError ||
+    Coordinator.AppDiscoveryError || @import("../coordinator.zig").CoordinatorError ||
+    @import("../compile_package.zig").PublishError || lir.CheckedPipeline.LowerResourceError ||
+    lir.LirImage.ViewError || eval.LirInterpreter.Error ||
+    error{ EntrypointNotFound, TestUnexpectedResult, TestExpectedEqual };
+
+fn runEmbeddingSequence(
+    app_path: []const u8,
+    expected_names: []const []const u8,
+    comptime execute_entrypoint: bool,
+) EmbeddingSequenceError!void {
+    // Paths are relative to the repo root for `run-test-zig-module-compile`.
 
     const gpa = std.testing.allocator;
     var arena_impl = collections.SingleThreadArena.init(gpa);
@@ -81,8 +101,7 @@ test "embedding API: full canonical sequence on simple_success app" {
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
 
-    // 3. iterReports must walk without crashing; we expect no errors for
-    //    simple_success.roc.
+    // 3. iterReports must walk without crashing; neither fixture has errors.
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
         try std.testing.expect(entry.report.severity != .fatal);
@@ -121,12 +140,16 @@ test "embedding API: full canonical sequence on simple_success app" {
         .{ .target_usize = base.target.TargetUsize.native },
     );
 
-    // 6. Build entrypoint list. simple_success has a platform-provided main!
-    //    so at least one entrypoint must exist.
+    // 6. Only provides declarations become entrypoints; requirements stay internal.
     const entrypoints = try lowered.platformEntrypoints(runtime_alloc);
     const entrypoint_names = try lowered.platformEntrypointNames(arena, root);
-    try std.testing.expect(entrypoints.len > 0);
+    try std.testing.expectEqual(expected_names.len, lowered.lir_result.root_procs.items.len);
+    try std.testing.expectEqual(expected_names.len, entrypoints.len);
     try std.testing.expectEqual(entrypoints.len, entrypoint_names.len);
+    for (expected_names, entrypoint_names, entrypoints, 0..) |expected, actual, entrypoint, ordinal| {
+        try std.testing.expectEqualStrings(expected, actual);
+        try std.testing.expectEqual(@as(u32, @intCast(ordinal)), entrypoint.ordinal);
+    }
 
     // 7. Fill the LIR image header in the contiguous buffer.
     const image_header = try runtime_alloc.create(lir.LirImage.Header);
@@ -149,6 +172,12 @@ test "embedding API: full canonical sequence on simple_success app" {
         lowered.target_usize,
     );
     defer view.deinit();
+    try std.testing.expectEqual(entrypoints.len, view.platform_entrypoints.len);
+    for (entrypoints, view.platform_entrypoints) |expected, actual| {
+        try std.testing.expectEqual(expected.ordinal, actual.ordinal);
+        try std.testing.expectEqual(expected.root_proc, actual.root_proc);
+    }
+    if (!execute_entrypoint) return;
 
     // 9. Wire RocOps with empty hosted_fns (simple_success has no hosted-fn
     //    calls). For platforms with hosted functions, the dispatch index

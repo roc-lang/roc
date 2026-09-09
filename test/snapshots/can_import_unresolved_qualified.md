@@ -45,111 +45,167 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
-── ● duplicate definition ─────────────── can_import_unresolved_qualified.md:1:1
-
-The name Json is being redeclared here:
-
-import json.Json
-^^^^^^^^^^^^^^^^
-
-In this scope, Json was already defined in can_import_unresolved_qualified.md:1:1:
-
-import json.Json
-^
-
-── ✗ name not in scope ────────────────── can_import_unresolved_qualified.md:5:8
-
-Nothing is named method in this scope.
-
-main = Json.NonExistent.method
-       ^^^^^^^^^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ mod not found ────────────────── can_import_unresolved_qualified.md:8:17
-
-This InvalidType type is declared to be in json.Json, which does not exist.
-
-parseData : Json.InvalidType -> Str
-                ^^^^^^^^^^^^
-
-── ✗ name not in scope ───────────────── can_import_unresolved_qualified.md:9:20
-
-Nothing is named stringify in this scope.
-
-parseData = |data| Json.stringify(data)
-                   ^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:29
-
-This Server.Request type is declared to be in http.Client, which does not exist.
-
-processRequest : Http.Server.Request -> Http.Server.Response
-                            ^^^^^^^^
-
-── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:52
-
-This Server.Response type is declared to be in http.Client, which does not
-exist.
-
-processRequest : Http.Server.Request -> Http.Server.Response
-                                                   ^^^^^^^^^
-
-── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:13:24
-
-Nothing is named defaultResponse in this scope.
-
-processRequest = |req| Http.Server.defaultResponse
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ────────────────── can_import_unresolved_qualified.md:13:19
-
-Variable req is defined here and then never used:
-
-processRequest = |req| Http.Server.defaultResponse
-                  ^^^
-
-If you don't need this variable, prefix it with an underscore like _req to
-suppress this warning.
-
-── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:16:10
-
-Nothing is named prase in this scope.
-
-result = Json.prase("test")
-         ^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ does not exist ─────────────────── can_import_unresolved_qualified.md:19:10
-
-Unknown.Mod.config does not exist.
-
-config = Unknown.Mod.config
-         ^^^^^^^^^^^^^^^^^^
-
-── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:22:10
-
-Nothing is named invalidMethod in this scope.
-
-client = Http.invalidMethod
-         ^^^^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:25:10
-
-Nothing is named create in this scope.
-
-parser = Json.Parser.Advanced.NonExistent.create
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 1 1) (end 1 17))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Json")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_import_unresolved_qualified.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Json")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_import_unresolved_qualified.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 5 8) (end 5 31))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "method")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 5 8) (end 5 31) (annotation error) (line-text "main = Json.NonExistent.method"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 8 17) (end 8 29))
+		(headline
+			(text "This ")
+			(annotated code "InvalidType")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_unresolved_qualified.md") (start 8 17) (end 8 29) (annotation error) (line-text "parseData : Json.InvalidType -> Str"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 9 20) (end 9 34))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "stringify")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 9 20) (end 9 34) (annotation error) (line-text "parseData = |data| Json.stringify(data)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 12 29) (end 12 37))
+		(headline
+			(text "This ")
+			(annotated code "Server.Request")
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_unresolved_qualified.md") (start 12 29) (end 12 37) (annotation error) (line-text "processRequest : Http.Server.Request -> Http.Server.Response"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 12 52) (end 12 61))
+		(headline
+			(text "This ")
+			(annotated code "Server.Response")
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_unresolved_qualified.md") (start 12 52) (end 12 61) (annotation error) (line-text "processRequest : Http.Server.Request -> Http.Server.Response"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 13 24) (end 13 51))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "defaultResponse")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 13 24) (end 13 51) (annotation error) (line-text "processRequest = |req| Http.Server.defaultResponse"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 13 19) (end 13 22))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "req")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_req")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 13 19) (end 13 22) (annotation error) (line-text "processRequest = |req| Http.Server.defaultResponse"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 16 10) (end 16 20))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "prase")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 16 10) (end 16 20) (annotation error) (line-text "result = Json.prase(\"test\")"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 19 10) (end 19 28))
+		(headline
+			(annotated symbol-unqualified "Unknown.Mod.config")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_unresolved_qualified.md") (start 19 10) (end 19 28) (annotation error) (line-text "config = Unknown.Mod.config"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 22 10) (end 22 28))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "invalidMethod")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 22 10) (end 22 28) (annotation error) (line-text "client = Http.invalidMethod"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 25 10) (end 25 49))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "create")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 25 10) (end 25 49) (annotation error) (line-text "parser = Json.Parser.Advanced.NonExistent.create")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

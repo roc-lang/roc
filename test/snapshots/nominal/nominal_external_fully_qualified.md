@@ -21,37 +21,59 @@ MOD NOT FOUND - nominal_external_fully_qualified.md:6:17:6:27
 MOD NOT FOUND - nominal_external_fully_qualified.md:7:17:7:27
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:32:7:36
 # PROBLEMS
-── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:3:21
-
-This MyTryType type is declared to be in MyTryMod, which does not exist.
-
-handleTry : MyTryMod.MyTryType(Str, I32) -> Str
-                    ^^^^^^^^^^
-
-── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:6:17
-
-This MyTryType type is declared to be in MyTryMod, which does not exist.
-
-MyTryMod.MyTryType.Ok(value) => value
-        ^^^^^^^^^^
-
-── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:7:17
-
-This MyTryType type is declared to be in MyTryMod, which does not exist.
-
-MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
-        ^^^^^^^^^^
-
-── ● unused variable ────────────────── nominal_external_fully_qualified.md:7:32
-
-Variable code is defined here and then never used:
-
-MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
-                       ^^^^
-
-If you don't need this variable, prefix it with an underscore like _code to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 3 21) (end 3 31))
+		(headline
+			(text "This ")
+			(annotated code "MyTryType")
+			(reflow " type is declared to be in ")
+			(annotated code "MyTryMod")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_external_fully_qualified.md") (start 3 21) (end 3 31) (annotation error) (line-text "handleTry : MyTryMod.MyTryType(Str, I32) -> Str"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 17) (end 6 27))
+		(headline
+			(text "This ")
+			(annotated code "MyTryType")
+			(reflow " type is declared to be in ")
+			(annotated code "MyTryMod")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_external_fully_qualified.md") (start 6 17) (end 6 27) (annotation error) (line-text "        MyTryMod.MyTryType.Ok(value) => value"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 7 17) (end 7 27))
+		(headline
+			(text "This ")
+			(annotated code "MyTryType")
+			(reflow " type is declared to be in ")
+			(annotated code "MyTryMod")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_external_fully_qualified.md") (start 7 17) (end 7 27) (annotation error) (line-text "        MyTryMod.MyTryType.Err(code) => \"Error: $(code.toStr())\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 7 32) (end 7 36))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "code")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_code")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "nominal_external_fully_qualified.md") (start 7 32) (end 7 36) (annotation error) (line-text "        MyTryMod.MyTryType.Err(code) => \"Error: $(code.toStr())\"")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

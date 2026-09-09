@@ -15,9 +15,32 @@ foo = {
 }
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_stmt.md:3:6:3:12
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 12))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "result")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$result")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_stmt.md") (start 3 6) (end 3 12) (annotation warning) (line-text "\tvar result = 0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -76,7 +99,7 @@ foo = {
 		(p-assign (ident "foo"))
 		(e-block
 			(s-var
-				(p-assign (ident "result"))
+				(p-var-assign (ident "result"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "x"))
@@ -87,17 +110,17 @@ foo = {
 						(e-num (value "3"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "result"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 300)
+						(p-var-assign (ident "result"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 301)
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "result"))))
+									(p-var-assign (ident "result"))))
 							(args
 								(e-lookup-local
 									(p-assign (ident "x"))))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "result"))))
+				(p-var-assign (ident "result"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~

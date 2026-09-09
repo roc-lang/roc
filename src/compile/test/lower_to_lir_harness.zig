@@ -140,6 +140,12 @@ pub const LirLoweringOptions = struct {
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
     monotype_only: bool = false,
+    /// Verify checked evidence consumption and worker ABIs at the Boxy planning
+    /// boundary, independently of codec body generation in Boxy lowering.
+    boxy_plan_inspect: ?*const fn (*const postcheck.Boxy.Plan.ProgramPlan) LowerToLirHarnessError!void = null,
+    /// Receives deterministic Monotype work counters. This is independent of
+    /// elapsed-time measurement and is available at the `monotype_only` boundary.
+    monotype_diagnostics_out: ?*postcheck.Monotype.Lower.Diagnostics = null,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -160,6 +166,13 @@ pub fn expectLowersToLirWithOptions(app_body: []const u8, opts: LirLoweringOptio
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null, null);
+}
+
+/// Lower an app at `app_path` to LIR with explicit lowering options. Reaching
+/// the end without a panic is the assertion, so `allow_user_errors` programs
+/// use this to pin that a rejected app still lowers to a checked crash.
+pub fn expectAppPathLowersToLirWithOptions(app_path: []const u8, opts: LirLoweringOptions) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, null, null);
 }
 
 /// Lower an app at `app_path` through Monotype specialization, without running
@@ -604,6 +617,15 @@ fn lowerAppPathToLir(
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    if (!opts.allow_user_errors and coord.hasUserErrors()) {
+        var reports = coord.iterReports();
+        while (reports.next()) |entry| {
+            var rendered = std.Io.Writer.Allocating.init(gpa);
+            defer rendered.deinit();
+            try entry.report.render(&rendered.writer, .markdown);
+            std.debug.print("{s}\n", .{rendered.written()});
+        }
+    }
     if (!opts.allow_user_errors) {
         try std.testing.expect(!coord.hasUserErrors());
     }
@@ -617,7 +639,12 @@ fn lowerAppPathToLir(
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    // These scheduler fixtures explicitly exercise checked procedure-use roots;
+    // ordinary host compilation selects only provided exports.
+    const lir_roots = if (opts.parallel_procedure_root_fixture or opts.prepared_direct_call_root_fixture)
+        try gpa.dupe(check.CheckedArtifact.RootRequest, root.root_requests.runtime_requests)
+    else
+        try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
     if (opts.parallel_procedure_root_fixture) {
         var procedure_use_roots: usize = 0;
@@ -628,6 +655,7 @@ fn lowerAppPathToLir(
     }
 
     if (opts.monotype_only) {
+        var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
         var mono = try postcheck.Monotype.Lower.run(
             gpa,
             .{
@@ -635,9 +663,21 @@ fn lowerAppPathToLir(
                 .imports = imports,
             },
             .{ .requests = lir_roots },
-            .{},
+            .{ .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null },
         );
         mono.deinit();
+        if (opts.monotype_diagnostics_out) |out| out.* = diagnostics;
+        return;
+    }
+
+    if (opts.boxy_plan_inspect) |inspect_plan| {
+        var plan = try postcheck.Boxy.Plan.analyzeProgram(gpa, .{
+            .root_module = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+            .roots = lir_roots,
+        }, .{});
+        defer plan.deinit();
+        try inspect_plan(&plan);
         return;
     }
 

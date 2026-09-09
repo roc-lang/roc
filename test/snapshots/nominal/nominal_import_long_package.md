@@ -13,13 +13,21 @@ red = ... # not implemented
 # EXPECTED
 MOD NOT FOUND - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
-── ✗ mod not found ─────────────────────── nominal_import_long_package.md:3:7
-
-This CE type is declared to be in design.Styles, which does not exist.
-
-red : CE
-      ^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 3 7) (end 3 9))
+		(headline
+			(text "This ")
+			(annotated code "CE")
+			(reflow " type is declared to be in ")
+			(annotated code "design.Styles")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_import_long_package.md") (start 3 7) (end 3 9) (annotation error) (line-text "red : CE")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,KwAs,UpperIdent,CloseSquare,

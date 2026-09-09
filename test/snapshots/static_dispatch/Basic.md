@@ -91,9 +91,9 @@ EndOfFile,
 				(ty-var (raw "b")))
 			(where
 				(method (mod-of "a") (name "to_str")
-					(args
-						(ty-var (raw "a")))
-					(ty-var (raw "b")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "helper1"))
 			(e-lambda
@@ -109,9 +109,9 @@ EndOfFile,
 				(ty-var (raw "b")))
 			(where
 				(method (mod-of "a") (name "to_str2")
-					(args
-						(ty-var (raw "a")))
-					(ty-var (raw "b")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "helper2"))
 			(e-lambda
@@ -199,7 +199,7 @@ main = (helper1(val), helper2(val))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 330)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 329)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -210,15 +210,15 @@ main = (helper1(val), helper2(val))
 				(ty-rigid-var (name "b")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
 		(p-assign (ident "helper2"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_str2") (constraint-fn-var 338)
+			(e-dispatch-call (method "to_str2") (constraint-fn-var 336)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -229,9 +229,9 @@ main = (helper1(val), helper2(val))
 				(ty-rigid-var (name "b")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str2")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
 		(p-assign (ident "val"))
 		(e-nominal (nominal "Basic")
@@ -245,12 +245,12 @@ main = (helper1(val), helper2(val))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 382)
+				(e-call (constraint-fn-var 380)
 					(e-lookup-local
 						(p-assign (ident "helper1")))
 					(e-lookup-local
 						(p-assign (ident "val"))))
-				(e-call (constraint-fn-var 388)
+				(e-call (constraint-fn-var 386)
 					(e-lookup-local
 						(p-assign (ident "helper2")))
 					(e-lookup-local

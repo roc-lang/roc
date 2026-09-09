@@ -278,7 +278,7 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("boxy_tag desc=");
                     try writeBoxyDescRef(s.target_desc, writer);
-                    try writer.print(" tag={s}", .{self.store.getString(s.tag_name)});
+                    try writer.print(" tag={s}", .{self.store.getBoxyName(s.tag_name)});
                     if (s.payload) |payload| {
                         try writer.print(" payload=l{d} layout=", .{@intFromEnum(payload)});
                         try writeLayout(self.layouts, s.payload_layout, writer);
@@ -295,7 +295,7 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("boxy_tag_payload source=l{d} desc=", .{@intFromEnum(s.source)});
                     try writeBoxyDescRef(s.source_desc, writer);
-                    try writer.print(" tag={s} payload={d}", .{ self.store.getString(s.tag_name), s.payload_index });
+                    try writer.print(" tag={s} payload={d}", .{ self.store.getBoxyName(s.tag_name), s.payload_index });
                     if (s.target_desc) |target_desc| {
                         try writer.print(" target_desc=l{d}", .{@intFromEnum(target_desc)});
                     }
@@ -306,7 +306,7 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("boxy_tag_match l{d} desc=", .{@intFromEnum(s.source)});
                     try writeBoxyDescRef(s.source_desc, writer);
-                    try writer.print(" tag={s}\n", .{self.store.getString(s.tag_name)});
+                    try writer.print(" tag={s}\n", .{self.store.getBoxyName(s.tag_name)});
                     try writeIndent(indent, writer);
                     try writer.writeAll("on_match:\n");
                     try self.writeChainInner(gpa, s.on_match, indent + 1, writer);
@@ -339,6 +339,7 @@ const Printer = struct {
                     try self.writeLocals(s.args, writer);
                     try writer.writeAll(")");
                     if (s.unique_args != 0) try writer.print(" unique=0x{x}", .{s.unique_args});
+                    if (s.simd_concat_count) |count| try writer.print(" concat_count={d}", .{count});
                     try writer.writeAll("\n");
                     current = s.next;
                 },

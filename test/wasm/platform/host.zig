@@ -49,12 +49,14 @@ const wasm_allocator = std.heap.wasm_allocator;
 // Diagnostics delegate to the imported env functions.
 
 comptime {
-    @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
-    @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
-    @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });
-    @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
-    @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
-    @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
+    shim_symbols.exportRuntimeFns(.{
+        .alloc = &rocAlloc,
+        .dealloc = &rocDealloc,
+        .realloc = &rocRealloc,
+        .dbg = &rocDbg,
+        .expect_failed = &rocExpectFailed,
+        .crashed = &rocCrashed,
+    }, .default);
 }
 
 fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {

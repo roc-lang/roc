@@ -20,22 +20,48 @@ main = {
 # EXPECTED
 RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:8:11:8:47
 # PROBLEMS
-── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:8:11
-
-This from_interpolation dispatch would have to call itself to satisfy its own
-type.
-
-url : Try(Try(Url, [InvalidUrl]), [Outer])
-      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The dispatcher type is:
-
-    Try(Url, [InvalidUrl])
-
-Hint: Use a more specific result type, or add an associated function whose
-from_interpolation implementation does not require the same dispatch on the
-same type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Recursive Dispatch")
+		(region (start 8 11) (end 8 47))
+		(headline
+			(reflow "The type requirements for")
+			(reflow " ")
+			(annotated code "from_interpolation")
+			(reflow " ")
+			(reflow "cannot be resolved."))
+		(document
+			(source-region (file "nested_try_interpolation_recursive_dispatch.md") (start 8 11) (end 8 47) (annotation error) (line-text "    url : Try(Try(Url, [InvalidUrl]), [Outer])"))
+			(line-break)
+			(reflow "The method is being selected for this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try(Url, [InvalidUrl])")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Using")
+			(reflow " ")
+			(annotated code "from_interpolation")
+			(reflow " ")
+			(reflow "for this type requires the same method again, before all of its type requirements have been determined.")
+			(line-break)
+			(line-break)
+			(reflow "Recursive function calls are allowed. This error is about a cycle in the type requirements, before the function can run.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Check the argument, result, and additional method requirements of")
+			(reflow " ")
+			(annotated code "from_interpolation")
+			(reflow " ")
+			(reflow "to find which requirement leads back to this call."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,

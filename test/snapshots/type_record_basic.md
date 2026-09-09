@@ -15,24 +15,63 @@ main! = |_| getName({namee: "luke", age:21})
 # EXPECTED
 TYPE MISMATCH - type_record_basic.md:6:13:6:13
 # PROBLEMS
-── ✗ type mismatch ─────────────────────────────────── type_record_basic.md:6:21
-
-The first argument being passed to this function has the wrong type.
-
-main! = |_| getName({namee: "luke", age:21})
-                    ^^^^^^^^^^^^^^^^^^^^^^^
-
-This argument has the type:
-
-    { age: U64, namee: a }
-      where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
-
-But getName needs the first argument to be:
-
-    { age: U64, name: Str }
-
-Hint: Maybe namee should be name?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 6 13) (end 6 45))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
+		(document
+			(source-underlines
+				(display (file "type_record_basic.md") (start 6 13) (end 6 45) (annotation dim) (line-text "main! = |_| getName({namee: \"luke\", age:21})"))
+				(underline (start 6 21) (end 6 44) (annotation error)))
+			(line-break)
+			(reflow "This argument has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ age: U64, namee: a }")
+			(line-break)
+			(indent 1)
+			(text "  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But")
+			(reflow " ")
+			(annotated code "getName")
+			(reflow " ")
+			(reflow "needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ age: U64, name: Str }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Maybe")
+			(reflow " ")
+			(annotated code "namee")
+			(reflow " ")
+			(reflow "should be")
+			(reflow " ")
+			(annotated code "name")
+			(reflow "?"))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

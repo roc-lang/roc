@@ -1,6 +1,8 @@
 //! Tail Recursion Modulo Constructor (TRMC) and plain tail-call elimination.
 //!
-//! Runs over the LIR after SolvedLirLower and before Arc.insert. For each
+//! Consumes producer-authored self-tail sites after lowering and before
+//! Arc.insert. Constructor candidates additionally require a LIR use walk.
+//! For each
 //! self-recursive proc it either:
 //!
 //! - applies TRMC, when at least one recursive call's result flows directly
@@ -75,13 +77,14 @@ pub const ResourceError = std.mem.Allocator.Error;
 
 /// Apply TRMC/TCE to every eligible proc in the store.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
+    std.debug.assert(store.tail_call_builder == null);
     const print_transforms = build_options.print_trmc;
     const print_ir = build_options.print_ir_after_trmc;
 
     // Every statement a proc's walk can reach exists before the pass runs;
     // statements appended by earlier transforms belong to already-processed
     // procs, so sizing the stamp array once up front is safe.
-    var scratch = try Scratch.init(store.allocator, store.cfStmtCount());
+    var scratch = Scratch.init(store.allocator, store.cfStmtCount());
     defer scratch.deinit();
 
     const proc_count = store.procSpecCount();
@@ -105,19 +108,26 @@ fn transformProc(
 
     var detection = Detection.init(store, layouts, proc_id, scratch);
     defer detection.deinit();
-    try detection.detect();
-    if (detection.bail) return;
+    // Ordinary TCE consumes producer facts directly; only constructor
+    // rewriting needs the graph walk and its path-specific use analysis.
+    if (layouts.getLayout(proc.ret_layout).tag == .tag_union) {
+        try detection.detect();
+        if (detection.bail) scratch.candidates.clearRetainingCapacity();
+    }
 
     var construct_count: usize = 0;
     var tail_count: usize = 0;
     for (scratch.candidates.items) |candidate| {
         if (candidate.state == .confirmed_construct) {
             construct_count += 1;
-        } else if (candidate.state == .confirmed_tail) {
-            tail_count += 1;
         }
     }
 
+    var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
+    while (tail_site) |id| {
+        tail_count += 1;
+        tail_site = store.getCFStmt(id).assign_call.tail_call.?.next;
+    }
     if (construct_count == 0 and tail_count == 0) return;
     if (builtin.mode == .Debug) detection.assertRewrittenStmtsUnshared();
 
@@ -133,6 +143,7 @@ fn transformProc(
         store.getProcSpecPtr(proc_id).tail_transform = .tce;
     }
 
+    store.getProcSpecPtr(proc_id).tail_calls = null;
     if (print_transforms) {
         const transformed = store.getProcSpec(proc_id);
         debugPrint("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
@@ -153,7 +164,7 @@ fn transformProc(
 
 /// How a statement is reached: the incoming reference the transform redirects
 /// to splice statements out of the graph. Statement graphs are DAGs (lowering
-/// shares linear tails), so this is the FIRST-seen reference. TRMC/TCE
+/// shares linear tails), so this is the FIRST-seen reference. Constructor
 /// eligibility rejects candidates whose recorded edge or rewritten statements
 /// are reachable through a shared tail; otherwise splicing or repurposing the
 /// shared node would change another path through the proc.
@@ -181,7 +192,6 @@ const CandidateState = enum {
     /// by alias hops).
     tagged,
     confirmed_construct,
-    confirmed_tail,
     invalid,
 };
 
@@ -237,7 +247,15 @@ const JoinInfo = struct {
 /// A work-stack entry for the detection walk.
 const WorkItem = struct { stmt: CFStmtId, edge: Edge };
 
-/// Per-run reusable buffers for detection: the containers that would
+const LoopMove = struct {
+    target: LocalId,
+    source: LocalId = undefined,
+    source_index: ?usize = null,
+    readers: usize = 0,
+    pending: bool = false,
+};
+
+/// Per-run reusable buffers for detection and rewriting: containers that would
 /// otherwise be allocated and freed for every proc. The ArrayLists clear in
 /// O(1) via clearRetainingCapacity, and the visited marks clear by bumping
 /// `generation`—so after the high-water marks are reached, a proc's walk
@@ -255,7 +273,8 @@ const Scratch = struct {
     ///
     /// Once a statement has two incoming references, every statement reachable
     /// through it is shared too: mutating any of them changes both paths.
-    stamps: []u32,
+    stamps: []u32 = &.{},
+    original_stmt_count: usize,
     /// Bumped by 3 in beginProc so all stamp values are fresh.
     generation: u32 = 0,
     work: std.ArrayList(WorkItem) = .empty,
@@ -265,11 +284,13 @@ const Scratch = struct {
     /// Every original `ret` statement of the current proc (epilogue-rewritten
     /// by TRMC).
     rets: std.ArrayList(CFStmtId) = .empty,
+    old_args: std.ArrayList(LocalId) = .empty,
+    new_locals: std.ArrayList(LocalId) = .empty,
+    moves: std.ArrayList(LoopMove) = .empty,
+    ready_moves: std.ArrayList(usize) = .empty,
 
-    fn init(gpa: Allocator, stmt_count: usize) ResourceError!Scratch {
-        const stamps = try gpa.alloc(u32, stmt_count);
-        @memset(stamps, 0);
-        return .{ .gpa = gpa, .stamps = stamps };
+    fn init(gpa: Allocator, stmt_count: usize) Scratch {
+        return .{ .gpa = gpa, .original_stmt_count = stmt_count };
     }
 
     fn deinit(self: *Scratch) void {
@@ -278,6 +299,10 @@ const Scratch = struct {
         self.candidates.deinit(self.gpa);
         self.shared_heads.deinit(self.gpa);
         self.rets.deinit(self.gpa);
+        self.old_args.deinit(self.gpa);
+        self.new_locals.deinit(self.gpa);
+        self.moves.deinit(self.gpa);
+        self.ready_moves.deinit(self.gpa);
     }
 
     fn beginProc(self: *Scratch) void {
@@ -285,6 +310,10 @@ const Scratch = struct {
         self.candidates.clearRetainingCapacity();
         self.shared_heads.clearRetainingCapacity();
         self.rets.clearRetainingCapacity();
+        self.old_args.clearRetainingCapacity();
+        self.new_locals.clearRetainingCapacity();
+        self.moves.clearRetainingCapacity();
+        self.ready_moves.clearRetainingCapacity();
         if (self.generation >= std.math.maxInt(u32) - 2) {
             // ~2 billion procs in one run; unreachable in practice, but wrap
             // would make stale stamps read as visited.
@@ -326,6 +355,11 @@ const Detection = struct {
         const proc = self.store.getProcSpec(self.proc_id);
         const ret_layout_val = self.layouts.getLayout(proc.ret_layout);
         self.eligible_trmc = ret_layout_val.tag == .tag_union;
+
+        if (self.scratch.stamps.len == 0) {
+            self.scratch.stamps = try self.scratch.gpa.alloc(u32, self.scratch.original_stmt_count);
+            @memset(self.scratch.stamps, 0);
+        }
 
         try self.walk(proc.body.?);
         if (self.bail) return;
@@ -542,7 +576,7 @@ const Detection = struct {
 
         // A self-call starts a new candidate (after the use checks above, so
         // its arguments invalidate any candidate locals they mention).
-        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id) {
+        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and stmt.assign_call.tail_call == null) {
             if (self.scratch.candidates.items.len == max_candidates) {
                 self.bail = true;
                 return;
@@ -699,7 +733,9 @@ const Detection = struct {
         switch (candidate.state) {
             .active => {
                 candidate.terminal_stmt = stmt_id;
-                candidate.state = .confirmed_tail;
+                // Plain tails require the producer's exact continuation proof.
+                // A result-use chain alone does not exclude intervening effects.
+                candidate.state = .invalid;
                 return true;
             },
             .tagged => {
@@ -713,7 +749,7 @@ const Detection = struct {
                 candidate.state = .invalid;
                 return true;
             },
-            .confirmed_construct, .confirmed_tail, .invalid => return false,
+            .confirmed_construct, .invalid => return false,
         }
     }
 
@@ -820,7 +856,7 @@ const Detection = struct {
     fn invalidateSharedRewriteCandidates(self: *Detection) void {
         for (self.scratch.candidates.items) |*candidate| {
             switch (candidate.state) {
-                .confirmed_construct, .confirmed_tail => {},
+                .confirmed_construct => {},
                 .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(candidate)) {
@@ -874,7 +910,7 @@ const Detection = struct {
     fn assertRewrittenStmtsUnshared(self: *const Detection) void {
         for (self.scratch.candidates.items) |candidate| {
             switch (candidate.state) {
-                .confirmed_construct, .confirmed_tail => {},
+                .confirmed_construct => {},
                 .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(&candidate)) {
@@ -898,11 +934,16 @@ const Transform = struct {
     proc_id: LIR.LirProcSpecId,
     detection: *const Detection,
     /// Every local created by the transform, merged into frame_locals at the end.
-    new_locals: std.ArrayList(LocalId),
-    /// Owned copy of the original proc arg locals; they become the loop join's
-    /// params while fresh locals take their place as proc args.
-    old_args: []LocalId,
+    new_locals: *std.ArrayList(LocalId),
+    /// Scratch copy of the original proc arg locals; they become loop params.
+    old_args: []const LocalId,
     join_id: JoinPointId,
+    /// Membership is local to this proc: retaining a DenseMap across procs
+    /// would retain pages spanning unrelated local IDs. Scheduling arrays live
+    /// in Scratch and retain capacity across both sites and procedures.
+    move_targets: collections.DenseMap(LocalId, usize),
+    moves: *std.ArrayList(LoopMove),
+    ready_moves: *std.ArrayList(usize),
     hole: LocalId = undefined,
     head: LocalId = undefined,
 
@@ -913,15 +954,28 @@ const Transform = struct {
             .layouts = layouts,
             .proc_id = proc_id,
             .detection = detection,
-            .new_locals = .empty,
+            .new_locals = &detection.scratch.new_locals,
+            .moves = &detection.scratch.moves,
+            .ready_moves = &detection.scratch.ready_moves,
             .old_args = &.{},
-            .join_id = @enumFromInt(detection.max_join_id + 1),
+            .move_targets = .init(gpa),
+            .join_id = if (store.getProcSpec(proc_id).tail_calls) |sites|
+                sites.loop
+            else
+                @enumFromInt(detection.max_join_id + 1),
         };
     }
 
     fn deinit(self: *Transform) void {
-        self.new_locals.deinit(self.gpa);
-        self.gpa.free(self.old_args);
+        self.move_targets.deinit();
+    }
+
+    fn copyArgs(self: *Transform, span: LIR.LocalSpan) ResourceError!void {
+        const args = self.store.getLocalSpan(span);
+        const buffer = &self.detection.scratch.old_args;
+        try buffer.ensureTotalCapacity(self.gpa, args.len);
+        for (0..args.len) |index| buffer.appendAssumeCapacity(GuardedList.at(args, index));
+        self.old_args = buffer.items;
     }
 
     fn addLocal(self: *Transform, layout_idx: layout_mod.Idx) ResourceError!LocalId {
@@ -933,12 +987,13 @@ const Transform = struct {
     fn applyTrmc(self: *Transform) ResourceError!void {
         const proc = self.store.getProcSpec(self.proc_id);
         const ret_layout = proc.ret_layout;
-        self.old_args = try GuardedList.dupe(self.gpa, LocalId, self.store.getLocalSpan(proc.args));
+        try self.copyArgs(proc.args);
 
         const ptr_ret = try self.layouts.insertPtr(ret_layout);
         self.hole = try self.addLocal(ptr_ret);
         self.head = try self.addLocal(ptr_ret);
         const initial = try self.addLocal(ptr_ret);
+        try self.initLoopMoves(self.hole);
 
         // Rewrite every original ret into the hole-fill epilogue. Confirmed
         // site terminals (which may be rets in hand-built shapes) are excluded:
@@ -951,30 +1006,27 @@ const Transform = struct {
         for (self.detection.scratch.candidates.items) |*candidate| {
             switch (candidate.state) {
                 .confirmed_construct => try self.rewriteConstructSite(candidate, ptr_ret),
-                .confirmed_tail => try self.rewriteTailSite(candidate),
                 .active, .boxed, .in_struct, .tagged, .invalid => {},
             }
         }
 
+        try self.rewriteTailSites();
         try self.installWrapper(true, initial);
     }
 
     fn applyTce(self: *Transform) ResourceError!void {
         const proc = self.store.getProcSpec(self.proc_id);
-        self.old_args = try GuardedList.dupe(self.gpa, LocalId, self.store.getLocalSpan(proc.args));
+        try self.copyArgs(proc.args);
+        try self.initLoopMoves(null);
 
-        for (self.detection.scratch.candidates.items) |*candidate| {
-            if (candidate.state == .confirmed_tail) {
-                try self.rewriteTailSite(candidate);
-            }
-        }
+        try self.rewriteTailSites();
         try self.installTceLoop();
     }
 
     fn isSiteTerminal(self: *const Transform, stmt_id: CFStmtId) bool {
         for (self.detection.scratch.candidates.items) |candidate| {
             switch (candidate.state) {
-                .confirmed_construct, .confirmed_tail => {
+                .confirmed_construct => {
                     if (candidate.terminal_stmt == stmt_id) return true;
                 },
                 .active, .boxed, .in_struct, .tagged, .invalid => {},
@@ -1048,7 +1100,7 @@ const Transform = struct {
         // 5. The terminal becomes: fill the current hole with the node value,
         //    thread the args + new hole, and loop.
         const st = try self.addLocal(.zst);
-        const loop_back = try self.buildLoopBack(candidate, &.{.{ .target = self.hole, .value = next_hole }});
+        const loop_back = try self.buildLoopBack(candidate.call_args, .{ .target = self.hole, .value = next_hole }, null);
         const store_args = try self.store.addLocalSpan(&.{ self.hole, candidate.head_local });
         self.store.getCFStmtPtr(candidate.terminal_stmt).* = .{ .assign_low_level = .{
             .target = st,
@@ -1059,74 +1111,126 @@ const Transform = struct {
         } };
     }
 
-    fn rewriteTailSite(self: *Transform, candidate: *const Candidate) ResourceError!void {
-        self.unlink(candidate.call_edge, self.nextOf(candidate.call_stmt));
-        const loop_back = try self.buildLoopBack(candidate, &.{});
-        // Overwrite the terminal in place with the head of the loop-back chain
-        // (the head statement object itself becomes garbage).
-        self.store.getCFStmtPtr(candidate.terminal_stmt).* = self.store.getCFStmt(loop_back);
+    fn rewriteTailSites(self: *Transform) ResourceError!void {
+        var site: ?CFStmtId = if (self.store.getProcSpec(self.proc_id).tail_calls) |sites| sites.head else null;
+        while (site) |id| {
+            const call = self.store.getCFStmt(id).assign_call;
+            site = call.tail_call.?.next;
+            // Every incoming reference reaches the same replacement. The
+            // shared return continuation remains available to other paths.
+            const loop_back = try self.buildLoopBack(call.args, null, id);
+            std.debug.assert(loop_back == id);
+        }
     }
 
     const ExtraParamWrite = struct { target: LocalId, value: LocalId };
 
-    /// Build `set_local param := arg` writes for each recursive-call arg (plus
-    /// extras), ending in `jump J`. Returns the chain head. Args that are
-    /// themselves param locals are copied through fresh temps first, since the
-    /// sequential writes would otherwise clobber a param another arg reads.
-    fn buildLoopBack(self: *Transform, candidate: *const Candidate, extras: []const ExtraParamWrite) ResourceError!CFStmtId {
-        const arg_view = self.store.getLocalSpan(candidate.call_args);
-        const args = try GuardedList.dupe(self.gpa, LocalId, arg_view);
-        defer self.gpa.free(args);
+    fn initLoopMoves(self: *Transform, extra: ?LocalId) ResourceError!void {
+        for (self.old_args) |param| try self.addLoopMoveTarget(param);
+        // The generated hole can be far from the original argument IDs. Keep
+        // its single index explicit instead of spanning that gap in the ID map.
+        if (extra) |param| try self.moves.append(self.gpa, .{ .target = param });
+    }
 
-        var copy_head: ?CFStmtId = null;
-        var copy_tail: ?CFStmtId = null;
-        for (args, 0..) |*arg, idx| {
-            if (arg.* == self.old_args[idx]) continue; // self-assign, skipped below
-            const is_param = std.mem.findScalar(LocalId, self.old_args, arg.*) != null;
-            if (!is_param) continue;
-            const tmp = try self.addLocal(self.store.getLocal(arg.*).layout_idx);
-            const copy = try self.store.addCFStmt(.{ .assign_ref = .{
-                .target = tmp,
-                .op = .{ .local = arg.* },
+    fn addLoopMoveTarget(self: *Transform, param: LocalId) ResourceError!void {
+        try self.move_targets.putNoClobber(param, self.moves.items.len);
+        try self.moves.append(self.gpa, .{ .target = param });
+    }
+
+    /// Schedule simultaneous parameter writes in linear time. A destination
+    /// can be overwritten once no pending move reads it. After those moves
+    /// drain, the remaining components are disjoint cycles, each requiring
+    /// just one temporary. Identity writes are omitted, including the hole
+    /// preserved by an ordinary tail site inside a TRMC procedure.
+    fn buildLoopBack(self: *Transform, call_args: LIR.LocalSpan, extra: ?ExtraParamWrite, reuse_head: ?CFStmtId) ResourceError!CFStmtId {
+        const args = self.store.getLocalSpan(call_args);
+        std.debug.assert(args.len == self.old_args.len);
+        const moves = self.moves.items;
+        for (moves) |*move| {
+            move.source = move.target;
+            move.source_index = null;
+            move.readers = 0;
+            move.pending = false;
+        }
+        for (moves[0..args.len], 0..) |*move, index| move.source = GuardedList.at(args, index);
+        if (extra) |write| {
+            const move = &moves[args.len];
+            std.debug.assert(move.target == write.target);
+            move.source = write.value;
+        }
+        for (moves) |*move| {
+            if (move.source == move.target) continue;
+            move.pending = true;
+            move.source_index = if (moves.len > args.len and move.source == moves[args.len].target)
+                args.len
+            else
+                self.move_targets.get(move.source);
+            if (move.source_index) |index| moves[index].readers += 1;
+        }
+        self.ready_moves.clearRetainingCapacity();
+        for (moves, 0..) |move, index| {
+            if (move.pending and move.readers == 0) try self.ready_moves.append(self.gpa, index);
+        }
+
+        var first: ?CFStmtId = reuse_head;
+        var last: ?CFStmtId = null;
+        while (self.ready_moves.pop()) |index| {
+            const move = &moves[index];
+            try self.appendLoopBackStmt(&first, &last, .{ .set_local = .{
+                .target = move.target,
+                .value = move.source,
+                .mode = .initialize_join_param,
                 .next = undefined,
             } });
-            if (copy_tail) |tail| {
-                self.setNext(tail, copy);
-            } else {
-                copy_head = copy;
+            move.pending = false;
+            if (move.source_index) |source_index| {
+                const source = &moves[source_index];
+                source.readers -= 1;
+                if (source.pending and source.readers == 0) try self.ready_moves.append(self.gpa, source_index);
             }
-            copy_tail = copy;
-            arg.* = tmp;
         }
 
-        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
-        var i = extras.len;
-        while (i > 0) {
-            i -= 1;
-            current = try self.store.addCFStmt(.{ .set_local = .{
-                .target = extras[i].target,
-                .value = extras[i].value,
-                .mode = .initialize_join_param,
-                .next = current,
+        for (moves, 0..) |move, start| {
+            if (!move.pending) continue;
+            const tmp = try self.addLocal(self.store.getLocal(move.target).layout_idx);
+            try self.appendLoopBackStmt(&first, &last, .{ .assign_ref = .{
+                .target = tmp,
+                .op = .{ .local = move.target },
+                .next = undefined,
             } });
+            var index = start;
+            while (true) {
+                const cycle_move = &moves[index];
+                std.debug.assert(cycle_move.pending and cycle_move.readers == 1);
+                const source_index = cycle_move.source_index.?;
+                try self.appendLoopBackStmt(&first, &last, .{ .set_local = .{
+                    .target = cycle_move.target,
+                    .value = if (source_index == start) tmp else cycle_move.source,
+                    .mode = .initialize_join_param,
+                    .next = undefined,
+                } });
+                cycle_move.pending = false;
+                if (source_index == start) break;
+                index = source_index;
+            }
         }
-        var j = args.len;
-        while (j > 0) {
-            j -= 1;
-            if (args[j] == self.old_args[j]) continue; // value already in the param
-            current = try self.store.addCFStmt(.{ .set_local = .{
-                .target = self.old_args[j],
-                .value = args[j],
-                .mode = .initialize_join_param,
-                .next = current,
-            } });
-        }
+        try self.appendLoopBackStmt(&first, &last, .{ .jump = .{ .target = self.join_id } });
+        return first.?;
+    }
 
-        if (copy_tail) |tail| {
-            self.setNext(tail, current);
-            return copy_head.?;
+    fn appendLoopBackStmt(self: *Transform, first: *?CFStmtId, last: *?CFStmtId, stmt: LIR.CFStmt) ResourceError!void {
+        // Ordinary tail sites already own a head row. Emit into it directly,
+        // preserving its source metadata and avoiding an unreachable copy.
+        if (last.* == null) {
+            if (first.*) |id| {
+                self.store.getCFStmtPtr(id).* = stmt;
+                last.* = id;
+                return;
+            }
         }
-        return current;
+        const id = try self.store.addCFStmt(stmt);
+        if (last.*) |previous| self.setNext(previous, id) else first.* = id;
+        last.* = id;
     }
 
     /// Wrap the (rewritten) body in the loop join and re-point the proc at
@@ -1222,8 +1326,14 @@ const Transform = struct {
     }
 
     fn requireStackProbeIfNeeded(self: *const Transform, proc: *LIR.LirProcSpec) void {
-        if (self.store.procNeedsStackProbe(self.layouts, proc.*)) {
-            proc.stack_probe = .required;
+        // Lowering already accounted for the original frame, arguments, and
+        // return layout. Only the locals introduced here can add a requirement.
+        if (proc.stack_probe == .required) return;
+        for (self.new_locals.items) |local| {
+            if (LIR.layoutNeedsStackProbe(self.layouts, self.store.getLocal(local).layout_idx)) {
+                proc.stack_probe = .required;
+                return;
+            }
         }
     }
 
@@ -1232,22 +1342,26 @@ const Transform = struct {
     fn rebuildFrameLocals(self: *Transform) ResourceError!LIR.LocalSpan {
         const old_span = self.store.getProcSpec(self.proc_id).frame_locals;
         const old = self.store.getLocalSpan(old_span);
+        if (builtin.mode == .Debug) {
+            var previous: ?LocalId = null;
+            for (0..old.len) |index| {
+                const local = GuardedList.at(old, index);
+                if (previous) |prev| std.debug.assert(@intFromEnum(prev) < @intFromEnum(local));
+                previous = local;
+            }
+            for (self.new_locals.items) |local| {
+                if (previous) |prev| std.debug.assert(@intFromEnum(prev) < @intFromEnum(local));
+                previous = local;
+            }
+        }
+        if (self.new_locals.items.len == 0) return old_span;
+        // Producers publish a sorted, unique inventory. addLocal allocates
+        // monotonically above every existing ID, so concatenation preserves it.
         var merged = try std.ArrayList(LocalId).initCapacity(self.gpa, old.len + self.new_locals.items.len);
         defer merged.deinit(self.gpa);
         for (0..old.len) |index| merged.appendAssumeCapacity(GuardedList.at(old, index));
         merged.appendSliceAssumeCapacity(self.new_locals.items);
-        std.mem.sort(LocalId, merged.items, {}, localIdLessThan);
-        var unique_len: usize = 0;
-        for (merged.items, 0..) |local, idx| {
-            if (idx > 0 and merged.items[unique_len - 1] == local) continue;
-            merged.items[unique_len] = local;
-            unique_len += 1;
-        }
-        return try self.store.addLocalSpan(merged.items[0..unique_len]);
-    }
-
-    fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
-        return @intFromEnum(a) < @intFromEnum(b);
+        return try self.store.addLocalSpan(merged.items);
     }
 
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
