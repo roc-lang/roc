@@ -740,18 +740,20 @@ described in full, with trailers; W6b currently has its provisional title):
 | `onmovlvr` / `92741c58` | W6b actual base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final gate 43/43 tests, 41/41 steps |
 | `mpqnvuvq` / `9c295876` | W6b checked-base owner completion atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 45/45 tests, 41/41 steps pass |
 | `mwttkmrx` / `e2380965` | W6b checked-error base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 51/51 tests, 41/41 steps pass |
-| `nrkxkkmn` | W6b owner-retirement reservation atomicity | reviewed bounded WIP; final normal 54/54 tests, 41/41 steps pass; publication pending |
+| `nrkxkkmn` / `a1757bdc` | W6b owner-retirement reservation atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 54/54 tests, 41/41 steps pass |
+| `uovwznvn` | W6b preexisting-malformed-base recovery authority | reviewed bounded WIP; final normal 57/57 tests, 41/41 steps pass; publication being finalized |
 
-The local and remote `jared/polarity` bookmarks now point at `mwttkmrx` /
-`e2380965`, directly above `mpqnvuvq` / `9c295876`, `onmovlvr` / `92741c58`,
+The local and remote `jared/polarity` bookmarks now point at `nrkxkkmn` /
+`a1757bdc`, directly above `mwttkmrx` / `e2380965`, `mpqnvuvq` / `9c295876`,
+`onmovlvr` / `92741c58`,
 `txopxlzx` / `10f613d6`,
 `wpvvswsl` / `95dfea5a`,
 `zkmyrwqu` / `1f69432c`
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`nrkxkkmn` owns the reviewed and verified owner-retirement reservation
-allocation-test slice, whose publication is now pending.
+`uovwznvn` owns the preexisting-malformed-base recovery-authority test slice
+and is not part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -4229,6 +4231,133 @@ subsets below do not override this latest checkpoint.
   task is an authentic preexisting-malformed-base full-tail positive plus
   separate local source-coordinate and produced/fresh phase negatives; its
   planning does not claim runtime success or change clean-cache recovery policy.
+
+- Publication of `nrkxkkmn` is complete: Git commit
+  `a1757bdcb41e2cef1ae788232776aca636ae656f` was fast-forwarded from `e2380965`
+  to `jared/polarity`. PR #10434's exact head, full updated body and draft status
+  were verified; `ru-reservation-pr-readback.json` records that readback. The
+  driver opened clean child `uovwznvnoklyworksrvynqoovyqvkvny` and explicitly
+  dispatched the sol-ultra author and independent reviewer for the next bounded
+  preexisting-malformed-base task. First is a real full-tail calibration of
+  `main = { ..(1..<5..<10), x: 1.U8 }`, with topology from a distinct canonical
+  request and exact existing malformed publication/retirement authority. Only
+  after it passes may the author add local source-coordinate and isolated
+  produced/fresh phase negatives. Clean-cache recovery rejection is intentional
+  and is not a positive oracle for this diagnostic-bearing fixture. No new-child
+  validation or complete R1/W6b acceptance is claimed.
+
+- Preexisting-malformed-base positive calibration is frozen at `99d2447e`,
+  Check SHA-256
+  `6d2141cb249e481bc9665a41405f76ff10ac3640d23fd9da625fe606d628e327`.
+  It runs the authentic no-import source through the full checker and derives
+  source topology from a distinct canonical-unchecked module. Exact base/owner
+  retirement coordinates, malformed publication/diagnostic, original payloads,
+  base/field plans, plus-one source coordinate and terminal group membership
+  are pinned. Local, produced-capability/context and distinct-fresh replay are
+  exercised without a clean-cache positive. Formatting is unchanged; semantic
+  11819 and a separately dispatched actual calibration review are running.
+  The reviewer has the driver-generated `preexisting-base-calibration-review.diff`.
+  Negative mutations are not implemented or accepted yet.
+
+- Initial preexisting-base semantic 11819 fails on a test-local naming error:
+  `var fresh` shadows the existing checker `fresh` method. The author is
+  narrowly thawed to rename that local and its references; no production fix
+  or negative cases are authorized. The independent actual-code reviewer
+  accepts the positive test's graph and phase oracles on `6d2141cb`, including
+  the phase-correct retired-owner field membership checks, but explicitly does
+  not claim semantic/runtime success. Validation will rerun on the renamed
+  fixture before this calibration is accepted as passing.
+
+- Rename-only correction is frozen at `670f7b7d`, Check SHA-256
+  `aaa4dde8c8d0d7cac995c65dde3688557142e8715116c81f4c22926f9f85741b`.
+  Semantic retry 7553 passes. The reviewer inspected every renamed fixture
+  reference and carries bounded positive-calibration static ACCEPT to this
+  exact source. Focused full-tail runtime 41407 is running; negatives remain
+  unimplemented pending the positive result.
+
+- Preexisting-base runtime 41407 fails `TestUnexpectedResult` while setting up
+  or decoding the distinct fresh canonical fixture, after the actual checked
+  source completed and its diagnostic/type-problem assertions passed. This is
+  not evidence of a compiler defect yet. The author added only finer diagnostic
+  stages for fresh initialization, canonical diagnostics and each topology
+  assertion, with no relaxation or production change. Diagnostic freeze
+  `11450c4b` / Check SHA
+  `942e943a9ce6e50c11bed8222a9d109726090a4afdb686a0659fbe7478f7f78b`
+  is running focused retry 74903. Negative mutations remain on hold.
+
+- Diagnostic retry 74903 fails in the fresh fixture's numeric-field assertion:
+  canonicalization explicitly produces `e_typed_int` for `1.U8`, whereas the
+  new oracle expected `e_num`. The author corrected both fresh and checked
+  assertions to require the actual typed-integer node, value `1` and suffix
+  `U8`; no compiler behavior or proof assertion changed. Formatting is
+  unchanged. Freeze `387884e0`, Check SHA-256
+  `7d6d63b54806b0bfac7da20adf6eb6e55e20cbe61973e5847a02efab4e5c53ed`,
+  is running focused runtime 23627 and a separately dispatched actual full
+  positive-calibration review. Negative cases remain unimplemented until the
+  positive passes. The published checkpoint remains `a1757bdc`.
+
+- The independent full positive-calibration re-review accepts `7d6d63b5`'s
+  literal correction and graph/phase checks statically. Runtime 23627 passes
+  fresh topology and terminal literal assertions, then fails `expected 7,
+  found 212` in the graph oracle. Producer inspection distinguishes the raw
+  base variable (the base syntax occurrence) from the field plan's fresh
+  projection variable, allocated before checking the field value. The new
+  test incorrectly equated both with syntax indices. The author is narrowly
+  correcting that test expectation from explicit producer evidence, without
+  changing production or reconstructing a variable from solved types.
+  Runtime acceptance and negative cases remain pending.
+
+- Projection-oracle correction freezes at `0d52e173`, Check SHA-256
+  `c1248ed91d4386c4738b275c1b7383af7510330126cd3b60785726fd44666877`.
+  Only the invalid field raw-variable equality changes: the projection raw
+  coordinate must be in bounds and distinct from the field syntax occurrence.
+  Exact P_B raw/syntax equality, P_F site/slot/outcome/cause/predecessor/base
+  authority, and retired-consumer/raw-plan equality remain pinned. This does
+  not independently prove the allocation lifetime of every synthetic field
+  variable. Formatting is unchanged; focused runtime 3996 and actual updated
+  independent positive review are running before negative implementation.
+
+- Positive calibration runtime 3996 passes 2/2 on `c1248ed9`, and a separately
+  dispatched actual updated adversarial review accepts that exact source.
+  The driver explicitly thawed the author for the two bounded negative cases:
+  tag-legal P_B source-coordinate retargeting to R_U, rejected locally; and
+  tag-legal R_B rewrite-kind/original-payload forgery that remains locally and
+  produced-context plausible but must fail distinct-fresh source replay.
+  Each restores the exact original row and rechecks acceptance. No production,
+  clean-cache policy, OOM, broad raw-variable forgery or serialization change is
+  authorized by this calibration result; final combined validation is pending.
+
+- Both bounded corruption blocks are implemented in the authentic positive
+  fixture. P_B retargeting remains tag-legal but fails the exact local
+  source-owner inverse; R_B's forged rewrite kind uses the actual healthy
+  typed field's tag/payload, passes local and explicit produced replay, and
+  must fail direct distinct-fresh source-namespace replay. Whole-row block
+  defers restore authority before complete positive replay after each case.
+  Initial full semantic 4059 caught a raw-node enum typo (`expr_typed_int`,
+  not the decoded expression arm `e_typed_int`); the one-token correction is
+  frozen at `7b959074`, Check SHA-256
+  `f7970faa44a7cc111983ff47a23a04648f7f2acba8aa467d90763d90833e0c02`.
+  Formatting is unchanged. Semantic retry 95917 and actual full-delta
+  independent review are running; no runtime or final-gate pass is claimed.
+
+- Final full-delta independent review accepts corrected freeze `7b959074` /
+  Check `f7970faa`: only additive test code, exact positive source/retirement
+  authority, isolated tag-legal negatives, and full restoration. Semantic
+  retry 95917 passes; focused runtime 18818 passes 2/2, including both mutation
+  blocks. The normal producer-regenerated combined gate 13152 is now running,
+  with the prior reservation/base/completion controls plus the actual chained
+  range canonicalizer and generic preexisting-runtime retirement controls.
+  No final-gate or publication success is claimed yet. The next candidate
+  bounded task is active R1 repeated rebuild and readonly/mutable serialization
+  with direct fresh replay, not clean-cache admission of recovery artifacts.
+
+- Final normal gate 13152 passes 57/57 tests and 41/41 steps: canonicalization
+  10, types 10, checker 32 and compile/serde 5, with regenerated Builtins,
+  schema-85 golden and native/wasm serialization sizes. Formatting passes and
+  all four compiler hashes match the independently reviewed `f7970faa` freeze.
+  The driver is finalizing the full jj description, WIP push and exact draft-PR
+  readback. This completes the bounded one-field preexisting-malformed-base
+  recovery-authority test task, not full R1, option (e), adapters or W6b.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

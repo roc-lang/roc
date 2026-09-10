@@ -6261,7 +6261,7 @@ reviewed freeze; push and exact draft-PR head/body readback are verified. The
 failure fixtures give
 the retained Env the same failing allocator used by publication. This isolated
 producer seam does not claim full-file chronology or terminal admission.
-Reviewed checkpoint `nrkxkkmn` implements outer-retirement reservation allocation
+Published `nrkxkkmn` / `a1757bdc` implements outer-retirement reservation allocation
 coverage at the authentic zero-supplied-field, pre-unset boundary. Its natural
 calibration and exhaustive allocation/outer-Probe tests pass the 15/15 direct
 runtime gate and independent actual full-delta review. Precise test-only
@@ -6270,11 +6270,26 @@ witnesses distinguish both reserve failures, and same-instance retry matches
 clean poststate. The production change only extracts the existing transaction.
 The final normal producer-regenerated gate passes 54/54 tests and 41/41 steps,
 including shared helpers, schema-85 golden, serialization and native/wasm sizes.
-Formatting and exact compiler hashes match review; publication is pending. This
-bounded
-slice does not certify supplied-field reservation variants or full R1 admission;
-this does not certify complete record-update admission.
-Preexisting-base cases, unrelated retirement ranges, broader corruption,
+Formatting and exact compiler hashes match review; push and exact draft-PR
+head/body readback are verified. This bounded
+slice does not certify supplied-field reservation variants or full R1 admission.
+Checkpoint `uovwznvn` adds an authentic preexisting-malformed-base positive
+and local-source/produced-versus-fresh phase negatives. Positive full-tail
+calibration passes 2/2 focused tests and independent updated review. It pins
+exact typed-integer syntax, distinct field projection-variable identity,
+preexisting malformed publication/retirement reuse, terminal owner membership,
+and explicit local/produced/distinct-fresh replay. Two fixture-oracle mistakes
+were corrected from actual producer evidence without production changes.
+Both bounded corruption cases pass the focused runtime test and final
+independent full-delta review: wrong base-retirement coordinates fail locally,
+and false rewrite history fails distinct-fresh source replay despite internally
+consistent local/produced state. Exact restoration is checked after each.
+The normal producer-regenerated combined gate passes 57/57 tests and 41/41
+steps, including schema-85 golden, serialization and native/wasm sizes.
+Formatting and exact compiler hashes match review; description and publication
+are being finalized. Clean-cache recovery rejection is unchanged. This does
+not certify complete record-update admission.
+Other preexisting-base shapes, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
 gates remain pending, as do later established-base failure causes and complete
 source-site reachability authority.

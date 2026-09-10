@@ -72307,6 +72307,92 @@ const record_update_direct_binder_owner_retirement_source =
     \\first = |value| { ..value, x: 1.U8 }
 ;
 
+const record_update_preexisting_malformed_base_source =
+    \\main = { ..(1..<5..<10), x: 1.U8 }
+;
+
+const RecordUpdatePreexistingMalformedBaseTopology = struct {
+    def_idx: CIR.Def.Idx,
+    record_expr: CIR.Expr.Idx,
+    base_expr: CIR.Expr.Idx,
+    field_expr: CIR.Expr.Idx,
+    base_diagnostic: CIR.Diagnostic.Idx,
+    malformed_publication: ModuleEnv.MalformedExpressionPublication,
+};
+
+/// Decode the canonical unchecked source before checking rewrites the outer
+/// record. The chained range is already a typed canonicalization-authored
+/// malformed expression, while its enclosing record and numeric field remain
+/// ordinary live expression nodes.
+fn recordUpdatePreexistingMalformedBaseTopology(
+    test_env: anytype,
+) error{TestUnexpectedResult}!RecordUpdatePreexistingMalformedBaseTopology {
+    var topology_stage: []const u8 = "root definition";
+    errdefer std.debug.print(
+        "preexisting malformed record-update topology failed at {s}\n",
+        .{topology_stage},
+    );
+    const cir = test_env.module_env;
+    const def_idx = test_env.can.explicitRootDefByName("main") orelse
+        return error.TestUnexpectedResult;
+    topology_stage = "live record owner";
+    const record_expr = cir.store.getDef(def_idx).expr;
+    const record = cir.store.getExpr(record_expr);
+    if (record != .e_record or record.e_record.ext == null or
+        cir.store.sliceUnsetFields(record.e_record.unsets).len != 0)
+    {
+        return error.TestUnexpectedResult;
+    }
+    topology_stage = "single healthy x field";
+    const fields = cir.store.sliceRecordFields(record.e_record.fields);
+    if (fields.len != 1) return error.TestUnexpectedResult;
+    const field = cir.store.getRecordField(fields[0]);
+    const field_expression = cir.store.getExpr(field.value);
+    if (!std.mem.eql(u8, cir.getIdent(field.name), "x") or
+        field_expression != .e_typed_int or
+        !std.mem.eql(u8, cir.getIdent(field_expression.e_typed_int.type_name), "U8") or
+        field_expression.e_typed_int.value.toI128() != 1)
+    {
+        return error.TestUnexpectedResult;
+    }
+    topology_stage = "chained-range malformed base";
+    const base_expr = record.e_record.ext.?;
+    const base_expression = cir.store.getExpr(base_expr);
+    if (base_expression != .e_runtime_error or
+        cir.store.getDiagnostic(base_expression.e_runtime_error.diagnostic) != .range_op_chained)
+    {
+        return error.TestUnexpectedResult;
+    }
+    topology_stage = "typed node phases";
+    const base_node = cir.store.nodes.get(ModuleEnv.nodeIdxFrom(base_expr));
+    if (base_node.tag != .malformed or
+        cir.store.nodes.get(ModuleEnv.nodeIdxFrom(record_expr)).tag != .expr_record or
+        !isExprNodeTag(cir.store.nodes.get(ModuleEnv.nodeIdxFrom(field.value)).tag))
+    {
+        return error.TestUnexpectedResult;
+    }
+    topology_stage = "singleton malformed publication";
+    const publications = cir.malformed_expression_publications.items.items;
+    if (publications.len != 1) return error.TestUnexpectedResult;
+    const publication = publications[0];
+    topology_stage = "malformed publication inverse";
+    if (!publication.hasLegalTags() or
+        publication.expr_node != @intFromEnum(base_expr) or
+        publication.diagnostic_index != @intFromEnum(base_expression.e_runtime_error.diagnostic) or
+        !malformedExpressionPublicationIsLocallyValid(cir, publication))
+    {
+        return error.TestUnexpectedResult;
+    }
+    return .{
+        .def_idx = def_idx,
+        .record_expr = record_expr,
+        .base_expr = base_expr,
+        .field_expr = field.value,
+        .base_diagnostic = base_expression.e_runtime_error.diagnostic,
+        .malformed_publication = publication,
+    };
+}
+
 const RecordUpdateCheckedErrorBaseTopology = struct {
     def_idx: CIR.Def.Idx,
     annotation_idx: CIR.Annotation.Idx,
@@ -73229,6 +73315,13 @@ const CompletedRecordUpdateOwnerPlanSet = struct {
     plans: RecordUpdateOwnerPlanSet,
 };
 
+const CompletedPreexistingMalformedRecordUpdateOwner = struct {
+    base_retirement_index: u32,
+    owner_retirement_index: u32,
+    base_plan_index: u32,
+    field_plan_index: u32,
+};
+
 fn expectCompletedRecordUpdateOwnerPlanSet(
     cir: *const ModuleEnv,
     owner_expr: CIR.Expr.Idx,
@@ -73322,6 +73415,188 @@ fn expectCompletedRecordUpdateOwnerPlanSet(
         try std.testing.expect(saw_field);
     }
     return .{ .owner = owner, .plans = plans };
+}
+
+fn expectCompletedPreexistingMalformedRecordUpdateOwner(
+    cir: *const ModuleEnv,
+    fresh_cir: *const ModuleEnv,
+    topology: RecordUpdatePreexistingMalformedBaseTopology,
+) !CompletedPreexistingMalformedRecordUpdateOwner {
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_failures.items.items.len);
+    try std.testing.expectEqual(@as(usize, 2), cir.expected_consumption_plans.items.items.len);
+    try std.testing.expectEqual(@as(usize, 2), cir.expected_consumer_retirements.items.items.len);
+    try std.testing.expectEqual(@as(usize, 2), cir.expected_retired_consumers.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_retirement_failures.items.items.len);
+
+    const completed = try expectCompletedRecordUpdateOwnerPlanSet(
+        cir,
+        topology.record_expr,
+        topology.base_expr,
+        &.{topology.field_expr},
+        0,
+    );
+    try std.testing.expectEqual(@as(u32, 0), completed.plans.base);
+    try std.testing.expectEqual(@as(u32, 1), completed.plans.fields[0]);
+    try std.testing.expectEqual(@as(u32, 1), completed.owner.retirement_index);
+
+    const base_plan = cir.expected_consumption_plans.items.items[completed.plans.base];
+    const field_plan = cir.expected_consumption_plans.items.items[completed.plans.fields[0]];
+    const base_retirement_index = base_plan.decodedSourceRetirementIndex() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 0), base_retirement_index);
+    try std.testing.expectEqual(@as(u32, 1), base_plan.source_retirement_index_plus_one);
+    try std.testing.expectEqual(@intFromEnum(topology.record_expr), base_plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(topology.base_expr), base_plan.site_node);
+    try std.testing.expectEqual(@intFromEnum(topology.base_expr), base_plan.raw_consumer_var);
+    try std.testing.expect(expectedCauseOwnersEqual(
+        ModuleEnv.CauseOwner.expectedConsumerRetirement(base_retirement_index),
+        base_plan.failure_owner,
+    ));
+    try std.testing.expect(expectedRecordUpdateBasePlanMatchesStep(cir, base_plan));
+    try std.testing.expect(expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+        cir,
+        base_plan,
+    ));
+    try std.testing.expectEqual(@intFromEnum(topology.record_expr), field_plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(topology.field_expr), field_plan.site_node);
+    try std.testing.expect(field_plan.raw_consumer_var < cir.types.len());
+    try std.testing.expect(field_plan.raw_consumer_var != @intFromEnum(topology.field_expr));
+    try std.testing.expectEqual(completed.plans.base, field_plan.failure_cause_plan_index);
+    try std.testing.expect(expectedCauseOwnersEqual(
+        base_plan.failure_owner,
+        field_plan.failure_owner,
+    ));
+    const base_authority = expectedRecordUpdateBaseAuthority(base_plan) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(expectedRecordUpdateFieldBeginsAtBase(
+        cir,
+        completed.plans.fields[0],
+        field_plan,
+        base_authority,
+    ));
+
+    const base_retirement = cir.expected_consumer_retirements.items.items[
+        base_retirement_index
+    ];
+    try std.testing.expect(base_retirement.hasLegalTags());
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.OwnerKind.expression,
+        base_retirement.decodedOwnerKind().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.Kind.preexisting_runtime_error,
+        base_retirement.decodedKind().?,
+    );
+    try std.testing.expectEqual(@intFromEnum(topology.base_expr), base_retirement.retired_node);
+    try std.testing.expectEqual(CIR.Node.Tag.malformed, base_retirement.decodedOriginalNodeTag().?);
+    try std.testing.expectEqual(
+        @intFromEnum(topology.base_diagnostic),
+        base_retirement.diagnostic_index,
+    );
+    try std.testing.expectEqual(@as(u32, 0), base_retirement.retired_consumers_start);
+    try std.testing.expectEqual(@as(u32, 0), base_retirement.retired_consumers_len);
+    try std.testing.expectEqual(@as(u32, 0), base_retirement.expected_failures_start);
+    try std.testing.expectEqual(@as(u32, 0), base_retirement.expected_failures_len);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.none,
+        base_retirement.rejection_owner_kind,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.none,
+        base_retirement.rejection_owner_index,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.none,
+        base_retirement.rejection_subject_var,
+    );
+    try std.testing.expectEqual(@as(u32, 0), base_retirement.reserved_0);
+    try std.testing.expectEqual(@as(u32, 0), base_retirement.reserved_1);
+    const fresh_base_node = fresh_cir.store.nodes.get(ModuleEnv.nodeIdxFrom(topology.base_expr));
+    const fresh_base_payload: [4]u32 = @bitCast(fresh_base_node.getPayload());
+    try std.testing.expectEqual(CIR.Node.Tag.malformed, fresh_base_node.tag);
+    try std.testing.expectEqualSlices(
+        u32,
+        &fresh_base_payload,
+        &base_retirement.original_payload,
+    );
+    try std.testing.expect(expectedConsumerRetirementNodeIsLocallyValid(
+        cir,
+        base_retirement,
+    ));
+
+    const owner_retirement = completed.owner.retirement;
+    try std.testing.expect(owner_retirement.hasLegalTags());
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.Kind.checker_rewrite_expected,
+        owner_retirement.decodedKind().?,
+    );
+    try std.testing.expectEqual(@intFromEnum(topology.record_expr), owner_retirement.retired_node);
+    try std.testing.expectEqual(CIR.Node.Tag.expr_record, owner_retirement.decodedOriginalNodeTag().?);
+    try std.testing.expectEqual(@as(u32, 0), owner_retirement.retired_consumers_start);
+    try std.testing.expectEqual(@as(u32, 2), owner_retirement.retired_consumers_len);
+    try std.testing.expectEqual(@as(u32, 0), owner_retirement.expected_failures_start);
+    try std.testing.expectEqual(@as(u32, 0), owner_retirement.expected_failures_len);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.none,
+        owner_retirement.rejection_owner_kind,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.none,
+        owner_retirement.rejection_owner_index,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.none,
+        owner_retirement.rejection_subject_var,
+    );
+    try std.testing.expectEqual(@as(u32, 0), owner_retirement.reserved_0);
+    try std.testing.expectEqual(@as(u32, 0), owner_retirement.reserved_1);
+    const checked_record = cir.store.getExpr(topology.record_expr);
+    if (checked_record != .e_runtime_error) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        @intFromEnum(checked_record.e_runtime_error.diagnostic),
+        owner_retirement.diagnostic_index,
+    );
+    const fresh_record_node = fresh_cir.store.nodes.get(ModuleEnv.nodeIdxFrom(
+        topology.record_expr,
+    ));
+    const fresh_record_payload: [4]u32 = @bitCast(fresh_record_node.getPayload());
+    try std.testing.expectEqual(CIR.Node.Tag.expr_record, fresh_record_node.tag);
+    try std.testing.expectEqualSlices(
+        u32,
+        &fresh_record_payload,
+        &owner_retirement.original_payload,
+    );
+    try std.testing.expect(expectedConsumerRetirementNodeIsLocallyValid(
+        cir,
+        owner_retirement,
+    ));
+
+    const publications = cir.malformed_expression_publications.items.items;
+    const fresh_publications = fresh_cir.malformed_expression_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 1), publications.len);
+    try std.testing.expectEqual(@as(usize, 1), fresh_publications.len);
+    try std.testing.expect(malformedExpressionPublicationIsLocallyValid(cir, publications[0]));
+    try std.testing.expect(malformedExpressionPublicationIsLocallyValid(
+        fresh_cir,
+        fresh_publications[0],
+    ));
+    try std.testing.expectEqual(topology.malformed_publication.expr_node, publications[0].expr_node);
+    try std.testing.expectEqual(
+        topology.malformed_publication.diagnostic_index,
+        publications[0].diagnostic_index,
+    );
+    try std.testing.expectEqual(publications[0].expr_node, fresh_publications[0].expr_node);
+    try std.testing.expectEqual(
+        publications[0].diagnostic_index,
+        fresh_publications[0].diagnostic_index,
+    );
+
+    return .{
+        .base_retirement_index = base_retirement_index,
+        .owner_retirement_index = completed.owner.retirement_index,
+        .base_plan_index = completed.plans.base,
+        .field_plan_index = completed.plans.fields[0],
+    };
 }
 
 fn expectHealthyRecordUpdatePlanSet(
@@ -74256,6 +74531,224 @@ test "record-update owner retirement: direct-binder checked base retires its exa
         context,
     );
     _ = try consumer.checker.validatedModule();
+}
+
+test "record-update owner retirement: preexisting malformed base reuses its exact retirement" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var failure_stage: []const u8 = "checked source";
+    errdefer std.debug.print(
+        "preexisting malformed record-update base failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var checked = try TestEnv.init(
+        "RecordUpdatePreexistingMalformedBase",
+        record_update_preexisting_malformed_base_source,
+    );
+    defer checked.deinit();
+    try checked.assertCanErrors(&.{"Chained Range"});
+    try std.testing.expectEqual(@as(usize, 0), checked.checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try checked.typeProblemCount());
+
+    failure_stage = "fresh initialization";
+    var fresh_env = try TestEnv.initUncheckedForTesting(
+        "RecordUpdatePreexistingMalformedBase",
+        record_update_preexisting_malformed_base_source,
+    );
+    defer fresh_env.deinit();
+    failure_stage = "fresh Chained Range diagnostic";
+    try fresh_env.assertCanErrors(&.{"Chained Range"});
+    failure_stage = "fresh record topology";
+    const topology = try recordUpdatePreexistingMalformedBaseTopology(&fresh_env);
+    const cir = checked.module_env;
+
+    failure_stage = "terminal node phases";
+    const checked_record = cir.store.getExpr(topology.record_expr);
+    const checked_base = cir.store.getExpr(topology.base_expr);
+    try std.testing.expect(checked_record == .e_runtime_error);
+    try std.testing.expect(checked_base == .e_runtime_error);
+    try std.testing.expectEqual(topology.base_diagnostic, checked_base.e_runtime_error.diagnostic);
+    try std.testing.expect(
+        cir.store.getDiagnostic(checked_base.e_runtime_error.diagnostic) == .range_op_chained,
+    );
+    try std.testing.expect(
+        cir.store.getDiagnostic(checked_record.e_runtime_error.diagnostic) == .erroneous_value_expr,
+    );
+    const checked_field = cir.store.getExpr(topology.field_expr);
+    try std.testing.expect(checked_field == .e_typed_int);
+    try std.testing.expectEqual(@as(i128, 1), checked_field.e_typed_int.value.toI128());
+    try std.testing.expectEqualStrings(
+        "U8",
+        cir.getIdent(checked_field.e_typed_int.type_name),
+    );
+
+    failure_stage = "exact R_B P_B P_F R_U graph";
+    const proof = try expectCompletedPreexistingMalformedRecordUpdateOwner(
+        cir,
+        fresh_env.module_env,
+        topology,
+    );
+    try expectDirectBinderTransientListsEmpty(&checked.checker);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checked.checker.aggregate_expected_retirement_drafts.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checked.checker.record_update_expected_plan_registrations.items.len,
+    );
+    try std.testing.expect(
+        checked.checker.record_update_expected_plan_registrations_consumed,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checked.checker.optional_field_accesses.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checked.checker.pending_record_updates.items.len,
+    );
+
+    failure_stage = "local and produced replay";
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+    const produced_context = ImportResolution.producedSupplied(
+        cir,
+        .{
+            .envs = checked.checker.imported_modules,
+            .modules = checked.checker.validated_imported_modules,
+        },
+        .{
+            .envs = checked.checker.owner_modules,
+            .modules = checked.checker.validated_owner_modules,
+        },
+        checked.checker.platform_dependency_index,
+    );
+    try validateExpectedFailureContext(cir, produced_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        cir,
+        checked.builtin_module.env,
+        produced_context,
+    );
+    _ = try checked.checker.validatedModule();
+
+    failure_stage = "distinct fresh replay";
+    const fresh_context = recordUpdateRootAuthorityFreshContext(&fresh_env);
+    try validateExpectedFailureContext(cir, fresh_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        cir,
+        checked.builtin_module.env,
+        fresh_context,
+    );
+
+    failure_stage = "P_B source-retirement retarget rejection";
+    const plans = cir.expected_consumption_plans.items.items;
+    {
+        const saved_base_plan = plans[proof.base_plan_index];
+        defer plans[proof.base_plan_index] = saved_base_plan;
+        plans[proof.base_plan_index].source_retirement_index_plus_one =
+            proof.owner_retirement_index + 1;
+        const retargeted_base_plan = plans[proof.base_plan_index];
+        try std.testing.expect(retargeted_base_plan.hasLegalTags());
+        try std.testing.expectEqual(
+            proof.owner_retirement_index,
+            retargeted_base_plan.decodedSourceRetirementIndex().?,
+        );
+        try std.testing.expect(!expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+            cir,
+            retargeted_base_plan,
+        ));
+        try std.testing.expect(!validateExpectedRecordUpdatePlans(&cir.types, cir));
+    }
+
+    failure_stage = "P_B source-retirement restoration";
+    _ = try expectCompletedPreexistingMalformedRecordUpdateOwner(
+        cir,
+        fresh_env.module_env,
+        topology,
+    );
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+    try validateExpectedFailureContext(cir, produced_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        cir,
+        checked.builtin_module.env,
+        produced_context,
+    );
+    try validateExpectedFailureContext(cir, fresh_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        cir,
+        checked.builtin_module.env,
+        fresh_context,
+    );
+
+    failure_stage = "R_B phase forgery isolation";
+    const retirements = cir.expected_consumer_retirements.items.items;
+    const healthy_field_node = cir.store.nodes.get(ModuleEnv.nodeIdxFrom(topology.field_expr));
+    try std.testing.expectEqual(CIR.Node.Tag.expr_typed_int, healthy_field_node.tag);
+    {
+        const saved_base_retirement = retirements[proof.base_retirement_index];
+        defer retirements[proof.base_retirement_index] = saved_base_retirement;
+        retirements[proof.base_retirement_index].kind = @intFromEnum(
+            ModuleEnv.ExpectedConsumerRetirement.Kind.checker_rewrite_ineligible,
+        );
+        retirements[proof.base_retirement_index].original_node_tag =
+            @intFromEnum(healthy_field_node.tag);
+        retirements[proof.base_retirement_index].original_payload =
+            @bitCast(healthy_field_node.getPayload());
+
+        const forged_base_retirement = retirements[proof.base_retirement_index];
+        try std.testing.expect(forged_base_retirement.hasLegalTags());
+        try std.testing.expect(expectedConsumerRetirementNodeIsLocallyValid(
+            cir,
+            forged_base_retirement,
+        ));
+        try std.testing.expect(expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+            cir,
+            plans[proof.base_plan_index],
+        ));
+        try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+        try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+        try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+        try validateExpectedFailureContext(cir, produced_context);
+        try validateWhereMarkerCopySourceNamespaces(
+            cir,
+            checked.builtin_module.env,
+            produced_context,
+        );
+        try std.testing.expectError(
+            error.CorruptArtifact,
+            validateWhereMarkerCopySourceNamespaces(
+                cir,
+                checked.builtin_module.env,
+                fresh_context,
+            ),
+        );
+    }
+
+    failure_stage = "R_B phase-forgery restoration";
+    _ = try expectCompletedPreexistingMalformedRecordUpdateOwner(
+        cir,
+        fresh_env.module_env,
+        topology,
+    );
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+    try validateExpectedFailureContext(cir, produced_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        cir,
+        checked.builtin_module.env,
+        produced_context,
+    );
+    try validateExpectedFailureContext(cir, fresh_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        cir,
+        checked.builtin_module.env,
+        fresh_context,
+    );
 }
 
 test "record-update root authority: direct and redirected selections survive rebuild serde and fresh admission" {
