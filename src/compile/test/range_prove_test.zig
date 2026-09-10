@@ -298,6 +298,215 @@ test "a byte merged from a read and a literal keeps its byte range for the overf
     try std.testing.expectEqual(@as(usize, 1), meet_shape.mul_proven);
 }
 
+const SearchShape = struct {
+    found: bool = false,
+    is_lt: usize = 0,
+    get_unsafe: usize = 0,
+    folded: usize = 0,
+};
+
+var search_shape: SearchShape = .{};
+
+fn countSearchShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    search_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "list_get_unsafe") == 0 or std.mem.count(u8, text, "i16_to_u64_wrap") == 0) continue;
+        search_shape = .{
+            .found = true,
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe"),
+            .folded = std.mem.count(u8, text, "tag v1 d1"),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== search proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+const real_search =
+    "Match : { length : U64, offset : U64 }\n" ++
+    "ext : List(U8), U64, U64, U64, U64 -> U64\n" ++
+    "ext = |input, a, b, start_len, max_len| {\n" ++
+    "    var $len = start_len\n" ++
+    "    while $len < max_len and (List.get(input, a.plus_wrap($len)) ?? 0) == (List.get(input, b.plus_wrap($len)) ?? 1) {\n" ++
+    "        $len = $len + 1\n" ++
+    "    }\n" ++
+    "    $len\n" ++
+    "}\n" ++
+    "mi : U64, I16 -> U64\n" ++
+    "mi = |in_base, node| in_base.to_i64_wrap().plus_wrap(node.to_i64()).to_u64_wrap()\n" ++
+    "longest_match : List(I16), I16, I16, U64, List(U8), U64, U64, U64, U64, U64 -> Try(Match, [CompressBug])\n" ++
+    "longest_match = |next_tab, cur_node3, cur_node4, in_base, input, in_next, best_len_in, max_len, nice_len, max_search_depth| {\n" ++
+    "    if List.len(input) < 4 {\n" ++
+    "        return Err(CompressBug)\n" ++
+    "    } else {\n" ++
+    "    }\n" ++
+    "    # The chain table is one window long, so every masked chain index is in\n" ++
+    "    # range. Establishing that once here lets the bounds test on each chain\n" ++
+    "    # read fold away instead of running per candidate. The node is masked\n" ++
+    "    # before it is widened so the next read's address needs only the mask\n" ++
+    "    # on top of the load, which is the loop's critical path.\n" ++
+    "    if List.len(next_tab) < 32768 {\n" ++
+    "        return Err(CompressBug)\n" ++
+    "    } else {\n" ++
+    "    }\n" ++
+    "    cur_pos = in_next - in_base\n" ++
+    "    cutoff = cur_pos.to_i32_wrap() - 32768\n" ++
+    "\n" ++
+    "    var $best_len = best_len_in\n" ++
+    "    var $best_match_at = in_next\n" ++
+    "\n" ++
+    "    seq4 = U32.from_le_bytes(input, in_next) ?? 0\n" ++
+    "    var $node4 = cur_node4\n" ++
+    "    var $depth = max_search_depth\n" ++
+    "    var $done = 0.U64\n" ++
+    "\n" ++
+    "    if $best_len < 4 {\n" ++
+    "        if cur_node3.to_i32() <= cutoff {\n" ++
+    "            $done = 1\n" ++
+    "        } else {\n" ++
+    "            if $best_len < 3 {\n" ++
+    "                match_at = mi(in_base, cur_node3)\n" ++
+    "                if (U32.from_le_bytes(input, match_at) ?? 0).bitwise_and(0xFFFFFF)\n" ++
+    "                    == seq4.bitwise_and(0xFFFFFF) {\n" ++
+    "                    $best_len = 3\n" ++
+    "                    $best_match_at = match_at\n" ++
+    "                } else {\n" ++
+    "                }\n" ++
+    "            } else {\n" ++
+    "            }\n" ++
+    "\n" ++
+    "            if $node4.to_i32() <= cutoff {\n" ++
+    "                $done = 1\n" ++
+    "            } else {\n" ++
+    "                # Walk the chain until four bytes agree.\n" ++
+    "                var $found_at = 0.U64\n" ++
+    "                while True {\n" ++
+    "                    match_at = mi(in_base, $node4)\n" ++
+    "                    if (U32.from_le_bytes(input, match_at) ?? 0) == seq4 {\n" ++
+    "                        $found_at = match_at\n" ++
+    "                        break\n" ++
+    "                    } else {\n" ++
+    "                    }\n" ++
+    "                    $node4 = List.get(next_tab, $node4.bitwise_and(32767).to_u64_wrap()) ?? 0\n" ++
+    "                    $depth = $depth.minus_wrap(1)\n" ++
+    "                    if $node4.to_i32() <= cutoff or $depth == 0 {\n" ++
+    "                        $done = 1\n" ++
+    "                        break\n" ++
+    "                    } else {\n" ++
+    "                    }\n" ++
+    "                }\n" ++
+    "\n" ++
+    "                if $done == 0 {\n" ++
+    "                    $best_match_at = $found_at\n" ++
+    "                    $best_len = ext(input, in_next, $found_at, 4, max_len)\n" ++
+    "                    if $best_len >= nice_len {\n" ++
+    "                        $done = 1\n" ++
+    "                    } else {\n" ++
+    "                        $node4 = List.get(next_tab, $node4.bitwise_and(32767).to_u64_wrap()) ?? 0\n" ++
+    "                        $depth = $depth.minus_wrap(1)\n" ++
+    "                        if $node4.to_i32() <= cutoff or $depth == 0 {\n" ++
+    "                            $done = 1\n" ++
+    "                        } else {\n" ++
+    "                        }\n" ++
+    "                    }\n" ++
+    "                } else {\n" ++
+    "                }\n" ++
+    "            }\n" ++
+    "        }\n" ++
+    "    } else {\n" ++
+    "        if $node4.to_i32() <= cutoff or $best_len >= nice_len {\n" ++
+    "            $done = 1\n" ++
+    "        } else {\n" ++
+    "        }\n" ++
+    "    }\n" ++
+    "\n" ++
+    "    # Now look only for matches longer than the one in hand.\n" ++
+    "    while $done == 0 {\n" ++
+    "        var $cand_at = 0.U64\n" ++
+    "        while True {\n" ++
+    "            match_at = mi(in_base, $node4)\n" ++
+    "            # The four bytes ending just past the current best length\n" ++
+    "            # are what a longer match must agree on, so check them\n" ++
+    "            # before anything else.\n" ++
+    "            # Wrapping arithmetic: positions are far below 2^63, and a checked\n" ++
+    "            # add or subtract would put an overflow branch on every candidate.\n" ++
+    "            if (U32.from_le_bytes(input, match_at.plus_wrap($best_len).minus_wrap(3)) ?? 0)\n" ++
+    "                == (U32.from_le_bytes(input, in_next.plus_wrap($best_len).minus_wrap(3)) ?? 0)\n" ++
+    "                and (U32.from_le_bytes(input, match_at) ?? 0)\n" ++
+    "                    == (U32.from_le_bytes(input, in_next) ?? 0) {\n" ++
+    "                $cand_at = match_at\n" ++
+    "                break\n" ++
+    "            } else {\n" ++
+    "            }\n" ++
+    "            $node4 = List.get(next_tab, $node4.bitwise_and(32767).to_u64_wrap()) ?? 0\n" ++
+    "            $depth = $depth.minus_wrap(1)\n" ++
+    "            if $node4.to_i32() <= cutoff or $depth == 0 {\n" ++
+    "                $done = 1\n" ++
+    "                break\n" ++
+    "            } else {\n" ++
+    "            }\n" ++
+    "        }\n" ++
+    "\n" ++
+    "        if $done == 0 {\n" ++
+    "            len = ext(input, in_next, $cand_at, 4, max_len)\n" ++
+    "            if len > $best_len {\n" ++
+    "                $best_len = len\n" ++
+    "                $best_match_at = $cand_at\n" ++
+    "                if $best_len >= nice_len {\n" ++
+    "                    $done = 1\n" ++
+    "                } else {\n" ++
+    "                }\n" ++
+    "            } else {\n" ++
+    "            }\n" ++
+    "            if $done == 0 {\n" ++
+    "                $node4 = List.get(next_tab, $node4.bitwise_and(32767).to_u64_wrap()) ?? 0\n" ++
+    "                $depth = $depth.minus_wrap(1)\n" ++
+    "                if $node4.to_i32() <= cutoff or $depth == 0 {\n" ++
+    "                    $done = 1\n" ++
+    "                } else {\n" ++
+    "                }\n" ++
+    "            } else {\n" ++
+    "            }\n" ++
+    "        } else {\n" ++
+    "        }\n" ++
+    "    }\n" ++
+    "\n" ++
+    "    Ok({ length: $best_len, offset: in_next - $best_match_at })\n" ++
+    "}\n" ++
+    "\n" ++
+    "## Insert `count` positions into the tables without searching them.\n" ++
+    "\n" ++
+    "main! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+    "main! = |_args| {\n" ++
+    "    r = longest_match([], 1, 2, 0, Str.to_utf8(Str.join_with(_args, \",\")), 9, 3, 20, 16, 8) ?? { length: 0, offset: 0 }\n" ++
+    "    echo!(Str.inspect(r.length))\n" ++
+    "    Ok({})\n" ++
+    "}\n";
+
+// The hash-chain search of a lazy compressor: a first walk for a four-byte
+// match, then a restart loop that walks the chain for longer matches. The
+// loops lower to joins that jump among one another, so the chain table's
+// length guard reaches the later walks only through several persisted meets
+// across walk regions.
+test "the lazy matchfinder's search proves every chain read against its entry guard" {
+    try harness.expectLirInspectionWithOptions(
+        real_search,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countSearchShape,
+    );
+    try std.testing.expect(search_shape.found);
+    try std.testing.expectEqual(@as(usize, 4), search_shape.get_unsafe);
+    // Only the two entry guards and the two loop conditions compare with
+    // `<`; every chain read's bounds test is proven away.
+    try std.testing.expectEqual(@as(usize, 4), search_shape.is_lt);
+}
+
 test "checked multiply is discharged from a masked range" {
     arithmetic_selection = .masked_mul;
     try harness.expectLirInspectionWithOptions(
