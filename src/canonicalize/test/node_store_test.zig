@@ -1873,3 +1873,53 @@ test "field access path rollback removes every partial auxiliary node" {
     try testing.expectEqual(regions_before, store.regions.len());
     try testing.expectEqual(index_data_before, store.index_data.len());
 }
+
+test "write occurrences preserve binding identity and token regions across CIR copies" {
+    const gpa = testing.allocator;
+    var original = try NodeStore.init(gpa);
+    defer original.deinit();
+    try testing.expectEqual(@as(usize, 0), original.write_occurrences.items.capacity);
+    try testing.expectEqual(@as(usize, 12), @sizeOf(NodeStore.WriteOccurrence));
+
+    const declaration = from_raw_offsets(4, 6);
+    const pattern = try original.addPattern(.{ .var_assign = .{ .ident = rand_ident_idx() } }, declaration);
+    try original.recordWriteOccurrence(pattern, from_raw_offsets(20, 22));
+    try original.recordWriteOccurrence(pattern, from_raw_offsets(43, 45));
+
+    var cloned = try original.clone(gpa);
+    defer cloned.deinit();
+    try testing.expectEqualDeep(original.write_occurrences.items.items, cloned.write_occurrences.items.items);
+    try testing.expectEqualDeep(declaration, cloned.getPatternRegion(pattern));
+
+    var writer = @import("collections").CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, NodeStore.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, .@"16", @intCast(writer.total_bytes));
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const stored: *const NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const restored = stored.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    try testing.expectEqualDeep(original.write_occurrences.items.items, restored.write_occurrences.items.items);
+    try testing.expectEqualDeep(declaration, restored.getPatternRegion(pattern));
+    for (restored.write_occurrences.items.items) |write| {
+        try testing.expectEqual(pattern, write.pattern_idx);
+        try testing.expectEqualDeep(from_raw_offsets(write.start, write.end), write.region());
+    }
+
+    // Mutable cached modules own their region column, but borrow source write
+    // metadata from the cache just like their other canonical data.
+    var mutable = try stored.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
+    defer mutable.regions.deinit(gpa);
+    try testing.expectEqualDeep(original.write_occurrences.items.items, mutable.write_occurrences.items.items);
+
+    // Relocation must move the new table along with the existing CIR columns.
+    const moved_buffer = try gpa.alignedAlloc(u8, .@"16", buffer.len);
+    defer gpa.free(moved_buffer);
+    @memcpy(moved_buffer, buffer);
+    var moved = restored;
+    const delta = @as(isize, @intCast(@intFromPtr(moved_buffer.ptr))) - @as(isize, @intCast(@intFromPtr(buffer.ptr)));
+    moved.relocate(delta);
+    try testing.expectEqual(@intFromPtr(restored.write_occurrences.items.items.ptr) +% @as(usize, @bitCast(delta)), @intFromPtr(moved.write_occurrences.items.items.ptr));
+    try testing.expectEqualDeep(original.write_occurrences.items.items, moved.write_occurrences.items.items);
+}

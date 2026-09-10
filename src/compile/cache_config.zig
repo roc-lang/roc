@@ -189,7 +189,8 @@ pub const Constants = struct {
     /// 87: Pure function types carry no effect dependencies; unifying an
     ///     effect-polymorphic function with a pure one makes each dependency
     ///     pure.
-    pub const CACHE_VERSION = 87;
+    /// 88: CIR retains exact source occurrences for mutable binding writes.
+    pub const CACHE_VERSION = 88;
 };
 
 /// Configuration for the Roc cache system.

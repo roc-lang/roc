@@ -277,6 +277,7 @@ const DiagnosticNodeTag = enum {
 gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
+write_occurrences: collections.SafeList(WriteOccurrence),
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan), // Checked literal dispatch metadata owned by literal nodes
 interpolation_data: collections.SafeList(InterpolationData), // Canonical and checked data owned by interpolation expressions
@@ -297,6 +298,29 @@ pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationSte
 where_clause_owners: collections.SafeList(WhereClauseOwnerData), // Canonical receiver ownership for each where-clause scope
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
+
+/// A source name that writes an existing mutable binding. Binding patterns keep
+/// their declaration regions; each write retains its own exact token region.
+/// This table contains only writes, not reads or fresh declarations.
+pub const WriteOccurrence = extern struct {
+    pattern_idx: CIR.Pattern.Idx,
+    start: u32,
+    end: u32,
+
+    pub fn region(self: WriteOccurrence) Region {
+        return Region.from_raw_offsets(self.start, self.end);
+    }
+};
+
+/// Record a write when canonicalization resolves its target binding.
+pub fn recordWriteOccurrence(store: *NodeStore, pattern_idx: CIR.Pattern.Idx, region: Region) Allocator.Error!void {
+    std.debug.assert(store.getPattern(pattern_idx) == .var_assign);
+    _ = try store.write_occurrences.append(store.gpa, .{
+        .pattern_idx = pattern_idx,
+        .start = region.start.offset,
+        .end = region.end.offset,
+    });
+}
 
 /// A pair of u32 values representing a span (start index and length).
 /// Used for storing argument lists, field lists, branch lists, etc.
@@ -658,6 +682,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .gpa = gpa,
         .nodes = nodes,
         .regions = regions,
+        .write_occurrences = .{},
         .int128_values = int128_values,
         .literal_dispatch_plans = literal_dispatch_plans,
         .interpolation_data = interpolation_data,
@@ -687,6 +712,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .gpa = gpa,
         .nodes = try self.nodes.clone(gpa),
         .regions = try self.regions.clone(gpa),
+        .write_occurrences = try self.write_occurrences.clone(gpa),
         .int128_values = try self.int128_values.clone(gpa),
         .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
         .interpolation_data = try self.interpolation_data.clone(gpa),
@@ -716,6 +742,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
+    store.write_occurrences.deinit(store.gpa);
     store.int128_values.deinit(store.gpa);
     store.literal_dispatch_plans.deinit(store.gpa);
     store.interpolation_data.deinit(store.gpa);
@@ -745,6 +772,7 @@ pub fn deinit(store: *NodeStore) void {
 pub fn relocate(store: *NodeStore, offset: isize) void {
     store.nodes.relocate(offset);
     store.regions.relocate(offset);
+    store.write_occurrences.relocate(offset);
     store.int128_values.relocate(offset);
     store.literal_dispatch_plans.relocate(offset);
     store.interpolation_data.relocate(offset);
@@ -6254,6 +6282,7 @@ pub const Serialized = extern struct {
     interpolation_data: collections.SafeList(InterpolationData).Serialized,
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
+    write_occurrences: collections.SafeList(WriteOccurrence).Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     method_call_data: collections.SafeList(MethodCallData).Serialized,
@@ -6287,6 +6316,7 @@ pub const Serialized = extern struct {
         try self.nodes.serialize(&store.nodes, allocator, writer);
         // Serialize regions
         try self.regions.serialize(&store.regions, allocator, writer);
+        try self.write_occurrences.serialize(&store.write_occurrences, allocator, writer);
         // Serialize span2_data
         try self.span2_data.serialize(&store.span2_data, allocator, writer);
         // Serialize span_with_node_data
@@ -6330,6 +6360,7 @@ pub const Serialized = extern struct {
             .gpa = gpa,
             .nodes = self.nodes.deserializeInto(base_addr),
             .regions = self.regions.deserializeInto(base_addr),
+            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
@@ -6361,6 +6392,7 @@ pub const Serialized = extern struct {
             .nodes = self.nodes.deserializeInto(base_addr),
             // Regions needs to be mutable (grown during type checking)
             .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
+            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
