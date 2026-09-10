@@ -895,7 +895,7 @@ pub const Resolver = struct {
                     try self.addDiagnostic(
                         "Package Too Large",
                         "The package at\n\n    {s}\n\nexpands to more than the per-package limit of {d} bytes.\n\n" ++
-                            "You can raise the limit with the --max-package-bytes flag, or stop depending on this package.",
+                            "You can raise the limit with the --max-package-mb flag, or stop depending on this package.",
                         .{ task.missing.url, self.config.max_package_expanded_bytes orelse 0 },
                     );
                     continue;
@@ -979,7 +979,7 @@ pub const Resolver = struct {
                 try self.addDiagnostic(
                     "Dependency Tree Too Large",
                     "Depending on\n\n    {s}\n\nhas pulled more than {d} bytes of packages into the build ({d} bytes so far).\n\n" ++
-                        "You can raise the limit with the --max-transitive-bytes flag, or stop depending on this package.",
+                        "You can raise the limit with the --max-transitive-mb flag, or stop depending on this package.",
                     .{ dep.spec, limit, total },
                 );
             }
@@ -2652,6 +2652,7 @@ test "transitive size limit counts each direct dependency's reachable packages" 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqualStrings("Dependency Tree Too Large", resolver.diagnostics.items[0].title);
     try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, a_url) != null);
+    try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, "--max-transitive-mb") != null);
 }
 
 test "platform dependencies have a larger transitive size limit" {
@@ -2716,6 +2717,7 @@ test "per-package size limit is enforced for packages but not platforms" {
     const diagnostic = resolver.diagnostics.items[0];
     try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, a_url) != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.message, "--max-package-mb") != null);
 }
 
 test "platform targets must be marked and packages may not depend on apps" {
