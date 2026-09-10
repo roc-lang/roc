@@ -102,7 +102,7 @@ pub const default_build_opt: OptLevel = .speed;
 /// Values are in megabytes; 0 means unlimited; null uses the default.
 pub const ResolveLimitArgs = struct {
     max_package_mb: ?u32 = null, // per-package decompressed size limit (default 10)
-    max_transitive_mb: ?u32 = null, // per-direct-dependency transitive size limit (default 100)
+    max_transitive_mb: ?u32 = null, // overrides both transitive limits (defaults: packages 100, platforms 512)
 };
 
 const ResolveLimitParse = union(enum) {
