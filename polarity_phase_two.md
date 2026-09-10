@@ -739,16 +739,18 @@ described in full, with trailers; W6b currently has its provisional title):
 | `txopxlzx` / `10f613d6` | W6b checked-base boundary coverage | pushed and exact PR readback verified; reviewed bounded WIP; final gate 41/41 tests, 41/41 steps |
 | `onmovlvr` / `92741c58` | W6b actual base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final gate 43/43 tests, 41/41 steps |
 | `mpqnvuvq` / `9c295876` | W6b checked-base owner completion atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 45/45 tests, 41/41 steps pass |
-| `mwttkmrx` | W6b checked-error base-plan publication atomicity | reviewed bounded WIP; final normal 51/51 tests, 41/41 steps pass; publication pending |
+| `mwttkmrx` / `e2380965` | W6b checked-error base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 51/51 tests, 41/41 steps pass |
+| `nrkxkkmn` | W6b owner-retirement reservation atomicity | reviewed bounded WIP; final normal 54/54 tests, 41/41 steps pass; publication pending |
 
-The local and remote `jared/polarity` bookmarks now point at `mpqnvuvq` /
-`9c295876`, directly above `onmovlvr` / `92741c58`, `txopxlzx` / `10f613d6`,
+The local and remote `jared/polarity` bookmarks now point at `mwttkmrx` /
+`e2380965`, directly above `mpqnvuvq` / `9c295876`, `onmovlvr` / `92741c58`,
+`txopxlzx` / `10f613d6`,
 `wpvvswsl` / `95dfea5a`,
 `zkmyrwqu` / `1f69432c`
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`mwttkmrx` owns the reviewed and verified checked-error base-plan publication
+`nrkxkkmn` owns the reviewed and verified owner-retirement reservation
 allocation-test slice, whose publication is now pending.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
@@ -4119,6 +4121,114 @@ subsets below do not override this latest checkpoint.
   No production or schema behavior changed in this task. Next is a separately
   reviewed reservation-only test slice using the authentic unset-only
   pre-unset producer cut; no next-task source edits have begun.
+
+- Publication of `mwttkmrx` is complete: Git commit
+  `e23809659f1276e11c82c4c5482626851aa10830` was fast-forwarded from `9c295876`
+  to `jared/polarity`. PR #10434's exact head, full body (including its terminal
+  newline) and draft status were verified; `checked-base-pr-readback.json`
+  records the readback. The driver opened clean child `nrkxkkmn` and explicitly
+  dispatched the sol-ultra author for reservation-only implementation plus the
+  independent sol-ultra reviewer for planning. The first freeze must contain
+  only the exact shared production Probe/reserve/commit helper and authentic
+  natural-success calibration using an unset-only update before unset work.
+  Subsequent OOM coverage may precisely tighten allocation capacity outside
+  injection while preserving the authentic two-row retirement prefix exactly;
+  this is test allocator-state calibration, never deletion/reconstruction of
+  authority. The untouched natural control remains required. No new-child
+  validation, full R1 admission or option-(e) completion is claimed.
+
+- Reservation calibration is frozen at `82475d63`, Check SHA-256
+  `33e34a77605b0217fae3274269854b1a9cffa9dc3d359cb6f7f4b0a27e1747d9`.
+  The production extraction shares only the existing Probe/reserve/commit
+  transaction; caller-side frame status assignment remains unchanged. A typed
+  common topology preserves the annotation/where/lookup authority for both the
+  preceding one-field fixture and the new zero-field, one-`x`-unset fixture.
+  The natural-success calibration retains both live frames, actual base status
+  and P_B publication, checks exact distinct pending R_U and unchanged R_A/R_B
+  prefix, and stops before unset processing. Semantic 17270 passes. Focused
+  runtime and a separately dispatched actual-code calibration review are
+  underway; snapshots, exhaustive allocation failures and outer Probe rollback
+  are deliberately not implemented until this boundary passes.
+
+- Reservation calibration focused runtime 75756 passes 2/2 on the same
+  `82475d63` / `33e34a77` source, after semantic 17270 passed. The author remains
+  frozen pending the independent actual-code calibration verdict; the full
+  snapshot/allocation/outer-Probe slice is not yet implemented or accepted.
+
+- Actual calibration review accepts the extraction, topology and live-frame
+  phase but requests two exact-oracle corrections before bounded ACCEPT:
+  validate the returned cause's canonical reserved words (its decoder alone
+  does not), and compare both R_U row and draft payloads independently with an
+  immutable pre-reservation record snapshot while proving the live node is
+  unchanged. Row-to-draft equality alone could accept symmetric corruption.
+  The author is narrowly thawed for these assertions and exact fixture
+  retirement-index checks; no full OOM work or production fix is authorized.
+
+- The calibration-oracle correction is frozen at `ad19cec0`, Check SHA-256
+  `e7c16822b8dbcd40fa28c2ce4f6fcb933e646233a04368de7d7bd4a85503a416`.
+  Stage now captures the original record node before reservation; both the
+  live node and each saved row/draft payload must independently match it.
+  Returned cause canonicality and fixture R_A=0/R_B=1/R_U=2 are explicit.
+  Formatting is unchanged. Focused compile/runtime retry 27912 and a separately
+  dispatched actual-code re-review are running. No full allocation loop yet.
+
+- Hardened reservation calibration runtime 27912 passes 2/2 on `ad19cec0` /
+  `e7c16822`, and the independent actual-code reviewer gives final bounded
+  static ACCEPT for that exact calibration. The driver has explicitly thawed
+  the author for the complete reservation snapshot, capacity-constrained
+  allocation sweep, same-instance retry and outer real-Probe rollback case.
+  The natural-success control remains. Capacity shaping must preserve the
+  actual R_A/R_B rows exactly and occur before injection; both reserve sites
+  must be exercised. Final full-delta review and normal producer-regenerated
+  verification remain required before the next push.
+
+- Full reservation slice is frozen at `903f6168`, Check SHA-256
+  `9e6281ef484789b6d520fb1751f4d00abd23b5347da40013eada0c37620d96db`.
+  Formatting is unchanged. The composite snapshot includes logical transaction
+  state, recovery/context/frame state, and exact record/base/unset syntax and
+  backing rows. The allocation sweep preserves the authentic two-row prefix
+  through precise capacity shaping, fails every measured helper allocation,
+  pins the penultimate/final reserve-site failures explicitly, and retries the
+  same checker and allocator against clean poststate. Outer real-Probe rollback
+  does not mutate caller frame status inside the Probe. Semantic validation
+  and a separately dispatched actual full-delta adversarial review are running;
+  no full-slice acceptance or new publication is claimed yet.
+
+- Full reservation semantic 92346 passes on the frozen `903f6168` /
+  `9e6281ef` source. Broad owner-retirement direct runtime 36862 is running,
+  including the new calibration, exhaustive reserve-site failures and outer
+  Probe rollback together with earlier owner/base-publication/completion
+  controls. Independent full-delta review is also in progress; the source
+  remains frozen and the normal publication gate has not started.
+
+- Full reservation direct runtime 36862 passes 15/15 on frozen `9e6281ef`,
+  including the exhaustive reservation allocation sweep, explicit two-reserve
+  failure witnesses, same-instance retries, outer-Probe rollback, and all
+  preceding owner/publication/completion controls. The normal combined
+  producer-regenerated publication gate is now running. The full-delta reviewer
+  also has the exact driver-generated checker diff in
+  `ru-reservation-full-review.diff`; final review and publication remain pending.
+
+- The independent reviewer gives final actual full-delta bounded static ACCEPT
+  for `903f6168` / `9e6281ef`, after inspecting the complete parent-to-current
+  checker diff and exact code. It accepts the behavior-preserving transaction
+  extraction, live producer boundary, owned snapshot cleanup, precise
+  capacity-constrained authentic prefix, exhaustive measured failures with
+  both reserve-site witnesses, same-instance retry and outer-Probe rollback.
+  No caller status is repaired after rollback and no terminal validator is
+  used early. Normal combined gate 46156 remains running. This accepts the
+  unset-only reservation slice only, not supplied-field reservation coverage,
+  full R1 admission, preexisting-malformed-base variants or option (e).
+
+- Reservation final normal gate 46156 passes 54/54 tests and 41/41 steps on
+  the independently reviewed `9e6281ef` source: canonicalization 9, types 10,
+  checker 30 and compile/serde 5, regenerated Builtins, shared helpers,
+  schema-85 golden, serialization and native/wasm sizes. Formatting and exact
+  compiler hashes match review. The driver is preparing the full jj
+  description, WIP push and exact draft-PR head/body readback. The next bounded
+  task is an authentic preexisting-malformed-base full-tail positive plus
+  separate local source-coordinate and produced/fresh phase negatives; its
+  planning does not claim runtime success or change clean-cache recovery policy.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

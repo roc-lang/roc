@@ -6246,7 +6246,7 @@ review gives final bounded ACCEPT after pinning the unresolved literal phase.
 The final normal producer-regenerated gate passes 45/45 tests and 41/41 steps,
 including shared helpers, the schema-85 golden, serialization and native/wasm
 sizes. Formatting and exact source hashes match review; push and exact draft-PR
-head/body readback are verified. Reviewed checkpoint `mwttkmrx` adds actual
+head/body readback are verified. Published `mwttkmrx` / `e2380965` adds actual
 checked-error base-plan publication allocation coverage, retaining authentic
 producer-returned status, live expression frames and existing source-retirement
 authority. Its isolated calibration passes semantic and runtime checks and
@@ -6257,10 +6257,22 @@ bounded review after moving allocator-identity assertions into same-instance
 rollback only. The final normal producer-regenerated gate passes 51/51 tests
 and 41/41 steps, including shared direct-binder helpers, the schema-85 golden,
 serialization and native/wasm sizes. Formatting and compiler hashes match the
-reviewed freeze; publication is pending. The failure fixtures give
+reviewed freeze; push and exact draft-PR head/body readback are verified. The
+failure fixtures give
 the retained Env the same failing allocator used by publication. This isolated
 producer seam does not claim full-file chronology or terminal admission.
-Outer-retirement reservation allocation coverage remains open;
+Reviewed checkpoint `nrkxkkmn` implements outer-retirement reservation allocation
+coverage at the authentic zero-supplied-field, pre-unset boundary. Its natural
+calibration and exhaustive allocation/outer-Probe tests pass the 15/15 direct
+runtime gate and independent actual full-delta review. Precise test-only
+capacity shaping preserves the authentic two-row retirement prefix; explicit
+witnesses distinguish both reserve failures, and same-instance retry matches
+clean poststate. The production change only extracts the existing transaction.
+The final normal producer-regenerated gate passes 54/54 tests and 41/41 steps,
+including shared helpers, schema-85 golden, serialization and native/wasm sizes.
+Formatting and exact compiler hashes match review; publication is pending. This
+bounded
+slice does not certify supplied-field reservation variants or full R1 admission;
 this does not certify complete record-update admission.
 Preexisting-base cases, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
