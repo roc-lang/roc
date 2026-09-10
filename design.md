@@ -8736,10 +8736,11 @@ checked expression. A literal's earlier `custom_dispatch` selection proves its
 callable relation, but its selected declaration can subsequently be rejected,
 including by final strict-demand cycle checking. Once all plans are resolved,
 checked-module construction propagates these seeds through the existing body
-diagnostic analysis and refreshes root eligibility before creating executable
-root requests. Both the conversion root and any enclosing constant roots are
+diagnostic analysis and updates `CompileTimeRoot.request_eligibility` before
+creating compile-time root requests. Both the conversion root and any enclosing
+constant roots are
 ineligible; independent roots still evaluate. `unreachable` is not a diagnostic
-seed. The existing expression fact carries this state through serialization;
+seed. The existing `contains_diagnostic_error` field carries this state through serialization;
 the resolution pass merely records whether recovery propagation is needed, so
 successful modules allocate no new index and perform no additional traversal.
 The ordinary body scan is specialized at compile time to omit recovery-graph

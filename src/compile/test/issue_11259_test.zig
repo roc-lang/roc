@@ -159,7 +159,11 @@ const RecoveryExpectation = struct {
     independent_expr: ?[]const u8 = null,
 };
 
-fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, expected: RecoveryExpectation) !void {
+const ConversionRecoveryError = compile_build.InitError || compile_build.BuildRootError ||
+    std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError ||
+    error{ TestExpectedEqual, TestUnexpectedResult };
+
+fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, expected: RecoveryExpectation) ConversionRecoveryError!void {
     const expected_rejections = expected.rejections;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
