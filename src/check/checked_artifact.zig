@@ -35908,7 +35908,7 @@ fn expectProvidedExportKind(
     defer allocator.free(template_root_evidence);
     @memset(template_root_evidence, null);
 
-    try resolveTotalDispatchPlans(
+    try std.testing.expect(!try resolveTotalDispatchPlans(
         allocator,
         module,
         &canonical_names,
@@ -35926,7 +35926,7 @@ fn expectProvidedExportKind(
         &.{},
         &.{},
         template_root_evidence,
-    );
+    ));
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
