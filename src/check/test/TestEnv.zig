@@ -814,6 +814,30 @@ pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!v
     try testing.expectEqualStrings(expected, report_buf.items);
 }
 
+/// Assert that at least one type problem with the expected title was
+/// reported (other problems may also be present).
+pub fn assertHasTypeError(self: *TestEnv, expected: []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    var found_titles = try std.array_list.Managed(u8).initCapacity(self.gpa, 64);
+    defer found_titles.deinit();
+
+    for (self.checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        if (std.mem.eql(u8, report.title, expected)) return;
+        try found_titles.appendSlice(report.title);
+        try found_titles.append('\n');
+    }
+
+    std.debug.print("expected a type problem titled \"{s}\" but found only:\n{s}", .{ expected, found_titles.items });
+    return error.TestUnexpectedResult;
+}
+
 /// Assert that the first type error matches the expected title (allows multiple errors).
 pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
