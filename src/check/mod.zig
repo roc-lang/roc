@@ -104,6 +104,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11128_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11229_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11245_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11246_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11214_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
 
