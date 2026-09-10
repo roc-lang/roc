@@ -55897,19 +55897,31 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     const alias = try graph.newNode(.{ .primitive = .str });
     try graph.unify(receiver, alias);
 
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, receiver_ty, .{ .flex = .{} });
+    try checked_types.fillSyntheticTypeRoot(gpa, other_receiver_ty, .{ .flex = .{} });
+    const result_ty = try checked_types.appendSyntheticPayloadRoot(gpa, &frame_names, .empty_record);
+    const encode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, result_ty);
+    const other_decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{other_receiver_ty}, other_receiver_ty);
+    const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
+
     var frame_view: ModuleView = undefined;
     frame_view.names = &frame_names;
+    frame_view.types = checked_types.view();
     const params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = frame_encode, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(2), .slot = 0, .runtime_dictionary = true },
-        .{ .method = frame_decode, .dispatcher_ty = @enumFromInt(1), .callable_ty = @enumFromInt(3), .slot = 1, .runtime_dictionary = true },
-        .{ .method = frame_decode, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(4), .slot = 0, .runtime_dictionary = true },
+        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true },
     };
     const frame: EvidenceChain = .{
         .scope = undefined,
         .schema = .{
             .view = frame_view,
             .root = null,
-            .scheme_vars = &.{ @enumFromInt(0), @enumFromInt(1) },
+            .scheme_vars = &.{ receiver_ty, other_receiver_ty },
             .params = &params,
         },
         .subst = &.{ .{ .node = receiver }, .{ .node = other_receiver } },
@@ -55935,13 +55947,14 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     try std.testing.expectEqual(caller_decode, inner_method);
     var inner_view: ModuleView = undefined;
     inner_view.names = &inner_names;
+    inner_view.types = checked_types.view();
     ctx.evidence = .{
         .scope = undefined,
         .schema = .{
             .view = inner_view,
             .root = null,
-            .scheme_vars = &.{@enumFromInt(0)},
-            .params = &.{.{ .method = inner_method, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(1), .slot = 0, .runtime_dictionary = true }},
+            .scheme_vars = &.{receiver_ty},
+            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true }},
         },
         .subst = &.{.{ .node = receiver }},
         .vector = &.{.{ .structural = .{ .derivation = .equality } }},
