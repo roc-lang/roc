@@ -11133,6 +11133,38 @@ instantiate those variables with caller-side lifetimes at each call site.
 
 ### Constraints Per Statement Form
 
+Allocation lifetime and by-value representation lifetime are distinct. A
+`list_len` or `list_capacity` operand reads only its saved list descriptor; it
+does not keep that descriptor's buffer alive. `LowLevel.representationArgs` declares
+these operand positions, separately from the RC-effect row so LIR statements
+do not grow. A representation-only position may not consume, retain, share,
+borrow from, or test uniqueness of the allocation.
+
+ARC's existing structural lift distinguishes representation reads in its
+occurrence inventory. Allocation demands propagate backward over pure copied
+list-descriptor aliases with one worklist visit per local. A descriptor alias
+with no allocation-dependent use carries no ownership unit and does not extend
+its source's allocation lifetime. Calls, joins, escaping values, and payload
+reads keep their existing explicit lifetime contracts. Extracting a descriptor
+from a container still requires the container at the extraction; subsequent
+metadata reads of the copied descriptor require only that saved value. When
+assignment or loop rebinding replaces a list, existing descriptor copies keep
+their saved values.
+
+The certifier independently permits metadata reads and descriptor copies from
+bound list representations after their units move or die. It preserves their
+original allocation identity: any later payload read, retain, or ownership
+transfer must still prove that allocation live. This rule neither rewrites
+statement order nor adds eager scalar snapshots, and no backend selects RC
+behavior from it.
+
+The interpreter's debug shape validator follows the same representation boundary.
+Pure list copies (`local`, `list_reinterpret`, and `nominal` reference operations)
+validate the copied descriptor without walking its allocation. Newly produced
+lists and payload extractions retain item validation; nested payload checks
+keep their existing rules. Debug validation must not add allocation reads to a
+statement that only copies saved metadata.
+
 Inference lifts each proc body once, assigning fresh resource variables, and
 generates constraints per statement:
 
@@ -11174,8 +11206,9 @@ generates constraints per statement:
   concrete host layout borrows or consumes the box payload according to the
   statement's explicit ownership mode and descriptor.
 - `assign_low_level`: constraints come from the op's `RcEffect`. Args in
-  `consume_args` are owned occurrences. Args outside `consume_args` are
-  borrowed occurrences whose lender must be live at the call. Args in
+  `consume_args` are owned occurrences. Args outside `consume_args` and
+  `representationArgs` are borrowed occurrences whose lender must be live at
+  the call. Representation-only operands require a bound descriptor. Args in
   `retain_args` are stored by the op, so the stored value's storage
   constraint applies. A new mask, `result_borrows_args`, names the args the
   result may alias without owning (for example `list_get_unsafe` results

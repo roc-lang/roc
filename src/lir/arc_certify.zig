@@ -1639,10 +1639,10 @@ const LocalClass = enum(u8) {
     owned,
     conditional_owned,
     borrowed,
-    /// An inline struct binding whose RC ownership unit is gone. Its
+    /// An inline struct or copied list descriptor whose RC unit is gone. Its
     /// representation remains available only for same-value aliases and
-    /// non-RC field reads; no operation may observe or consume RC state
-    /// through it.
+    /// non-RC field or descriptor reads; no operation may observe or consume
+    /// RC state through it.
     representation,
 };
 
@@ -2197,6 +2197,22 @@ const Certifier = struct {
         return layout.tag == .struct_;
     }
 
+    fn isListRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
+        const tag = self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag;
+        return tag == .list or tag == .list_of_zst;
+    }
+
+    /// A copied list descriptor remains readable after its buffer dies. Its
+    /// ValueId still records the original allocation, so payload reads and
+    /// retains must separately prove that allocation live with requireLive.
+    fn requireListRepresentation(self: *Certifier, state: *const State, local: LIR.LocalId) CertifyError!ValueId {
+        if (!self.isListRepresentation(local)) return self.fail("list representation read has non-list operand", .{});
+        if (!self.isRc(local)) return no_value;
+        const value = state.valueOf(local);
+        if (value == no_value) return self.fail("use of unbound list representation {d}", .{@intFromEnum(local)});
+        return value;
+    }
+
     /// Requires only the inline representation of a struct, not an RC unit
     /// reachable through it. ARC may move or release every stored RC unit and
     /// still read an inline scalar sibling; all operations that can observe RC
@@ -2709,7 +2725,7 @@ const Certifier = struct {
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
-                } else if (self.isInlineStructRepresentation(self.proc_locals.items[dense])) {
+                } else if (self.isInlineStructRepresentation(self.proc_locals.items[dense]) or self.isListRepresentation(self.proc_locals.items[dense])) {
                     summary = .{
                         .class = .representation,
                         .repr = repr,
@@ -4610,7 +4626,7 @@ const Certifier = struct {
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
-                        } else if (self.isInlineStructRepresentation(local)) {
+                        } else if (self.isInlineStructRepresentation(local) or self.isListRepresentation(local)) {
                             summary = .{
                                 .class = .representation,
                                 .repr = repr,
@@ -5601,6 +5617,8 @@ const Certifier = struct {
         const source_layout = self.store.getLocal(source).layout_idx;
         const source_value = if (self.isRc(source) and target_layout == source_layout and self.isInlineStructRepresentation(source))
             try self.requireStructRepresentation(state, source)
+        else if (self.isListRepresentation(source) and self.isListRepresentation(target))
+            try self.requireListRepresentation(state, source)
         else
             try self.requireLive(state, source);
         if (!self.isRc(target)) return;
@@ -5617,7 +5635,10 @@ const Certifier = struct {
     }
 
     fn bindSameValue(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
-        const source_value = try self.requireLive(state, source);
+        const source_value = if (self.isListRepresentation(source) and self.isListRepresentation(target))
+            try self.requireListRepresentation(state, source)
+        else
+            try self.requireLive(state, source);
         if (!self.isRc(target)) return;
         if (source_value == no_value) {
             self.diag.context_local = source;
@@ -5791,7 +5812,8 @@ const Certifier = struct {
         var arg_values_buffer: [64]ValueId = undefined;
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
             const arg = GuardedList.at(arg_locals, index);
-            const value = try self.requireLive(state, arg);
+            const representation_only = index < 64 and (assign.op.representationArgs() & (@as(u64, 1) << @as(u6, @intCast(index)))) != 0;
+            const value = if (representation_only) try self.requireListRepresentation(state, arg) else try self.requireLive(state, arg);
             if (index < arg_values_buffer.len) arg_values_buffer[index] = value;
         }
 
@@ -5957,6 +5979,95 @@ fn refOpReadsLocal(op: LIR.RefOp, needle: LIR.LocalId) bool {
 
 test "certifier declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "certify list metadata survives release but payload and retain do not" {
+    const Use = enum { length, capacity, payload, retain };
+    for (std.enums.values(Use)) |use| {
+        for ([_]bool{ false, true }) |cross_join| {
+            var f = try CertifyTest.init(testing.allocator);
+            defer f.deinit();
+            const list_layout = try f.layouts.insertList(.u64);
+            const list = try f.local(list_layout);
+            const alias = try f.local(list_layout);
+            const result = try f.local(.u64);
+            const index = try f.local(.u64);
+            const ret = try f.ret(result);
+            const op: LIR.LowLevel = switch (use) {
+                .length, .retain => .list_len,
+                .capacity => .list_capacity,
+                .payload => .list_get_unsafe,
+            };
+            var read = try f.store.addCFStmt(.{ .assign_low_level = .{
+                .target = result,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try f.store.addLocalSpan(if (use == .payload) &.{ alias, index } else &.{alias}),
+                .next = ret,
+            } });
+            if (use == .retain) read = try f.increfStmt(alias, list_layout, read);
+            const copy = try f.store.addCFStmt(.{ .assign_ref = .{
+                .target = alias,
+                .op = .{ .local = list },
+                .next = read,
+            } });
+            const continuation = if (cross_join) blk: {
+                const join_id = f.freshJoinPointId();
+                const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+                break :blk try f.store.addCFStmt(.{ .join = .{
+                    .id = join_id,
+                    .params = .empty(),
+                    .body = copy,
+                    .remainder = jump,
+                } });
+            } else copy;
+            const release = try f.decrefStmt(list, list_layout, continuation);
+            _ = try f.addProc(&.{ list, index }, release, .u64);
+            if (use == .length or use == .capacity) {
+                try f.certify();
+            } else {
+                try testing.expectError(error.Certification, f.certify());
+                try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+            }
+        }
+    }
+}
+
+test "certify list metadata from a container requires extraction before release" {
+    for ([_]bool{ false, true }) |extract_first| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const inner_layout = try f.layouts.insertList(.u64);
+        const outer_layout = try f.layouts.insertList(inner_layout);
+        const outer = try f.local(outer_layout);
+        const inner = try f.local(inner_layout);
+        const index = try f.local(.u64);
+        const length = try f.local(.u64);
+        const ret = try f.ret(length);
+        const read_length = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = length,
+            .op = .list_len,
+            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .args = try f.store.addLocalSpan(&.{inner}),
+            .next = ret,
+        } });
+        const after_extract = if (extract_first) try f.decrefStmt(outer, outer_layout, read_length) else read_length;
+        const extract = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = inner,
+            .op = .list_get_unsafe,
+            .rc_effect = LIR.LowLevel.list_get_unsafe.rcEffect(),
+            .args = try f.store.addLocalSpan(&.{ outer, index }),
+            .next = after_extract,
+        } });
+        const body = if (extract_first) extract else try f.decrefStmt(outer, outer_layout, extract);
+        _ = try f.addProc(&.{ outer, index }, body, .u64);
+        if (extract_first) {
+            try f.certify();
+        } else {
+            try testing.expectError(error.Certification, f.certify());
+            try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+        }
+    }
 }
 
 const testing = std.testing;
