@@ -8794,6 +8794,21 @@ Monotype lowering never derives a method owner from type content, never
 searches a registry by method name, and never intersects constraints to guess
 a target.
 
+A direct call expression instantiates its callee's checked function type once
+per lowered body. Every result-type read of that expression (a
+structural-equality operand sealed before its operands lower, argument evidence
+for an enclosing call, argument preparation) and the expression's own lowering
+share that one request interface, one argument preparation, and one callee
+selection, and the callee is selected and drafted against the request at the
+first read that needs the completed result, so the type a read seals is the
+type the lowered call produces. A read that carries an expected result cell
+relates it to the shared request the way a fresh instantiation would. Requests
+whose interface depends on the read itself are never shared: an iterator
+procedure's request may be replaced by a generated private interface chosen
+from its argument evidence, a hosted `Try` request may be widened by the
+expected result's error labels, and an expected cell carrying generated-private
+evidence becomes the request's own result.
+
 The `.lss` strategy consumes these plans while producing Monotype IR. The
 `.boxy` strategy does not enter Monotype; it consumes the same checked dispatch
 plans while lowering checked CIR directly to LIR, choosing dictionary/vtable

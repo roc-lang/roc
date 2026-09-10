@@ -16080,7 +16080,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -16105,6 +16105,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]p
         .{ .name = "Nested closures prepared", .count = body.nested_closures_prepared },
         .{ .name = "Nested lookup probes", .count = body.nested_lookup_probes },
         .{ .name = "Draft commit lookup steps", .count = body.draft_commit_lookup_steps },
+        .{ .name = "Direct call request reuses", .count = body.direct_call_request_reuses },
     };
 }
 

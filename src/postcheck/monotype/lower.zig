@@ -612,6 +612,7 @@ pub const BodyDiagnostics = struct {
     expr_relation_requests: u64 = 0,
     argument_spans_prepared: u64 = 0,
     arguments_prepared: u64 = 0,
+    direct_call_request_reuses: u64 = 0,
     nested_callable_checks: u64 = 0,
     nested_lambdas_prepared: u64 = 0,
     nested_closures_prepared: u64 = 0,
@@ -11945,6 +11946,27 @@ const ClosedDirectDraftSpecialization = struct {
     draft_spec: ?u32,
 };
 
+/// The callee specialization selected for one direct-call request interface,
+/// with the request node the selection completed.
+const CompletedDirectCallee = struct {
+    callee: DraftFnSlot,
+    fn_node: NodeId,
+};
+
+/// The graph request one direct call expression instantiated. A body asks
+/// for a direct call's result type from several places (structural-equality
+/// operand sealing, argument evidence for an enclosing call, argument
+/// preparation) before it lowers the call itself, and every one of those
+/// reads the same checked expression against the same checked argument
+/// cells, so they share one request interface, one argument preparation,
+/// and one callee selection instead of instantiating the callee's checked
+/// type again for each read.
+const DirectCallRequest = struct {
+    fn_node: NodeId,
+    args_prepared: bool = false,
+    completed: ?CompletedDirectCallee = null,
+};
+
 const DraftProcCallee = union(enum(u8)) {
     func: DraftFnSlot,
     lifted: Ast.LiftedFnId,
@@ -16288,6 +16310,9 @@ const BodyContext = struct {
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
     propagate_constructor_value_evidence: bool = false,
+    /// One shared request interface per direct call expression of this body;
+    /// see `DirectCallRequest`.
+    direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
     /// Exact return cell owned by the active checked lambda specialization.
     /// Source `return` expressions must consume this cell rather than create a
     /// new instantiation of the lambda's checked return type.
@@ -17325,6 +17350,7 @@ const BodyContext = struct {
         self.equality_expansion_stack.deinit();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
+        self.direct_call_requests.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
@@ -22007,7 +22033,7 @@ const BodyContext = struct {
         defer timing_scope.end();
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
-            .call => |call| try self.callResultTypeNode(expr.ty, call, null),
+            .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
             .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
@@ -22030,7 +22056,7 @@ const BodyContext = struct {
             // so an unconstrained occurrence uses unit while contextual lowering
             // supplies the exact expected type through lowerExprAtType.
             .runtime_error => try self.unitType(),
-            .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
+            .call => |call| (try self.callResultMonoType(expr_id, expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
             .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerTypeView(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
@@ -23007,7 +23033,7 @@ const BodyContext = struct {
         if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
             return expr;
         }
-        const lowered = try self.lowerCall(checked_ret_ty, call);
+        const lowered = try self.lowerCall(checked_expr_id, checked_ret_ty, call);
         const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
         const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
         var result_request_node = checked_ret_node;
@@ -30572,17 +30598,24 @@ const BodyContext = struct {
         } } });
     }
 
-    fn lowerCall(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!LoweredCall {
-        return try self.lowerCallAtExpectedNode(checked_ret_ty, call, null, null);
+    fn lowerCall(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        checked_ret_ty: checked.CheckedTypeId,
+        call: anytype,
+    ) Allocator.Error!LoweredCall {
+        return try self.lowerCallAtExpectedNode(checked_expr, checked_ret_ty, call, null, null);
     }
 
     fn lowerCallAtType(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!LoweredCall {
         return try self.lowerCallAtExpectedNode(
+            checked_expr,
             checked_ret_ty,
             call,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
@@ -30592,15 +30625,17 @@ const BodyContext = struct {
 
     fn lowerCallAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: NodeId,
     ) Allocator.Error!LoweredCall {
-        return try self.lowerCallAtExpectedNode(checked_ret_ty, call, expected_ret_node, null);
+        return try self.lowerCallAtExpectedNode(checked_expr, checked_ret_ty, call, expected_ret_node, null);
     }
 
     fn lowerCallAtExpectedNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: ?NodeId,
@@ -30612,41 +30647,23 @@ const BodyContext = struct {
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
-            var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-            call_ctx.evidence = self.evidence;
-            defer call_ctx.deinit();
-            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-            call_ctx.current_fn_key = self.current_fn_key;
-            call_ctx.source_region_override = self.source_region_override;
-            call_ctx.current_entry_root = self.current_entry_root;
-            call_ctx.in_deferred_body = self.in_deferred_body;
-
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
             const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
-            var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
-                source_fn_ty,
-                self,
+            const fn_node = try self.directCallRequestNode(
+                checked_expr,
+                target,
+                call,
                 checked_ret_ty,
-                call.args,
+                source_fn_ty,
                 expected_ret_node,
-                try self.hostedTryCapabilityForResolvedTarget(target),
-                try self.iteratorCallNeedsConstructorArgumentEvidence(iterator_procedure, call.args),
             );
-            if (iterator_procedure) |procedure| {
-                const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
-                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
-                    try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
-                    try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
-                    fn_node = private_fn_node;
-                }
-            }
             const fn_nodes = try self.graph.functionNodes(fn_node);
-            try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
+            try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
             if (try self.lowerDirectCallWithUninhabitedArgument(call.args, fn_nodes)) |lowered| return lowered;
             if (iterator_procedure) |procedure| {
                 if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return lowered;
             }
-            const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
+            const source_fn_key = self.view.types.rootKey(source_fn_ty);
             if (self.resolvedTargetIsStrInspect(target)) {
                 const args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
                 if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
@@ -30662,9 +30679,8 @@ const BodyContext = struct {
                     } },
                 };
             }
-            const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
-            const callee_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-            const callee_fn_nodes = try self.graph.functionNodes(callee_fn_node);
+            const completed = try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node);
+            const callee_fn_nodes = try self.graph.functionNodes(completed.fn_node);
             if (callee_fn_nodes.args.len != fn_nodes.args.len) {
                 Common.invariant("completed direct-call specialization changed argument arity");
             }
@@ -30673,7 +30689,7 @@ const BodyContext = struct {
             return .{
                 .ret_ty = DraftTypeCell.fromGraphNode(callee_fn_nodes.ret),
                 .data = .{ .call_proc = .{
-                    .callee = .{ .func = callee },
+                    .callee = .{ .func = completed.callee },
                     .args = lowered_args,
                     .iterator_procedure = iterator_procedure,
                     .captures = captures,
@@ -31318,17 +31334,19 @@ const BodyContext = struct {
             .call => |call| {
                 if (call.direct_target) |target| {
                     const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                    const fn_node = try self.directCallTypeNode(
-                        expr.ty,
+                    const fn_node = try self.directCallRequestNode(
+                        checked_arg,
+                        target,
                         call,
+                        expr.ty,
                         source_fn_ty,
                         if (expected_ty) |expected| try self.activeNodeFromType(expected) else null,
                     );
                     const fn_nodes = try self.graph.functionNodes(fn_node);
                     if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) return fn_nodes.ret;
-                    return try self.directCallCompletedResultNode(target, call, source_fn_ty, fn_node);
+                    return try self.directCallCompletedResultNode(checked_arg, target, call, source_fn_ty, fn_node);
                 }
-                return try self.callResultTypeNode(expr.ty, call, expected_ty);
+                return try self.callResultTypeNode(checked_arg, expr.ty, call, expected_ty);
             },
             .dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
             .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty),
@@ -31841,17 +31859,19 @@ const BodyContext = struct {
 
     fn callResultMonoType(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const ret_node = try self.callResultTypeNode(checked_ret_ty, call, expected_ret_ty);
+        const ret_node = try self.callResultTypeNode(checked_expr, checked_ret_ty, call, expected_ret_ty);
         if (expected_ret_ty) |expected| return expected;
         return try self.activeTypeFromNode(ret_node);
     }
 
     fn callResultTypeNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
@@ -31896,13 +31916,111 @@ const BodyContext = struct {
 
         const target = call.direct_target.?;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-        const fn_node = try self.directCallTypeNode(
-            checked_ret_ty,
+        const fn_node = try self.directCallRequestNode(
+            checked_expr,
+            target,
             call,
+            checked_ret_ty,
             source_fn_ty,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
         );
-        return try self.directCallCompletedResultNode(target, call, source_fn_ty, fn_node);
+        return try self.directCallCompletedResultNode(checked_expr, target, call, source_fn_ty, fn_node);
+    }
+
+    /// The request interface of a direct call expression, instantiated once
+    /// per body and shared by every later read of the same expression (see
+    /// `DirectCallRequest`). A later read that carries an expected result
+    /// cell relates it to the shared request exactly as a fresh
+    /// instantiation would. Requests whose interface depends on the read
+    /// itself are never shared: an iterator procedure's request may be
+    /// replaced by a generated private interface chosen from the argument
+    /// evidence, a hosted `Try` request may be widened by the expected
+    /// result's error labels, and an expected cell carrying generated-private
+    /// evidence becomes the request's own result.
+    fn directCallRequestNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        target: checked.ResolvedValueId,
+        call: anytype,
+        checked_ret_ty: checked.CheckedTypeId,
+        source_fn_ty: checked.CheckedTypeId,
+        expected_ret_node: ?NodeId,
+    ) Allocator.Error!NodeId {
+        if (!try self.directCallRequestIsShareable(target, expected_ret_node)) {
+            return try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        }
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            self.builder.countBodyDiagnostic("direct_call_request_reuses");
+            if (expected_ret_node) |expected| {
+                const fn_nodes = try self.graph.functionNodes(request.fn_node);
+                _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
+            }
+            return request.fn_node;
+        }
+        const fn_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        try self.direct_call_requests.put(self.allocator, checked_expr, .{ .fn_node = fn_node });
+        return fn_node;
+    }
+
+    fn directCallRequestIsShareable(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+        expected_ret_node: ?NodeId,
+    ) Allocator.Error!bool {
+        if (self.iteratorProcedureForResolvedTarget(target) != null) return false;
+        if (try self.hostedTryCapabilityForResolvedTarget(target) != null) return false;
+        if (expected_ret_node) |expected| {
+            if (try self.graph.containsGeneratedPrivate(expected)) return false;
+        }
+        return true;
+    }
+
+    /// Relate a direct call's arguments to its request interface once per
+    /// shared request.
+    fn prepareDirectCallArgsAtNodes(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        fn_node: NodeId,
+        checked_args: []const checked.CheckedExprId,
+        arg_nodes: []const NodeId,
+    ) Allocator.Error!void {
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (request.fn_node == fn_node and request.args_prepared) return;
+        }
+        try self.prepareExprSpanAtNodes(checked_args, arg_nodes);
+        if (self.direct_call_requests.getPtr(checked_expr)) |request| {
+            if (request.fn_node == fn_node) request.args_prepared = true;
+        }
+    }
+
+    /// Select and draft the callee specialization of a direct call's request
+    /// interface, once per shared request.
+    fn completedDirectCalleeAtNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        target: checked.ResolvedValueId,
+        source_fn_ty: checked.CheckedTypeId,
+        fn_node: NodeId,
+    ) Allocator.Error!CompletedDirectCallee {
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (request.fn_node == fn_node) {
+                if (request.completed) |completed| return completed;
+            }
+        }
+        const callee = try self.fnTemplateForDirectCallAtNode(
+            target,
+            source_fn_ty,
+            self.view.types.rootKey(source_fn_ty),
+            fn_node,
+        );
+        const completed = CompletedDirectCallee{
+            .callee = callee,
+            .fn_node = try self.draftFnSlotTypeNode(callee, fn_node),
+        };
+        if (self.direct_call_requests.getPtr(checked_expr)) |request| {
+            if (request.fn_node == fn_node) request.completed = completed;
+        }
+        return completed;
     }
 
     /// The result cell of a direct call is the selected specialization's
@@ -31921,17 +32039,23 @@ const BodyContext = struct {
     /// request cell, exactly as their lowering does.
     fn directCallCompletedResultNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         target: checked.ResolvedValueId,
         call: anytype,
         source_fn_ty: checked.CheckedTypeId,
         fn_node: NodeId,
     ) Allocator.Error!NodeId {
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (request.fn_node == fn_node) {
+                if (request.completed) |completed| return (try self.graph.functionNodes(completed.fn_node)).ret;
+            }
+        }
         const fn_nodes = try self.graph.functionNodes(fn_node);
         if (self.checkedExprDivergesInLoweredRuntime(call.func)) return fn_nodes.ret;
         for (call.args) |arg| {
             if (self.checkedExprDivergesInLoweredRuntime(arg)) return fn_nodes.ret;
         }
-        try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
+        try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
         for (fn_nodes.args) |arg_node| {
             if (try self.nodeIsProvenUninhabited(arg_node)) return fn_nodes.ret;
         }
@@ -31941,14 +32065,8 @@ const BodyContext = struct {
             }
         }
         if (self.resolvedTargetIsStrInspect(target)) return fn_nodes.ret;
-        const callee = try self.fnTemplateForDirectCallAtNode(
-            target,
-            source_fn_ty,
-            self.view.types.rootKey(source_fn_ty),
-            fn_node,
-        );
-        const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-        return (try self.graph.functionNodes(completed_fn_node)).ret;
+        const completed = try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node);
+        return (try self.graph.functionNodes(completed.fn_node)).ret;
     }
 
     fn directCallTypeNode(
@@ -35594,7 +35712,7 @@ const BodyContext = struct {
             .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
             .lookup_external => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
             .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
-            .call => |call| try self.relateCallExprAtNode(expr.ty, call, expected_node),
+            .call => |call| try self.relateCallExprAtNode(checked_expr, expr.ty, call, expected_node),
             .dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
             .interpolation => |interpolation| try self.relateDispatchExprAtNode(expr.ty, interpolation.plan, expected_node),
             .type_dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
@@ -35698,10 +35816,21 @@ const BodyContext = struct {
 
     fn relateCallExprAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: NodeId,
     ) Allocator.Error!void {
+        if (call.direct_target) |target| {
+            if (try self.directCallRequestIsShareable(target, null)) {
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const fn_node = try self.directCallRequestNode(checked_expr, target, call, checked_ret_ty, source_fn_ty, null);
+                const fn_nodes = try self.graph.functionNodes(fn_node);
+                try relateRequestComponent(self.graph, fn_nodes.ret, expected_ret_node);
+                for (call.args, fn_nodes.args) |arg, arg_node| try self.relateExprAtNode(arg, arg_node);
+                return;
+            }
+        }
         var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
@@ -36485,9 +36614,9 @@ const BodyContext = struct {
             // contain unresolved payload cells here, so materializing it as a
             // Monotype TypeId would emit an incomplete output.
             const call_data = if (producer_request) |request|
-                try self.lowerCallAtNode(expr.ty, call, request)
+                try self.lowerCallAtNode(checked_expr, expr.ty, call, request)
             else
-                try self.lowerCall(expr.ty, call);
+                try self.lowerCall(checked_expr, expr.ty, call);
             break :lowered try self.addExprWithTypeCell(call_data.ret_ty, call_data.data);
         };
         const lowered_node = try self.exprTypeCell(lowered).toGraphNode(self.graph);
@@ -36584,7 +36713,7 @@ const BodyContext = struct {
                     return lowered;
                 }
                 try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerCallAtType(expr.ty, call, ty);
+                const lowered = try self.lowerCallAtType(checked_expr, expr.ty, call, ty);
                 if (!self.sameType(ty, try self.activeTypeFromCell(lowered.ret_ty))) {
                     Common.invariant("checked call expression lowered at a type different from its context type");
                 }
@@ -48492,7 +48621,7 @@ const BodyContext = struct {
         if (self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
-            .call => |call| try self.callResultTypeNode(expr.ty, call, null),
+            .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
             .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
@@ -51060,9 +51189,11 @@ const BodyContext = struct {
             .call => |call| blk: {
                 const target = call.direct_target orelse break :blk null;
                 const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                const fn_node = try self.directCallTypeNode(
-                    expr.ty,
+                const fn_node = try self.directCallRequestNode(
+                    checked_value,
+                    target,
                     call,
+                    expr.ty,
                     source_fn_ty,
                     expected_node,
                 );
@@ -51071,14 +51202,8 @@ const BodyContext = struct {
                 if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
 
                 try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
-                const callee = try self.fnTemplateForDirectCallAtNode(
-                    target,
-                    source_fn_ty,
-                    self.view.types.rootKey(source_fn_ty),
-                    fn_node,
-                );
-                const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-                break :blk (try self.graph.functionNodes(completed_fn_node)).ret;
+                const completed = try self.completedDirectCalleeAtNode(checked_value, target, source_fn_ty, fn_node);
+                break :blk (try self.graph.functionNodes(completed.fn_node)).ret;
             },
             .dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
                 expr.ty,
