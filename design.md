@@ -3150,14 +3150,15 @@ a reachable `checked_error` literal pattern may not enter a checked body. A
 later scheme instantiation still owns failure of its copied static-dispatch
 constraint at the use expression. Ownership is explicit producer data and must
 not be reconstructed from pattern structure. The plan packs its kind and
-resolution into one word, so recording the owner does not increase plan size.
+resolution into one word and references its pattern-only context, keeping the
+common literal plan at five words.
 Discarding a subtree retires its pattern evidence as well as its expression
 evidence. Finalization queues owners of late-rejected patterns and invalidates
 them after sealing the dense plan array, so retirement cannot invalidate its
 iteration. Repeated owners are deduplicated before invalidation. This worklist
 allocates only on failure. `pattern_error` reuses the selected-root body union
 and the existing binder index; it adds no root storage on successful programs.
-No persistent reverse index or owner table is maintained for successful checking.
+No persistent reverse index is maintained for successful checking.
 
 `unresolved` is construction-only and may not cross the checked boundary.
 Checking finalizes each live record exactly once after constraint solving;
@@ -3172,6 +3173,24 @@ They must not inspect the checked target type to reconstruct which literal path
 checking selected. In particular, `builtin_direct` stores neither the synthetic
 conversion callable nor a runtime dispatch plan, and
 `specialization_dispatch` is not a standalone compile-time root.
+
+Custom and generalized literal patterns retain the exact equality constraint
+created alongside their conversion constraint. CIR keeps the failure owner and
+equality callable in a pattern-only context referenced by its five-word literal
+plan; expression literals allocate no context. Checked publication emits a
+matched-value binder and an ordinary `method_eq` expression whose operands are
+that binder and the existing conversion expression. The pattern's optional
+guard expression id replaces its former conversion id, so checked pattern nodes
+do not grow. Builtin-direct patterns emit no binder, guard, or equality plan.
+The guard participates in its enclosing procedure's ordinary expression,
+dispatch-evidence, and specialization-relation inventories. Both lowering
+strategies bind the matched value and consume that expression through ordinary
+equality lowering; neither reconstructs the pattern's equality target.
+Multiple literal guards and a source guard compose in source evaluation order
+with short-circuiting. Monotype consumes each as a condition and produces an
+explicit internal predicate; it does not equate the representation of a source
+`Bool` value with that of an internal comparison predicate. A sole guard needs
+no composition expression.
 
 #### Erroneous Call Operand Retirement
 

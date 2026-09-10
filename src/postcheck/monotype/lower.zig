@@ -16434,18 +16434,12 @@ const BodyContext = struct {
     /// While recursively restoring a stored constant, the concrete type of the
     /// whole restored value. Nested stored closures use this to instantiate the
     /// owner callable's return when synthesizing the constant scheme's evidence.
-    const PatternLiteralGuard = struct {
-        local: DraftLocalId,
-        ty: Type.TypeId,
-        check: union(enum) {
-            /// Compare against the literal's `from_numeral`/`from_quote`
-            /// conversion result.
-            conversion: checked.CheckedExprId,
-            /// The literal's value is unrepresentable at the scrutinee's
-            /// concrete type, so the branch can never match (checking reports
-            /// these; an I8 can never equal 300).
-            never,
-        },
+    const PatternLiteralGuard = union(enum) {
+        /// The checker-produced comparison, including conversion and exact
+        /// equality dispatch, reads the bound pattern value.
+        condition: checked.CheckedExprId,
+        /// This literal is unrepresentable at the specialized builtin type.
+        never,
     };
 
     /// A user binder deferred while an optional destructure is translated
@@ -49950,8 +49944,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.tupleItemTypes(ty), checks_out) };
             },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
             .str_interpolation => |str| try self.lowerStrPatternCollectingLists(str, ty, checks_out),
             .underscore => .wildcard,
         };
@@ -54899,11 +54893,11 @@ const BodyContext = struct {
             },
             .numeral_literal => |num| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk try self.lowerNumeralLiteralPattern(num, ty);
+                break :blk try self.lowerNumeralLiteralPattern(pattern_id, num, ty);
             },
             .str_literal => |str| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk try self.lowerStringLiteralPattern(str, ty);
+                break :blk try self.lowerStringLiteralPattern(pattern_id, str, ty);
             },
             .str_interpolation => |str| try self.lowerStrPattern(str, try self.activeTypeFromNode(node)),
             .underscore => .wildcard,
@@ -55125,8 +55119,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerTuplePattern(items, ty) };
             },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
             .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
         };
@@ -55284,13 +55278,14 @@ const BodyContext = struct {
     /// checker-selected conversion and equality guard.
     fn lowerNumeralLiteralPattern(
         self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
         numeral: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
         return switch (self.shapeContent(ty)) {
             .primitive => try self.numeralPatBits(numeral.literal, ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.guard) |guard|
+                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom numeral pattern had no checked conversion"),
         };
@@ -55301,6 +55296,7 @@ const BodyContext = struct {
     /// can never match, and a custom target uses the checked conversion guard.
     fn lowerStringLiteralPattern(
         self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
         str: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
@@ -55309,8 +55305,8 @@ const BodyContext = struct {
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) }
             else
                 try self.bindNeverMatchPattern(ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.guard) |guard|
+                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom string pattern had no checked conversion"),
         };
@@ -55320,15 +55316,18 @@ const BodyContext = struct {
     /// recording an equality condition for the enclosing match branch.
     fn bindLiteralGuardPattern(
         self: *BodyContext,
-        conversion: checked.CheckedExprId,
+        pattern_id: checked.CheckedPatternId,
+        condition: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
-        const local = try self.addLocal(self.builder.symbols.fresh(), ty);
-        try self.pattern_literal_guards.append(self.allocator, .{
-            .local = local,
-            .ty = ty,
-            .check = .{ .conversion = conversion },
-        });
+        const binder = self.view.bodies.literalPatternBinder(pattern_id);
+        const local = if (self.currentOwnerPatternBinderLocal(binder)) |existing| existing else blk: {
+            const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+            try self.bindLocalName(new_local, binder);
+            try self.binders.put(binder, new_local);
+            break :blk new_local;
+        };
+        try self.pattern_literal_guards.append(self.allocator, .{ .condition = condition });
         return .{ .bind = local };
     }
 
@@ -55338,43 +55337,18 @@ const BodyContext = struct {
     /// compared against the unrepresentable value.
     fn bindNeverMatchPattern(self: *BodyContext, ty: Type.TypeId) Allocator.Error!BodyPatData {
         const local = try self.addLocal(self.builder.symbols.fresh(), ty);
-        try self.pattern_literal_guards.append(self.allocator, .{
-            .local = local,
-            .ty = ty,
-            .check = .never,
-        });
+        try self.pattern_literal_guards.append(self.allocator, .never);
         return .{ .bind = local };
     }
 
-    /// Compare a bound match value against a literal's converted constant,
-    /// dispatching to the type's `is_eq` method when it has one and falling
-    /// back to structural equality otherwise, mirroring `==`. A never-match
-    /// guard is the constant `false` instead.
+    /// Consume the ordinary checked equality expression retained by the
+    /// pattern. Structural and callable equality use the same dispatch path
+    /// as source `==`, including specialization evidence and local captures.
     fn lowerPatternLiteralEq(self: *BodyContext, entry: PatternLiteralGuard) Allocator.Error!DraftExprId {
-        const conversion = switch (entry.check) {
-            .conversion => |conversion| conversion,
-            .never => return try self.boolLiteral(false, try self.primitiveType(.bool)),
+        return switch (entry) {
+            .condition => |condition| try self.lowerExpr(condition),
+            .never => try self.boolLiteral(false, try self.primitiveType(.bool)),
         };
-        const scrutinee = try self.localExpr(entry.local, entry.ty);
-        const expected = try self.lowerExpr(conversion);
-        if (methodOwnerFromType(self.typeStore(), entry.ty)) |owner| {
-            if (try self.lookupMethodTargetByName(owner, "is_eq")) |raw_lookup| {
-                const lookup = try self.withLocalProcContext(raw_lookup);
-                var target_ctx = try self.methodTargetContext(lookup);
-                defer target_ctx.deinit();
-                const target_fn = target_ctx.checkedFunctionType(lookup.target.callable_ty);
-                const bool_ty = try self.lowerTypeFromView(lookup.view, target_fn.ret);
-                const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
-                const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
-                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
-                return try self.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-                    .callee = draftProcCalleeForSlot(callee),
-                    .args = try self.addExprSpan(&.{ scrutinee, expected }),
-                    .captures = try self.methodTargetCaptureSpan(lookup),
-                } } });
-            }
-        }
-        return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.primitiveType(.bool));
     }
 
     /// Take ownership of the literal-equality conditions collected since
@@ -55431,16 +55405,24 @@ const BodyContext = struct {
     /// (optional) user guard, literal conditions first.
     fn conjoinPatternLiteralGuards(self: *BodyContext, user_guard: ?DraftExprId) Allocator.Error!?DraftExprId {
         if (self.pattern_literal_guards.items.len == 0) return user_guard;
+        if (self.pattern_literal_guards.items.len == 1 and user_guard == null) {
+            const condition = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[0]);
+            self.pattern_literal_guards.clearRetainingCapacity();
+            return condition;
+        }
         const bool_ty = try self.primitiveType(.bool);
-        var cond = user_guard;
+        const yes = try self.boolLiteral(true, bool_ty);
+        const no = try self.boolLiteral(false, bool_ty);
+        // Source Bool values and internal comparison predicates need not have
+        // the same Monotype representation. Consume each as a condition and
+        // produce one explicit primitive predicate, rather than returning a
+        // source guard as a branch of a primitive-typed expression.
+        var cond = if (user_guard) |guard| try self.ifExpr(guard, yes, no, bool_ty) else yes;
         var i = self.pattern_literal_guards.items.len;
         while (i > 0) {
             i -= 1;
             const eq = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[i]);
-            cond = if (cond) |inner|
-                try self.ifExpr(eq, inner, try self.boolLiteral(false, bool_ty), bool_ty)
-            else
-                eq;
+            cond = try self.ifExpr(eq, cond, no, bool_ty);
         }
         self.pattern_literal_guards.clearRetainingCapacity();
         return cond;

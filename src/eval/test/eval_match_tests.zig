@@ -9,6 +9,175 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 
 /// Match-lowering conformance cases, consumed by the parallel runner.
 pub const tests = [_]TestCase{
+    .{
+        .name = "literal pattern checked equality: recursive nominal",
+        .source_kind = .module,
+        .source =
+        \\Px := [End, Next(Px)].{
+        \\    is_eq : _
+        \\    from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Ok(Next(End))
+        \\}
+        \\matches : Px -> Bool
+        \\matches = |p| match p {
+        \\    0 => True
+        \\    _ => False
+        \\}
+        \\main = (matches(Px.Next(Px.End)), matches(Px.End))
+        ,
+        .expected = .{ .inspect_str = "(True, False)" },
+    },
+    .{
+        .name = "literal pattern checked equality: local equality captures",
+        .source_kind = .module,
+        .source =
+        \\run : U32 -> (Bool, Bool)
+        \\run = |modulus| {
+        \\    Px := { n: U32 }.{
+        \\        from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+        \\        from_numeral = |numeral| match U32.from_numeral(numeral) {
+        \\            Ok(n) => Ok({ n: n })
+        \\            Err(err) => Err(err)
+        \\        }
+        \\        is_eq : Px, Px -> Bool
+        \\        is_eq = |a, b| a.n % modulus == b.n % modulus
+        \\    }
+        \\    matches : a -> Bool where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]
+        \\    matches = |p| match p {
+        \\        380 => True
+        \\        _ => False
+        \\    }
+        \\    (matches(Px.{ n: 390 }), matches(Px.{ n: 381 }))
+        \\}
+        \\main = run(10)
+        ,
+        .expected = .{ .inspect_str = "(True, False)" },
+    },
+    .{
+        .name = "literal pattern checked equality: derived record",
+        .source_kind = .module,
+        .source =
+        \\Px := { n : U32 }.{
+        \\    is_eq : _
+        \\    from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match U32.from_numeral(numeral) {
+        \\        Ok(n) => Ok({ n: n })
+        \\        Err(err) => Err(err)
+        \\    }
+        \\}
+        \\matches : Px -> Bool
+        \\matches = |p| match p {
+        \\    380 => True
+        \\    _ => False
+        \\}
+        \\main = (matches(380.Px), matches(381.Px))
+        ,
+        .expected = .{ .inspect_str = "(True, False)" },
+    },
+    .{
+        .name = "literal pattern checked equality: generic evidence",
+        .source_kind = .module,
+        .source =
+        \\Px := { n : U32 }.{
+        \\    is_eq : _
+        \\    from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match U32.from_numeral(numeral) {
+        \\        Ok(n) => Ok({ n: n })
+        \\        Err(err) => Err(err)
+        \\    }
+        \\}
+        \\matches : a -> Bool where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]
+        \\matches = |p| match p {
+        \\    380 => True
+        \\    _ => False
+        \\}
+        \\main = (matches(380.Px), matches(381.Px), matches(380.U32), matches(381.U32))
+        ,
+        .expected = .{ .inspect_str = "(True, False, True, False)" },
+    },
+    .{
+        .name = "literal pattern checked equality: derived tag union",
+        .source_kind = .module,
+        .source =
+        \\Px := [Val(U32)].{
+        \\    is_eq : _
+        \\    from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match U32.from_numeral(numeral) {
+        \\        Ok(n) => Ok(Val(n))
+        \\        Err(err) => Err(err)
+        \\    }
+        \\}
+        \\matches : a -> Bool where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]
+        \\matches = |p| match p {
+        \\    380 => True
+        \\    _ => False
+        \\}
+        \\main = (matches(380.Px), matches(381.Px))
+        ,
+        .expected = .{ .inspect_str = "(True, False)" },
+    },
+    .{
+        .name = "literal pattern checked equality: nested heap values and guard fallthrough",
+        .source_kind = .module,
+        .source =
+        \\Px := { n : List(U32) }.{
+        \\    is_eq : _
+        \\    from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match U32.from_numeral(numeral) {
+        \\        Ok(n) => Ok({ n: [n] })
+        \\        Err(err) => Err(err)
+        \\    }
+        \\}
+        \\matches : List(Px), Bool -> U8
+        \\matches = |ps, flag| match ps {
+        \\    [380, ..] if flag => 1
+        \\    [380, ..] => 2
+        \\    _ => 3
+        \\}
+        \\main = (matches([380.Px], True), matches([380.Px], False), matches([381.Px], True), matches([], True))
+        ,
+        .expected = .{ .inspect_str = "(1, 2, 3, 3)" },
+    },
+    .{
+        .name = "literal pattern checked equality: derived quote",
+        .source_kind = .module,
+        .source =
+        \\Word := { text : Str }.{
+        \\    is_eq : _
+        \\    from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| Ok({ text: text })
+        \\}
+        \\matches : Word -> Bool
+        \\matches = |p| match p {
+        \\    "hello" => True
+        \\    _ => False
+        \\}
+        \\main = (matches("hello".Word), matches("world".Word))
+        ,
+        .expected = .{ .inspect_str = "(True, False)" },
+    },
+    .{
+        .name = "literal pattern checked equality: multiple guards short circuit",
+        .source_kind = .module,
+        .source =
+        \\Px := { n: U32 }.{
+        \\    from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match U32.from_numeral(numeral) {
+        \\        Ok(n) => Ok({ n: n })
+        \\        Err(err) => Err(err)
+        \\    }
+        \\    is_eq : Px, Px -> Bool
+        \\    is_eq = |a, b| if a.n == 999 { crash "later equality must short circuit" } else { a.n == b.n }
+        \\}
+        \\matches : Px, Px, Bool -> U8
+        \\matches = |a, b, flag| match (a, b) {
+        \\    (380, 381) if flag => 1
+        \\    _ => 2
+        \\}
+        \\main = (matches(380.Px, 381.Px, True), matches(380.Px, 381.Px, False), matches(380.Px, 382.Px, True), matches(379.Px, 999.Px, True))
+        ,
+        .expected = .{ .inspect_str = "(1, 2, 2, 2)" },
+    },
     // --- Tag dispatch ---
     .{
         .name = "match-dt: four-tag nominal union dispatches every arm",
