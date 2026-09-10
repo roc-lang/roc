@@ -3177,7 +3177,7 @@ conversion callable nor a runtime dispatch plan, and
 Custom and generalized literal patterns retain the exact equality constraint
 created alongside their conversion constraint. CIR keeps the failure owner and
 equality callable in a pattern-only context referenced by its five-word literal
-plan; expression literals allocate no context. Checked publication emits a
+plan; expression literals allocate no context. Checked body construction emits a
 matched-value binder and an ordinary `method_eq` expression whose operands are
 that binder and the existing conversion expression. The pattern's optional
 guard expression id replaces its former conversion id, so checked pattern nodes
