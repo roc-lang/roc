@@ -19983,7 +19983,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         .optional => .optional,
                     },
                 } }, .construction);
-                if (access_result.isProblem()) {
+                // Suppression preserves the receiver's original diagnostic,
+                // but establishes no record relation or field value type.
+                if (!access_result.isEstablished()) {
                     try self.markErroneous(expr_var);
                     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
                     access_failed = true;
