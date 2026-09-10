@@ -39140,8 +39140,22 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const result = try self.lowerNumeralCallRaw(checked_ret_ty, maybe_plan, target_ty);
+        const callable = switch (self.literalDispatchRuntimePlan(maybe_plan)) {
+            .callable => |callable| callable,
+            .crash => |reason| return try self.runtimeCrashExpr(target_ty, dispatchCrashMessage(reason)),
+        };
+        const result = try self.lowerNumeralCallRaw(checked_ret_ty, callable, target_ty);
         return try self.unwrapNumeralResult(result.call, result.try_ty, target_ty);
+    }
+
+    fn literalDispatchRuntimePlan(
+        self: *BodyContext,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+    ) DispatchRuntimePlan {
+        const plan_id = maybe_plan orelse Common.invariant("checked literal conversion reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (plan.result_mode != .value) Common.invariant("checked literal conversion plan had a non-value result mode");
+        return self.dispatchRuntimePlan(plan);
     }
 
     const NumeralCall = struct {
@@ -39152,13 +39166,11 @@ const BodyContext = struct {
     fn lowerNumeralCallRaw(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        callable: CallableDispatchPlan,
         target_ty: Type.TypeId,
     ) Allocator.Error!NumeralCall {
-        const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
-        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const plan = callable.plan;
+        const plan_args = callable.operands;
 
         var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
@@ -39197,10 +39209,14 @@ const BodyContext = struct {
             .str_from_quote => |quote| quote.plan,
             .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion root did not point at a conversion expression"),
         };
+        const callable = switch (self.literalDispatchRuntimePlan(plan)) {
+            .callable => |callable| callable,
+            .crash => |reason| return try self.runtimeCrashExpr(try_ty, dispatchCrashMessage(reason)),
+        };
         const ok_tag = self.monoTagByText(try_ty, "Ok");
         const ok_payloads = self.typeStore().span(ok_tag.payloads);
         if (ok_payloads.len != 1) Common.invariant("numeral conversion root Try.Ok did not carry one payload");
-        const result = try self.lowerNumeralCallRaw(expr.ty, plan, GuardedList.at(ok_payloads, 0));
+        const result = try self.lowerNumeralCallRaw(expr.ty, callable, GuardedList.at(ok_payloads, 0));
         if (!self.sameType(result.try_ty, try_ty)) {
             Common.invariant("numeral conversion root type differed from the from_numeral result type");
         }
