@@ -935,6 +935,100 @@ test "check - repro - issue 11024 - empty record literal satisfies an all-defaul
     try test_env.assertDefType("y", "Foo");
 }
 
+test "check - issue 11271 - polymorphic calls retain every omitted-default construction" {
+    const cases = [_]struct { expression: []const u8, owners: usize, fields_per_owner: usize = 2, empty: bool = true }{
+        .{ .expression = "List.repeat({}, 2)", .owners = 1 },
+        .{ .expression = "List.map([1, 2], |_| {})", .owners = 1 },
+        .{ .expression = "id([{}, {}])", .owners = 2 },
+        .{ .expression = "id([id({}), id({})])", .owners = 2 },
+        .{ .expression = "id(if True [{}, {}] else [{}, {}])", .owners = 4 },
+        .{ .expression = "List.map([True, False], |flag| if flag {} else {})", .owners = 2 },
+        .{ .expression = "id([{ count: 1 }, { count: 2 }])", .owners = 2, .fields_per_owner = 1, .empty = false },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(std.testing.allocator,
+            \\Config := {{ count : U8 ?? 10, other : U8 ?? 20 }}
+            \\id : a -> a
+            \\id = |x| x
+            \\xs : List(Config)
+            \\xs = {s}
+        , .{case.expression});
+        defer std.testing.allocator.free(source);
+        var env = try TestEnv.init("Test", source);
+        defer env.deinit();
+        try env.assertDefType("xs", "List(Config)");
+        const omissions = env.module_env.record_omitted_defaults.items.items;
+        try std.testing.expectEqual(case.fields_per_owner * case.owners, omissions.len);
+        for (omissions) |omission| {
+            const expr = env.module_env.store.getExpr(omission.expr);
+            try std.testing.expect(if (case.empty) expr == .e_empty_record else expr == .e_record);
+            var owned_count: usize = 0;
+            for (omissions) |other| {
+                if (other.expr == omission.expr) owned_count += 1;
+            }
+            try std.testing.expectEqual(case.fields_per_owner, owned_count);
+        }
+    }
+}
+
+test "check - issue 11271 - polymorphic calls preserve required fields and committed width" {
+    const sources = [_][]const u8{
+        \\Config := { count : U8, other : U8 ?? 20 }
+        \\id : a -> a
+        \\id = |x| x
+        \\value : Config
+        \\value = id({})
+        ,
+        \\Config := { count : U8 ?? 10 }
+        \\id : a -> a
+        \\id = |x| x
+        \\make : {} -> Config
+        \\make = |empty| id(empty)
+        ,
+        \\Config := { count : U8 ?? 10 }
+        \\id : a -> a
+        \\id = |x| x
+        \\read : Config -> U8
+        \\read = |config| config.count
+        \\use : {} -> U8
+        \\use = |empty| read(id(empty))
+        ,
+    };
+    for (sources) |source| {
+        var env = try TestEnv.init("Test", source);
+        defer env.deinit();
+        try env.assertOneTypeError("Type Mismatch");
+    }
+}
+
+test "check - issue 11271 - polymorphic omission preserves independent nominal arguments" {
+    var env = try TestEnv.init("Test",
+        \\Config(a) := { values : List(a) ?? [] }
+        \\id : a -> a
+        \\id = |x| x
+        \\numbers : Config(U8)
+        \\numbers = id({})
+        \\strings : Config(Str)
+        \\strings = id({})
+    );
+    defer env.deinit();
+    try env.assertDefType("numbers", "Config(U8)");
+    try env.assertDefType("strings", "Config(Str)");
+    try std.testing.expectEqual(2, env.module_env.record_omitted_defaults.items.items.len);
+}
+
+test "check - issue 11271 - merged constructions retain recursive-default rejection" {
+    var env = try TestEnv.init("Test",
+        \\Config := { count : U64 ?? make(True).count }
+        \\id : a -> a
+        \\id = |x| x
+        \\make : Bool -> Config
+        \\make = |flag| id(if flag {} else {})
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Recursive Default Value");
+}
+
 test "check - issue 11024 - nested empty literals own their omitted defaults" {
     const src =
         \\Foo := { bar : U64 ?? 3, baz : U64 ?? 7 }

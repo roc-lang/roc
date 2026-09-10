@@ -21,6 +21,44 @@ const simd_tests = @import("eval_simd_tests.zig");
 /// Every value-producing test is observed solely through `Str.inspect(...)`.
 const core_tests = [_]TestCase{
     .{
+        .name = "issue 11271: polymorphic record constructions materialize all defaults",
+        .source_kind = .module,
+        .source =
+        \\Config := { count : U64 ?? 10, other : U64 ?? 20 }
+        \\id : a -> a
+        \\id = |x| x
+        \\value : Config
+        \\value = id({})
+        \\repeated : List(Config)
+        \\repeated = List.repeat({}, 2)
+        \\mapped : List(Config)
+        \\mapped = List.map([1, 2], |_| {})
+        \\siblings : List(Config)
+        \\siblings = id([id({}), id({})])
+        \\partial : List(Config)
+        \\partial = id([{ count: 1 }, { count: 2 }])
+        \\total : List(Config) -> U64
+        \\total = |configs| List.fold(configs, 0, |sum, config| sum + config.count + config.other)
+        \\main = (value.count, value.other, total(repeated), total(mapped), total(siblings), total(partial))
+        ,
+        .expected = .{ .inspect_str = "(10, 20, 60, 60, 60, 43)" },
+    },
+    .{
+        .name = "issue 11271: polymorphic branch constructions retain optional and heap defaults",
+        .source_kind = .module,
+        .imports = &.{.{ .name = "Cfg", .source = "Cfg := { text : Str ?? \"a default string longer than the inline capacity\", count ?: U64 }\n" }},
+        .source =
+        \\import Cfg
+        \\id : a -> a
+        \\id = |x| x
+        \\make : Bool -> List(Cfg.Cfg)
+        \\make = |flag| id(if flag [{}, {}] else [{}, {}])
+        \\valid = |configs| List.all(configs, |config| (config.text == "a default string longer than the inline capacity") and ((config.?count ?? 9) == 9))
+        \\main = valid(make(True)) and valid(make(False))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "issue 11024: implicit empty nominal records materialize defaults at every site",
         .source_kind = .module,
         .source =
