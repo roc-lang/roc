@@ -2351,13 +2351,20 @@ const Formatter = struct {
                 try fmt.formatCollection(args_region, fmt.ast.store.getCollectionLayout(ei), .round, AST.Expr.Idx, fmt.ast.store.exprSlice(na.args), Formatter.formatExpr);
             },
             .nominal_record => |nr| {
-                const mapper = try fmt.formatExprWithInfo(nr.mapper);
                 const mapper_region = fmt.nodeRegion(@intFromEnum(nr.mapper));
+                // Unlike field access, `.{}` stays in a pipe's target even
+                // after a newline. Always group a pipe used as the mapper.
+                const parenthesize_mapper = fmt.ast.store.getExpr(nr.mapper) == .arrow_call or
+                    fmt.postfixReceiverNeedsParens(nr.mapper);
+                const mapper = if (parenthesize_mapper)
+                    try fmt.formatParenthesizedExpr(null, nr.mapper, fmt.groupedExprWillBeMultiline(nr.mapper) or fmt.regionHasInteriorComment(mapper_region))
+                else
+                    try fmt.formatExprWithInfo(nr.mapper);
                 if (fmt.hasCommentBefore(mapper_region.end)) {
                     if (try fmt.flushCommentsBefore(mapper_region.end)) {
                         try fmt.pushIndent();
                     }
-                } else {
+                } else if (!parenthesize_mapper) {
                     _ = try fmt.continueAfterMultilineStringLine(mapper);
                 }
                 try fmt.push('.');
@@ -5766,6 +5773,87 @@ test "issue 11176: grouped expression layout follows formatted children" {
         const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
         defer std.testing.allocator.free(result);
         try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 11273: nominal record mapped from an arrow call is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/11273
+    // `->` takes only the ident as its target, so `{}->k` is the mapper of the
+    // nominal record. Preserve that grouping while migrating the arrow to a pipe.
+    const result = try moduleFmtsStable(std.testing.allocator, "a=({}->k.{})", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = (({} |> k).{})\n", result);
+}
+
+test "issue 11273: nominal record formatting preserves mapper ownership" {
+    const Grouping = struct {
+        fn unwrap(ast: *const AST, idx: AST.Expr.Idx) AST.Expr {
+            var expr_idx = idx;
+            var expr = ast.store.getExpr(idx);
+            while (expr == .tuple and ast.store.getCollectionLayout(expr_idx) == .compact) {
+                const items = ast.store.exprSlice(expr.tuple.items);
+                if (items.len != 1) break;
+                expr_idx = items[0];
+                expr = ast.store.getExpr(expr_idx);
+            }
+            return expr;
+        }
+    };
+    const cases = [_]struct {
+        input: []const u8,
+        mapper_tag: std.meta.Tag(AST.Expr),
+        pipe_target: bool = false,
+        expected: ?[]const u8 = null,
+    }{
+        .{ .input = "a=({}->k.{})", .mapper_tag = .arrow_call },
+        .{ .input = "a={}->k.{}", .mapper_tag = .arrow_call },
+        .{ .input = "a={}\n->k.{}", .mapper_tag = .arrow_call, .expected = "a = (\n\t{}\n\t\t|> k\n).{}\n" },
+        .{ .input = "a=({}-> # target\nk.{})", .mapper_tag = .arrow_call },
+        .{ .input = "a={}-> # target\nk.{}", .mapper_tag = .arrow_call, .expected = "a = (\n\t{}\n\t\t|> # target\n\t\tk\n).{}\n" },
+        .{ .input = "a={}->k # mapper\n.{}", .mapper_tag = .arrow_call, .expected = "a = ({} |> k) # mapper\n.{}\n" },
+        .{ .input = "a=({}->k).{field:1}", .mapper_tag = .arrow_call },
+        .{ .input = "a=x|>k.{}", .mapper_tag = .ident, .pipe_target = true },
+        .{ .input = "a=x|>(a+b).{}", .mapper_tag = .bin_op, .pipe_target = true },
+        .{ .input = "a=x|>(a+ # operand\nb).{}", .mapper_tag = .bin_op, .pipe_target = true },
+        .{ .input = "a=x|>(-a).{}", .mapper_tag = .unary_op, .pipe_target = true },
+        .{ .input = "a=x|>(|v|v).{}", .mapper_tag = .lambda, .pipe_target = true },
+        .{ .input = "a=x|>(1).{}", .mapper_tag = .int, .pipe_target = true },
+        .{ .input = "a=x|>(_0).{}", .mapper_tag = .ident, .pipe_target = true },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        if (case.expected) |expected| try std.testing.expectEqualStrings(expected, result);
+
+        // Idempotence alone can accept a changed expression. On both sides,
+        // check whether the record owns the pipe or is the pipe's target.
+        for ([_][]const u8{ case.input, result }) |source| {
+            var env = try ModuleEnv.init(std.testing.allocator, source);
+            defer env.deinit();
+            const ast = try parse.file(std.testing.allocator, &env.common);
+            defer ast.deinit();
+            try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+            const statements = ast.store.statementSlice(ast.store.getFile().statements);
+            try std.testing.expectEqual(@as(usize, 1), statements.len);
+            const stmt = ast.store.getStatement(statements[0]);
+            var record = Grouping.unwrap(ast, stmt.decl.body);
+            if (case.pipe_target) {
+                try std.testing.expect(record == .arrow_call);
+                try std.testing.expectEqual(AST.PipeTargetKind.ordinary, record.arrow_call.target_kind);
+                record = Grouping.unwrap(ast, record.arrow_call.right);
+            }
+            try std.testing.expect(record == .nominal_record);
+            const mapper = Grouping.unwrap(ast, record.nominal_record.mapper);
+            try std.testing.expectEqual(case.mapper_tag, std.meta.activeTag(mapper));
+            if (mapper == .arrow_call) {
+                try std.testing.expectEqual(AST.PipeTargetKind.ordinary, mapper.arrow_call.target_kind);
+                try std.testing.expect(Grouping.unwrap(ast, mapper.arrow_call.left) == .record);
+                const target = Grouping.unwrap(ast, mapper.arrow_call.right);
+                try std.testing.expect(target == .ident);
+                try std.testing.expectEqualStrings("k", ast.resolve(target.ident.token));
+            }
+            try std.testing.expect(ast.store.getExpr(record.nominal_record.backing) == .record);
+        }
     }
 }
 
