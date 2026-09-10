@@ -737,16 +737,17 @@ described in full, with trailers; W6b currently has its provisional title):
 | `zkmyrwqu` / `1f69432c` | W6b record-update root-request mechanics | pushed WIP and PR read-back verified; final gate green (26/26 tests, 38/38 steps); review accepts mechanics only, complete admission ownership/retirement remains REQUEST CHANGES |
 | `wpvvswsl` / `95dfea5a` | W6b checked-base record-update retirements | pushed and PR read-back verified; reviewed bounded WIP, final gate 38/38 tests, 41/41 steps; complete ownership and W6b remain unaccepted |
 | `txopxlzx` / `10f613d6` | W6b checked-base boundary coverage | pushed and exact PR readback verified; reviewed bounded WIP; final gate 41/41 tests, 41/41 steps |
-| `onmovlvr` | W6b actual base-plan publication atomicity | reviewed bounded WIP; established-base OOM/retry and outer local-transaction rollback pass; final gate 43/43 tests, 41/41 steps; driver preparing publication |
+| `onmovlvr` / `92741c58` | W6b actual base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final gate 43/43 tests, 41/41 steps |
+| `mpqnvuvq` | W6b checked-base owner completion atomicity | reviewed bounded WIP; direct 9/9 and final normal 45/45 tests, 41/41 steps pass; publication underway |
 
-The local and remote `jared/polarity` bookmarks now point at `txopxlzx` /
-`10f613d6`, directly above `wpvvswsl` / `95dfea5a`, `zkmyrwqu` / `1f69432c`
+The local and remote `jared/polarity` bookmarks now point at `onmovlvr` /
+`92741c58`, directly above `txopxlzx` / `10f613d6`, `wpvvswsl` / `95dfea5a`,
+`zkmyrwqu` / `1f69432c`
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`onmovlvr` owns the verified actual-producer allocation-test slice, whose
-publication is being prepared after final independent acceptance and its
-43/43-test, 41/41-step gate.
+`mpqnvuvq` owns the central owner-retirement completion allocation-test
+slice and is not part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -3918,6 +3919,101 @@ subsets below do not override this latest checkpoint.
   `base-producer-final-regression.txt`,
   `base-producer-checkpoint-description.txt`, and
   `pr-body-base-producer-checkpoint.md` in the artifact directory above.
+
+- Publication of `onmovlvr` is complete: Git commit
+  `92741c582452e8a3136cd95bce9264c47321fa87` was fast-forwarded from `10f613d6`
+  to `jared/polarity`. Draft PR #10434 has that exact head and exact updated
+  body, with draft status preserved; readback is saved as
+  `base-producer-pr-readback.json` in the artifact directory above. The driver
+  opened clean child `mpqnvuvqoonktrzzuyrytxrnpytpxyml` for actual central R_U
+  completion allocation/retry tests. The same sol-ultra author and independent
+  sol-ultra planning auditor were explicitly dispatched with `followup_task`;
+  the finished-code review will be separately dispatched after a code freeze.
+  This avoids confusing a completed planning turn with a running code review.
+  The next fixture must use real pre-poison checking and the real leaf sweep
+  to complete R_B, leaving the outer record and pending R_U intact. Create the
+  real outer diagnostic before the failing-allocator window, then exercise
+  `replaceExprWithRuntimeError` itself across every allocation, including
+  preflight consumer growth and transactional subtree invalidation. Verify
+  exact no-op on failure and same-instance completion followed by the real
+  checker tail and distinct fresh admission. Capture both durable/private
+  transaction state and affected invalidation metadata; no test-side repairs,
+  fabricated rows or weakened terminal admission. Checked-error base
+  publication and R_U reservation OOM remain later bounded tasks.
+
+- The independent completion planning audit finds three demanded allocation
+  families in the real central path: the retired-consumer suffix, offside
+  descendant discovery, and durable invalidation membership. Discovery starts
+  with the outer record's children, not the outer record itself; selected-root
+  bodies are not cloned or mutated by this operation. The test must pin fresh
+  consumer and invalidation capacity and supplement the existing transaction
+  snapshot with invalidation metadata, exact node tags/payloads and diagnostics.
+  The author is first building the authentic calibration-success seam before
+  the exhaustive failure/retry loop. This is planning evidence only: no new
+  test result or finished-code acceptance is claimed.
+
+- The early calibration seam passes semantic retry 30906 after two test-local
+  shadow-name fixes. Direct runtime 58903 passes 7/8 tests: only the new fixture
+  fails at pre-completion staging. Focused diagnostic 73906 pins the failure to
+  direct-binder/owner identity checking, before the copy-root assertions. The
+  fixture called a terminal lookup proof that requires the upstream annotation
+  retirement to have completed; this intentional seam has completed only the
+  base lookup R_B. The author is correcting the test to authenticate that
+  intermediate R_B through the existing phase-appropriate identity checks,
+  retaining terminal proof after the unmodified full tail. This is a test
+  staging correction, not authority fabrication or weakened terminal admission.
+  The exhaustive failure loop is deferred until calibration passes.
+
+- Calibration now passes: focused runtime 92287 is 2/2 at freeze `05ad7608`,
+  Check SHA-256
+  `50f2882be3126abe8c1721a94ff4477181601bd0620ec8747259a2b4f9fae64a`.
+  Two further targeted failures exposed test-phase assumptions: the historical
+  selected root was compared to its later union-find representative, and a
+  full canonical proof validator was invoked before rebuilding. The fixture
+  now preserves exact copy-time coordinates and checks their current
+  equivalence; all full local/fresh validation remains after the real tail.
+  No production semantics or validator were changed. Independent actual-code
+  review accepts this calibration only. The author is now adding the composite
+  state snapshot, exhaustive central-completion allocation failures and
+  same-instance retry/terminal comparison; that loop is not yet certified.
+
+- The full completion-only slice is frozen at `e6dd4e01`, Check SHA-256
+  `4deaae392adea75c6fa700f40705ecf349dc04f487c822638c760f15743ab500`.
+  Semantic 96831 passes, and direct runtime 35568 passes 9/9 tests, including
+  the retained calibration and exhaustive actual central-completion OOM/retry
+  test. The latter independently measures ordered child discovery and requires
+  exactly two additional allocation sites for consumer and durable invalidation
+  reserves. Every failure preserves logical transaction state, exact nodes,
+  diagnostics, metadata and the still-live upstream annotation draft; retry on
+  the same instance matches committed state and canonical terminal bytes after
+  the real tail and distinct fresh admission. Final actual-code review accepts
+  those mechanics but requests one explicit assertion that the sole field's
+  literal plan is unresolved before finalization. That narrow addition and the
+  normal producer-regenerated combined gate remain before publication.
+
+- Final code freeze `e5d98d6f`, Check SHA-256
+  `95bcdd179c3c6747415358ce2381fc50537c3b4de477d01c43b4451c578de537`,
+  adds only the requested unresolved-literal assertion. The independent
+  sol-ultra reviewer gives final bounded ACCEPT for the entire completion-only
+  delta, including live R_A lifecycle coverage, exact immutable row oracles,
+  allocation-site accounting, every OOM no-op, same-allocator retry, real-tail
+  fresh admission and canonical bytes. Normal combined gate 11291 is running
+  against that final source. Its result and publication are still pending;
+  the earlier 9/9 direct gate is not substituted for producer regeneration.
+
+- Normal combined gate 11291 passes **45/45 tests and 41/41 steps** on the
+  final reviewed source: canonicalization 9, types 10, checker 21, compile/serde
+  5, regenerated Builtins, shared-helper regressions, measured schema-85 golden
+  and native/wasm serialization sizes. Formatting passes and compiler hashes
+  match the accepted freeze. The driver is describing and publishing
+  `mpqnvuvq` as `WIP: verify checked-base owner retirement completion atomicity`.
+  Artifacts are `ru-completion-final-regression.txt`,
+  `ru-completion-checkpoint-description.txt`, and
+  `pr-body-ru-completion-checkpoint.md` in the artifact directory above.
+  This completes the bounded central-completion allocation task only; checked-
+  error base publication and R_U reservation OOM, broader R1 admission and
+  active serialization, R2/R3, call-formal failures, option (e), runtime adapters
+  and full W6b verification remain open.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

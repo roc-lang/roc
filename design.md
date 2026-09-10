@@ -6221,7 +6221,8 @@ runtime diagnostics pass (5/5 tests). The normal combined gate passes 41/41
 tests and 41/41 steps, including regenerated Builtins, the schema-85 golden,
 serialization and native/wasm sizes. Independent adversarial review accepts
 this bounded slice. Its push and exact draft-PR head/body readback are verified.
-Child `onmovlvr` extracts the existing base-plan publication transaction into
+Published `onmovlvr` / `92741c58` extracts the existing base-plan publication
+transaction into
 a shared production helper and verifies authentic established-base allocation
 failure, same-instance retry and outer local-transaction rollback, including
 its nested Probe-owned ledgers and Env-owned ranks. The snapshot includes exact
@@ -6231,9 +6232,22 @@ preserves a genuine nonempty publication prefix through rollback. The original
 lower-level copy test remains covered. Semantic and targeted runtime checks
 pass, and the final normal gate passes 43/43 tests and 41/41 steps, including
 regenerated Builtins, the schema-85 golden, serialization and native/wasm sizes.
-Independent adversarial review accepts this bounded slice; the driver is
-publishing it as WIP. Checked-error base and outer-retirement allocation
-coverage remain open; this does not certify complete record-update admission.
+Independent adversarial review accepts this bounded slice, whose push and
+exact draft-PR head/body readback are verified. Child `mpqnvuvq` implements
+allocation-failure and same-instance retry coverage for actual central
+checked-base outer-retirement completion, including subtree invalidation and
+replacement. Its authentic calibration and exhaustive allocation loop pass a
+9/9 direct runtime gate. The loop preserves exact pending state, including the
+live upstream annotation draft, across every measured allocation failure;
+same-instance retry matches committed state and canonical terminal bytes after
+the real checker tail and distinct fresh admission. Independent adversarial
+review gives final bounded ACCEPT after pinning the unresolved literal phase.
+The final normal producer-regenerated gate passes 45/45 tests and 41/41 steps,
+including shared helpers, the schema-85 golden, serialization and native/wasm
+sizes. Formatting and exact source hashes match review; publication is
+underway. Checked-error
+base publication and outer-retirement reservation allocation coverage remain
+open; this does not certify complete record-update admission.
 Preexisting-base cases, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
 gates remain pending, as do later established-base failure causes and complete
