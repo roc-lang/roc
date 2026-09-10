@@ -1719,7 +1719,14 @@ for a speculative commit, a shared representative, dispatch success, or another
 checked output whose validity depends on the whole requested relation must
 require `unified`; `suppressed_by_error` cannot authorize that action. Evidence
 for a child relation that completed before suppression remains independently
-valid. A site that relies on one variable to carry a relation between several
+valid. Each field-access segment requires an established record relation before
+its field type can become the next receiver or the access result. Suppression
+retires the consuming access through its existing local error metadata, so an
+enclosing match consumes an erroneous scrutinee, preventing a
+decision tree over an unrelated field type. The original diagnostic and the
+independently solved receiver remain unchanged.
+
+A site that relies on one variable to carry a relation between several
 others has to supply that relation itself once the carrier is erroneous.
 `match` is one such site: every branch pattern describes the same scrutinee
 value, and that mutual consistency normally travels through the scrutinee's

@@ -250,45 +250,19 @@ keeps = Keeps.{}
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-block
-			(s-let
-				(p-assign (ident "n"))
-				(e-num (value "1")))
-			(e-closure
-				(captures
-					(capture (ident "n")))
-				(e-lambda
-					(args
-						(p-underscore))
-					(e-dispatch-call (method "plus") (constraint-fn-var 296)
-						(receiver
-							(e-field-access
-								(receiver
-									(e-runtime-error (tag "erroneous_value_expr")))
-								(segments
-									(segment (name "a") (mode "required")))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "n")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "apply"))
 		(e-lambda
 			(args
 				(p-assign (ident "g")))
-			(e-call (constraint-fn-var 301)
+			(e-call (constraint-fn-var 299)
 				(e-lookup-local
 					(p-assign (ident "g")))
 				(e-empty_record))))
 	(d-let
 		(p-assign (ident "make"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-field-access
-				(receiver
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(segments
-					(segment (name "a") (mode "required"))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "make_handler"))
 		(e-lambda
@@ -331,9 +305,9 @@ keeps = Keeps.{}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> b where [b.plus : b, Dec -> b]"))
+		(patt (type "_arg -> Error"))
 		(patt (type "({} -> b) -> b"))
-		(patt (type "_arg -> _ret"))
+		(patt (type "_arg -> Error"))
 		(patt (type "_arg -> U8"))
 		(patt (type "Keeps")))
 	(type_decls
@@ -344,9 +318,9 @@ keeps = Keeps.{}
 		(nominal (type "Keeps")
 			(ty-header (name "Keeps"))))
 	(expressions
-		(expr (type "_arg -> b where [b.plus : b, Dec -> b]"))
+		(expr (type "_arg -> Error"))
 		(expr (type "({} -> b) -> b"))
-		(expr (type "_arg -> _ret"))
+		(expr (type "_arg -> Error"))
 		(expr (type "_arg -> U8"))
 		(expr (type "Keeps"))))
 ~~~
