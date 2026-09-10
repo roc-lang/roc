@@ -327,6 +327,9 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "document highlight handler resolves symbol from a reference site", .run = documentHighlightHandlerResolvesFromReferenceSite },
     .{ .name = "document highlight handler includes the annotated name", .run = documentHighlightHandlerIncludesAnnotationName },
     .{ .name = "rename handler rewrites every occurrence including the annotation", .run = renameHandlerRewritesEveryOccurrence },
+    .{ .name = "rename handler rewrites the name a var reassignment writes to", .run = renameHandlerRewritesVarReassignment },
+    .{ .name = "binding handlers resolve plain var reassignment occurrences", .run = bindingHandlersResolvePlainReassignments },
+    .{ .name = "binding handlers resolve structural var reassignment occurrences", .run = bindingHandlersResolveStructuralReassignments },
     .{ .name = "rename handler refuses a name already visible in scope", .run = renameHandlerRefusesNameAlreadyInScope },
     .{ .name = "rename handler refuses a name that changes what it means", .run = renameHandlerRefusesMeaningChangingName },
     .{ .name = "rename handler refuses a document that does not compile", .run = renameHandlerRefusesUncompilableDocument },
@@ -911,6 +914,257 @@ pub fn renameHandlerRewritesEveryOccurrence() integration_spec.SpecError!void {
         try std.testing.expect(try hasEdit(edits, 2, 0, 6, "triple"));
         try std.testing.expect(try hasEdit(edits, 3, 0, 6, "triple"));
         try std.testing.expect(try hasEdit(edits, 5, 7, 13, "triple"));
+    }
+}
+
+/// Verifies a rename rewrites the name a `var` reassignment writes to.
+///
+/// repro for https://github.com/roc-lang/roc/issues/11258
+///
+/// The left of `$total = $total + 1` names the binding just as the declaration
+/// and the read do, so all four occurrences belong to the rewrite. Rewriting
+/// three of them leaves `$total` unbound, which is the partial rewrite rename
+/// exists to refuse.
+pub fn renameHandlerRewritesVarReassignment() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "rename_reassign.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\count_up = |start| {{
+        \\    var $total = start
+        \\    $total = $total + 1
+        \\    $total
+        \\}}
+        \\
+        \\main = count_up(1)
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // Once from the declaration, once from the reassigned name itself: both
+    // name the same binding, so both must produce the same rewrite.
+    const from_declaration = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":10}},"newName":"$sum"}}}}
+    , .{fixture.uri});
+    defer allocator.free(from_declaration);
+    const from_reassignment = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":6}},"newName":"$sum"}}}}
+    , .{fixture.uri});
+    defer allocator.free(from_reassignment);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ from_declaration, from_reassignment });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    for ([_]i64{ 2, 3 }) |request_id| {
+        var response = try responseById(allocator, responses, request_id);
+        defer response.deinit();
+        const edits = try workspaceEditsFor(try response.result(), fixture.uri);
+
+        try std.testing.expect(edits == .array);
+        try std.testing.expectEqual(@as(usize, 4), edits.array.items.len);
+        // The declaration.
+        try std.testing.expect(try hasEdit(edits, 3, 8, 14, "$sum"));
+        // The reassignment: the name written to, then the name read.
+        try std.testing.expect(try hasEdit(edits, 4, 4, 10, "$sum"));
+        try std.testing.expect(try hasEdit(edits, 4, 13, 19, "$sum"));
+        // The block's result.
+        try std.testing.expect(try hasEdit(edits, 5, 4, 10, "$sum"));
+    }
+}
+
+const ReassignmentOccurrence = struct {
+    line: i64,
+    start: i64,
+    write: bool = false,
+};
+
+/// All local-binding requests must agree on writes, including when declarations
+/// are excluded. Same-named vars in the other function must stay untouched.
+pub fn bindingHandlersResolvePlainReassignments() integration_spec.SpecError!void {
+    const body =
+        \\count_up = |start| {
+        \\    var $x = start
+        \\    $x = $x + 1
+        \\    $x = $x + 2
+        \\    $x
+        \\}
+        \\other = |start| {
+        \\    var $x = start
+        \\    $x = $x + 2
+        \\    $x
+        \\}
+        \\main = count_up(1) + other(2)
+    ;
+    try checkReassignmentHandlers(body, &.{
+        .{ .line = 3, .start = 8 },
+        .{ .line = 4, .start = 4, .write = true },
+        .{ .line = 4, .start = 9 },
+        .{ .line = 5, .start = 4, .write = true },
+        .{ .line = 5, .start = 9 },
+        .{ .line = 6, .start = 4 },
+    });
+}
+
+/// Nested patterns mix fresh declarations with writes. The name's region must
+/// exclude `var`, record labels, and the surrounding destructuring syntax.
+pub fn bindingHandlersResolveStructuralReassignments() integration_spec.SpecError!void {
+    const body =
+        \\count_up = |start| {
+        \\    var $x = start
+        \\    (a, var $x, var $z) = (1, $x + 1, 2)
+        \\    { value: var $x, extra: b } = { value: $x + a, extra: $z }
+        \\    ($x, c) = ($x + b, 3)
+        \\    $x + c
+        \\}
+        \\other = |start| {
+        \\    var $x = start
+        \\    $x = $x + 2
+        \\    $x
+        \\}
+        \\main = count_up(1) + other(2)
+    ;
+    try checkReassignmentHandlers(body, &.{
+        .{ .line = 3, .start = 8 },
+        .{ .line = 4, .start = 12, .write = true },
+        .{ .line = 4, .start = 30 },
+        .{ .line = 5, .start = 17, .write = true },
+        .{ .line = 5, .start = 43 },
+        .{ .line = 6, .start = 5, .write = true },
+        .{ .line = 6, .start = 15 },
+        .{ .line = 7, .start = 4 },
+    });
+}
+
+fn checkReassignmentHandlers(body: []const u8, occurrences: []const ReassignmentOccurrence) integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "write_occurrences.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Equal-length names keep the explicit expected ranges the same. `$` is
+    // only a naming convention; the unprefixed mutable binding is valid too.
+    for ([_][]const u8{ "$x", "xx" }, [_][]const u8{ "$y", "yy" }) |name, new_name| {
+        const named_body = try std.mem.replaceOwned(u8, allocator, body, "$x", name);
+        defer allocator.free(named_body);
+        const source = try std.fmt.allocPrint(allocator, "app [main] {{ pf: platform \"{s}\" }}\n\n{s}", .{ platform_path, named_body });
+        defer allocator.free(source);
+
+        var requests: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (requests.items) |request| allocator.free(request);
+            requests.deinit(allocator);
+        }
+        const cursor = occurrences[1];
+        const methods = [_][]const u8{ "rename", "prepareRename", "definition", "references", "references", "documentHighlight" };
+        for (methods, 0..) |method, i| {
+            const extra = switch (i) {
+                0 => try std.fmt.allocPrint(allocator, ",\"newName\":\"{s}\"", .{new_name}),
+                3 => try allocator.dupe(u8, ",\"context\":{\"includeDeclaration\":true}"),
+                4 => try allocator.dupe(u8, ",\"context\":{\"includeDeclaration\":false}"),
+                else => try allocator.dupe(u8, ""),
+            };
+            defer allocator.free(extra);
+            const request = try std.fmt.allocPrint(allocator,
+                \\{{"jsonrpc":"2.0","id":{d},"method":"textDocument/{s}","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":{d},"character":{d}}}{s}}}}}
+            , .{ i + 2, method, fixture.uri, cursor.line, cursor.start + 1, extra });
+            errdefer allocator.free(request);
+            try requests.append(allocator, request);
+        }
+        // Every write site must also be able to initiate the same rename.
+        for (occurrences[2..]) |occurrence| {
+            if (!occurrence.write) continue;
+            const request = try std.fmt.allocPrint(allocator,
+                \\{{"jsonrpc":"2.0","id":{d},"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":{d},"character":{d}}},"newName":"{s}"}}}}
+            , .{ requests.items.len + 2, fixture.uri, occurrence.line, occurrence.start + 1, new_name });
+            errdefer allocator.free(request);
+            try requests.append(allocator, request);
+        }
+        const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, requests.items);
+        defer {
+            for (responses) |response| allocator.free(response);
+            allocator.free(responses);
+        }
+        for (0..requests.items.len) |i| {
+            var response = try responseById(allocator, responses, @intCast(i + 2));
+            defer response.deinit();
+            const result = try response.result();
+            switch (i) {
+                1 => {
+                    try std.testing.expectEqualStrings(name, try stringField(result, "placeholder"));
+                    try expectRange(try objectField(result, "range"), cursor.line, cursor.start, cursor.line, cursor.start + 2);
+                },
+                2 => {
+                    const declaration = occurrences[0];
+                    try expectLocation(result, fixture.uri, declaration.line, declaration.start, declaration.line, declaration.start + 2);
+                },
+                3, 4 => {
+                    const expected = if (i == 3) occurrences else occurrences[1..];
+                    try std.testing.expect(result == .array);
+                    try std.testing.expectEqual(expected.len, result.array.items.len);
+                    for (expected) |occurrence| {
+                        try std.testing.expect(try hasLocation(result, fixture.uri, occurrence.line, occurrence.start, occurrence.start + 2));
+                    }
+                },
+                5 => {
+                    try std.testing.expect(result == .array);
+                    try std.testing.expectEqual(occurrences.len, result.array.items.len);
+                    for (occurrences) |occurrence| {
+                        try std.testing.expect(try hasHighlightRange(result, occurrence.line, occurrence.start, occurrence.line, occurrence.start + 2));
+                    }
+                },
+                else => {
+                    const edits = try workspaceEditsFor(result, fixture.uri);
+                    try std.testing.expect(edits == .array);
+                    try std.testing.expectEqual(occurrences.len, edits.array.items.len);
+                    for (occurrences) |occurrence| {
+                        try std.testing.expect(try hasEdit(edits, occurrence.line, occurrence.start, occurrence.start + 2, new_name));
+                    }
+                    if (i == 0) {
+                        // Apply the actual returned edits and require the resulting
+                        // document to build and resolve the renamed write again.
+                        const renamed = try allocator.dupe(u8, source);
+                        defer allocator.free(renamed);
+                        for (edits.array.items) |edit| {
+                            const range = try objectField(edit, "range");
+                            const start = try objectField(range, "start");
+                            const line = try integerField(start, "line");
+                            const col = try integerField(start, "character");
+                            var offset: usize = 0;
+                            var lines = std.mem.splitScalar(u8, source, '\n');
+                            for (0..@intCast(line)) |_| offset += lines.next().?.len + 1;
+                            offset += @intCast(col);
+                            @memcpy(renamed[offset..][0..2], try stringField(edit, "newText"));
+                        }
+                        const after = try runSessionResponses(allocator, tmp_path, fixture.uri, renamed, &.{requests.items[1]});
+                        defer {
+                            for (after) |message| allocator.free(message);
+                            allocator.free(after);
+                        }
+                        var prepared = try responseById(allocator, after, 3);
+                        defer prepared.deinit();
+                        try std.testing.expectEqualStrings(new_name, try stringField(try prepared.result(), "placeholder"));
+                    }
+                },
+            }
+        }
     }
 }
 

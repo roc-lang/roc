@@ -7,7 +7,7 @@
 //! These functions are designed to be used by LSP handlers for:
 //! - Hover (findTypeAtOffset)
 //! - Go-to-definition (findLookupAtOffset, findDefinitionAtOffset)
-//! - Find-references (collectLookupReferences)
+//! - Find-references (collectReferences)
 //! - Document highlights (resolveSymbolAtOffset, findPatternAtOffset)
 //! - Completions (findFieldAccessReceiverTypeVar)
 
@@ -1083,15 +1083,23 @@ pub fn findTagAtOffset(module_env: *ModuleEnv, offset: u32) ?TagRef {
 
 /// Collect all references to a specific pattern (variable binding).
 ///
-/// This finds all e_lookup_local expressions that reference the target pattern,
-/// which is useful for find-references and document highlights.
-pub fn collectLookupReferences(
+/// Includes both local reads and canonicalization's explicit write occurrences.
+/// Writes are references even when the caller excludes declarations.
+pub fn collectReferences(
     module_env: *ModuleEnv,
     target_pattern: CIR.Pattern.Idx,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!std.ArrayList(LspRange) {
     var results: std.ArrayList(LspRange) = .empty;
     errdefer results.deinit(allocator);
+
+    for (module_env.store.write_occurrences.items.items) |write| {
+        if (write.pattern_idx == target_pattern) {
+            if (regionToRange(module_env, write.region())) |range| {
+                try results.append(allocator, range);
+            }
+        }
+    }
 
     var ctx = CollectReferencesContext{
         .store = &module_env.store,
@@ -1430,7 +1438,7 @@ pub fn collectTopLevelDefinitionsInRange(
 /// canonicalization merges a matching annotation into the def it annotates—
 /// so it is read from `Annotation.name_region`.
 ///
-/// Kept separate from `collectLookupReferences` because LSP asks for the two
+/// Kept separate from `collectReferences` because LSP asks for the two
 /// separately: `textDocument/references` can be told to leave the declaration
 /// out.
 pub fn collectDeclarationRegions(
@@ -1538,12 +1546,21 @@ fn findPatternByAnnotationName(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern
     return ctx.result;
 }
 
+/// Find the exact source occurrence that writes an existing local binding.
+/// A structural reassignment's surrounding pattern is not the written name.
+pub fn findWriteAtOffset(module_env: *const ModuleEnv, offset: u32) ?NodeStore.WriteOccurrence {
+    for (module_env.store.write_occurrences.items.items) |write| {
+        if (regionContainsOffset(write.region(), offset)) return write;
+    }
+    return null;
+}
+
 /// Resolve the symbol at the given offset to the pattern that defines it.
 ///
 /// The cursor can sit on any occurrence of a binding: the defining pattern,
-/// the name written on its type annotation, or an `e_lookup_local` that
-/// references it. All three resolve to the same `Pattern.Idx`, which is the
-/// identity `collectLookupReferences` expects, so callers that need every
+/// the name written on its type annotation, a local read, or a reassignment
+/// target. All resolve to the same `Pattern.Idx`, which is the
+/// identity `collectReferences` expects, so callers that need every
 /// occurrence of a symbol must go through here rather than through
 /// `findPatternAtOffset` alone.
 ///
@@ -1551,6 +1568,7 @@ fn findPatternByAnnotationName(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern
 /// (an external lookup, a record field, a keyword). Callers must treat that as
 /// "no symbol here" and must not widen the query by matching identifier text.
 pub fn resolveSymbolAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.Idx {
+    if (findWriteAtOffset(module_env, offset)) |write| return write.pattern_idx;
     if (findPatternAtOffset(module_env, offset)) |pattern_idx| return pattern_idx;
     if (findPatternByAnnotationName(module_env, offset)) |pattern_idx| return pattern_idx;
 

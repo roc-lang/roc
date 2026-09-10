@@ -1620,6 +1620,15 @@ pub const SyntaxChecker = struct {
     /// Find the definition location for the expression at the given byte offset.
     /// Looks for lookups (e_lookup_local, e_lookup_external) and returns the definition location.
     fn findDefinitionAtOffset(self: *SyntaxChecker, build_env: *BuildEnv, module_env: *ModuleEnv, doc_path: []const u8, target_offset: u32, current_uri: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
+        if (cir_queries.findWriteAtOffset(module_env, target_offset)) |write| {
+            const range = cir_queries.declarationNameRegion(module_env, write.pattern_idx) orelse return null;
+            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                oom.* = err;
+                return null;
+            };
+            return DefinitionResult{ .uri = uri_copy, .range = range };
+        }
+
         var best_lookup: ?cir_queries.LookupResult = null;
 
         // Iterate through all definitions
@@ -2971,7 +2980,7 @@ pub const SyntaxChecker = struct {
         var regions = try cir_queries.collectDeclarationRegions(module_env, target_pattern, self.allocator);
         errdefer regions.deinit(self.allocator);
 
-        var lookup_regions = try cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
+        var lookup_regions = try cir_queries.collectReferences(module_env, target_pattern, self.allocator);
         defer lookup_regions.deinit(self.allocator);
         try regions.appendSlice(self.allocator, lookup_regions.items);
 
@@ -3386,7 +3395,7 @@ pub const SyntaxChecker = struct {
     /// its uses listed.
     ///
     /// When `include_declaration` is false the binding site and its annotation
-    /// name are left out, keeping only the places the symbol is read.
+    /// name are left out, keeping the places the symbol is read or reassigned.
     pub fn getReferencesAtPosition(
         self: *SyntaxChecker,
         uri: []const u8,
@@ -3421,7 +3430,7 @@ pub const SyntaxChecker = struct {
             try regions.appendSlice(self.allocator, declarations.items);
         }
 
-        var lookups = try cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
+        var lookups = try cir_queries.collectReferences(module_env, target_pattern, self.allocator);
         defer lookups.deinit(self.allocator);
         try regions.appendSlice(self.allocator, lookups.items);
 

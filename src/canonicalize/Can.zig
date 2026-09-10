@@ -10038,6 +10038,7 @@ fn scheduleBlockDeclContinuation(
             if (self.scopeFindBinding(.ident, ident_idx)) |existing_binding| {
                 const existing_pattern_idx = existing_binding.pattern_idx;
                 if (self.isVarPattern(existing_pattern_idx)) {
+                    try self.env.store.recordWriteOccurrence(existing_pattern_idx, ident_region);
                     if (existing_binding.crosses_function_boundary) {
                         if (type_var_scope) |scope_idx| {
                             self.scopeExitTypeVar(scope_idx);
@@ -10497,6 +10498,7 @@ fn canonicalizeStandaloneBlockDecl(
             if (self.scopeFindBinding(.ident, ident_idx)) |existing_binding| {
                 const existing_pattern_idx = existing_binding.pattern_idx;
                 if (self.isVarPattern(existing_pattern_idx)) {
+                    try self.env.store.recordWriteOccurrence(existing_pattern_idx, ident_region);
                     if (existing_binding.crosses_function_boundary) {
                         const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .var_across_function_boundary = .{
                             .region = ident_region,
@@ -18146,6 +18148,7 @@ pub fn canonicalizePattern(
                                     continue :patternkernel_loop .dispatch;
                                 },
                                 .var_reassignment_ok => |existing_pattern_idx| {
+                                    try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
                                     self.pattern_reused_existing_var = true;
                                     // Only record the reassignment target while inside a block
                                     // declaration's pattern (where `allow_pattern_var_reuse` is set):
@@ -18901,6 +18904,7 @@ fn scopeIntroduceVar(
             } });
         },
         .var_reassignment_ok => |existing_pattern_idx| {
+            try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
             // Var reassignment - return the existing pattern
             return existing_pattern_idx;
         },

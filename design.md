@@ -1439,6 +1439,16 @@ module construction, and every later consumer use that explicit distinction.
 They must not infer mutability from identifier text. The `$` byte remains part
 of an identifier's exact identity, so `$value` and `value` are distinct names.
 
+A mutable binding's CIR pattern always retains its declaration region.
+Canonicalization records each source write separately in `NodeStore.write_occurrences`,
+with the resolved binding pattern and exact name-token region. This includes every
+reassigned leaf of a structural pattern, but excludes fresh declarations in that
+pattern. The compact write table survives CIR cloning and serialization; consumers
+must not recover write locations from statement extents or identifier spelling.
+Existing read and declaration nodes retain their own occurrence data. Any tooling
+indexes over these explicit occurrences belong to the tooling snapshot and are not
+built or serialized by ordinary compilation.
+
 The `$` prefix is a naming convention enforced only as a declaration-site
 warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
 immutable binder whose name starts with `$`, when it identifies the source

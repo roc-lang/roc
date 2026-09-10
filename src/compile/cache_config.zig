@@ -186,7 +186,8 @@ pub const Constants = struct {
     ///     classifications across checked-environment rechecks.
     /// 86: Hoisted-root pruning resolves associated lookup identities through
     ///     the expression's owning module, including imported callable bodies.
-    pub const CACHE_VERSION = 86;
+    /// 87: CIR retains exact source occurrences for mutable binding writes.
+    pub const CACHE_VERSION = 87;
 };
 
 /// Configuration for the Roc cache system.
