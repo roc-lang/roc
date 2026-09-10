@@ -190,7 +190,9 @@ pub const Constants = struct {
     ///     effect-polymorphic function with a pure one makes each dependency
     ///     pure.
     /// 88: CIR retains exact source occurrences for mutable binding writes.
-    pub const CACHE_VERSION = 88;
+    /// 89: Literal patterns retain their equality callable and failure owner
+    ///     in a pattern-only context.
+    pub const CACHE_VERSION = 89;
 };
 
 /// Configuration for the Roc cache system.

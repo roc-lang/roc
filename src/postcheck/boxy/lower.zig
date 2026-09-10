@@ -20037,7 +20037,7 @@ const ProcBodyBuilder = struct {
             const pattern = self.module.checked_bodies.pattern(patterns[0].pattern);
             switch (pattern.data) {
                 .numeral_literal => |literal| {
-                    if (literal.conversion != null) return null;
+                    if (literal.guard != null) return null;
                     const magnitude = exact_numeral.intMagnitude(
                         self.module.module_env.exactNumeral(literal.literal),
                     ) orelse return null;
@@ -22295,14 +22295,14 @@ const ProcBodyBuilder = struct {
             .nominal => |nominal| try self.lowerNominalPatternThen(pattern.ty, nominal.backing_pattern, source, on_match, miss, remaps),
             .applied_tag => |tag| try self.lowerAppliedTagPatternThen(pattern.ty, tag.name, tag.args, source, on_match, miss, remaps),
             .numeral_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin numeral pattern reached boxy match lowering before dictionary conversion lowering");
+                if (literal.guard) |guard| {
+                    break :blk try self.lowerCheckedLiteralGuard(pattern_id, guard, source, on_match, miss);
                 }
                 break :blk try self.lowerNumeralPatternThen(pattern.ty, source, literal.literal, on_match, miss);
             },
             .str_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin string pattern reached boxy match lowering before dictionary conversion lowering");
+                if (literal.guard) |guard| {
+                    break :blk try self.lowerCheckedLiteralGuard(pattern_id, guard, source, on_match, miss);
                 }
                 break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .str = literal.literal }, on_match, miss);
             },
@@ -23236,6 +23236,24 @@ const ProcBodyBuilder = struct {
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
         } });
+    }
+
+    /// Bind the matched value before evaluating its checker-selected equality
+    /// guard. Ordinary expression lowering owns conversion and method dispatch.
+    fn lowerCheckedLiteralGuard(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        guard: checked.CheckedExprId,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Allocator.Error!LIR.CFStmtId {
+        const binder = self.module.checked_bodies.literalPatternBinder(pattern_id);
+        try self.reserveBinderLocalIfFresh(binder, self.module.checked_bodies.pattern(pattern_id).ty);
+        const eq = try self.addFrameLocal(.bool);
+        const branch = try self.boolSwitchNoContinuation(eq, on_match, try self.patternMissJump(miss));
+        const compare = try self.lowerExprInto(eq, guard, branch);
+        return try self.bindMatchBinder(binder, source, &.{}, compare);
     }
 
     fn lowerLiteralPatternThen(
@@ -40879,7 +40897,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
             .literal = try testIntNumeral(42),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -41025,7 +41043,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
             .literal = try testSmallDecNumeral(value),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -41181,7 +41199,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
         .source_region = base.Region.zero(),
         .data = .{ .str_literal = .{
             .literal = @enumFromInt(fixtureTableIndex(0)),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{

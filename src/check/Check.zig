@@ -7979,7 +7979,7 @@ fn checkNumeralLiteral(
 
     _ = try self.unify(occurrence_var, flex_var, env);
     if (occurrence == .pattern) {
-        try self.mkPatternLiteralEqConstraint(occurrence_var, env, region);
+        try self.mkPatternLiteralEqConstraint(node_idx, occurrence_var, env, region);
     }
 }
 
@@ -10356,7 +10356,7 @@ fn constraintSourceExpr(
             return @enumFromInt(plan.node_idx);
         }
         if (pattern_failure_expr == null) {
-            if (plan.patternFailureOwner()) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
+            if (plan.patternFailureOwner(&self.cir.store)) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
         }
     }
     return pattern_failure_expr;
@@ -10496,7 +10496,7 @@ fn literalPatternFailureExprForConstraint(
         if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-        const raw = plan.patternFailureOwner() orelse continue;
+        const raw = plan.patternFailureOwner(&self.cir.store) orelse continue;
         return self.literalFailureOwnerExpr(@enumFromInt(raw));
     }
     return null;
@@ -10526,7 +10526,7 @@ fn poisonLiteralFailureOwners(
             const owner: CIR.Node.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
                 @enumFromInt(plan.node_idx)
             else
-                @enumFromInt(plan.patternFailureOwner() orelse continue);
+                @enumFromInt(plan.patternFailureOwner(&self.cir.store) orelse continue);
             var already_recorded = false;
             for (owners.items) |recorded| {
                 if (recorded == owner) {
@@ -16932,7 +16932,7 @@ fn checkPatternHelp(
                 env,
             );
             _ = try self.unify(pattern_var, flex_var, env);
-            try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
+            try self.mkPatternLiteralEqConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, env, pattern_region);
         },
         .str_interpolation => |str| {
             const str_var = try self.freshStr(env, pattern_region);
@@ -23278,7 +23278,7 @@ fn checkBinopExpr(
             const ret_var = lhs_var;
 
             // Create the binop static dispatch function: lhs.method(rhs) -> lhs
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 lhs_var,
                 rhs_var,
                 ret_var,
@@ -23329,7 +23329,7 @@ fn checkBinopExpr(
             const arg_var = rhs_var;
 
             // Create the binop constraint with unified arg type
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
                 ret_var,
@@ -23386,7 +23386,7 @@ fn checkBinopExpr(
             const ret_var = try self.mkRangeVar(arg_var, env, expr_region);
 
             // Create the binop static dispatch function: bound.method(bound) -> Range(bound)
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
                 ret_var,
@@ -23412,7 +23412,7 @@ fn checkBinopExpr(
             }
 
             const eq_ret_var = try self.freshBool(env, expr_region);
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 rhs_var,
                 rhs_var,
                 eq_ret_var,
@@ -23455,7 +23455,7 @@ fn checkBinopExpr(
             const eq_ret_var = try self.freshBool(env, expr_region);
 
             // Create the eq static dispatch function: arg.is_eq(arg) -> Bool
-            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
+            _ = try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
 
             // Get the not method + ret var
             const not_method_name = self.cir.idents.not;
@@ -23662,12 +23662,14 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
 /// pattern compares the scrutinee against the literal's converted value.
 fn mkPatternLiteralEqConstraint(
     self: *Self,
+    node: CIR.Node.Idx,
     pattern_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
     const ret_var = try self.freshBool(env, region);
-    try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+    const fn_var = try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+    self.cir.store.recordLiteralPatternEquality(node, fn_var);
 }
 
 fn mkBinopConstraint(
@@ -23680,7 +23682,7 @@ fn mkBinopConstraint(
     env: *Env,
     region: Region,
     binop_expr_idx: ?CIR.Expr.Idx,
-) Allocator.Error!void {
+) Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -23716,6 +23718,7 @@ fn mkBinopConstraint(
     _ = try self.unify(constrained_var, lhs_var, env);
     try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint));
+    return constraint_fn_var;
 }
 
 fn publishBinopDispatchExpr(
@@ -34555,7 +34558,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         };
         self.cir.finalizeLiteralDispatchResolution(@enumFromInt(plan.node_idx), resolution);
         if (resolution == .checked_error) {
-            if (plan.patternFailureOwner()) |owner| {
+            if (plan.patternFailureOwner(&self.cir.store)) |owner| {
                 try failed_pattern_owners.append(self.gpa, @enumFromInt(owner));
             }
         }
@@ -34598,12 +34601,12 @@ test "literal pattern recovery retires all discarded parameter evidence" {
     // No detached parameter plan may survive even though its raw pattern node
     // still exists in the append-only CIR store.
     for (test_env.module_env.store.literalDispatchPlans()) |plan| {
-        try std.testing.expect(plan.patternFailureOwner() == null);
+        try std.testing.expect(plan.patternFailureOwner(&test_env.module_env.store) == null);
         try std.testing.expect(plan.dispatchResolution() == .builtin_direct);
     }
     var retired_patterns: usize = 0;
     for (test_env.checker.retired_literal_dispatch_plans.items) |plan| {
-        if (plan.patternFailureOwner() != null) retired_patterns += 1;
+        if (plan.patternFailureOwner(&test_env.module_env.store) != null) retired_patterns += 1;
     }
     try std.testing.expectEqual(@as(usize, 3), retired_patterns);
 }
@@ -34624,7 +34627,7 @@ test "literal pattern recovery preserves a generalized definition after a reject
     try test_env.assertDefTypeOptions("good", "Bool", .{ .allow_type_errors = true });
     var found_generalized_pattern = false;
     for (test_env.module_env.store.literalDispatchPlans()) |plan| {
-        if (plan.patternFailureOwner() == null) continue;
+        if (plan.patternFailureOwner(&test_env.module_env.store) == null) continue;
         try std.testing.expectEqual(LiteralDispatchPlan.Resolution.specialization_dispatch, plan.dispatchResolution());
         found_generalized_pattern = true;
     }

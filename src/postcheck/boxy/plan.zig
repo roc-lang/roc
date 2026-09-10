@@ -11165,8 +11165,8 @@ const Builder = struct {
                 if (list.rest) |rest| if (rest.pattern) |child| try self.analyzePatternTypes(view, child);
             },
             .tuple => |items| for (items) |child| try self.analyzePatternTypes(view, child),
-            .numeral_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
-            .str_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
+            .numeral_literal => |literal| if (literal.guard) |guard| try self.analyzeExprTypes(view, guard),
+            .str_literal => |literal| if (literal.guard) |guard| try self.analyzeExprTypes(view, guard),
             .str_interpolation => |interpolation| {
                 for (interpolation.steps) |step| {
                     if (step.capture) |capture| try self.analyzePatternTypes(view, capture);

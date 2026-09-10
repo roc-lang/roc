@@ -2195,6 +2195,31 @@ pub const StaticDispatchPlanTable = struct {
             try quote_by_node.put(allocator, node, plan_id);
         }
 
+        // Only custom/generalized literal patterns have these synthesized
+        // guards. Builtin patterns produce neither a guard nor an equality plan.
+        for (checked_bodies.literal_pattern_exprs.items) |literal| {
+            const source = module_env.store.literalDispatchPlanForNode(@enumFromInt(literal.raw_node)) orelse unreachable;
+            const context = source.patternContext(&module_env.store) orelse unreachable;
+            std.debug.assert(context.equality_fn_var_plus_one != 0);
+            const constraint_fn: Var = @enumFromInt(context.equality_fn_var_plus_one - 1);
+            const args = [_]StaticDispatchOperand{
+                .{ .checked_expr = literal.scrutinee }, .{ .checked_expr = literal.expr },
+            };
+            try plans.append(allocator, .{
+                .expr = literal.equality,
+                .method = try names.internMethodName("is_eq"),
+                .dispatcher = .{ .arg = 0 },
+                .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(source.target_var)),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn),
+                .args = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args),
+                .result_mode = .{ .equality = .{ .structural_allowed = true, .negated = false } },
+            });
+            try plan_sources.append(allocator, .{
+                .dispatcher_var = @enumFromInt(source.target_var),
+                .constraint_fn_var = constraint_fn,
+            });
+        }
+
         for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
             const for_node_idx: CIR.Node.Idx = @enumFromInt(for_plan.node_idx);
             const pattern_idx: CIR.Pattern.Idx = @enumFromInt(for_plan.pattern_idx);
