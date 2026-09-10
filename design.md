@@ -2076,11 +2076,40 @@ nodes and slots and proves a bijection between those sites and their plan rows;
 separately, every anchored row and every expected-copy origin are bijective.
 Thus a same-shaped node cannot be substituted for the actual consumer, and
 neither settled type equality nor duplicated unchecked metadata supplies
-authority. A record update first eagerly copies
-its exact base expression under a `.record_update_base { record_expr,
-base_expr }` producer origin, then projects a field occurrence from that
-authenticated destination root; a monomorphic call analogously uses a
-call-formal producer root rather than pretending a SchemeUse occurred.
+authority. A record update first eagerly copies its exact base expression
+under a `.record_update_base { record_expr, base_expr, root_binding }`
+producer origin, then projects a field occurrence from that authenticated
+destination root. `base_expr` is the exact CIR child and therefore the exact
+raw TypeStore request `V`. `root_binding` is a closed two-arm declaration.
+`direct_request` requires the Instantiator's initial root selection to name raw
+source `V` and the exact returned raw destination; this preserves the ordinary
+copy/root-occurrence rule. `redirected_identity_share` is legal only when that
+initial request entered an already-existing redirect, rank/leaf sharing
+selected the actual shared Store occurrence `R`, `V != R`, and the producer
+emitted the root selection `R -> R` with `local_raw_identity_share_cut`. The
+latter does not recast `V -> R` as a copied occurrence: the step's root
+occurrence and root action remain exact raw identity `R -> R`, while the origin
+separately preserves that syntax requested `V`. Admission requires the record
+node's extension child to be exactly `base_expr`, and the redirected arm
+specifically requires that selected occurrence plus its exact root-copy share
+action; a direct structural copy retains the ordinary rule under which
+structural outgoing witnesses need no root action. `V` and `R` must project
+to the step's same current canonical root pair. This canonical
+projection verifies the already-declared bridge; it may not select an
+occurrence, substitute a same-shaped child, or supply a bridge when the
+tag/witness is absent. Contextual admission also binds every retained local
+record-update origin to the exact canonical source edge at
+`origin.record_expr`: both the checked node and the independently supplied
+resolution node at that index are `expr_record` nodes whose decoded extension
+child is present and equals `origin.base_expr`, and that child is in bounds in
+both stores. Raw record payload words are not authority for this edge because
+they contain backing-table indices; fields and unsets are outside this bridge
+fact. Producer self-validation runs this rule against its own context and
+enforces internal owner/base-edge agreement. The independent inverse against a
+coordinated checked-side retarget is supplied only by a distinct fresh or
+admitted resolution context, which replays the same edge against its canonical
+source. A monomorphic call analogously uses a call-formal producer root rather
+than pretending a SchemeUse occurred.
 An aggregate has one owner projection, plus one plan row for every CIR child
 contribution slot; child rows may deliberately select the same occurrence when
 the expected graph aliases those slots. A branch has three explicit phases:
@@ -5850,7 +5879,18 @@ Implementation checkpoint (2026-09-10): W6a is implemented. W6b's ordinary
 and virtual-ingress fresh-flex allocation witnesses, exact allocation-claim
 uniqueness, interpolation-role validation, and canonical empty-list cache
 serialization are implemented and independently reviewed in WIP change
-`qpmsttws` (cache version 83). These are checked-boundary prerequisites, not
+`qpmsttws` (cache version 83). The next WIP task, `zkmyrwqu` (cache version
+84), implements the exact record-update root-request bridge declared below;
+its focused types, checker corruption/serialization, exhaustive staged
+allocation-failure tests, and measured cache golden pass. Adversarial review
+accepts only these lower-level mechanics as an incomplete WIP checkpoint;
+complete checked-boundary admission remains explicitly unaccepted.
+Retirement of errored record-update owners and the full owner/projection
+inverse remain completion dependencies: retargeting both an origin's owner
+and base to a sibling can satisfy the per-row live source-edge check while
+orphaning the original owner and duplicating the sibling. The mandatory base
+plan and exact live/retired owner converse declared above must close this gap.
+These are checked-boundary prerequisites, not
 completion of option (e)'s nested-row rejection or the direct-result/Try
 runtime adapters. Those mechanisms and full-suite verification remain open;
 `polarity_phase_two.md` section 8 records the verification and remaining work.
@@ -6015,6 +6055,32 @@ occurrences remain owned by the original descriptor and were not copied by
 this step. This applies equally to rank-based cuts, explicit leaf-sharing, and
 shared virtual requirement/interpolation ingresses. The raw occurrence and
 typed cut witness remain mandatory.
+
+An Instantiator with a proof-root sink emits one one-shot
+`ProofRootSelection { source_var, destination_var, action }` from the initial
+edge-null request at the same branch that records its root pair/action. The
+sink is empty at that outer edge-null entry, is filled before the ordinary
+`traverse` witness path's early return, is cleared on allocation failure, and
+is complete only when the root instantiation returns; its destination equals
+the returned root. A synthesized end-of-walk root row carries an explicit
+non-null edge and cannot fill the sink again.
+Structural child requests and detached requirement
+receiver/function/interpolation walks carry a non-null edge and cannot replace
+it. This token is checker-local producer state, not serialized authority. A
+record-update publisher consumes it to classify both `root_binding` arms;
+only `record_update_base.redirected_identity_share` may use it to bridge a raw
+requested root distinct from the selected occurrence. Every other local
+origin retains its exact raw requested-root requirement without acquiring a
+new proof-root sink, and cross-module copies never consume this token.
+
+`WhereMarkerRecordUpdateBaseOrigin.root_binding` reuses one former reserved
+word; the origin remains six `u32` words and the copy-step layout is unchanged.
+It is a raw-`u32` dense tag with `direct_request = 0` as the default and
+`redirected_identity_share = 1`; it has no inactive arm, every other value is
+rejected, and `reserved_1` through `reserved_3` are zero.
+This semantic cache change owns an independent cache-version advance; it is
+not part of the preceding fresh-flex-witness/canonical-empty serialization
+cohort.
 
 A constraint-copy pair exists only when the producer appends the named
 destination constraint: either the structural traversal's `stepFlexLike` or

@@ -2179,10 +2179,19 @@ pub const WhereMarkerDefaultFieldTypeOrigin = extern struct {
 pub const WhereMarkerRecordUpdateBaseOrigin = extern struct {
     record_expr: u32,
     base_expr: u32,
-    reserved_0: u32 = 0,
+    root_binding: u32 = @intFromEnum(RootBinding.direct_request),
     reserved_1: u32 = 0,
     reserved_2: u32 = 0,
     reserved_3: u32 = 0,
+
+    pub const RootBinding = enum(u32) {
+        direct_request,
+        redirected_identity_share,
+    };
+
+    pub fn decodedRootBinding(self: @This()) ?RootBinding {
+        return std.enums.fromInt(RootBinding, self.root_binding);
+    }
 };
 
 pub const WhereMarkerCopyOccurrenceSide = enum(u32) {

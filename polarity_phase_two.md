@@ -733,11 +733,13 @@ described in full, with trailers; W6b currently has its provisional title):
 | `wrtzpoum` | option (e) decision | declared in design.md |
 | `ktlykkxv` | W6a | implemented; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
 | `ssvqsxro` / `cc8ace35` | W6b recovery/metadata checkpoint | pushed WIP; bounded 59-test gate green, but full checker gate is red: 1,257/1,383 pass, 6 fail, 120 crash |
-| `qpmsttws` | W6b allocation-witness/cache prerequisite checkpoint | independently reviewed and verified: combined gate 29/29 tests, 41/41 steps; cache version 83; WIP, not whole-W6b acceptance |
+| `qpmsttws` / `e67aaeb8` | W6b allocation-witness/cache prerequisite checkpoint | pushed and PR read-back verified; independent review accepted, combined gate 29/29 tests, 41/41 steps; cache version 83; WIP, not whole-W6b acceptance |
+| `zkmyrwqu` | W6b record-update root-request mechanics | final combined gate green (26/26 tests, 38/38 steps); reviewer accepts lower-level mechanics only, requests changes for complete admission ownership/retirement; prepared for WIP publication |
 
-The next reviewed WIP publication is `qpmsttws`, directly above the previously
-pushed checkpoint `ssvqsxro` / `cc8ace35`; the driver moves `jared/polarity`
-to this completed task and verifies the remote and draft PR after pushing.
+The local and remote `jared/polarity` bookmarks point at `qpmsttws` /
+`e67aaeb8`, directly above `ssvqsxro` / `cc8ace35`. The driver verified the
+remote head and read back the updated PR description with draft status intact.
+New task `zkmyrwqu` is a separate child and is not part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -764,14 +766,25 @@ unaccepted as a whole. The reviewed recovery checkpoint was pushed as
 accepted as a bounded task with combined gate `42891` green: 29/29 tests,
 41/41 steps. This does not certify the unresolved full-checker failures.**
 
-The active prerequisite adds ordinary and combined virtual-ingress fresh-flex
-allocation witnesses, with exact raw mapping authority and an at-most-one
-allocation-claim fence. Preliminary low-level types gate `78293` passes 5/5;
-checker fixtures and independent final review remain in progress. The first
-focused checker attempt found a preexisting empty `SafeMultiList` serialized
-capacity inconsistency; its bounded production correction is approved but not
-yet accepted. Incremental watcher `44170` was stopped after repeated generated
-object linker errors; regular builds with minimal diagnostics are the current
+The fresh-flex witness and canonical-empty `SafeMultiList` serialization
+prerequisite is now accepted and pushed as `e67aaeb8`, with the combined
+29/29-test gate above. The active task is the separate record-update
+root-request bridge (`zkmyrwqu`, cache version 84): preserve the actual raw
+`R -> R` shared occurrence when the syntax's request `V` already redirects
+to `R`, and validate the exact record-to-base source edge. Its types-only
+gate passes 10/10 tests and independent types review accepts that slice.
+The first checker fixture and original crash regression pass (3/3), including
+real representative-change, fresh-context, rebuild, and serialization checks.
+The complete corruption/OOM matrix now passes, including same-instance retry
+after every injected publication allocation failure. Native/wasm sizes and
+four compile/serde tests pass; measured version-84 golden retry passes 2/2.
+Review accepts the lower-level mechanics only as an incomplete WIP checkpoint,
+not complete admission: the owner bijection and retired-owner lifecycle remain
+unimplemented requirements. Final shared-helper/bridge/schema gate `99548`
+passes 26/26 tests and 38/38 steps. The driver is publishing this accurately
+scoped WIP checkpoint, then opening the separate ownership/retirement task.
+Incremental watcher `44170` was stopped after repeated generated object
+linker errors; regular builds with minimal diagnostics are the current
 verification mode. No disk-space error occurred and `.zig-cache` was not pruned.
 Contributor/settlement normalization, remaining failure producers, option-(e)
 rejection, downstream authority transport, adapters, and whole-phase gates are
@@ -3173,6 +3186,178 @@ subsets below do not override this latest checkpoint.
   belong to a separate next cache-version checkpoint. An independent audit
   of the 62 old call-formal witness crashes is also in progress. Neither
   failure group is yet dynamically certified fixed on this newer source.
+- WIP publication completed and read back: `qpmsttws` is Git commit
+  `e67aaeb8a89e56e40474fe27e7d24f88956c0c77`, fast-forwarded from `cc8ace35`
+  on `jared/polarity`. Draft PR #10434's description matches the prepared
+  body and reports both the new 29-test gate and the old full-checker red
+  result. Root opened `zkmyrwqu` for the separate root-request task.
+  Gate `81384` is running the unmodified pushed source with the minimal
+  `record - update 1` case and the independently audited
+  `literal strict demands flow through polymorphic called function summaries`
+  call-retirement case. No new implementation is part of those reproductions.
+- Current-source reproduction `81384` completed RED on pushed `e67aaeb8`:
+  1/3 tests passed, 2 crashed (5/7 steps). `record - update 1` reproduces
+  `local marker-copy witness named an absent raw occurrence`; the strict-
+  demand call case reproduces `checked-boundary call formal lost its producer
+  witness`. Both are current completion blockers. The first task preserves
+  the authentic shared root with an explicit producer-authored request bridge;
+  successful-call retirement after later poisoning remains a separate task.
+  Report: `root-share-call-retirement-repro-e67-81384.txt` in the artifact
+  directory above. No claim is made that all 24 or all 62 cases have the same
+  cause until their targeted groups have been rerun.
+- Root-request bridge preflight is accepted and implementation is underway,
+  with design changes written first. Only record-update copies opt into an
+  initial-request `ProofRootSelection`; child/detached walks cannot replace
+  it and OOM clears it. The origin uses dense `direct_request=0` and
+  `redirected_identity_share=1`, reusing a reserved word. Raw occurrence
+  identity survives rebuild independently of current canonical roots.
+  Other local origins and cross-module copying keep their existing behavior.
+  This is the separate cache-version-84 task, not a rewrite of pushed v83.
+- Driver audit corrected a preflight overclaim: admission has no whole-CIR
+  fresh-byte comparison for record updates. A small contextual base-edge
+  inverse is therefore included and declared before implementation. At the
+  exact record owner index, candidate and supplied resolution environments
+  must each contain a record update whose actual decoded base child is
+  `origin.base_expr`. Bounds and expression tags are checked before reading
+  each `span_with_node_data` backing row. Merely comparing `ExprRecord`
+  payload indices is insufficient. The check runs in produced, fresh-cache,
+  and admitted-republication contexts; self-context is checked, not skipped.
+  It claims the exact record-to-base edge, not equality of all record fields
+  or prevention of arbitrary coordinated proof-row permutations. Tests must
+  distinguish this contextual authority from local byte-roundtrip oracles.
+- Preliminary root-selection gate is GREEN: all 10 `instantiator proof:`
+  tests passed (4/4 steps), including direct/redirected root selection,
+  child/detached non-overwrite, zero-child structural publication, and
+  allocation-failure clearing. The tested `instantiate.zig` SHA-256 is
+  `6b4d4b304551a08b0f12ab43063db0534aaf69911ff1ae67f549ac40fdd26c39`.
+  A syntax preflight correction preceded the gate; the first build attempt
+  was blocked by shared Zig-cache permissions and the permitted retry passed.
+  No disk-space error or cache pruning occurred. Report:
+  `record-root-types-preliminary-permitted.txt` in the artifact directory
+  above. Checker integration fixtures, full bridge review, schema-84 golden
+  measurement, and the old 24-case group remain pending; this is not yet a
+  completed or publishable bridge task.
+- Independent adversarial review accepted the frozen types-only delta at
+  that same digest: exact one-shot producer selection, structural/detached
+  non-overwrite, synthesized-root exclusion, and allocation-failure cleanup
+  have no static blocker. This does not yet accept the checker/durable
+  integration. Its first real-source fixture and fresh-context negative are
+  written; representative-change and local-publication OOM tests are being
+  completed before the combined gate and full task review.
+- Interim checker review found a concrete untrusted-input blocker: local
+  record-update proof validation called `getExpr` before bounding the record's
+  backing-table index, and that local pass precedes contextual admission.
+  The already-declared bounds-first canonical-edge helper must also guard
+  the local pass. The task adds a forged out-of-range backing-index test at
+  both local validation and actual admission; rejection must return failure,
+  never panic. The production fix is written and its independent static
+  re-review accepts the bounds-first ordering.
+- Early checker gate `97010` completed on frozen `e56344e7`: 2/3 tests pass,
+  with the original `record - update 1` crash regression now passing. The new
+  fixture fails a numeric assertion (`expected 0, found 1`) at its authentic
+  producer-proof stage, before its corruption/rebuild/admission checks run.
+  This is not a green integration gate. The fixture oracle is being audited
+  against the exact field-projection authority chain: a fresh-shape support
+  may use the intermediate projection root as its parent, rather than name
+  the base-copy root directly. The source stayed frozen throughout the run.
+  Report: `record-root-first-checker.txt` in the artifact directory above.
+- The fixture-only correction is frozen at `e689ca2c` and independently
+  accepted statically. It now checks the exact base-to-projection-to-field
+  or fresh-shape-support chain, with source slot/site and support range
+  preserved. Each raw selected root is checked against its own canonical
+  projection; the two updates share their final canonical class, not
+  necessarily the same raw occurrence. At least one genuine later
+  representative change is required, and both rebuilds preserve the exact
+  raw identities. Retry `24959` is running the same new fixture and original
+  record-update regression. No production code changed in this retry.
+- Retry `24959` stopped at semantic compilation: the three test-only
+  diagnostic sentinel locals needed explicit `u32` types. That correction
+  is the only subsequent code delta. The next normal gate, `26189`, is
+  GREEN on frozen `d4537534`: 3/3 tests, 7/7 steps (14 seconds, 25 MB test
+  runtime). Thus the first real-source proof/corruption/fresh-context/
+  rebuild/readonly-mutable-serde/full-admission fixture and original
+  record-update crash regression now pass. Check.zig SHA-256 is
+  `db5edc4ea4bbda5cd74a463572a65948475cd0d6ed01273d8745fa4c47b4a9f5`.
+  Report: `record-root-first-checker-oracle-u32-retry.txt` in the artifact
+  directory above. The historical 24-case gate `37050` is now running.
+  Remaining task work is the complete corruption matrix, an exhaustive
+  measured OOM/retry sweep of the authentic pre-generalization redirected
+  base producer, schema-84 verification, and final adversarial review.
+- Historical 24-case gate `37050` completed on the same frozen compiler
+  source: 19/25 tests passed (including the aggregator), six crashed, and
+  5/7 steps succeeded. None of the 24 cases retains the original absent-raw-
+  occurrence panic. Two now fail call-formal witness replay (generalized
+  unset rejects required row; issue 10576), two fail erased record-update
+  plan replay (empty base; missing field), and two fail local marker-copy
+  proof validation (field mismatch 3; wrong optional payload). The last two
+  have an independent exact-predicate audit in progress; they are not
+  silently waived as unrelated baseline failures. The six downstream
+  failures still block whole-W6b acceptance. Report: `record-root-all24.txt`.
+  Frozen binary SHA-256:
+  `9ae65f7b34298019c62a23912019e7e5abb8fb30bc7ee3604ca2c34e6369b15b`.
+- Native and wasm serialization-size gate `70064` is GREEN (29/29 steps).
+  `ModuleEnv.Serialized` remains 3520 bytes, NodeStore 528, Node.Payload 16,
+  and Node 20. Report: `record-root-version84-serialization-sizes.txt`.
+  Schema-84 golden measurement and compile-module serde tests remain pending.
+  The driver also verified a non-emitting semantic-only checker preflight
+  using the exact normal-build compiler arguments and generated Builtin
+  inputs; this is an additional fast diagnostic step for test-only edits,
+  not a replacement for normal builds or executed acceptance tests.
+- Complete matrix gate `68818` finished on frozen compiler `49cc5cce`:
+  18/19 tests passed and 36/38 steps succeeded. Types passed 10/10; checker
+  passed 4/4, including direct/redirected origin corruption, genuinely fresh
+  contextual admission, readonly/mutable serialization, two exact rebuilds,
+  and the exhaustive staged redirected-publication allocation-failure sweep.
+  Each failed allocation rolls back semantic state and permits same-instance
+  retry; map capacity is additionally checked on same-instance rollback.
+  Native/wasm serialization sizes passed. Compile/serde passed 4/5: its sole
+  failure was the intentionally stale version-83 golden. The measured
+  version-84 hash is
+  `9006bb901cb33ee2d114390a05259a8fe5bb3416d3393cb93a681f1b420f2a15`;
+  the driver updated only those golden bytes and started targeted retry
+  `47558`. Reports: `record-root-full-matrix-combined.txt` and
+  `record-root-version84-golden-retry.txt` in the artifact directory above.
+  The checker digest is
+  `aabdd481bd247f24abcf0b0af9782d109c32982f357cede3416f08a1647bbd2b`.
+- Final adversarial review is resolving two explicit acceptance boundaries:
+  retained record-update origins still require a live owner (the old local
+  validator already required `expr_record`), and the new source-edge bridge
+  proves each row's owner/base edge rather than a whole-owner bijection.
+  The four downstream record-update failures require explicit early/late
+  retirement authority; coordinated owner-plus-base substitution needs an
+  exact projection/owner inverse audit. Neither is waived for whole-W6b
+  acceptance. The author is preparing the next bounded retirement task
+  read-only while the current compiler source remains frozen.
+- Golden retry `47558` is GREEN: 2/2 tests and 25/25 steps. The sole schema
+  golden edit copies the exact measured version-84 bytes above. Changed Zig
+  files pass formatting. Final combined gate `99548` adds the existing
+  shared-helper consumers (rebuild OOM, method-output OOM/Probe, selected-method
+  rollback, external-cache OOM, and nested Probe ownership) to the focused
+  bridge and compile/serde/size tests.
+- Final static verdict: the root-selection/redirect transaction mechanics
+  are accepted only as an explicitly incomplete WIP checkpoint. Complete
+  checked-boundary admission has a REQUEST CHANGES finding: changing just
+  the first redirected step's `origin.{record_expr,base_expr}` to the second
+  update's owner/base leaves both authentic backing rows untouched and can
+  pass local plus fresh per-row validation. Its projection chain still
+  belongs to the first owner, which is orphaned while the sibling is
+  duplicated. The next task must implement the already-declared mandatory
+  base Expected plan and exact live/retired owner/base-step/projection
+  converses, including zero-field updates. A field-only equality check is
+  insufficient. The four downstream record-update failures additionally
+  require early/late failure retirement without restamping successful plans.
+  The reviewer found no other static blocker to the mechanical WIP scope;
+  publishing that checkpoint does not waive this admission finding.
+- Final gate `99548` is GREEN: 26/26 tests and 38/38 steps (types 10,
+  checker 11, compile/serde 5), including native/wasm serialization sizes and
+  all seven selected shared-helper regressions. Compiler digests stayed
+  identical to the reviewed freeze; only the measured golden changed after
+  `68818`. Report: `record-root-final-shared-helper-combined.txt` in the
+  artifact directory above. The driver prepared the full jj description
+  `WIP: preserve record-update root-selection and rollback mechanics` with
+  coauthor trailer and a PR body carrying the exact admission finding and
+  remaining failures. This is publication of accepted lower-level mechanics,
+  not completion of record-update admission, W6b, or the feature.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

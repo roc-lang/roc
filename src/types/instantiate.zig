@@ -250,6 +250,16 @@ pub const ProofRootPair = struct {
     destination_var: Var,
 };
 
+/// Exact raw occurrence and action selected by one outer instantiation root
+/// request. Unlike `ProofRootPair`, this is a one-shot producer result: it
+/// distinguishes the caller's requested var from the resolved occurrence at
+/// which a rank/leaf share actually terminates.
+pub const ProofRootSelection = struct {
+    source_var: Var,
+    destination_var: Var,
+    action: ProofWitnessAction,
+};
+
 /// One suspended copy step on the explicit instantiation worklist. Every
 /// frame owns a freshly minted placeholder var (already registered in
 /// `var_map`, so cycles in the source graph resolve to it) and fills that
@@ -399,6 +409,11 @@ pub const Instantiator = struct {
     proof_pairs: ?*std.ArrayListUnmanaged(ProofPair) = null,
     proof_constraint_pairs: ?*std.ArrayListUnmanaged(ProofConstraintPair) = null,
     proof_witnesses: ?*std.ArrayListUnmanaged(ProofWitness) = null,
+    /// Optional one-shot result for the initial edge-null proof request. The
+    /// caller supplies an empty slot and consumes it before this Instantiator
+    /// or its proof scratch is reused. Edge-bearing child/detached requests do
+    /// not touch it.
+    proof_root_selection: ?*?ProofRootSelection = null,
     /// Optional transient producer sink for exact rigid-substitution cuts.
     /// The key is the canonical source used by `var_map`; the value is the
     /// caller-owned destination selected at that cut.
@@ -607,6 +622,26 @@ pub const Instantiator = struct {
         action_auxiliary_origin_kind: ProofWitnessAuxiliaryOriginKind,
         action_auxiliary_origin_index: u32,
     ) std.mem.Allocator.Error!void {
+        const final_action = if (mb_edge) |edge|
+            if (edge.action_override == .requirement_component_ingress and
+                (action == .flex_fresh_flex_copy or action == .rigid_fresh_flex_cut))
+                ProofWitnessAction.requirement_component_fresh_flex_copy
+            else
+                edge.action_override orelse action
+        else
+            action;
+        if (mb_edge == null) {
+            if (self.proof_root_selection) |selection| {
+                if (selection.* != null) {
+                    std.debug.panic("instantiation root selection was published more than once", .{});
+                }
+                selection.* = .{
+                    .source_var = source,
+                    .destination_var = destination,
+                    .action = final_action,
+                };
+            }
+        }
         const sink = self.proof_witnesses orelse return;
         const edge = mb_edge orelse blk: {
             // An ordinary traversed root is established by the root pair and
@@ -620,11 +655,6 @@ pub const Instantiator = struct {
                 .edge_kind = .root_copy_action,
             };
         };
-        const final_action = if (edge.action_override == .requirement_component_ingress and
-            (action == .flex_fresh_flex_copy or action == .rigid_fresh_flex_cut))
-            ProofWitnessAction.requirement_component_fresh_flex_copy
-        else
-            edge.action_override orelse action;
         if (edge.action_override != null and action_auxiliary_origin_kind != .none) {
             std.debug.panic("virtual requirement ingress hid a child cut authority", .{});
         }
@@ -699,6 +729,19 @@ pub const Instantiator = struct {
         force_root_copy: bool,
         edge: ?ProofEdge,
     ) std.mem.Allocator.Error!Var {
+        const root_selection = if (edge == null) self.proof_root_selection else null;
+        if (root_selection) |selection| {
+            if (self.proof_pairs == null or self.proof_witnesses == null) {
+                std.debug.panic("instantiation root selection omitted its proof sinks", .{});
+            }
+            if (selection.* != null) {
+                std.debug.panic("instantiation root selection sink was not empty", .{});
+            }
+        }
+        errdefer {
+            if (root_selection) |selection| selection.* = null;
+        }
+
         const machine = self.scratch();
         const frames_base = machine.frames.items.len;
         const values_base = machine.value_stack.items.len;
@@ -768,6 +811,13 @@ pub const Instantiator = struct {
                         .edge_kind = .root_copy_action,
                     }, initial_var, result, .traverse, .none, 0);
                 }
+            }
+        }
+        if (root_selection) |selection| {
+            const selected = selection.* orelse
+                std.debug.panic("instantiation root request omitted its exact selection", .{});
+            if (selected.destination_var != result) {
+                std.debug.panic("instantiation root selection disagreed with its returned destination", .{});
             }
         }
         return result;
@@ -2257,6 +2307,124 @@ test "instantiator root proof: structural root with an outgoing witness emits no
     try std.testing.expectEqual(ProofWitnessAuxiliaryOriginKind.none, witness.auxiliary_origin_kind);
     try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_source_var);
     try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_destination_var);
+}
+
+test "instantiator proof: root selection distinguishes direct copies and redirected identity shares" {
+    const gpa = std.testing.allocator;
+    var env = try ProofTestEnv.init(gpa);
+    defer env.deinit();
+
+    var selection: ?ProofRootSelection = null;
+    var inst = env.instantiator(.fresh_flex);
+    inst.proof_root_selection = &selection;
+
+    const leaf_source = try env.store.freshFromContentWithRank(
+        .{ .structure = .empty_record },
+        .generalized,
+    );
+    const leaf_destination = try inst.instantiateVar(leaf_source);
+    const leaf_selection = selection orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(leaf_source, leaf_selection.source_var);
+    try std.testing.expectEqual(leaf_destination, leaf_selection.destination_var);
+    try std.testing.expectEqual(ProofWitnessAction.traverse, leaf_selection.action);
+
+    const detached_source = try env.store.freshFromContentWithRank(
+        .{ .flex = Flex.init() },
+        .generalized,
+    );
+    _ = try inst.instantiateSchemeRequirementReceiver(
+        .{ .source_var = leaf_source, .destination_var = leaf_destination },
+        3,
+        detached_source,
+        false,
+    );
+    try std.testing.expect(std.meta.eql(leaf_selection, selection.?));
+
+    selection = null;
+    const structural_child = try env.store.freshFromContentWithRank(
+        .{ .structure = .empty_record },
+        .generalized,
+    );
+    const structural_elems = try env.store.appendVars(&.{structural_child});
+    const structural_source = try env.store.freshFromContentWithRank(
+        .{ .structure = .{ .tuple = .{ .elems = structural_elems } } },
+        .generalized,
+    );
+    const structural_destination = try inst.instantiateVar(structural_source);
+    const structural_selection = selection orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(structural_source, structural_selection.source_var);
+    try std.testing.expectEqual(structural_destination, structural_selection.destination_var);
+    try std.testing.expectEqual(ProofWitnessAction.traverse, structural_selection.action);
+
+    selection = null;
+    const direct_shared = try env.store.freshFromContentWithRank(
+        .{ .flex = Flex.init() },
+        .outermost,
+    );
+    try std.testing.expectEqual(direct_shared, try inst.instantiateVar(direct_shared));
+    const direct_selection = selection orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(direct_shared, direct_selection.source_var);
+    try std.testing.expectEqual(direct_shared, direct_selection.destination_var);
+    try std.testing.expectEqual(
+        ProofWitnessAction.local_raw_identity_share_cut,
+        direct_selection.action,
+    );
+
+    selection = null;
+    const redirected_request = try env.store.freshRedirect(direct_shared);
+    try std.testing.expectEqual(direct_shared, try inst.instantiateVar(redirected_request));
+    const redirected_selection = selection orelse return error.TestUnexpectedResult;
+    try std.testing.expect(redirected_request != redirected_selection.source_var);
+    try std.testing.expectEqual(direct_shared, redirected_selection.source_var);
+    try std.testing.expectEqual(direct_shared, redirected_selection.destination_var);
+    try std.testing.expectEqual(
+        ProofWitnessAction.local_raw_identity_share_cut,
+        redirected_selection.action,
+    );
+}
+
+test "instantiator proof: root selection clears on allocation failure" {
+    const gpa = std.testing.allocator;
+    var observed_failure = false;
+    var observed_success = false;
+    for (0..64) |fail_index| {
+        var env = try ProofTestEnv.init(gpa);
+        defer env.deinit();
+
+        const source_child = try env.store.freshFromContentWithRank(
+            .{ .structure = .empty_record },
+            .generalized,
+        );
+        const source_elems = try env.store.appendVars(&.{source_child});
+        const source = try env.store.freshFromContentWithRank(
+            .{ .structure = .{ .tuple = .{ .elems = source_elems } } },
+            .generalized,
+        );
+        var selection: ?ProofRootSelection = null;
+        var inst = env.instantiator(.fresh_flex);
+        inst.proof_root_selection = &selection;
+
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_index });
+        const original_store_gpa = env.store.gpa;
+        env.store.gpa = failing.allocator();
+        const result = inst.instantiateVar(source);
+        env.store.gpa = original_store_gpa;
+        if (result) |destination| {
+            try std.testing.expect(!failing.has_induced_failure);
+            const selected = selection orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(destination, selected.destination_var);
+            observed_success = true;
+            break;
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                try std.testing.expect(failing.has_induced_failure);
+                try std.testing.expectEqual(@as(?ProofRootSelection, null), selection);
+                observed_failure = true;
+            },
+        }
+    }
+    try std.testing.expect(observed_failure);
+    try std.testing.expect(observed_success);
 }
 
 fn expectConstrainedSharedChildTerminatesProof(

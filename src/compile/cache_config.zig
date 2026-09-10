@@ -199,7 +199,9 @@ pub const Constants = struct {
     /// 83: Marker-copy witnesses retain fresh-flex allocation authority,
     ///     including virtual requirement ingresses; empty SafeMultiList cache
     ///     descriptors require canonical zero capacity.
-    pub const CACHE_VERSION = 83;
+    /// 84: Record-update base-copy origins distinguish a direct raw request
+    ///     from an authenticated redirected identity-share root selection.
+    pub const CACHE_VERSION = 84;
 };
 
 /// Configuration for the Roc cache system.

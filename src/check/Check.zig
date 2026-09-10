@@ -51,6 +51,7 @@ const InstantiationProofPair = types_mod.instantiate.ProofPair;
 const InstantiationProofConstraintPair = types_mod.instantiate.ProofConstraintPair;
 const InstantiationProofWitness = types_mod.instantiate.ProofWitness;
 const InstantiationProofRootPair = types_mod.instantiate.ProofRootPair;
+const InstantiationProofRootSelection = types_mod.instantiate.ProofRootSelection;
 const PolarityVarBehavior = Instantiator.PolarityVarBehavior;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
@@ -8156,6 +8157,7 @@ fn validateWhereMarkerCopySourceNamespaces(
     builtin_env: *const ModuleEnv,
     context: ImportResolution,
 ) W6bSemanticValidationError!void {
+    try validateRecordUpdateBaseOriginContext(env, context.resolution_env);
     const steps = env.where_marker_copy_steps.items.items;
     const occurrences = env.where_marker_copy_occurrences.items.items;
     const pairs = env.where_marker_copy_pairs.items.items;
@@ -8286,6 +8288,39 @@ fn validateWhereMarkerCopySourceNamespaces(
         }
     }
     if (!validateSelectedMethodDecisionsContext(env, builtin_env, context)) return error.CorruptArtifact;
+}
+
+fn recordUpdateBaseOriginMatchesCanonicalEdge(
+    env: *const ModuleEnv,
+    origin: ModuleEnv.WhereMarkerRecordUpdateBaseOrigin,
+) bool {
+    if (origin.record_expr >= env.store.nodes.len() or
+        origin.base_expr >= env.store.nodes.len())
+    {
+        return false;
+    }
+    const record_node = env.store.nodes.get(@enumFromInt(origin.record_expr));
+    const base_node = env.store.nodes.get(@enumFromInt(origin.base_expr));
+    if (record_node.tag != .expr_record or !isExprNodeTag(base_node.tag)) return false;
+    const record = record_node.getPayload().expr_record;
+    if (record.fields_ext_idx >= env.store.span_with_node_data.items.items.len) return false;
+    const fields_ext = env.store.span_with_node_data.items.items[record.fields_ext_idx];
+    return fields_ext.node != 0 and fields_ext.node == origin.base_expr;
+}
+
+fn validateRecordUpdateBaseOriginContext(
+    env: *const ModuleEnv,
+    resolution_env: *const ModuleEnv,
+) W6bSemanticValidationError!void {
+    for (env.where_marker_copy_steps.items.items) |step| {
+        if (step.decodedKind() != .record_update_base) continue;
+        const origin = step.origin.record_update_base;
+        if (!recordUpdateBaseOriginMatchesCanonicalEdge(env, origin) or
+            !recordUpdateBaseOriginMatchesCanonicalEdge(resolution_env, origin))
+        {
+            return error.CorruptArtifact;
+        }
+    }
 }
 
 const MethodOutputTryIdentity = struct {
@@ -8815,7 +8850,7 @@ fn whereMarkerCopyOriginReservedIsZero(
         },
         .record_update_base => blk: {
             const origin = step.origin.record_update_base;
-            break :blk origin.reserved_0 == 0 and origin.reserved_1 == 0 and
+            break :blk origin.decodedRootBinding() != null and origin.reserved_1 == 0 and
                 origin.reserved_2 == 0 and origin.reserved_3 == 0;
         },
         .aggregate_fresh_shape_child => true,
@@ -14570,20 +14605,28 @@ fn validateWhereMarkerCopyProofLocal(
             },
             .record_update_base => {
                 const origin = step.origin.record_update_base;
-                if (origin.record_expr >= cir.store.nodes.len() or
-                    origin.base_expr >= cir.store.nodes.len() or
-                    cir.store.nodes.get(@enumFromInt(origin.record_expr)).tag != .expr_record or
-                    step.source_root_var != origin.base_expr or
-                    occurrences[step.root_occurrence_offset].raw_source_var != origin.base_expr)
+                const root_occurrence = occurrences[step.root_occurrence_offset];
+                if (origin.base_expr >= type_len or
+                    !recordUpdateBaseOriginMatchesCanonicalEdge(cir, origin) or
+                    origin.decodedRootBinding() == null)
                 {
                     return false;
                 }
-                const record_expr = cir.store.getExpr(@enumFromInt(origin.record_expr));
-                if (record_expr != .e_record or
-                    record_expr.e_record.ext == null or
-                    @intFromEnum(record_expr.e_record.ext.?) != origin.base_expr)
-                {
-                    return false;
+                const root_pair = pairs[root_occurrence.canonical_pair_offset];
+                switch (origin.decodedRootBinding().?) {
+                    .direct_request => if (root_occurrence.raw_source_var != origin.base_expr) {
+                        return false;
+                    },
+                    .redirected_identity_share => {
+                        if (root_occurrence.raw_source_var == origin.base_expr or
+                            root_occurrence.raw_source_var != root_occurrence.raw_destination_var or
+                            root_pair.source_var != root_pair.destination_var or
+                            types.resolveVar(@enumFromInt(origin.base_expr)).var_ !=
+                                @as(Var, @enumFromInt(root_pair.source_var)))
+                        {
+                            return false;
+                        }
+                    },
                 }
             },
             .aggregate_fresh_shape_child => {
@@ -15191,6 +15234,27 @@ fn validateWhereMarkerCopyProofLocal(
             (root_action_count == 0 and root_structural_outgoing_count == 0))
         {
             return false;
+        }
+        if (kind == .record_update_base and
+            step.origin.record_update_base.decodedRootBinding() == .redirected_identity_share)
+        {
+            const root_occurrence = occurrences[step.root_occurrence_offset];
+            var matching_share_actions: usize = 0;
+            for (witnesses) |witness| {
+                if (witness.decodedEdgeKind() == .root_copy_action and
+                    witness.parent_occurrence_offset == step.root_occurrence_offset and
+                    witness.child_occurrence_offset == step.root_occurrence_offset and
+                    witness.decodedAction() == .local_raw_identity_share_cut and
+                    witness.decodedAuxiliaryOriginKind() == .none and
+                    witness.auxiliary_origin_step == 0 and
+                    witness.auxiliary_origin_index == 0 and
+                    witness.raw_source_var == root_occurrence.raw_source_var and
+                    witness.raw_destination_var == root_occurrence.raw_destination_var)
+                {
+                    matching_share_actions += 1;
+                }
+            }
+            if (matching_share_actions != 1) return false;
         }
         witness_end += step.witnesses_len;
 
@@ -29886,6 +29950,11 @@ fn instantiateVarWithMarkerCopy(
     defer self.scratch_where_marker_copy_witnesses.clearRetainingCapacity();
     const ambiguity_candidates_start = self.ambiguity_candidates.items.len;
     const open_literals_start = self.open_literal_vars.items.len;
+    const records_root_selection = switch (origin) {
+        .record_update_base => true,
+        else => false,
+    };
+    var root_selection: ?InstantiationProofRootSelection = null;
     var carried_where_marker = false;
     var instantiate_ctx = Instantiator{
         .store = self.types,
@@ -29894,6 +29963,7 @@ fn instantiateVarWithMarkerCopy(
         .proof_pairs = &self.scratch_where_marker_copy_pairs,
         .proof_constraint_pairs = &self.scratch_where_marker_constraint_pairs,
         .proof_witnesses = &self.scratch_where_marker_copy_witnesses,
+        .proof_root_selection = if (records_root_selection) &root_selection else null,
         .where_marker_copy_step = reserved_step,
         .where_marker_carried = &carried_where_marker,
         .current_rank = env.rank(),
@@ -29917,12 +29987,45 @@ fn instantiateVarWithMarkerCopy(
     const publish_support = carried_where_marker or needs_driver_step or publication == .eager_support or
         hasGenuinelyNewLocalConstraintCopy(self.scratch_where_marker_constraint_pairs.items) or
         self.localWhereMarkerCopyStepIsReferenced(reserved_step);
+    var published_source = var_to_instantiate;
+    var published_destination = instantiated;
+    var published_origin = origin;
+    if (records_root_selection) {
+        const selection = root_selection orelse
+            std.debug.panic("record-update base instantiation omitted its exact root selection", .{});
+        const record_origin = origin.record_update_base;
+        if (record_origin.base_expr != @intFromEnum(var_to_instantiate) or
+            selection.destination_var != instantiated)
+        {
+            std.debug.panic("record-update base origin disagreed with its exact raw request", .{});
+        }
+        var bound_origin = record_origin;
+        if (selection.source_var == var_to_instantiate) {
+            bound_origin.root_binding = @intFromEnum(
+                ModuleEnv.WhereMarkerRecordUpdateBaseOrigin.RootBinding.direct_request,
+            );
+        } else {
+            if (selection.source_var != selection.destination_var or
+                selection.action != .local_raw_identity_share_cut or
+                self.types.resolveVar(var_to_instantiate).var_ != selection.source_var or
+                self.types.resolveVar(selection.source_var).var_ != selection.source_var)
+            {
+                std.debug.panic("record-update redirected root lacked exact identity-share authority", .{});
+            }
+            bound_origin.root_binding = @intFromEnum(
+                ModuleEnv.WhereMarkerRecordUpdateBaseOrigin.RootBinding.redirected_identity_share,
+            );
+        }
+        published_source = selection.source_var;
+        published_destination = selection.destination_var;
+        published_origin = .{ .record_update_base = bound_origin };
+    }
     const copy_step = if (publish_support) blk: {
         const published_step = try self.publishLocalWhereMarkerCopyStep(
             reserved_step,
-            var_to_instantiate,
-            instantiated,
-            origin,
+            published_source,
+            published_destination,
+            published_origin,
             rankedFreshFlexMarkerCopyPolicy(
                 .close,
                 .pos,
@@ -62174,6 +62277,18 @@ fn appendTestWhereMethodMarkerRef(
     }});
 }
 
+/// These four durable rows are explicitly full-width serialized records: each
+/// is an extern struct made only of u32 coordinates plus a fixed-width extern
+/// union whose inactive words are canonicalized by its producer/validator.
+/// Comparing their complete storage is therefore semantic and never observes
+/// ordinary-struct padding or an undefined inactive union tail.
+fn checkedBoundarySnapshotUsesCanonicalFullWidthStorage(comptime T: type) bool {
+    return T == ModuleEnv.DispatchSettlementSource or
+        T == ModuleEnv.WhereMarkerCopyStep or
+        T == ModuleEnv.ExpectedConsumptionPlan or
+        T == ModuleEnv.ExpectedFailure;
+}
+
 fn CheckedBoundaryListSnapshot(comptime T: type) type {
     return struct {
         const Snapshot = @This();
@@ -62181,6 +62296,7 @@ fn CheckedBoundaryListSnapshot(comptime T: type) type {
         ptr: [*]const T,
         len: usize,
         capacity: usize,
+        items: []T,
         bytes: []u8,
 
         fn capture(
@@ -62188,11 +62304,13 @@ fn CheckedBoundaryListSnapshot(comptime T: type) type {
             items: []const T,
             capacity: usize,
         ) Allocator.Error!Snapshot {
+            const owned_items = try gpa.dupe(T, items);
             return .{
                 .ptr = items.ptr,
                 .len = items.len,
                 .capacity = capacity,
-                .bytes = try gpa.dupe(u8, std.mem.sliceAsBytes(items)),
+                .items = owned_items,
+                .bytes = std.mem.sliceAsBytes(owned_items),
             };
         }
 
@@ -62211,8 +62329,40 @@ fn CheckedBoundaryListSnapshot(comptime T: type) type {
             );
         }
 
+        fn expectSameItems(
+            self: *const Snapshot,
+            items: []const T,
+        ) !void {
+            try std.testing.expectEqual(self.len, items.len);
+            if (comptime checkedBoundarySnapshotUsesCanonicalFullWidthStorage(T)) {
+                try std.testing.expectEqualSlices(
+                    u8,
+                    self.bytes,
+                    std.mem.sliceAsBytes(items),
+                );
+                return;
+            }
+            for (self.items, items) |expected, actual| {
+                try std.testing.expect(std.meta.eql(expected, actual));
+            }
+        }
+
+        fn expectSameSnapshotItems(
+            self: *const Snapshot,
+            actual: *const Snapshot,
+        ) !void {
+            try std.testing.expectEqual(self.len, actual.len);
+            if (comptime checkedBoundarySnapshotUsesCanonicalFullWidthStorage(T)) {
+                try std.testing.expectEqualSlices(u8, self.bytes, actual.bytes);
+                return;
+            }
+            for (self.items, actual.items) |expected, actual_item| {
+                try std.testing.expect(std.meta.eql(expected, actual_item));
+            }
+        }
+
         fn deinit(self: *Snapshot, gpa: Allocator) void {
-            gpa.free(self.bytes);
+            gpa.free(self.items);
             self.* = undefined;
         }
     };
@@ -62786,6 +62936,22 @@ const CheckedBoundaryStateSnapshot = struct {
             checker.cir.external_cache_seeds.items.items,
             checker.cir.external_cache_seeds.items.capacity,
         );
+    }
+
+    /// Probe rollback may retain capacity obtained before a later allocation
+    /// failed. The logical checked-boundary rows nevertheless remain exact.
+    fn expectSameItems(
+        self: *const @This(),
+        gpa: Allocator,
+        checker: *const Self,
+    ) !void {
+        var current = try @This().capture(gpa, checker);
+        defer current.deinit(gpa);
+        inline for (std.meta.fields(@This())) |field| {
+            const expected = &@field(self, field.name);
+            const actual = &@field(current, field.name);
+            try expected.expectSameSnapshotItems(actual);
+        }
     }
 
     fn deinit(self: *@This(), gpa: Allocator) void {
@@ -69450,6 +69616,1754 @@ test "virtual requirement fresh-flex copies survive exact local publication and 
     const mutable_bytes = try serializeModuleEnvForCanonicalComparison(std.testing.allocator, mutable);
     defer std.testing.allocator.free(mutable_bytes);
     try std.testing.expectEqualSlices(u8, canonical_twice, mutable_bytes);
+}
+
+const record_update_root_authority_test_source =
+    \\redirected = |container, first_value, second_value| (
+    \\    { ..container, data: first_value },
+    \\    { ..container, data: second_value },
+    \\)
+    \\
+    \\direct = |first_value, second_value| {
+    \\    ..{ data: first_value },
+    \\    data: second_value,
+    \\}
+;
+
+const RecordUpdateRootAuthorityTestTopology = struct {
+    redirected_lambda: CIR.Expr.Idx,
+    redirected_container_pattern: CIR.Pattern.Idx,
+    redirected_records: [2]CIR.Expr.Idx,
+    redirected_bases: [2]CIR.Expr.Idx,
+    direct_record: CIR.Expr.Idx,
+    direct_base: CIR.Expr.Idx,
+};
+
+fn recordUpdateRootAuthorityTestTopology(test_env: anytype) !RecordUpdateRootAuthorityTestTopology {
+    const cir = test_env.module_env;
+    const redirected_def_idx = test_env.can.explicitRootDefByName("redirected") orelse
+        return error.TestUnexpectedResult;
+    const redirected_def = cir.store.getDef(redirected_def_idx);
+    const redirected_lambda = cir.store.getExpr(redirected_def.expr);
+    if (redirected_lambda != .e_lambda) return error.TestUnexpectedResult;
+    const redirected_patterns = cir.store.slicePatterns(redirected_lambda.e_lambda.args);
+    if (redirected_patterns.len != 3) return error.TestUnexpectedResult;
+    const redirected_body = cir.store.getExpr(redirected_lambda.e_lambda.body);
+    if (redirected_body != .e_tuple) return error.TestUnexpectedResult;
+    const redirected_records = cir.store.sliceExpr(redirected_body.e_tuple.elems);
+    if (redirected_records.len != 2) return error.TestUnexpectedResult;
+
+    var record_exprs: [2]CIR.Expr.Idx = undefined;
+    var base_exprs: [2]CIR.Expr.Idx = undefined;
+    for (redirected_records, 0..) |record_expr, index| {
+        const record = cir.store.getExpr(record_expr);
+        if (record != .e_record or record.e_record.ext == null) {
+            return error.TestUnexpectedResult;
+        }
+        const base_expr = record.e_record.ext.?;
+        const base_expression = cir.store.getExpr(base_expr);
+        if (base_expression != .e_lookup_local or
+            base_expression.e_lookup_local.pattern_idx != redirected_patterns[0])
+        {
+            return error.TestUnexpectedResult;
+        }
+        record_exprs[index] = record_expr;
+        base_exprs[index] = base_expr;
+    }
+    if (base_exprs[0] == base_exprs[1]) return error.TestUnexpectedResult;
+
+    const direct_def_idx = test_env.can.explicitRootDefByName("direct") orelse
+        return error.TestUnexpectedResult;
+    const direct_def = cir.store.getDef(direct_def_idx);
+    const direct_lambda = cir.store.getExpr(direct_def.expr);
+    if (direct_lambda != .e_lambda) return error.TestUnexpectedResult;
+    const direct_record_expr = direct_lambda.e_lambda.body;
+    const direct_record = cir.store.getExpr(direct_record_expr);
+    if (direct_record != .e_record or direct_record.e_record.ext == null) {
+        return error.TestUnexpectedResult;
+    }
+    const direct_base_expr = direct_record.e_record.ext.?;
+    const direct_base = cir.store.getExpr(direct_base_expr);
+    if (direct_base != .e_record or direct_base.e_record.ext != null) {
+        return error.TestUnexpectedResult;
+    }
+
+    return .{
+        .redirected_lambda = redirected_def.expr,
+        .redirected_container_pattern = redirected_patterns[0],
+        .redirected_records = record_exprs,
+        .redirected_bases = base_exprs,
+        .direct_record = direct_record_expr,
+        .direct_base = direct_base_expr,
+    };
+}
+
+const RecordUpdateRootAuthorityTestProof = struct {
+    step_index: u32,
+    record_expr: CIR.Expr.Idx,
+    base_expr: CIR.Expr.Idx,
+    fields_ext_index: u32,
+    root_occurrence_index: u32,
+    root_witness_index: u32,
+    field_plan_index: u32,
+    selected_raw_root: u32,
+    selected_canonical_root: u32,
+};
+
+fn expectRecordUpdateRootAuthorityTestProof(
+    cir: *const ModuleEnv,
+    record_expr: CIR.Expr.Idx,
+    expected_binding: ModuleEnv.WhereMarkerRecordUpdateBaseOrigin.RootBinding,
+) !RecordUpdateRootAuthorityTestProof {
+    const raw_record: u32 = @intFromEnum(record_expr);
+    var failure_stage: []const u8 = "record payload";
+    var diagnostic_plan: u32 = ModuleEnv.ExpectedConsumptionPlan.none;
+    var diagnostic_parent_step: u32 = ModuleEnv.ExpectedConsumptionPlan.none;
+    var diagnostic_produced_step: u32 = ModuleEnv.ExpectedConsumptionPlan.none;
+    errdefer std.debug.print(
+        "record-update authority proof failed for record {d} ({s}) at {s}; plan={d} parent_step={d} produced_step={d}\n",
+        .{
+            raw_record,
+            @tagName(expected_binding),
+            failure_stage,
+            diagnostic_plan,
+            diagnostic_parent_step,
+            diagnostic_produced_step,
+        },
+    );
+    const record_node = cir.store.nodes.get(ModuleEnv.nodeIdxFrom(record_expr));
+    if (record_node.tag != .expr_record) return error.TestUnexpectedResult;
+    const fields_ext_index = record_node.getPayload().expr_record.fields_ext_idx;
+    if (fields_ext_index >= cir.store.span_with_node_data.items.items.len) {
+        return error.TestUnexpectedResult;
+    }
+    const record = cir.store.getExpr(record_expr);
+    if (record != .e_record or record.e_record.ext == null) return error.TestUnexpectedResult;
+    const base_expr = record.e_record.ext.?;
+
+    failure_stage = "record-update base step";
+    var matching_step_index: ?u32 = null;
+    for (cir.where_marker_copy_steps.items.items, 0..) |step, step_index| {
+        if (step.decodedKind() != .record_update_base or
+            step.origin.record_update_base.record_expr != raw_record)
+        {
+            continue;
+        }
+        if (matching_step_index != null) return error.TestUnexpectedResult;
+        matching_step_index = @intCast(step_index);
+    }
+    const step_index = matching_step_index orelse return error.TestUnexpectedResult;
+    const step = cir.where_marker_copy_steps.items.items[step_index];
+    const origin = step.origin.record_update_base;
+    try std.testing.expectEqual(@intFromEnum(base_expr), origin.base_expr);
+    try std.testing.expectEqual(expected_binding, origin.decodedRootBinding().?);
+    try std.testing.expectEqual(@as(u32, 0), origin.reserved_1);
+    try std.testing.expectEqual(@as(u32, 0), origin.reserved_2);
+    try std.testing.expectEqual(@as(u32, 0), origin.reserved_3);
+    if (!rangeFits(step.pairs_start, step.pairs_len, cir.where_marker_copy_pairs.items.items.len) or
+        !rangeFits(
+            step.occurrences_start,
+            step.occurrences_len,
+            cir.where_marker_copy_occurrences.items.items.len,
+        ) or !rangeFits(
+        step.witnesses_start,
+        step.witnesses_len,
+        cir.where_marker_copy_witnesses.items.items.len,
+    ) or step.root_occurrence_offset >= step.occurrences_len) {
+        return error.TestUnexpectedResult;
+    }
+    failure_stage = "base root occurrence";
+    const pairs = cir.where_marker_copy_pairs.items.items[step.pairs_start..][0..step.pairs_len];
+    const occurrences = cir.where_marker_copy_occurrences.items.items[step.occurrences_start..][0..step.occurrences_len];
+    const witnesses = cir.where_marker_copy_witnesses.items.items[step.witnesses_start..][0..step.witnesses_len];
+    const root_occurrence = occurrences[step.root_occurrence_offset];
+    if (root_occurrence.canonical_pair_offset >= pairs.len) return error.TestUnexpectedResult;
+    const root_pair = pairs[root_occurrence.canonical_pair_offset];
+    try std.testing.expectEqual(step.source_root_var, root_pair.source_var);
+    try std.testing.expectEqual(step.destination_root_var, root_pair.destination_var);
+    try std.testing.expectEqual(@as(u32, 0), root_pair.discovery_depth);
+    try std.testing.expectEqual(std.math.maxInt(u32), root_pair.predecessor_pair_offset);
+    try std.testing.expectEqual(std.math.maxInt(u32), root_pair.predecessor_edge_ordinal);
+
+    failure_stage = "root binding";
+    switch (expected_binding) {
+        .direct_request => {
+            try std.testing.expectEqual(origin.base_expr, root_occurrence.raw_source_var);
+        },
+        .redirected_identity_share => {
+            try std.testing.expect(origin.base_expr != root_occurrence.raw_source_var);
+            try std.testing.expectEqual(
+                root_occurrence.raw_source_var,
+                root_occurrence.raw_destination_var,
+            );
+            try std.testing.expectEqual(root_pair.source_var, root_pair.destination_var);
+            try std.testing.expectEqual(
+                cir.types.resolveVar(@enumFromInt(origin.base_expr)).var_,
+                @as(Var, @enumFromInt(root_pair.source_var)),
+            );
+        },
+    }
+
+    failure_stage = "root witness";
+    var root_witness_offset: ?u32 = null;
+    for (witnesses, 0..) |witness, witness_offset| {
+        if (witness.decodedEdgeKind() != .root_copy_action) continue;
+        if (root_witness_offset != null) return error.TestUnexpectedResult;
+        root_witness_offset = @intCast(witness_offset);
+        try std.testing.expectEqual(step.root_occurrence_offset, witness.parent_occurrence_offset);
+        try std.testing.expectEqual(step.root_occurrence_offset, witness.child_occurrence_offset);
+        try std.testing.expectEqual(std.math.maxInt(u32), witness.constraint_pair_offset);
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyWitness.Action.local_raw_identity_share_cut,
+            witness.decodedAction().?,
+        );
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind.none,
+            witness.decodedAuxiliaryOriginKind().?,
+        );
+        try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_step);
+        try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_index);
+        try std.testing.expectEqual(root_occurrence.raw_source_var, witness.raw_source_var);
+        try std.testing.expectEqual(root_occurrence.raw_destination_var, witness.raw_destination_var);
+    }
+    const root_witness = root_witness_offset orelse return error.TestUnexpectedResult;
+
+    failure_stage = "record field plan";
+    const fields = cir.store.sliceRecordFields(record.e_record.fields);
+    if (fields.len != 1) return error.TestUnexpectedResult;
+    const field = cir.store.getRecordField(fields[0]);
+    var matching_plan_index: ?u32 = null;
+    for (cir.expected_consumption_plans.items.items, 0..) |plan, plan_index| {
+        if (plan.decodedRole() != .record_update_field or plan.owner_node != raw_record) continue;
+        if (matching_plan_index != null) return error.TestUnexpectedResult;
+        try std.testing.expect(plan.hasLegalTags());
+        try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Outcome.anchored, plan.decodedOutcome().?);
+        try std.testing.expectEqual(@intFromEnum(field.value), plan.site_node);
+        try std.testing.expectEqual(@as(u32, 0), plan.slot);
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedMarkerAuthority.Kind.copy_occurrence,
+            plan.parent_authority.decodedKind().?,
+        );
+        matching_plan_index = @intCast(plan_index);
+    }
+    const field_plan_index = matching_plan_index orelse return error.TestUnexpectedResult;
+    diagnostic_plan = field_plan_index;
+    const plan = cir.expected_consumption_plans.items.items[field_plan_index];
+    diagnostic_parent_step = plan.parent_authority.payload.copy_occurrence.copy_step;
+    diagnostic_produced_step = plan.produced_copy_step;
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyOccurrenceSide.destination,
+        plan.decodedProducedSide().?,
+    );
+
+    const base_authority: ModuleEnv.ExpectedMarkerAuthority = .{
+        .kind = @intFromEnum(ModuleEnv.ExpectedMarkerAuthority.Kind.copy_occurrence),
+        .payload = .{ .copy_occurrence = .{
+            .copy_step = step_index,
+            .occurrence_offset = step.root_occurrence_offset,
+            .side = @intFromEnum(ModuleEnv.WhereMarkerCopyOccurrenceSide.destination),
+        } },
+    };
+    const plan_parent = plan.parent_authority.payload.copy_occurrence;
+    const parent_is_base = expectedMarkerAuthoritiesEqual(plan.parent_authority, base_authority);
+    const projection_step_index = if (parent_is_base)
+        plan.produced_copy_step
+    else
+        plan_parent.copy_step;
+    failure_stage = "expected projection step";
+    try std.testing.expect(projection_step_index > step_index);
+    if (projection_step_index >= cir.where_marker_copy_steps.items.items.len) {
+        return error.TestUnexpectedResult;
+    }
+    const projection_step = cir.where_marker_copy_steps.items.items[projection_step_index];
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyStep.Kind.aggregate_expected_projection,
+        projection_step.decodedKind().?,
+    );
+    const projection_origin = projection_step.origin.aggregate_expected_projection;
+    try std.testing.expectEqual(raw_record, projection_origin.consumer_node);
+    try std.testing.expectEqual(field_plan_index, projection_origin.expected_plan_index);
+    try std.testing.expect(expectedMarkerAuthoritiesEqual(
+        base_authority,
+        projection_origin.parent_authority,
+    ));
+    if (!rangeFits(
+        projection_step.occurrences_start,
+        projection_step.occurrences_len,
+        cir.where_marker_copy_occurrences.items.items.len,
+    ) or projection_step.root_occurrence_offset >= projection_step.occurrences_len) {
+        return error.TestUnexpectedResult;
+    }
+    const projection_root_occurrence = cir.where_marker_copy_occurrences.items.items[
+        projection_step.occurrences_start + projection_step.root_occurrence_offset
+    ];
+    try std.testing.expectEqual(
+        root_occurrence.raw_destination_var,
+        projection_root_occurrence.raw_source_var,
+    );
+    const projection_root_authority: ModuleEnv.ExpectedMarkerAuthority = .{
+        .kind = @intFromEnum(ModuleEnv.ExpectedMarkerAuthority.Kind.copy_occurrence),
+        .payload = .{ .copy_occurrence = .{
+            .copy_step = projection_step_index,
+            .occurrence_offset = projection_step.root_occurrence_offset,
+            .side = @intFromEnum(ModuleEnv.WhereMarkerCopyOccurrenceSide.destination),
+        } },
+    };
+
+    if (parent_is_base) {
+        failure_stage = "projected field occurrence";
+        try std.testing.expectEqual(projection_step_index, plan.produced_copy_step);
+        try std.testing.expect(plan.produced_occurrence_offset < projection_step.occurrences_len);
+
+        const projection_witnesses = cir.where_marker_copy_witnesses.items.items[projection_step.witnesses_start..][0..projection_step.witnesses_len];
+        var field_edge_count: usize = 0;
+        for (projection_witnesses) |witness| {
+            const edge_kind = witness.decodedEdgeKind() orelse return error.TestUnexpectedResult;
+            if (witness.parent_occurrence_offset == projection_step.root_occurrence_offset and
+                witness.child_occurrence_offset == plan.produced_occurrence_offset and
+                (edge_kind == .record_field_type or edge_kind == .record_unbound_field_type) and
+                witness.edge_index == 0 and witness.edge_name == @as(u32, @bitCast(field.name)))
+            {
+                field_edge_count += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), field_edge_count);
+    } else {
+        failure_stage = "fresh-shape support step";
+        try std.testing.expect(expectedMarkerAuthoritiesEqual(
+            projection_root_authority,
+            plan.parent_authority,
+        ));
+        try std.testing.expect(plan.produced_copy_step > projection_step_index);
+        if (plan.produced_copy_step >= cir.where_marker_copy_steps.items.items.len) {
+            return error.TestUnexpectedResult;
+        }
+        const support_step = cir.where_marker_copy_steps.items.items[plan.produced_copy_step];
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyStep.Kind.aggregate_fresh_shape_child,
+            support_step.decodedKind().?,
+        );
+        const support_origin = support_step.origin.aggregate_fresh_shape_child;
+        try std.testing.expectEqual(field_plan_index, support_origin.expected_plans_start);
+        try std.testing.expectEqual(@as(u32, 1), support_origin.expected_plans_len);
+        try std.testing.expect(expectedMarkerAuthoritiesEqual(
+            projection_root_authority,
+            support_origin.parent_authority,
+        ));
+        try std.testing.expectEqual(support_step.root_occurrence_offset, plan.produced_occurrence_offset);
+        if (!rangeFits(
+            support_step.occurrences_start,
+            support_step.occurrences_len,
+            cir.where_marker_copy_occurrences.items.items.len,
+        ) or support_step.root_occurrence_offset >= support_step.occurrences_len) {
+            return error.TestUnexpectedResult;
+        }
+        const support_root_occurrence = cir.where_marker_copy_occurrences.items.items[
+            support_step.occurrences_start + support_step.root_occurrence_offset
+        ];
+        try std.testing.expectEqual(plan.raw_consumer_var, support_root_occurrence.raw_source_var);
+    }
+
+    return .{
+        .step_index = step_index,
+        .record_expr = record_expr,
+        .base_expr = base_expr,
+        .fields_ext_index = fields_ext_index,
+        .root_occurrence_index = step.occurrences_start + step.root_occurrence_offset,
+        .root_witness_index = step.witnesses_start + root_witness,
+        .field_plan_index = field_plan_index,
+        .selected_raw_root = root_occurrence.raw_source_var,
+        .selected_canonical_root = root_pair.source_var,
+    };
+}
+
+fn recordUpdateRootAuthorityFreshContext(test_env: anytype) ImportResolution {
+    return ImportResolution.freshSupplied(
+        test_env.module_env,
+        .{
+            .envs = test_env.checker.imported_modules,
+            .modules = test_env.checker.validated_imported_modules,
+        },
+        .{
+            .envs = test_env.checker.owner_modules,
+            .modules = test_env.checker.validated_owner_modules,
+        },
+        test_env.checker.platform_dependency_index,
+    );
+}
+
+test "record-update root authority: direct and redirected selections survive rebuild serde and fresh admission" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    var failure_stage: []const u8 = "checked fixture";
+    errdefer std.debug.print("record-update root authority fixture failed at {s}\n", .{failure_stage});
+
+    var test_env = try TestEnv.init("RecordUpdateRootAuthority", record_update_root_authority_test_source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    var fresh_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+        "RecordUpdateRootAuthority",
+        record_update_root_authority_test_source,
+        test_env.builtin_module,
+        test_env.builtin_validation,
+        compiled_builtins.builtinIndices(CIR),
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{});
+    const topology = try recordUpdateRootAuthorityTestTopology(&test_env);
+    const fresh_topology = try recordUpdateRootAuthorityTestTopology(&fresh_env);
+    try std.testing.expect(std.meta.eql(topology, fresh_topology));
+
+    failure_stage = "authentic producer proofs";
+    const first = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.redirected_records[0],
+        .redirected_identity_share,
+    );
+    const second = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.redirected_records[1],
+        .redirected_identity_share,
+    );
+    const direct = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.direct_record,
+        .direct_request,
+    );
+    try std.testing.expect(first.base_expr != second.base_expr);
+    const first_resolved_root: u32 = @intFromEnum(
+        test_env.module_env.types.resolveVar(@enumFromInt(first.selected_raw_root)).var_,
+    );
+    const second_resolved_root: u32 = @intFromEnum(
+        test_env.module_env.types.resolveVar(@enumFromInt(second.selected_raw_root)).var_,
+    );
+    try std.testing.expectEqual(first.selected_canonical_root, first_resolved_root);
+    try std.testing.expectEqual(second.selected_canonical_root, second_resolved_root);
+    try std.testing.expectEqual(first_resolved_root, second_resolved_root);
+    try std.testing.expect(
+        first.selected_raw_root != first_resolved_root or
+            second.selected_raw_root != second_resolved_root,
+    );
+    try std.testing.expect(direct.base_expr == @as(CIR.Expr.Idx, @enumFromInt(direct.selected_raw_root)));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    ));
+    const context = recordUpdateRootAuthorityFreshContext(&fresh_env);
+    try validateWhereMarkerCopySourceNamespaces(
+        test_env.module_env,
+        test_env.builtin_module.env,
+        context,
+    );
+
+    failure_stage = "closed binding corruptions";
+    const first_step = &test_env.module_env.where_marker_copy_steps.items.items[first.step_index];
+    const saved_first_step = first_step.*;
+    first_step.origin.record_update_base.root_binding = 2;
+    const accepted_unknown_binding = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_unknown_binding);
+
+    first_step.origin.record_update_base.root_binding = @intFromEnum(
+        ModuleEnv.WhereMarkerRecordUpdateBaseOrigin.RootBinding.direct_request,
+    );
+    const accepted_redirect_as_direct = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_redirect_as_direct);
+
+    const direct_step = &test_env.module_env.where_marker_copy_steps.items.items[direct.step_index];
+    const saved_direct_step = direct_step.*;
+    direct_step.origin.record_update_base.root_binding = @intFromEnum(
+        ModuleEnv.WhereMarkerRecordUpdateBaseOrigin.RootBinding.redirected_identity_share,
+    );
+    const accepted_direct_as_redirect = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    direct_step.* = saved_direct_step;
+    try std.testing.expect(!accepted_direct_as_redirect);
+
+    first_step.origin.record_update_base.reserved_1 = 1;
+    const accepted_reserved = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_reserved);
+
+    first_step.origin.record_update_base.reserved_2 = 1;
+    const accepted_reserved_2 = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_reserved_2);
+
+    first_step.origin.record_update_base.reserved_3 = 1;
+    const accepted_reserved_3 = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_reserved_3);
+
+    first_step.origin.record_update_base.record_expr = @intFromEnum(first.base_expr);
+    const accepted_wrong_record_owner = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_wrong_record_owner);
+
+    first_step.origin.record_update_base.base_expr = std.math.maxInt(u32);
+    const accepted_missing_base = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_missing_base);
+
+    first_step.root_occurrence_offset = first_step.occurrences_len;
+    const accepted_missing_root_occurrence = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_step.* = saved_first_step;
+    try std.testing.expect(!accepted_missing_root_occurrence);
+
+    const first_root_occurrence = &test_env.module_env.where_marker_copy_occurrences.items.items[
+        first.root_occurrence_index
+    ];
+    const saved_first_root_occurrence = first_root_occurrence.*;
+    first_root_occurrence.canonical_pair_offset = first_step.pairs_len;
+    const accepted_missing_root_pair = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_root_occurrence.* = saved_first_root_occurrence;
+    try std.testing.expect(!accepted_missing_root_pair);
+
+    first_root_occurrence.raw_source_var = @intFromEnum(first.base_expr);
+    const accepted_retargeted_redirect_source = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_root_occurrence.* = saved_first_root_occurrence;
+    try std.testing.expect(!accepted_retargeted_redirect_source);
+
+    first_root_occurrence.raw_destination_var = @intFromEnum(first.base_expr);
+    const accepted_retargeted_redirect_destination = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    first_root_occurrence.* = saved_first_root_occurrence;
+    try std.testing.expect(!accepted_retargeted_redirect_destination);
+
+    const direct_root_occurrence = &test_env.module_env.where_marker_copy_occurrences.items.items[
+        direct.root_occurrence_index
+    ];
+    const saved_direct_root_occurrence = direct_root_occurrence.*;
+    direct_root_occurrence.raw_source_var = first.selected_raw_root;
+    const accepted_retargeted_direct_source = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    direct_root_occurrence.* = saved_direct_root_occurrence;
+    try std.testing.expect(!accepted_retargeted_direct_source);
+
+    direct_root_occurrence.raw_destination_var = first.selected_raw_root;
+    const accepted_retargeted_direct_destination = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    direct_root_occurrence.* = saved_direct_root_occurrence;
+    try std.testing.expect(!accepted_retargeted_direct_destination);
+
+    const first_record_node_idx = ModuleEnv.nodeIdxFrom(first.record_expr);
+    const saved_first_record_node = test_env.module_env.store.nodes.get(first_record_node_idx);
+    var changed_first_record_node = saved_first_record_node;
+    var changed_first_record_payload = changed_first_record_node.getPayload();
+    changed_first_record_payload.expr_record.fields_ext_idx = @intCast(
+        test_env.module_env.store.span_with_node_data.items.items.len,
+    );
+    changed_first_record_node.setPayload(changed_first_record_payload);
+    test_env.module_env.store.nodes.set(first_record_node_idx, changed_first_record_node);
+    const accepted_out_of_bounds_base_edge = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    test_env.module_env.store.nodes.set(first_record_node_idx, saved_first_record_node);
+    try std.testing.expect(!accepted_out_of_bounds_base_edge);
+
+    var wrong_first_record_tag = saved_first_record_node;
+    wrong_first_record_tag.tag = .ty_lookup;
+    test_env.module_env.store.nodes.set(first_record_node_idx, wrong_first_record_tag);
+    const accepted_wrong_record_tag = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    test_env.module_env.store.nodes.set(first_record_node_idx, saved_first_record_node);
+    try std.testing.expect(!accepted_wrong_record_tag);
+
+    const first_base_node_idx = ModuleEnv.nodeIdxFrom(first.base_expr);
+    const saved_first_base_node = test_env.module_env.store.nodes.get(first_base_node_idx);
+    var wrong_first_base_tag = saved_first_base_node;
+    wrong_first_base_tag.tag = .ty_lookup;
+    test_env.module_env.store.nodes.set(first_base_node_idx, wrong_first_base_tag);
+    const accepted_wrong_base_tag = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    test_env.module_env.store.nodes.set(first_base_node_idx, saved_first_base_node);
+    try std.testing.expect(!accepted_wrong_base_tag);
+
+    const root_witness = &test_env.module_env.where_marker_copy_witnesses.items.items[
+        first.root_witness_index
+    ];
+    const saved_root_witness = root_witness.*;
+    root_witness.action = std.math.maxInt(u32);
+    const accepted_unknown_root_action = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_unknown_root_action);
+
+    root_witness.auxiliary_origin_kind = std.math.maxInt(u32);
+    const accepted_unknown_root_auxiliary = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_unknown_root_auxiliary);
+
+    root_witness.auxiliary_origin_index = 1;
+    const accepted_active_none_auxiliary = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_active_none_auxiliary);
+
+    root_witness.auxiliary_origin_step = 1;
+    const accepted_active_none_auxiliary_step = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_active_none_auxiliary_step);
+
+    root_witness.raw_source_var = @intFromEnum(first.base_expr);
+    const accepted_retargeted_share_witness = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_retargeted_share_witness);
+
+    root_witness.raw_destination_var = @intFromEnum(first.base_expr);
+    const accepted_retargeted_share_destination = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_retargeted_share_destination);
+
+    root_witness.child_occurrence_offset = first_step.occurrences_len;
+    const accepted_out_of_range_share_child = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_out_of_range_share_child);
+
+    root_witness.action = @intFromEnum(ModuleEnv.WhereMarkerCopyWitness.Action.traverse);
+    root_witness.raw_source_var = std.math.maxInt(u32);
+    root_witness.raw_destination_var = std.math.maxInt(u32);
+    const accepted_missing_share = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    root_witness.* = saved_root_witness;
+    try std.testing.expect(!accepted_missing_share);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    ));
+
+    failure_stage = "fresh canonical base edge";
+    const first_record_node = test_env.module_env.store.nodes.get(
+        ModuleEnv.nodeIdxFrom(first.record_expr),
+    );
+    const first_fields_ext = &test_env.module_env.store.span_with_node_data.items.items[
+        first_record_node.getPayload().expr_record.fields_ext_idx
+    ];
+    const saved_first_fields_ext = first_fields_ext.*;
+    first_fields_ext.node = @intFromEnum(second.base_expr);
+    first_step.origin.record_update_base.base_expr = @intFromEnum(second.base_expr);
+    const accepted_coordinated_local = validateWhereMarkerCopyProofLocal(
+        &test_env.module_env.types,
+        test_env.module_env,
+    );
+    const accepted_coordinated_fresh = validateWhereMarkerCopySourceNamespaces(
+        test_env.module_env,
+        test_env.builtin_module.env,
+        context,
+    );
+    first_fields_ext.* = saved_first_fields_ext;
+    first_step.* = saved_first_step;
+    try std.testing.expect(accepted_coordinated_local);
+    try std.testing.expectError(error.CorruptArtifact, accepted_coordinated_fresh);
+    try validateWhereMarkerCopySourceNamespaces(
+        test_env.module_env,
+        test_env.builtin_module.env,
+        context,
+    );
+
+    failure_stage = "canonical rebuild";
+    const canonical_before = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        test_env.module_env,
+    );
+    defer std.testing.allocator.free(canonical_before);
+    try test_env.checker.rebuildCheckedBoundaryWhereMethodState();
+    const canonical_once = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        test_env.module_env,
+    );
+    defer std.testing.allocator.free(canonical_once);
+    try std.testing.expectEqualSlices(u8, canonical_before, canonical_once);
+    const first_once = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.redirected_records[0],
+        .redirected_identity_share,
+    );
+    const second_once = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.redirected_records[1],
+        .redirected_identity_share,
+    );
+    const direct_once = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.direct_record,
+        .direct_request,
+    );
+    try std.testing.expectEqual(first.selected_raw_root, first_once.selected_raw_root);
+    try std.testing.expectEqual(second.selected_raw_root, second_once.selected_raw_root);
+    try std.testing.expectEqual(direct.selected_raw_root, direct_once.selected_raw_root);
+    try std.testing.expectEqual(first.selected_canonical_root, first_once.selected_canonical_root);
+    try std.testing.expectEqual(second.selected_canonical_root, second_once.selected_canonical_root);
+    try std.testing.expectEqual(direct.selected_canonical_root, direct_once.selected_canonical_root);
+    try test_env.checker.rebuildCheckedBoundaryWhereMethodState();
+    const canonical_twice = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        test_env.module_env,
+    );
+    defer std.testing.allocator.free(canonical_twice);
+    try std.testing.expectEqualSlices(u8, canonical_before, canonical_twice);
+    const first_twice = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.redirected_records[0],
+        .redirected_identity_share,
+    );
+    const second_twice = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.redirected_records[1],
+        .redirected_identity_share,
+    );
+    const direct_twice = try expectRecordUpdateRootAuthorityTestProof(
+        test_env.module_env,
+        topology.direct_record,
+        .direct_request,
+    );
+    try std.testing.expectEqual(first.selected_raw_root, first_twice.selected_raw_root);
+    try std.testing.expectEqual(second.selected_raw_root, second_twice.selected_raw_root);
+    try std.testing.expectEqual(direct.selected_raw_root, direct_twice.selected_raw_root);
+    try std.testing.expectEqual(first.selected_canonical_root, first_twice.selected_canonical_root);
+    try std.testing.expectEqual(second.selected_canonical_root, second_twice.selected_canonical_root);
+    try std.testing.expectEqual(direct.selected_canonical_root, direct_twice.selected_canonical_root);
+    try validateWhereMarkerCopySourceNamespaces(
+        test_env.module_env,
+        test_env.builtin_module.env,
+        context,
+    );
+
+    failure_stage = "readonly and mutable serde";
+    const buffer = try serializeModuleEnvForDeserializationTest(
+        std.testing.allocator,
+        test_env.module_env,
+    );
+    defer std.testing.allocator.free(buffer);
+    try std.testing.expectEqualSlices(u8, canonical_twice, buffer);
+    const base_addr = @intFromPtr(buffer.ptr);
+    const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized.validate(buffer.len);
+
+    {
+        const corrupt = try serialized.deserializeWithMutableTypes(
+            base_addr,
+            std.testing.allocator,
+            record_update_root_authority_test_source,
+            "RecordUpdateRootAuthority",
+        );
+        defer {
+            corrupt.deinitCachedModule();
+            std.testing.allocator.destroy(corrupt);
+        }
+        const corrupt_record_node_idx = ModuleEnv.nodeIdxFrom(first.record_expr);
+        const saved_corrupt_record_node = corrupt.store.nodes.get(corrupt_record_node_idx);
+        var changed_corrupt_record_node = saved_corrupt_record_node;
+        var changed_corrupt_record_payload = changed_corrupt_record_node.getPayload();
+        changed_corrupt_record_payload.expr_record.fields_ext_idx = @intCast(
+            corrupt.store.span_with_node_data.items.items.len,
+        );
+        changed_corrupt_record_node.setPayload(changed_corrupt_record_payload);
+        corrupt.store.nodes.set(corrupt_record_node_idx, changed_corrupt_record_node);
+        const rejected_out_of_bounds_base_edge = admitCheckedOwned(
+            std.testing.allocator,
+            corrupt,
+            test_env.builtin_validation,
+            compiled_builtins.builtinIndices(CIR),
+            .{ .fresh = .{
+                .env = fresh_env.module_env,
+                .imported_modules = .{
+                    .envs = fresh_env.checker.imported_modules,
+                    .modules = fresh_env.checker.validated_imported_modules,
+                },
+                .semantic_dependencies = .{
+                    .envs = fresh_env.checker.owner_modules,
+                    .modules = fresh_env.checker.validated_owner_modules,
+                },
+                .platform_dependency_index = fresh_env.checker.platform_dependency_index,
+            } },
+        );
+        corrupt.store.nodes.set(corrupt_record_node_idx, saved_corrupt_record_node);
+        try std.testing.expectError(error.CorruptArtifact, rejected_out_of_bounds_base_edge);
+        try std.testing.expect(validateWhereMarkerCopyProofLocal(&corrupt.types, corrupt));
+    }
+
+    const readonly = try serialized.deserializeInto(
+        base_addr,
+        std.testing.allocator,
+        record_update_root_authority_test_source,
+        "RecordUpdateRootAuthority",
+    );
+    defer {
+        readonly.imports.deinitMapOnly(std.testing.allocator);
+        readonly.import_mapping.deinit();
+        std.testing.allocator.destroy(readonly);
+    }
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&readonly.types, readonly));
+    try validateWhereMarkerCopySourceNamespaces(readonly, test_env.builtin_module.env, context);
+    const readonly_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        readonly,
+    );
+    defer std.testing.allocator.free(readonly_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_twice, readonly_bytes);
+
+    const mutable = try serialized.deserializeWithMutableTypes(
+        base_addr,
+        std.testing.allocator,
+        record_update_root_authority_test_source,
+        "RecordUpdateRootAuthority",
+    );
+    defer {
+        mutable.deinitCachedModule();
+        std.testing.allocator.destroy(mutable);
+    }
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&mutable.types, mutable));
+    try validateWhereMarkerCopySourceNamespaces(mutable, test_env.builtin_module.env, context);
+    const mutable_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        mutable,
+    );
+    defer std.testing.allocator.free(mutable_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_twice, mutable_bytes);
+
+    var admitted = try admitCheckedOwned(
+        std.testing.allocator,
+        mutable,
+        test_env.builtin_validation,
+        compiled_builtins.builtinIndices(CIR),
+        .{ .fresh = .{
+            .env = fresh_env.module_env,
+            .imported_modules = .{
+                .envs = fresh_env.checker.imported_modules,
+                .modules = fresh_env.checker.validated_imported_modules,
+            },
+            .semantic_dependencies = .{
+                .envs = fresh_env.checker.owner_modules,
+                .modules = fresh_env.checker.validated_owner_modules,
+            },
+            .platform_dependency_index = fresh_env.checker.platform_dependency_index,
+        } },
+    );
+    defer admitted.deinit();
+    try std.testing.expectEqual(mutable, try admitted.capability().validate());
+}
+
+fn expectRecordUpdateTestSemanticSlicesEqual(expected: anytype, actual: anytype) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |expected_item, actual_item| {
+        try std.testing.expect(std.meta.eql(expected_item, actual_item));
+    }
+}
+
+/// Compare every logical TypeStore row while deliberately ignoring capacities
+/// that a failed allocation may have grown before the enclosing Probe rolled
+/// its append/mutation transaction back.
+fn expectRecordUpdateTestTypeStoreEqual(
+    expected: *const types_mod.Store,
+    actual: *const types_mod.Store,
+) !void {
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.slots.backing.items.items,
+        actual.slots.backing.items.items,
+    );
+    try std.testing.expectEqual(expected.descs.backing.len(), actual.descs.backing.len());
+    for (0..expected.descs.backing.len()) |index| {
+        try std.testing.expect(std.meta.eql(
+            expected.descs.backing.get(@enumFromInt(index)),
+            actual.descs.backing.get(@enumFromInt(index)),
+        ));
+    }
+    try std.testing.expectEqual(expected.root_metas.len(), actual.root_metas.len());
+    for (0..expected.root_metas.len()) |index| {
+        try std.testing.expect(std.meta.eql(
+            expected.root_metas.get(@enumFromInt(index)),
+            actual.root_metas.get(@enumFromInt(index)),
+        ));
+    }
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.union_ranks.items.items,
+        actual.union_ranks.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.vars.items.items,
+        actual.vars.items.items,
+    );
+    try std.testing.expectEqual(expected.record_fields.len(), actual.record_fields.len());
+    for (0..expected.record_fields.len()) |index| {
+        try std.testing.expect(std.meta.eql(
+            expected.record_fields.get(@enumFromInt(index)),
+            actual.record_fields.get(@enumFromInt(index)),
+        ));
+    }
+    try std.testing.expectEqual(expected.tags.len(), actual.tags.len());
+    for (0..expected.tags.len()) |index| {
+        try std.testing.expect(std.meta.eql(
+            expected.tags.get(@enumFromInt(index)),
+            actual.tags.get(@enumFromInt(index)),
+        ));
+    }
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.interpolation_parts.items.items,
+        actual.interpolation_parts.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.where_method_marker_contracts.items.items,
+        actual.where_method_marker_contracts.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.where_method_marker_bases.items.items,
+        actual.where_method_marker_bases.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.where_method_marker_path_steps.items.items,
+        actual.where_method_marker_path_steps.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.constraint_evidence_handles.items.items,
+        actual.constraint_evidence_handles.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.static_dispatch_constraints.items.items,
+        actual.static_dispatch_constraints.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.nominal_decls.items.items,
+        actual.nominal_decls.items.items,
+    );
+    try expectRecordUpdateTestSemanticSlicesEqual(
+        expected.nominal_decl_index.items.items,
+        actual.nominal_decl_index.items.items,
+    );
+}
+
+const RecordUpdateTestVarPoolSnapshot = struct {
+    rank_lengths: []usize,
+    vars: []Var,
+
+    fn capture(gpa: Allocator, env: *Env) Allocator.Error!@This() {
+        const ranks = env.var_pool.slice();
+        const rank_lengths = try gpa.alloc(usize, ranks.len);
+        errdefer gpa.free(rank_lengths);
+        var total: usize = 0;
+        for (ranks, rank_lengths) |rank, *rank_len| {
+            rank_len.* = rank.items.len;
+            total = std.math.add(usize, total, rank.items.len) catch return error.OutOfMemory;
+        }
+        const vars = try gpa.alloc(Var, total);
+        errdefer gpa.free(vars);
+        var cursor: usize = 0;
+        for (ranks) |rank| {
+            @memcpy(vars[cursor..][0..rank.items.len], rank.items);
+            cursor += rank.items.len;
+        }
+        return .{ .rank_lengths = rank_lengths, .vars = vars };
+    }
+
+    fn expectEqual(self: *const @This(), env: *Env) !void {
+        const ranks = env.var_pool.slice();
+        try std.testing.expectEqual(self.rank_lengths.len, ranks.len);
+        var cursor: usize = 0;
+        for (ranks, self.rank_lengths) |rank, expected_len| {
+            try std.testing.expectEqual(expected_len, rank.items.len);
+            try std.testing.expectEqualSlices(
+                Var,
+                self.vars[cursor..][0..expected_len],
+                rank.items,
+            );
+            cursor += expected_len;
+        }
+        try std.testing.expectEqual(self.vars.len, cursor);
+    }
+
+    fn deinit(self: *@This(), gpa: Allocator) void {
+        gpa.free(self.vars);
+        gpa.free(self.rank_lengths);
+        self.* = undefined;
+    }
+};
+
+/// Complete semantic snapshot of the surfaces the local marker-copy Probe and
+/// its outer Env transaction own. Pointer/capacity identity is intentionally
+/// excluded: failed growth may retain allocation capacity, while every row,
+/// raw union mapping, rank entry, and consume-once input must be restored.
+const RecordUpdateRootTransactionSnapshot = struct {
+    types: types_mod.Store,
+    boundary: CheckedBoundaryStateSnapshot,
+    cross_copy: ProbeCrossCopyOwnedStateSnapshot,
+    var_pool: RecordUpdateTestVarPoolSnapshot,
+    deferred_constraints: []DeferredConstraintCheck,
+    regions: []Region,
+    scheme_uses: []ModuleEnv.SchemeUseRecord,
+    scheme_use_pairs: []ModuleEnv.SchemeUsePair,
+    problems_len: usize,
+    snapshots_mark: SnapshotStore.Mark,
+    probe_depth: u32,
+    commit_probe_active: bool,
+    type_savepoint_active: bool,
+    store_savepoint_depth: u32,
+    type_savepoint_baseline_slots: u32,
+    type_savepoint_baseline_descs: u32,
+    type_savepoint_baseline_nominal_decls: u32,
+    type_savepoint_trail_lengths: [5]usize,
+    ident_savepoint_depth: u32,
+    identity_savepoint_depth: u32,
+    pending_nested_function_use: ?CIR.Expr.Idx,
+    pending_inspect_method_use: ?PendingInspectMethodUse,
+    pending_shape_validation_instantiation: bool,
+    scratch_pairs_len: usize,
+    scratch_constraint_pairs_len: usize,
+    scratch_witnesses_len: usize,
+    scratch_evidence_pairs_len: usize,
+    instantiation_scratch_lengths: [9]usize,
+
+    fn capture(
+        gpa: Allocator,
+        checker: *const Self,
+        env: *Env,
+    ) Allocator.Error!@This() {
+        var types = try checker.types.clone(gpa);
+        errdefer types.deinit();
+        var boundary = try CheckedBoundaryStateSnapshot.capture(gpa, checker);
+        errdefer boundary.deinit(gpa);
+        var cross_copy = try ProbeCrossCopyOwnedStateSnapshot.capture(gpa, checker);
+        errdefer cross_copy.deinit();
+        var var_pool = try RecordUpdateTestVarPoolSnapshot.capture(gpa, env);
+        errdefer var_pool.deinit(gpa);
+        const deferred_constraints = try gpa.dupe(
+            DeferredConstraintCheck,
+            env.deferred_static_dispatch_constraints.items.items,
+        );
+        errdefer gpa.free(deferred_constraints);
+        const regions = try gpa.dupe(Region, checker.regions.items.items);
+        errdefer gpa.free(regions);
+        const scheme_uses = try gpa.dupe(
+            ModuleEnv.SchemeUseRecord,
+            checker.cir.scheme_uses.items.items,
+        );
+        errdefer gpa.free(scheme_uses);
+        const scheme_use_pairs = try gpa.dupe(
+            ModuleEnv.SchemeUsePair,
+            checker.cir.scheme_use_pairs.items.items,
+        );
+        errdefer gpa.free(scheme_use_pairs);
+        const scratch = &checker.types.instantiate_scratch;
+        return .{
+            .types = types,
+            .boundary = boundary,
+            .cross_copy = cross_copy,
+            .var_pool = var_pool,
+            .deferred_constraints = deferred_constraints,
+            .regions = regions,
+            .scheme_uses = scheme_uses,
+            .scheme_use_pairs = scheme_use_pairs,
+            .problems_len = checker.problems.problems.items.len,
+            .snapshots_mark = checker.snapshots.mark(),
+            .probe_depth = checker.probe_depth,
+            .commit_probe_active = checker.commit_probe_active,
+            .type_savepoint_active = checker.types.savepoint_active,
+            .store_savepoint_depth = checker.types.savepoint_depth,
+            .type_savepoint_baseline_slots = checker.types.savepoint_baseline_slots,
+            .type_savepoint_baseline_descs = checker.types.savepoint_baseline_descs,
+            .type_savepoint_baseline_nominal_decls = checker.types.savepoint_baseline_nominal_decls,
+            .type_savepoint_trail_lengths = .{
+                checker.types.slot_trail.items.len,
+                checker.types.desc_trail.items.len,
+                checker.types.root_meta_trail.items.len,
+                checker.types.union_rank_trail.items.len,
+                checker.types.nominal_decl_trail.items.len,
+            },
+            .ident_savepoint_depth = checker.cir.common.idents.interner.savepoint_depth,
+            .identity_savepoint_depth = checker.cir.module_identities.savepoint_depth,
+            .pending_nested_function_use = checker.pending_nested_function_use,
+            .pending_inspect_method_use = checker.pending_inspect_method_use,
+            .pending_shape_validation_instantiation = checker.pending_shape_validation_instantiation,
+            .scratch_pairs_len = checker.scratch_where_marker_copy_pairs.items.len,
+            .scratch_constraint_pairs_len = checker.scratch_where_marker_constraint_pairs.items.len,
+            .scratch_witnesses_len = checker.scratch_where_marker_copy_witnesses.items.len,
+            .scratch_evidence_pairs_len = checker.scratch_evidence_pairs.items.len,
+            .instantiation_scratch_lengths = .{
+                scratch.frames.items.len,
+                scratch.value_stack.items.len,
+                scratch.pending_tags.items.len,
+                scratch.pending_fields.items.len,
+                scratch.pending_constraints.items.len,
+                scratch.pending_parts.items.len,
+                scratch.pending_marker_contracts.items.len,
+                scratch.pending_marker_bases.items.len,
+                scratch.pending_marker_paths.items.len,
+            },
+        };
+    }
+
+    fn expectEqual(
+        self: *const @This(),
+        gpa: Allocator,
+        checker: *const Self,
+        env: *Env,
+    ) !void {
+        try expectRecordUpdateTestTypeStoreEqual(&self.types, checker.types);
+        try self.boundary.expectSameItems(gpa, checker);
+        try self.cross_copy.expectSameItems(checker);
+        try self.var_pool.expectEqual(env);
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.deferred_constraints,
+            env.deferred_static_dispatch_constraints.items.items,
+        );
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.regions,
+            checker.regions.items.items,
+        );
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.scheme_uses,
+            checker.cir.scheme_uses.items.items,
+        );
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.scheme_use_pairs,
+            checker.cir.scheme_use_pairs.items.items,
+        );
+        try std.testing.expectEqual(self.problems_len, checker.problems.problems.items.len);
+        try std.testing.expect(std.meta.eql(self.snapshots_mark, checker.snapshots.mark()));
+        try std.testing.expectEqual(self.probe_depth, checker.probe_depth);
+        try std.testing.expectEqual(self.commit_probe_active, checker.commit_probe_active);
+        try std.testing.expectEqual(self.type_savepoint_active, checker.types.savepoint_active);
+        try std.testing.expectEqual(self.store_savepoint_depth, checker.types.savepoint_depth);
+        try std.testing.expectEqual(
+            self.type_savepoint_baseline_slots,
+            checker.types.savepoint_baseline_slots,
+        );
+        try std.testing.expectEqual(
+            self.type_savepoint_baseline_descs,
+            checker.types.savepoint_baseline_descs,
+        );
+        try std.testing.expectEqual(
+            self.type_savepoint_baseline_nominal_decls,
+            checker.types.savepoint_baseline_nominal_decls,
+        );
+        const actual_type_savepoint_trail_lengths = [5]usize{
+            checker.types.slot_trail.items.len,
+            checker.types.desc_trail.items.len,
+            checker.types.root_meta_trail.items.len,
+            checker.types.union_rank_trail.items.len,
+            checker.types.nominal_decl_trail.items.len,
+        };
+        try std.testing.expectEqualSlices(
+            usize,
+            &self.type_savepoint_trail_lengths,
+            &actual_type_savepoint_trail_lengths,
+        );
+        try std.testing.expectEqual(
+            self.ident_savepoint_depth,
+            checker.cir.common.idents.interner.savepoint_depth,
+        );
+        try std.testing.expectEqual(
+            self.identity_savepoint_depth,
+            checker.cir.module_identities.savepoint_depth,
+        );
+        try std.testing.expect(std.meta.eql(
+            self.pending_nested_function_use,
+            checker.pending_nested_function_use,
+        ));
+        try std.testing.expect(std.meta.eql(
+            self.pending_inspect_method_use,
+            checker.pending_inspect_method_use,
+        ));
+        try std.testing.expectEqual(
+            self.pending_shape_validation_instantiation,
+            checker.pending_shape_validation_instantiation,
+        );
+        try std.testing.expectEqual(
+            self.scratch_pairs_len,
+            checker.scratch_where_marker_copy_pairs.items.len,
+        );
+        try std.testing.expectEqual(
+            self.scratch_constraint_pairs_len,
+            checker.scratch_where_marker_constraint_pairs.items.len,
+        );
+        try std.testing.expectEqual(
+            self.scratch_witnesses_len,
+            checker.scratch_where_marker_copy_witnesses.items.len,
+        );
+        try std.testing.expectEqual(
+            self.scratch_evidence_pairs_len,
+            checker.scratch_evidence_pairs.items.len,
+        );
+        const scratch = &checker.types.instantiate_scratch;
+        const actual_scratch_lengths = [9]usize{
+            scratch.frames.items.len,
+            scratch.value_stack.items.len,
+            scratch.pending_tags.items.len,
+            scratch.pending_fields.items.len,
+            scratch.pending_constraints.items.len,
+            scratch.pending_parts.items.len,
+            scratch.pending_marker_contracts.items.len,
+            scratch.pending_marker_bases.items.len,
+            scratch.pending_marker_paths.items.len,
+        };
+        try std.testing.expectEqualSlices(
+            usize,
+            &self.instantiation_scratch_lengths,
+            &actual_scratch_lengths,
+        );
+    }
+
+    fn deinit(self: *@This(), gpa: Allocator) void {
+        gpa.free(self.scheme_use_pairs);
+        gpa.free(self.scheme_uses);
+        gpa.free(self.regions);
+        gpa.free(self.deferred_constraints);
+        self.var_pool.deinit(gpa);
+        self.cross_copy.deinit();
+        self.boundary.deinit(gpa);
+        self.types.deinit();
+        self.* = undefined;
+    }
+};
+
+const StagedRecordUpdateRootPublication = struct {
+    record_expr: CIR.Expr.Idx,
+    base_expr: CIR.Expr.Idx,
+    requested_var: Var,
+    selected_root: Var,
+    copy_steps_start: u32,
+    copy_pairs_start: u32,
+    copy_occurrences_start: u32,
+    constraint_pairs_start: u32,
+    copy_witnesses_start: u32,
+    copied_groups_start: u32,
+    copied_events_start: u32,
+    selected_anchors_start: u32,
+    evidence_handles_start: u32,
+    settlement_sources_start: u32,
+    scheme_uses_start: u32,
+    scheme_use_pairs_start: u32,
+    current_rank_len: usize,
+};
+
+fn expectRecordUpdateRootProofScratchEmpty(checker: *const Self) !void {
+    try std.testing.expectEqual(@as(usize, 0), checker.scratch_where_marker_copy_pairs.items.len);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checker.scratch_where_marker_constraint_pairs.items.len,
+    );
+    try std.testing.expectEqual(@as(usize, 0), checker.scratch_where_marker_copy_witnesses.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.scratch_evidence_pairs.items.len);
+    const scratch = &checker.types.instantiate_scratch;
+    inline for (.{
+        scratch.frames.items.len,
+        scratch.value_stack.items.len,
+        scratch.pending_tags.items.len,
+        scratch.pending_fields.items.len,
+        scratch.pending_constraints.items.len,
+        scratch.pending_parts.items.len,
+        scratch.pending_marker_contracts.items.len,
+        scratch.pending_marker_bases.items.len,
+        scratch.pending_marker_paths.items.len,
+    }) |length| {
+        try std.testing.expectEqual(@as(usize, 0), length);
+    }
+}
+
+/// Reach the real record-base producer boundary without checking the outer
+/// record. The lookup first unifies its raw expression variable `V` with the
+/// lambda parameter's nongeneralized root `R`; the subsequent wrapper must
+/// therefore publish `V` in its origin but `R -> R` as its selected root
+/// occurrence.
+fn stageRecordUpdateRootPublication(
+    test_env: anytype,
+    env: *Env,
+) !StagedRecordUpdateRootPublication {
+    const checker = &test_env.checker;
+    const topology = try recordUpdateRootAuthorityTestTopology(test_env);
+
+    checker.beginTypecheck();
+    try ensureTypeStoreIsFilled(checker);
+    try checker.reserveWhereAliasDeclarationPublications();
+    try checker.collectHostBoundaryAnnotations();
+    try checker.copyBuiltinTypes();
+    for (0..checker.cir.builtin_statements.span.len) |statement_offset| {
+        const statement = checker.cir.store.statementAt(
+            checker.cir.builtin_statements,
+            statement_offset,
+        );
+        try checker.generateStmtTypeDeclType(statement, env);
+    }
+    try checker.finalizeTypeDeclarationValidity();
+    try env.var_pool.pushRank();
+    try std.testing.expectEqual(Rank.outermost, env.rank());
+    try env.var_pool.pushRank();
+
+    const requested_var = ModuleEnv.varFrom(topology.redirected_bases[0]);
+    const parameter_var = ModuleEnv.varFrom(topology.redirected_container_pattern);
+    try std.testing.expect(requested_var != parameter_var);
+    try checker.checkPattern(topology.redirected_container_pattern, .fn_arg, env);
+    _ = try checker.checkExpr(topology.redirected_bases[0], env, Expected.none());
+    const selected = checker.types.resolveVar(requested_var);
+    const parameter = checker.types.resolveVar(parameter_var);
+    try std.testing.expect(requested_var != selected.var_);
+    try std.testing.expectEqual(parameter.var_, selected.var_);
+    try std.testing.expectEqual(env.rank(), selected.desc.rank);
+    try std.testing.expect(selected.desc.rank != .generalized);
+    try std.testing.expectEqual(@as(usize, 0), checker.problems.problems.items.len);
+    try std.testing.expect(!checker.types.savepoint_active);
+    try std.testing.expectEqual(@as(u32, 0), checker.types.savepoint_depth);
+    try std.testing.expectEqual(@as(usize, 0), checker.types.slot_trail.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.types.desc_trail.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.types.root_meta_trail.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.types.union_rank_trail.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.types.nominal_decl_trail.items.len);
+    try std.testing.expect(checker.pending_nested_function_use == null);
+    try std.testing.expect(checker.pending_inspect_method_use == null);
+    try std.testing.expect(!checker.pending_shape_validation_instantiation);
+    try expectRecordUpdateRootProofScratchEmpty(checker);
+
+    return .{
+        .record_expr = topology.redirected_records[0],
+        .base_expr = topology.redirected_bases[0],
+        .requested_var = requested_var,
+        .selected_root = selected.var_,
+        .copy_steps_start = @intCast(checker.cir.where_marker_copy_steps.items.items.len),
+        .copy_pairs_start = @intCast(checker.cir.where_marker_copy_pairs.items.items.len),
+        .copy_occurrences_start = @intCast(checker.cir.where_marker_copy_occurrences.items.items.len),
+        .constraint_pairs_start = @intCast(checker.cir.where_marker_constraint_copy_pairs.items.items.len),
+        .copy_witnesses_start = @intCast(checker.cir.where_marker_copy_witnesses.items.items.len),
+        .copied_groups_start = @intCast(checker.cir.copied_open_literal_groups.items.items.len),
+        .copied_events_start = @intCast(checker.cir.copied_open_literal_events.items.items.len),
+        .selected_anchors_start = @intCast(checker.cir.selected_receiver_anchors.items.items.len),
+        .evidence_handles_start = @intCast(checker.types.constraint_evidence_handles.items.items.len),
+        .settlement_sources_start = @intCast(checker.cir.dispatch_settlement_sources.items.items.len),
+        .scheme_uses_start = @intCast(checker.cir.scheme_uses.items.items.len),
+        .scheme_use_pairs_start = @intCast(checker.cir.scheme_use_pairs.items.items.len),
+        .current_rank_len = env.var_pool.getVarsForRank(env.rank()).len,
+    };
+}
+
+fn publishStagedRecordUpdateRootWithAllocator(
+    checker: *Self,
+    env: *Env,
+    allocator: Allocator,
+    stage: StagedRecordUpdateRootPublication,
+) Allocator.Error!InstantiatedVarWithMarkerCopy {
+    const saved_checker_gpa = checker.gpa;
+    const saved_cir_gpa = checker.cir.gpa;
+    const saved_types_gpa = checker.types.gpa;
+    checker.gpa = allocator;
+    checker.cir.gpa = allocator;
+    checker.types.gpa = allocator;
+    defer {
+        checker.gpa = saved_checker_gpa;
+        checker.cir.gpa = saved_cir_gpa;
+        checker.types.gpa = saved_types_gpa;
+    }
+
+    return checker.instantiateVarWithMarkerCopy(
+        stage.requested_var,
+        env,
+        .use_last_var,
+        .{ .record_update_base = .{
+            .record_expr = @intFromEnum(stage.record_expr),
+            .base_expr = @intFromEnum(stage.base_expr),
+        } },
+        .eager_support,
+    );
+}
+
+const StagedRecordUpdateRootPublicationProof = struct {
+    result_var: Var,
+    step: ModuleEnv.WhereMarkerCopyStep,
+    pair: ModuleEnv.WhereMarkerCopyPair,
+    occurrence: ModuleEnv.WhereMarkerCopyOccurrence,
+    witness: ModuleEnv.WhereMarkerCopyWitness,
+
+    fn expectEqual(self: @This(), actual: @This()) !void {
+        try std.testing.expectEqual(self.result_var, actual.result_var);
+        // WhereMarkerCopyStep is one of the explicitly canonical full-width
+        // rows above; its origin is an untagged extern union, so typed generic
+        // equality is neither defined nor needed.
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&self.step),
+            std.mem.asBytes(&actual.step),
+        );
+        try std.testing.expect(std.meta.eql(self.pair, actual.pair));
+        try std.testing.expect(std.meta.eql(self.occurrence, actual.occurrence));
+        try std.testing.expect(std.meta.eql(self.witness, actual.witness));
+    }
+};
+
+fn expectStagedRecordUpdateRootPublication(
+    checker: *const Self,
+    env: *Env,
+    stage: StagedRecordUpdateRootPublication,
+    result: InstantiatedVarWithMarkerCopy,
+) !StagedRecordUpdateRootPublicationProof {
+    try std.testing.expectEqual(stage.selected_root, result.var_);
+    try std.testing.expectEqual(@as(?u32, stage.copy_steps_start), result.copy_step);
+    try std.testing.expectEqual(
+        @as(usize, stage.copy_steps_start + 1),
+        checker.cir.where_marker_copy_steps.items.items.len,
+    );
+    const step = checker.cir.where_marker_copy_steps.items.items[stage.copy_steps_start];
+    try std.testing.expectEqual(ModuleEnv.WhereMarkerCopyStep.Kind.record_update_base, step.decodedKind().?);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyStep.CopyPolicy.ranked_fresh_flex_close,
+        step.decodedCopyPolicy().?,
+    );
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), step.source_root_var);
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), step.destination_root_var);
+    try std.testing.expectEqual(stage.copy_pairs_start, step.pairs_start);
+    try std.testing.expectEqual(@as(u32, 1), step.pairs_len);
+    try std.testing.expectEqual(stage.copy_occurrences_start, step.occurrences_start);
+    try std.testing.expectEqual(@as(u32, 1), step.occurrences_len);
+    try std.testing.expectEqual(@as(u32, 0), step.root_occurrence_offset);
+    try std.testing.expectEqual(stage.constraint_pairs_start, step.constraint_pairs_start);
+    try std.testing.expectEqual(@as(u32, 0), step.constraint_pairs_len);
+    try std.testing.expectEqual(stage.copy_witnesses_start, step.witnesses_start);
+    try std.testing.expectEqual(@as(u32, 1), step.witnesses_len);
+    try std.testing.expectEqual(stage.copied_groups_start, step.copied_groups_start);
+    try std.testing.expectEqual(@as(u32, 0), step.copied_groups_len);
+    const origin = step.origin.record_update_base;
+    try std.testing.expectEqual(@intFromEnum(stage.record_expr), origin.record_expr);
+    try std.testing.expectEqual(@intFromEnum(stage.base_expr), origin.base_expr);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerRecordUpdateBaseOrigin.RootBinding.redirected_identity_share,
+        origin.decodedRootBinding().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), origin.reserved_1);
+    try std.testing.expectEqual(@as(u32, 0), origin.reserved_2);
+    try std.testing.expectEqual(@as(u32, 0), origin.reserved_3);
+
+    try std.testing.expectEqual(
+        @as(usize, stage.copy_pairs_start + 1),
+        checker.cir.where_marker_copy_pairs.items.items.len,
+    );
+    const pair = checker.cir.where_marker_copy_pairs.items.items[stage.copy_pairs_start];
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), pair.source_var);
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), pair.destination_var);
+    try std.testing.expectEqual(@as(u32, 0), pair.discovery_depth);
+    try std.testing.expectEqual(std.math.maxInt(u32), pair.predecessor_pair_offset);
+    try std.testing.expectEqual(std.math.maxInt(u32), pair.predecessor_edge_ordinal);
+
+    try std.testing.expectEqual(
+        @as(usize, stage.copy_occurrences_start + 1),
+        checker.cir.where_marker_copy_occurrences.items.items.len,
+    );
+    const occurrence = checker.cir.where_marker_copy_occurrences.items.items[
+        stage.copy_occurrences_start
+    ];
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), occurrence.raw_source_var);
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), occurrence.raw_destination_var);
+    try std.testing.expectEqual(@as(u32, 0), occurrence.canonical_pair_offset);
+
+    try std.testing.expectEqual(
+        @as(usize, stage.copy_witnesses_start + 1),
+        checker.cir.where_marker_copy_witnesses.items.items.len,
+    );
+    const witness = checker.cir.where_marker_copy_witnesses.items.items[
+        stage.copy_witnesses_start
+    ];
+    try std.testing.expectEqual(@as(u32, 0), witness.parent_occurrence_offset);
+    try std.testing.expectEqual(@as(u32, 0), witness.child_occurrence_offset);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.EdgeKind.root_copy_action,
+        witness.decodedEdgeKind().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), witness.edge_index);
+    try std.testing.expectEqual(@as(u32, 0), witness.edge_name);
+    try std.testing.expectEqual(@as(u32, 0), witness.edge_origin_module);
+    try std.testing.expectEqual(@as(u32, 0), witness.edge_source_decl);
+    try std.testing.expectEqual(std.math.maxInt(u32), witness.constraint_pair_offset);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.Action.local_raw_identity_share_cut,
+        witness.decodedAction().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind.none,
+        witness.decodedAuxiliaryOriginKind().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_step);
+    try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_index);
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), witness.raw_source_var);
+    try std.testing.expectEqual(@intFromEnum(stage.selected_root), witness.raw_destination_var);
+
+    try std.testing.expectEqual(
+        @as(usize, stage.constraint_pairs_start),
+        checker.cir.where_marker_constraint_copy_pairs.items.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, stage.copied_groups_start),
+        checker.cir.copied_open_literal_groups.items.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, stage.copied_events_start),
+        checker.cir.copied_open_literal_events.items.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, stage.selected_anchors_start),
+        checker.cir.selected_receiver_anchors.items.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, stage.evidence_handles_start),
+        checker.types.constraint_evidence_handles.items.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, stage.settlement_sources_start),
+        checker.cir.dispatch_settlement_sources.items.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, stage.scheme_uses_start),
+        checker.cir.scheme_uses.items.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, stage.scheme_use_pairs_start),
+        checker.cir.scheme_use_pairs.items.items.len,
+    );
+    const current_rank_vars = env.var_pool.getVarsForRank(env.rank());
+    try std.testing.expectEqual(stage.current_rank_len + 1, current_rank_vars.len);
+    try std.testing.expectEqual(stage.selected_root, current_rank_vars[current_rank_vars.len - 1]);
+    try expectRecordUpdateRootProofScratchEmpty(checker);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    return .{
+        .result_var = result.var_,
+        .step = step,
+        .pair = pair,
+        .occurrence = occurrence,
+        .witness = witness,
+    };
+}
+
+test "record-update root authority: redirected publication is atomic across every allocation" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
+    var builtin_module = try can.BuiltinStatic.moduleView(
+        std.testing.allocator,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    defer builtin_module.deinit();
+    var owned_builtin_validation = try admitBuiltinOwned(
+        std.testing.allocator,
+        builtin_module.env,
+        builtin_indices,
+    );
+    defer owned_builtin_validation.deinit();
+    const builtin_validation = owned_builtin_validation.capability();
+
+    var calibration_test_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+        "RecordUpdateRootOomCalibration",
+        record_update_root_authority_test_source,
+        builtin_module,
+        builtin_validation,
+        builtin_indices,
+    );
+    defer calibration_test_env.deinit();
+    try calibration_test_env.assertCanErrors(&.{});
+    var calibration_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
+        .fail_index = std.math.maxInt(usize),
+        .resize_fail_index = std.math.maxInt(usize),
+    });
+    const calibration_gpa = calibration_allocator.allocator();
+    var calibration_env = try Env.init(calibration_gpa, .generalized);
+    defer calibration_env.deinit(calibration_gpa);
+    const calibration_stage = try stageRecordUpdateRootPublication(
+        &calibration_test_env,
+        &calibration_env,
+    );
+    var calibration_before = try RecordUpdateRootTransactionSnapshot.capture(
+        std.testing.allocator,
+        &calibration_test_env.checker,
+        &calibration_env,
+    );
+    defer calibration_before.deinit(std.testing.allocator);
+    const allocation_base = calibration_allocator.alloc_index;
+    calibration_allocator.resize_fail_index = calibration_allocator.resize_index;
+    const calibration_result = try publishStagedRecordUpdateRootWithAllocator(
+        &calibration_test_env.checker,
+        &calibration_env,
+        calibration_gpa,
+        calibration_stage,
+    );
+    const allocation_count = calibration_allocator.alloc_index - allocation_base;
+    try std.testing.expect(!calibration_allocator.has_induced_failure);
+    try std.testing.expect(allocation_count > 0);
+    const calibration_proof = try expectStagedRecordUpdateRootPublication(
+        &calibration_test_env.checker,
+        &calibration_env,
+        calibration_stage,
+        calibration_result,
+    );
+    var calibration_after = try RecordUpdateRootTransactionSnapshot.capture(
+        std.testing.allocator,
+        &calibration_test_env.checker,
+        &calibration_env,
+    );
+    defer calibration_after.deinit(std.testing.allocator);
+
+    var induced_failures: usize = 0;
+    for (0..allocation_count) |failure_index| {
+        var failure_stage: []const u8 = "fixture staging";
+        errdefer std.debug.print(
+            "record-update root allocation sweep failed at index={} stage={s}\n",
+            .{ failure_index, failure_stage },
+        );
+        var failed_test_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+            "RecordUpdateRootOomCalibration",
+            record_update_root_authority_test_source,
+            builtin_module,
+            builtin_validation,
+            builtin_indices,
+        );
+        defer failed_test_env.deinit();
+        try failed_test_env.assertCanErrors(&.{});
+        var injected = std.testing.FailingAllocator.init(std.testing.allocator, .{
+            .fail_index = std.math.maxInt(usize),
+            .resize_fail_index = std.math.maxInt(usize),
+        });
+        const injected_gpa = injected.allocator();
+        var failed_env = try Env.init(injected_gpa, .generalized);
+        defer failed_env.deinit(injected_gpa);
+        const stage = try stageRecordUpdateRootPublication(&failed_test_env, &failed_env);
+        try std.testing.expect(std.meta.eql(calibration_stage, stage));
+        var before = try RecordUpdateRootTransactionSnapshot.capture(
+            std.testing.allocator,
+            &failed_test_env.checker,
+            &failed_env,
+        );
+        defer before.deinit(std.testing.allocator);
+        try calibration_before.expectEqual(
+            std.testing.allocator,
+            &failed_test_env.checker,
+            &failed_env,
+        );
+
+        failure_stage = "injected publication";
+        const failure_allocation_base = injected.alloc_index;
+        injected.fail_index = std.math.add(
+            usize,
+            failure_allocation_base,
+            failure_index,
+        ) catch return error.TestUnexpectedResult;
+        injected.resize_fail_index = injected.resize_index;
+        const failed_result = publishStagedRecordUpdateRootWithAllocator(
+            &failed_test_env.checker,
+            &failed_env,
+            injected_gpa,
+            stage,
+        );
+        try std.testing.expectError(error.OutOfMemory, failed_result);
+        try std.testing.expect(injected.has_induced_failure);
+        induced_failures += 1;
+
+        failure_stage = "complete rollback";
+        try before.expectEqual(
+            std.testing.allocator,
+            &failed_test_env.checker,
+            &failed_env,
+        );
+        try before.cross_copy.expectEqual(&failed_test_env.checker);
+        try std.testing.expectEqual(
+            @as(usize, stage.copy_steps_start),
+            failed_test_env.module_env.where_marker_copy_steps.items.items.len,
+        );
+        try std.testing.expectEqual(
+            @as(usize, stage.copy_pairs_start),
+            failed_test_env.module_env.where_marker_copy_pairs.items.items.len,
+        );
+        try std.testing.expectEqual(
+            @as(usize, stage.copy_occurrences_start),
+            failed_test_env.module_env.where_marker_copy_occurrences.items.items.len,
+        );
+        try std.testing.expectEqual(
+            @as(usize, stage.copy_witnesses_start),
+            failed_test_env.module_env.where_marker_copy_witnesses.items.items.len,
+        );
+
+        failure_stage = "same-instance retry";
+        injected.fail_index = std.math.maxInt(usize);
+        injected.resize_fail_index = std.math.maxInt(usize);
+        const retry_result = try publishStagedRecordUpdateRootWithAllocator(
+            &failed_test_env.checker,
+            &failed_env,
+            injected_gpa,
+            stage,
+        );
+        const retry_proof = try expectStagedRecordUpdateRootPublication(
+            &failed_test_env.checker,
+            &failed_env,
+            stage,
+            retry_result,
+        );
+        try calibration_proof.expectEqual(retry_proof);
+        try calibration_after.expectEqual(
+            std.testing.allocator,
+            &failed_test_env.checker,
+            &failed_env,
+        );
+    }
+    try std.testing.expectEqual(allocation_count, induced_failures);
 }
 
 test "local detached scheme copied source has exact paired and identity-skip converses" {
@@ -94440,7 +96354,7 @@ const ProbeCrossCopyOwnedStateSnapshot = struct {
         };
     }
 
-    fn expectEqual(self: *const @This(), checker: *const Self) !void {
+    fn expectSameItems(self: *const @This(), checker: *const Self) !void {
         const ident_interner = &checker.cir.common.idents.interner;
         const module_interner = &checker.cir.module_identities;
         try std.testing.expectEqual(self.ident_count, ident_interner.entry_count);
@@ -94471,11 +96385,15 @@ const ProbeCrossCopyOwnedStateSnapshot = struct {
             self.module_identity_displays_bytes,
             std.mem.sliceAsBytes(checker.cir.module_identity_displays.items.items),
         );
-        try std.testing.expectEqual(self.var_map_capacity, checker.var_map.capacity());
         try std.testing.expectEqual(self.var_map_entries.len, checker.var_map.count());
         for (self.var_map_entries) |entry| {
             try std.testing.expectEqual(entry.value, checker.var_map.get(entry.key).?);
         }
+    }
+
+    fn expectEqual(self: *const @This(), checker: *const Self) !void {
+        try self.expectSameItems(checker);
+        try std.testing.expectEqual(self.var_map_capacity, checker.var_map.capacity());
     }
 
     fn deinit(self: *@This()) void {
