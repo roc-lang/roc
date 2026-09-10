@@ -2378,6 +2378,14 @@ or checked-error. `platformRequirementSolutionTableFromInputs` and
 `EvidencePass.run` consume that verdict directly; they never infer success by
 inspecting solved type shape or by comparing the eventual runtime value kind.
 
+A procedure requirement's root evidence follows the complete scheme of its
+recorded app definition, including captured codec requirements. The copied
+platform requirement type supplies the solved interface, not the scheme's
+evidence identity. Checked output validates a direct procedure's root vector
+against the app template's parameter count. Monotype selects this root evidence
+before materializing an edge for a direct call, procedure value, or interface
+relation; downstream specialization receives only that selected edge.
+
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
 that wants to expose an app-provided value to its host defines an explicit
@@ -7784,6 +7792,9 @@ Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
 retained hidden method contracts. Descendant contexts then use ordinary live
 bindings; decoding stored evidence never attaches graph cells to durable data.
+An initializer template with no requirements derives no method evidence. A use
+of its returned value can still carry a checked recipe for a callable stored
+inside that value; that recipe is separate from the initializer edge.
 Restoring a compile-time evaluation template installs its checked scheme and
 fresh substitution in the body context even when its method evidence is already
 supplied or empty. Pending callable evaluation wrappers install the same frame
@@ -11132,6 +11143,38 @@ instantiate those variables with caller-side lifetimes at each call site.
 
 ### Constraints Per Statement Form
 
+Allocation lifetime and by-value representation lifetime are distinct. A
+`list_len` or `list_capacity` operand reads only its saved list descriptor; it
+does not keep that descriptor's buffer alive. `LowLevel.representationArgs` declares
+these operand positions, separately from the RC-effect row so LIR statements
+do not grow. A representation-only position may not consume, retain, share,
+borrow from, or test uniqueness of the allocation.
+
+ARC's existing structural lift distinguishes representation reads in its
+occurrence inventory. Allocation demands propagate backward over pure copied
+list-descriptor aliases with one worklist visit per local. A descriptor alias
+with no allocation-dependent use carries no ownership unit and does not extend
+its source's allocation lifetime. Calls, joins, escaping values, and payload
+reads keep their existing explicit lifetime contracts. Extracting a descriptor
+from a container still requires the container at the extraction; subsequent
+metadata reads of the copied descriptor require only that saved value. When
+assignment or loop rebinding replaces a list, existing descriptor copies keep
+their saved values.
+
+The certifier independently permits metadata reads and descriptor copies from
+bound list representations after their units move or die. It preserves their
+original allocation identity: any later payload read, retain, or ownership
+transfer must still prove that allocation live. This rule neither rewrites
+statement order nor adds eager scalar snapshots, and no backend selects RC
+behavior from it.
+
+The interpreter's debug shape validator follows the same representation boundary.
+Pure list copies (`local`, `list_reinterpret`, and `nominal` reference operations)
+validate the copied descriptor without walking its allocation. Newly produced
+lists and payload extractions retain item validation; nested payload checks
+keep their existing rules. Debug validation must not add allocation reads to a
+statement that only copies saved metadata.
+
 Inference lifts each proc body once, assigning fresh resource variables, and
 generates constraints per statement:
 
@@ -11173,8 +11216,9 @@ generates constraints per statement:
   concrete host layout borrows or consumes the box payload according to the
   statement's explicit ownership mode and descriptor.
 - `assign_low_level`: constraints come from the op's `RcEffect`. Args in
-  `consume_args` are owned occurrences. Args outside `consume_args` are
-  borrowed occurrences whose lender must be live at the call. Args in
+  `consume_args` are owned occurrences. Args outside `consume_args` and
+  `representationArgs` are borrowed occurrences whose lender must be live at
+  the call. Representation-only operands require a bound descriptor. Args in
   `retain_args` are stored by the op, so the stored value's storage
   constraint applies. A new mask, `result_borrows_args`, names the args the
   result may alias without owning (for example `list_get_unsafe` results
