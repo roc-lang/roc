@@ -6146,7 +6146,20 @@ Restrictions:
   (`Cfg.{...}`) or through an expected nominal type (`cfg : Cfg; cfg = {}`).
   Empty and nonempty literals use the same backing-row relation: omission
   validates every field and the complete extension before retaining the nominal
-  result, and records each default on its source construction. Canonicalization
+  result, and records each default on its source construction. Both nominal
+  lifting paths retain the checked representatives of the record relation,
+  alongside its original operands, so a polymorphic call's formal slot cannot
+  hide the literal that supplies it. Checking registers fresh record expressions
+  as they are checked. At settlement, before default-cycle validation, it groups
+  accepted omission decisions by solved record equality and distributes each
+  decision to every registered construction in that class that did not supply
+  the field. This consumes the unifier's explicit default identity, including
+  when later value relations normalized the field to required; it never
+  reconstructs an omission from a nominal declaration or a solved field kind.
+  Equal decisions are coalesced before visiting constructors, and only classes
+  with omissions are indexed. Type unions, instantiation, and serialized types
+  carry no additional construction state. Speculative checking rolls back
+  construction registrations with its omission decisions. Canonicalization
   analyzes cycles through explicit constructors; checking also analyzes the
   omissions determined by expected types. Derived
   codecs reach defaulted fields through the nominal's derived methods
