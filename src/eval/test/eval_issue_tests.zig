@@ -1563,4 +1563,102 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(True, False)" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11243
+        // A type-module function whose Bool result comes from a method
+        // dispatch on an unresolved receiver (`boxes.any(...)`) is called
+        // directly as an operand of `==` against a bare tag literal. The
+        // comparison must take place at the call's completed result type,
+        // the nominal Bool the callee produces, rather than at the anonymous
+        // tag union the call site observed; no boxes block the point, so
+        // the comparison is true and both points are kept.
+        .name = "issue 11243: direct call compared with a bare Bool tag compares at the callee's result type",
+        .source_kind = .module,
+        .source =
+        \\Repro :: {}.{
+        \\    point_blocked = |point, boxes| boxes.any(|box| point.x > box.min_x)
+        \\
+        \\    keep_visible = |start, finish, boxes| if Repro.point_blocked(start, boxes) == False {
+        \\        [start, finish]
+        \\    } else {
+        \\        []
+        \\    }
+        \\}
+        \\
+        \\main = Repro.keep_visible({ x: 0, y: 0 }, { x: 1, y: 1 }, []).len()
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11243
+        // Reduced from roc-graph-layout's Route module. `portals` is built by
+        // mapping over a list whose element type is still open (the input's
+        // `group_attachments` is empty, so `get` fixes nothing about its
+        // elements), and the same `is_empty` specialization is requested
+        // twice on it before its elements are read field by field. The
+        // second request must join the first specialization's recorded
+        // interface as a fully readable Monotype type instead of tripping
+        // over an unresolved cell. No attachments exist, so no portals are
+        // produced and the route is the empty polyline.
+        .name = "issue 11243: repeated is_empty specialization request on field-copied element records",
+        .source_kind = .module,
+        .source =
+        \\Repro :: {}.{
+        \\    route_one = |input| {
+        \\        portals = [0].keep_oks(|i| input.group_attachments.get(i)).map(
+        \\            |_rule| { point: { x: 0, y: 0 }, outward: { x: 0, y: 1 }, offset: 0.5, leaving: True },
+        \\        )
+        \\        if portals.is_empty() or portals.is_empty() {
+        \\            Polyline([])
+        \\        } else {
+        \\            Polyline(portals.map(|portal| if portal.leaving {
+        \\                portal.point
+        \\            } else {
+        \\                portal.outward
+        \\            }))
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main = Repro.route_one({ group_attachments: [] })
+        ,
+        .expected = .{ .inspect_str = "Polyline([])" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11243
+        // Reduced from roc-graph-layout's Route module. The fold closure's
+        // record parameter is a dismantle candidate only when its binding is
+        // owned, and this emission binds it borrowed. Releasing it at the end
+        // of the closure must then release the whole value; a residual
+        // field-by-field release is only valid for a container the dismantle
+        // plan committed for this emission. The input has no shared ends, so
+        // the fold produces the empty list.
+        .name = "issue 11243: borrowed owned-only dismantle candidate releases whole",
+        .source_kind = .module,
+        .source =
+        \\Repro :: {}.{
+        \\    problems : { graph : { edges : List(U64) }, shared_ends : List({ edges : List(U64) }) } -> List(U64)
+        \\    problems = |input| input.shared_ends.fold(
+        \\        [],
+        \\        |acc, rule| {
+        \\            same_end = rule.edges.any(|edge_index| input.graph.edges.first() == input.graph.edges.get(edge_index))
+        \\            d = if same_end {
+        \\                acc
+        \\            } else {
+        \\                []
+        \\            }
+        \\            overlaps = input.shared_ends.any(|other| other.edges == rule.edges)
+        \\            if overlaps {
+        \\                d
+        \\            } else {
+        \\                []
+        \\            }
+        \\        },
+        \\    )
+        \\}
+        \\
+        \\main = Repro.problems({ graph: { edges: [] }, shared_ends: [] })
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
 };

@@ -3254,6 +3254,9 @@ to reconstruct this category.
 Ordinary calls and method dispatches to the same intrinsic consume this exact
 identity through one Monotype lowering path. A call-site intrinsic never becomes
 an ordinary procedure specialization merely because static dispatch selected it.
+Direct-call result queries apply the intrinsic's declared result source to the
+same callable request used by call-site lowering. They do not draft the wrapper's
+placeholder body to obtain a result type.
 
 Each checked procedure template stores separate spans of direct calls and
 dispatch relations. Evidence instantiation iterates only the relation span; it
@@ -8086,6 +8089,10 @@ argument must overlap the root's initially snapshotted argument classes before
 the edge can be classified as recursive. This is the same explicit ownership
 rule used by draft-local procedures and prevents either an accidental second
 body for the root or a merge of unrelated sibling requests.
+Local procedure requests retain the requesting body's owner separately from
+entering the declaration's lexical owner. Recursive-edge ancestry consumes the
+requesting owner; specialization identity and captures consume the declaration
+owner. Entering a declaration context must not erase the active recursive edge.
 
 Checking must also validate a mono-specialization default against the complete
 method callable type before placing direct evidence in the checked dispatch
@@ -8889,6 +8896,21 @@ Nothing else exists. Absent an explicit checker-authored callable path,
 Monotype lowering never derives a method owner from type content, never
 searches a registry by method name, and never intersects constraints to guess
 a target.
+
+A direct call expression instantiates its callee's checked function type once
+per lowered body. Every result-type read of that expression (a
+structural-equality operand sealed before its operands lower, argument evidence
+for an enclosing call, argument preparation) and the expression's own lowering
+share that one request interface, one argument preparation, and one callee
+selection, and the callee is selected and drafted against the request at the
+first read that needs the completed result, so the type a read seals is the
+type the lowered call produces. A read that carries an expected result cell
+relates it to the shared request the way a fresh instantiation would. Requests
+whose interface depends on the read itself are never shared: an iterator
+procedure's request may be replaced by a generated private interface chosen
+from its argument evidence, a hosted `Try` request may be widened by the
+expected result's error labels, and an expected cell carrying generated-private
+evidence becomes the request's own result.
 
 The `.lss` strategy consumes these plans while producing Monotype IR. The
 `.boxy` strategy does not enter Monotype; it consumes the same checked dispatch
@@ -11995,7 +12017,9 @@ parameter to owned—the mode-specialized variants callers with dying
 arguments select. Dismantle analysis outputs the exact per-procedure `u16`
 parameter-benefit mask consumed by variant admission; the caller does not
 rediscover the benefit from field reads or uniqueness checks. The base emission
-keeps the borrowed schedule untouched.
+keeps the borrowed schedule untouched, and the parameter's residual field
+domain is committed only in the emissions that apply its takes, so an emission
+that skips them releases the parameter whole.
 Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.

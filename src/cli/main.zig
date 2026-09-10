@@ -16057,7 +16057,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]
         .{ .name = "Unification requests", .count = graph.unify_requests },
         .{ .name = "Union classes joined", .count = graph.class_unions },
         .{ .name = "Active type requests", .count = graph.active_type_requests },
-        .{ .name = "Imported active type hits", .count = graph.active_type_imported_hits },
+        .{ .name = "Imported type view hits", .count = graph.imported_type_view_hits },
         .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },
         .{ .name = "Active snapshot misses", .count = graph.active_snapshot_cache_misses },
         .{ .name = "Snapshot nodes materialized", .count = graph.active_snapshot_nodes_materialized },
@@ -16080,7 +16080,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -16105,6 +16105,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]p
         .{ .name = "Nested closures prepared", .count = body.nested_closures_prepared },
         .{ .name = "Nested lookup probes", .count = body.nested_lookup_probes },
         .{ .name = "Draft commit lookup steps", .count = body.draft_commit_lookup_steps },
+        .{ .name = "Direct call request reuses", .count = body.direct_call_request_reuses },
     };
 }
 

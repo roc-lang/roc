@@ -217,7 +217,9 @@ pub const Dismantles = struct {
     /// owned (mode-specialized variants). The value is the parameter local,
     /// so emission can check the override for the current variant.
     owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
-    /// Containers behind `owned_only_takes`, keyed by the parameter local.
+    /// Containers behind `owned_only_takes`, keyed by the container local:
+    /// the parameter itself, or a projection binding whose takes that
+    /// parameter's owned override activates.
     owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
