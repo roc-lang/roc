@@ -204,6 +204,100 @@ fn arithmeticApp(comptime body: []const u8, comptime call: []const u8) []const u
         "}\n";
 }
 
+const MeetShape = struct {
+    found: bool = false,
+    is_lt: usize = 0,
+    get_unsafe: usize = 0,
+    mul_crash: usize = 0,
+    mul_proven: usize = 0,
+};
+
+const MeetSelection = enum {
+    hashed_read,
+    scaled_byte,
+};
+
+var meet_shape: MeetShape = .{};
+var meet_selection: MeetSelection = .hashed_read;
+
+fn countMeetShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    meet_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "list_get_unsafe") == 0) continue;
+        const selected = switch (meet_selection) {
+            .hashed_read => std.mem.count(u8, text, "num_shift_right_zf_by") > 0,
+            .scaled_byte => std.mem.count(u8, text, "num_int_mul_") > 0,
+        };
+        if (!selected) continue;
+        meet_shape = .{
+            .found = true,
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe"),
+            .mul_crash = std.mem.count(u8, text, "num_int_mul_crash_on_overflow"),
+            .mul_proven = std.mem.count(u8, text, "num_int_mul_proven_cannot_overflow"),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== meet proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+test "a hash bounded by a guard on entry and a shift on the back edge proves its table read" {
+    meet_selection = .hashed_read;
+    // The loop parameter meets two different derivations of the same
+    // constant bound: the entry guard and the shift's range, whose amount
+    // is a narrowing of a literal difference.
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "walk : List(U16), U64, List(U8), U64 -> U64\n" ++
+                "walk = |tab, h0, input, n| {\n" ++
+                "    if List.len(tab) < 256 or h0 >= 256 {\n" ++
+                "        return 0\n" ++
+                "    } else {\n" ++
+                "    }\n" ++
+                "    var $h = h0\n" ++
+                "    var $i = 0\n" ++
+                "    var $acc = 0.U64\n" ++
+                "    while $i < n {\n" ++
+                "        $acc = $acc.plus_wrap((List.get(tab, $h) ?? 0).to_u64())\n" ++
+                "        seq = U32.from_le_bytes(input, $i) ?? 0\n" ++
+                "        $h = seq.times_wrap(0x1E35A7BD).shr_zf_wrap((32.U64 - 8).to_u8_wrap()).to_u64()\n" ++
+                "        $i = $i + 1\n" ++
+                "    }\n" ++
+                "    $acc\n" ++
+                "}\n",
+            "walk([], 0, Str.to_utf8(Str.join_with(_args, \",\")), List.len(_args))",
+        ),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMeetShape,
+    );
+    try std.testing.expect(meet_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), meet_shape.get_unsafe);
+    // The entry guard's length test, the loop condition, and the word read's
+    // short-input test remain; the table read's bounds test is proven away.
+    try std.testing.expectEqual(@as(usize, 3), meet_shape.is_lt);
+}
+
+test "a byte merged from a read and a literal keeps its byte range for the overflow proof" {
+    meet_selection = .scaled_byte;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "cost : List(U8), U64, U64 -> U64\ncost = |bits, slot, base| base + (List.get(bits, slot) ?? 0).to_u64() * 16\n",
+            "cost(Str.to_utf8(Str.join_with(_args, \",\")), List.len(_args), 3)",
+        ),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMeetShape,
+    );
+    try std.testing.expect(meet_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), meet_shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), meet_shape.mul_proven);
+}
+
 test "checked multiply is discharged from a masked range" {
     arithmetic_selection = .masked_mul;
     try harness.expectLirInspectionWithOptions(

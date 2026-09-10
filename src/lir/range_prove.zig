@@ -398,6 +398,8 @@ const Pass = struct {
     value_roots: collections.DenseMap(NodeId, LocalId),
     loop_bounds: std.AutoHashMap(u64, LoopBounds),
     loop_facts: collections.DenseMap(JoinPointId, LoopFacts),
+    /// The round's shared root for constant bounds, made on first use.
+    zero_node: ?NodeId = null,
     /// Per merge head: last round's all-edge fact intersection in stable
     /// form, seeded when the merge must walk before its captures complete
     /// (a forced loop-body or cycle-interior region). Facts held by every
@@ -533,6 +535,7 @@ const Pass = struct {
 
     fn resetRound(self: *Pass) void {
         self.nodes.clearRetainingCapacity();
+        self.zero_node = null;
         self.facts.clearRetainingCapacity();
         self.no_overflow_facts.clearRetainingCapacity();
         self.global_facts.clearRetainingCapacity();
@@ -1392,8 +1395,15 @@ const Pass = struct {
             if (meet.bounds.len == 0) continue;
             // The edges bind different values, but each proves the same upper
             // bounds; a fresh value carrying those bounds preserves them.
-            const node = (try self.unknownFor(.u64)) orelse continue;
+            var hi = trackedIntMax(self.localLayout(meet.local)) orelse std.math.maxInt(u64);
             for (meet.bounds.slice()) |bound| {
+                const root = self.nodes.items[bound.root];
+                if (root.lo == root.hi) hi = @min(hi, root.lo + bound.c);
+            }
+            const node = (try self.freshRoot(0, hi)) orelse continue;
+            for (meet.bounds.slice()) |bound| {
+                const root = self.nodes.items[bound.root];
+                if (root.lo == root.hi) continue;
                 try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet });
             }
             try self.bind(meet.local, .{ .node = node });
@@ -1597,7 +1607,7 @@ const Pass = struct {
     fn seedMergeEnv(self: *Pass, head: CFStmtId) ResourceError!void {
         const stored = self.merge_env.get(head) orelse return;
         for (stored.items[0..stored.len]) |entry| {
-            const node = (try self.unknownFor(self.localLayout(entry.local))) orelse continue;
+            const node = (try self.metValueNode(entry.local, entry.bounds[0..entry.len])) orelse continue;
             var used = false;
             for (entry.bounds[0..entry.len]) |bound| {
                 switch (bound.base) {
@@ -1611,15 +1621,23 @@ const Pass = struct {
                         try self.addFact(.{ .a = node, .b = self.rootOf(v), .c = bound.c + self.offHiOf(v), .origin = .meet });
                         used = true;
                     },
-                    .constant => {
-                        const const_node = (try self.constNode(bound.c)) orelse continue;
-                        try self.addFact(.{ .a = node, .b = const_node, .c = 0, .origin = .meet });
-                        used = true;
-                    },
+                    // Folded into the node's own range.
+                    .constant => used = true,
                 }
             }
             if (used) try self.bind(entry.local, .{ .node = node });
         }
+    }
+
+    /// A fresh value for a met local: its layout's range narrowed by the
+    /// constant bounds, so the static-range readers (overflow proofs among
+    /// them) see those bounds without a fact query.
+    fn metValueNode(self: *Pass, local: LocalId, bounds: []const StableBound) ResourceError!?NodeId {
+        var hi = trackedIntMax(self.localLayout(local)) orelse std.math.maxInt(u64);
+        for (bounds) |bound| {
+            if (bound.base == .constant) hi = @min(hi, bound.c);
+        }
+        return try self.freshRoot(0, hi);
     }
 
     fn persistLoopBounds(self: *Pass) ResourceError!void {
@@ -1743,7 +1761,7 @@ const Pass = struct {
             try self.seedLenInvariants(stored, local);
             return;
         }
-        const node = (try self.unknownFor(.u64)) orelse return;
+        const node = (try self.metValueNode(local, stored.items[0..stored.len])) orelse return;
         var used = false;
         for (stored.items[0..stored.len]) |bound| {
             switch (bound.base) {
@@ -1759,11 +1777,8 @@ const Pass = struct {
                     try self.addFact(.{ .a = node, .b = len_node, .c = bound.c, .origin = .meet });
                     used = true;
                 },
-                .constant => {
-                    const const_node = (try self.constNode(bound.c)) orelse continue;
-                    try self.addFact(.{ .a = node, .b = const_node, .c = 0, .origin = .meet });
-                    used = true;
-                },
+                // Folded into the node's own range.
+                .constant => used = true,
                 .value_of => |scalar_local| {
                     const v = (try self.valueOf(scalar_local)) orelse continue;
                     try self.addFact(.{ .a = node, .b = self.rootOf(v), .c = bound.c + self.offHiOf(v), .origin = .meet });
@@ -1845,7 +1860,57 @@ const Pass = struct {
                 }
             }
         }
-        return bounds;
+        return try self.normalizeUpperBounds(bounds, node);
+    }
+
+    /// Bounds against literal values are keyed by one shared constant root,
+    /// with the literal folded into `c`, so two edges that bound a value by
+    /// different constants (a guard on entry, a shift's range on the back
+    /// edge, say) still meet. A root's own static range is such a bound too.
+    fn constantRoot(self: *Pass) ResourceError!?NodeId {
+        if (self.zero_node) |id| return id;
+        const id = (try self.constNode(0)) orelse return null;
+        self.zero_node = id;
+        return id;
+    }
+
+    fn normalizeUpperBounds(self: *Pass, bounds: MeetBounds, node: Node) ResourceError!MeetBounds {
+        const zero = (try self.constantRoot()) orelse return bounds;
+        var out: MeetBounds = .{};
+        var best: ?i128 = null;
+        for (bounds.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) {
+                const c = root.lo + bound.c;
+                if (best == null or c < best.?) best = c;
+            } else {
+                out.append(bound);
+            }
+        }
+        const root = self.nodes.items[node.root];
+        if (root.hi < std.math.maxInt(u64)) {
+            const c = root.hi + node.off_hi;
+            if (best == null or c < best.?) best = c;
+        }
+        if (best) |c| out.append(.{ .root = zero, .c = c });
+        return out;
+    }
+
+    fn normalizeLowerBounds(self: *Pass, bounds: MeetBounds) ResourceError!MeetBounds {
+        const zero = (try self.constantRoot()) orelse return bounds;
+        var out: MeetBounds = .{};
+        var best: ?i128 = null;
+        for (bounds.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) {
+                const c = bound.c - root.lo;
+                if (best == null or c < best.?) best = c;
+            } else {
+                out.append(bound);
+            }
+        }
+        if (best) |c| out.append(.{ .root = zero, .c = c });
+        return out;
     }
 
     /// Lower bounds `root <= value(len_node) + c` provable from the current
@@ -1873,7 +1938,7 @@ const Pass = struct {
                 }
             }
         }
-        return bounds;
+        return try self.normalizeLowerBounds(bounds);
     }
 
     /// This round's length lower bounds for a local, when its value is a
@@ -2723,6 +2788,23 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            .u16_to_u8_wrap, .u32_to_u8_wrap, .u32_to_u16_wrap, .u64_to_u8_wrap, .u64_to_u16_wrap, .u64_to_u32_wrap, .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap => {
+                // A narrowing that provably cannot wrap leaves the number
+                // alone as well: a shift amount computed from literals, say,
+                // stays a constant the shift rule can read.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |node_id| {
+                        const node = self.nodes.items[node_id];
+                        const root = self.nodes.items[node.root];
+                        const max = trackedIntMax(self.localLayout(s.target));
+                        if (max != null and root.hi + node.off_hi <= max.? and root.lo + node.off_lo >= 0) {
+                            try self.bind(s.target, .{ .node = node_id });
+                            return;
+                        }
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .u8_to_u16, .u8_to_u32, .u8_to_u64, .u16_to_u32, .u16_to_u64, .u32_to_u64 => {
                 // A widening whose target represents every value of its source
                 // leaves the number alone, so the result is the argument: it
@@ -3067,7 +3149,6 @@ const Pass = struct {
             .u16_to_i16_wrap,
             .u16_to_i16_try,
             .u16_to_i128,
-            .u16_to_u8_wrap,
             .u16_to_u8_try,
             .u16_to_u128,
             .u16_to_f32,
@@ -3096,9 +3177,7 @@ const Pass = struct {
             .u32_to_i32_wrap,
             .u32_to_i32_try,
             .u32_to_i128,
-            .u32_to_u8_wrap,
             .u32_to_u8_try,
-            .u32_to_u16_wrap,
             .u32_to_u16_try,
             .u32_to_u128,
             .u32_to_f32,
@@ -3131,11 +3210,8 @@ const Pass = struct {
             .u64_to_i64_wrap,
             .u64_to_i64_try,
             .u64_to_i128,
-            .u64_to_u8_wrap,
             .u64_to_u8_try,
-            .u64_to_u16_wrap,
             .u64_to_u16_try,
-            .u64_to_u32_wrap,
             .u64_to_u32_try,
             .u64_to_u128,
             .u64_to_f32,
@@ -3171,13 +3247,9 @@ const Pass = struct {
             .u128_to_i64_try,
             .u128_to_i128_wrap,
             .u128_to_i128_try,
-            .u128_to_u8_wrap,
             .u128_to_u8_try,
-            .u128_to_u16_wrap,
             .u128_to_u16_try,
-            .u128_to_u32_wrap,
             .u128_to_u32_try,
-            .u128_to_u64_wrap,
             .u128_to_u64_try,
             .u128_to_f32,
             .u128_to_f64,
