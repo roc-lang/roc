@@ -156,14 +156,14 @@ main = g([1.U32, 2.U32])
 			(e-block
 				(s-let
 					(p-assign (ident "_a1"))
-					(e-call (constraint-fn-var 270)
+					(e-call (constraint-fn-var 267)
 						(e-lookup-local
 							(p-assign (ident "f1")))
 						(e-lookup-local
 							(p-assign (ident "l")))))
 				(s-let
 					(p-assign (ident "_a2"))
-					(e-call (constraint-fn-var 278)
+					(e-call (constraint-fn-var 272)
 						(e-lookup-local
 							(p-assign (ident "f2")))
 						(e-lookup-local
@@ -171,7 +171,7 @@ main = g([1.U32, 2.U32])
 				(e-num (value "0")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 324)
+		(e-call (constraint-fn-var 308)
 			(e-lookup-local
 				(p-assign (ident "g")))
 			(e-list

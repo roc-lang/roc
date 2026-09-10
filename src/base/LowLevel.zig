@@ -821,6 +821,15 @@ pub const LowLevel = enum(u16) {
         }
     };
 
+    /// Operands read solely from their by-value representation. These reads
+    /// need the saved descriptor, but never its backing allocation. Other
+    /// operands retain their ordinary allocation-lifetime requirements.
+    /// Kept as static operation data rather than widening every LIR statement.
+    pub fn representationArgs(self: LowLevel) u64 {
+        if (self == .list_len or self == .list_capacity) return argMask(&.{0});
+        return 0;
+    }
+
     /// Return the explicit RC metadata for this primitive. The masks identify
     /// argument positions whose refcount may be inspected for copy-on-write.
     pub fn rcEffect(self: LowLevel) RcEffect {

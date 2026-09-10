@@ -65,9 +65,13 @@ cd "$repo_root"
 # store pair replacing a longer scalar sequence. The pinned compare loop is
 # untouched, still load, load, compare, advance with the `from_le_bytes` bounds
 # test doubling as the loop's termination.
+# Separating saved list metadata from allocation lifetime releases the root
+# argument list before the length arithmetic. ARM64 can then pair the length
+# and capacity loads into one ldp, reducing 94 to 93 instructions. The pinned
+# compare loop and vectorized List.repeat setup are unchanged.
 expectations=(
     "x64musl:102"
-    "arm64musl:94"
+    "arm64musl:93"
 )
 
 failed=0

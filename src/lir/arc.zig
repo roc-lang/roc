@@ -5921,6 +5921,7 @@ const Inserter = struct {
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
     fn noteLivenessUseLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) ResourceError!void {
+        if (self.solution.isRepresentationAlias(local)) return;
         if (self.rawLivenessBitOf(local)) |bit| try reads.set(bit);
         if (self.groupBitOf(local)) |bit| try reads.set(bit);
         if (self.valueUseBitOf(local)) |bit| try reads.set(bit);
@@ -6091,7 +6092,9 @@ const Inserter = struct {
 
             switch (self.store.getCFStmt(stmt)) {
                 .assign_ref => |assign| {
-                    try self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
+                    if (!self.solution.isRepresentationAlias(assign.target)) {
+                        try self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -6205,7 +6208,12 @@ const Inserter = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_low_level => |assign| {
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    const args = self.store.getLocalSpan(assign.args);
+                    const representation_args = assign.op.representationArgs();
+                    for (0..GuardedList.borrowLen(args)) |index| {
+                        if (index < 64 and (representation_args & argMaskBit(index)) != 0) continue;
+                        try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, GuardedList.at(args, index));
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -7505,6 +7513,106 @@ test "exact ARC sets preserve operations across persistent forks" {
 
 test "arc insertion boundary exists" {
     std.testing.refAllDecls(@This());
+}
+
+test "RC list metadata through aliases does not preserve a consumed buffer" {
+    try testListObservationAfterReserve(.list_len);
+    try testListObservationAfterReserve(.list_capacity);
+}
+
+test "RC list payload through aliases preserves a consumed buffer" {
+    try testListObservationAfterReserve(.list_get_unsafe);
+}
+
+fn testListObservationAfterReserve(op: LIR.LowLevel) (Allocator.Error || error{TestExpectedEqual})!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const old = try f.local(f.list_i64);
+    const reserved = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const reinterpreted = try f.local(f.list_i64);
+    const size = try f.local(.u64);
+    const observed = try f.local(.u64);
+    const ret = try f.ret(reserved);
+    const read = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = observed,
+        .op = op,
+        .rc_effect = op.rcEffect(),
+        .args = try f.span(if (op == .list_get_unsafe) &.{ reinterpreted, size } else &.{reinterpreted}),
+        .next = ret,
+    } });
+    const aliases = try f.assignRefLocal(alias, old, try f.assignRefReinterpret(reinterpreted, alias, read));
+    const reserve = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = reserved,
+        .op = .list_reserve,
+        .rc_effect = LIR.LowLevel.list_reserve.rcEffect(),
+        .args = try f.span(&.{ old, size }),
+        .next = aliases,
+    } });
+    const initial = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = old,
+        .op = .list_with_capacity,
+        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .args = try f.span(&.{size}),
+        .next = reserve,
+    } });
+    _ = try f.addProc(&.{size}, initial, f.list_i64);
+    try f.run();
+    try testing.expectEqual(@as(usize, if (op == .list_get_unsafe) 1 else 0), f.countRc(old, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(alias, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(reinterpreted, .incref));
+}
+
+test "RC list metadata alias survives source replacement without a unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const old = try f.local(f.list_i64);
+    const replacement = try f.local(f.list_i64);
+    const snapshot = try f.local(f.list_i64);
+    const length = try f.local(.u64);
+    const ret = try f.ret(length);
+    const read = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = length,
+        .op = .list_len,
+        .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+        .args = try f.span(&.{snapshot}),
+        .next = ret,
+    } });
+    const replace = try f.setLocal(old, replacement, .replace_existing, read);
+    const copy = try f.assignRefLocal(snapshot, old, replace);
+    const proc = try f.addProc(&.{ old, replacement }, copy, .u64);
+    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    try testing.expectEqual(@as(usize, 0), f.countRc(snapshot, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(old, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(replacement, .incref));
+}
+
+test "RC list metadata does not erase ownership of a redefined alias" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const value = try f.local(f.list_i64);
+    const size = try f.local(.u64);
+    const length = try f.local(.u64);
+    const ret = try f.ret(length);
+    const read = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = length,
+        .op = .list_len,
+        .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+        .args = try f.span(&.{value}),
+        .next = ret,
+    } });
+    const rebind = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = value,
+        .op = .list_with_capacity,
+        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .args = try f.span(&.{size}),
+        .next = read,
+    } });
+    const copy = try f.assignRefLocal(value, source, rebind);
+    const proc = try f.addProc(&.{ source, size }, copy, .u64);
+    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    try testing.expectEqual(@as(usize, 2), f.countRc(value, .decref));
 }
 
 test "RC elision removes adjacent retain release pairs" {

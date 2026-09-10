@@ -116,7 +116,7 @@ NO CHANGE
 					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 350)
+		(e-call (constraint-fn-var 342)
 			(e-lookup-local
 				(p-assign (ident "where_clause_underscore_method_type_issue_11156.Blub.parse")))
 			(e-string
