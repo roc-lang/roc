@@ -3229,6 +3229,9 @@ to reconstruct this category.
 Ordinary calls and method dispatches to the same intrinsic consume this exact
 identity through one Monotype lowering path. A call-site intrinsic never becomes
 an ordinary procedure specialization merely because static dispatch selected it.
+Direct-call result queries apply the intrinsic's declared result source to the
+same callable request used by call-site lowering. They do not draft the wrapper's
+placeholder body to obtain a result type.
 
 Each checked procedure template stores separate spans of direct calls and
 dispatch relations. Evidence instantiation iterates only the relation span; it

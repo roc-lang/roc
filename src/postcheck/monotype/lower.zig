@@ -23174,6 +23174,25 @@ const BodyContext = struct {
         };
     }
 
+    /// Apply the checked intrinsic's result source to its callable request.
+    /// Result queries and call-site lowering share these exact graph relations;
+    /// the intrinsic wrapper never supplies an ordinary procedure body.
+    fn callsiteIntrinsicRequestNode(
+        self: *BodyContext,
+        intrinsic: checked.IntrinsicId,
+        callable_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const callable = try self.graph.functionNodes(callable_node);
+        return switch (intrinsic.requestResultSource()) {
+            .declared_return => callable_node,
+            .argument => |index| blk: {
+                if (index >= callable.args.len) Common.invariant("checked intrinsic result argument was outside its callable request");
+                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact);
+                break :blk try functionRequestNode(self.graph, callable_node, callable.args, request_ret);
+            },
+        };
+    }
+
     /// Lower every syntax form for a call-site intrinsic through one exact
     /// monomorphic body generator. The checked callable request owns the
     /// specialization cells; neither source syntax nor the intrinsic wrapper
@@ -23189,19 +23208,10 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
         const args = self.checkedCallsiteIntrinsicArgs(intrinsic, operands, &checked_arg_storage);
-        var callable_node = initial_callable_node;
-        var callable = try self.graph.functionNodes(callable_node);
+        const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, initial_callable_node);
+        const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != args.len) {
             Common.invariant("checked call-site intrinsic request had an unexpected arity");
-        }
-        switch (intrinsic.requestResultSource()) {
-            .declared_return => {},
-            .argument => |index| {
-                if (index >= callable.args.len) Common.invariant("checked intrinsic result argument was outside its callable request");
-                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact);
-                callable_node = try functionRequestNode(self.graph, callable_node, callable.args, request_ret);
-                callable = try self.graph.functionNodes(callable_node);
-            },
         }
 
         if (!self.frozen_sealed_emission) {
@@ -32036,7 +32046,8 @@ const BodyContext = struct {
     /// never routes through a callee template (a divergent callee or
     /// argument expression, an argument proven uninhabited, `Iter.next` on
     /// generated iterator evidence, or `Str.inspect`) answer with the
-    /// request cell, exactly as their lowering does.
+    /// request cell, exactly as their lowering does. Call-site intrinsics
+    /// apply their checked result-source relation without drafting a wrapper.
     fn directCallCompletedResultNode(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -32049,6 +32060,10 @@ const BodyContext = struct {
             if (request.fn_node == fn_node) {
                 if (request.completed) |completed| return (try self.graph.functionNodes(completed.fn_node)).ret;
             }
+        }
+        if (self.callsiteIntrinsicForResolvedTarget(target)) |intrinsic| {
+            const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, fn_node);
+            return (try self.graph.functionNodes(callable_node)).ret;
         }
         const fn_nodes = try self.graph.functionNodes(fn_node);
         if (self.checkedExprDivergesInLoweredRuntime(call.func)) return fn_nodes.ret;
