@@ -12066,6 +12066,8 @@ pub const CheckedBodyStore = struct {
             store.view(),
             dispatch_operands,
             expr_contains_diagnostic_error,
+            false,
+            {},
         );
         for (store.stored_exprs.items, expr_contains_diagnostic_error) |*stored, contains_diagnostic_error| stored.contains_diagnostic_error = contains_diagnostic_error;
         try store.pattern_binder_by_pattern.appendSlice(allocator, pattern_binder_by_pattern);
@@ -12272,20 +12274,25 @@ pub const CheckedBodyStore = struct {
         }
     }
 
-    /// Rejection discovered when resolving a binding use must reach the same
-    /// checked facts as a source runtime error, before templates collect relations.
+    /// Rejection discovered when resolving a binding use or dispatch must reach
+    /// the same checked facts as a source runtime error before roots are requested.
     /// Successful modules never allocate this recovery scratch.
-    fn republishRejectedBindingFacts(
+    fn republishDiagnosticErrorFacts(
         self: *CheckedBodyStore,
         allocator: Allocator,
         checked_types: *const CheckedTypeStore,
         plans: *const static_dispatch.StaticDispatchPlanTable,
+        bindings: ?DiagnosticErrorBindings,
     ) Allocator.Error!void {
         const operands = try checkedDispatchOperands(allocator, self.exprCount(), plans, null);
         defer freeCheckedDispatchOperands(allocator, operands);
         const errors = try allocator.alloc(bool, self.exprCount());
         defer allocator.free(errors);
-        try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors);
+        if (bindings) |resolved| {
+            try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors, true, resolved);
+        } else {
+            try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors, false, {});
+        }
         for (self.stored_exprs.items, errors) |*stored, contains_error| stored.contains_diagnostic_error = contains_error;
 
         const exprs = try allocator.alloc(CheckedExpr, self.exprCount());
@@ -13213,12 +13220,118 @@ const DivergenceDispatchFacts = struct {
 
 const DiagnosticErrorVisitState = enum { fresh, active, done };
 
+const DiagnosticErrorBindings = struct {
+    module: CheckedModuleArtifactKey,
+    refs: *const ResolvedValueRefTable,
+    roots: *const CompileTimeRootTable,
+    const_templates: *const ConstTemplateTable,
+};
+
+/// Recovery-only edges recorded by the ordinary body traversal. Constant
+/// references can close cycles through delayed function bodies; a monotone
+/// worklist propagates errors across those cycles without recursive retries.
+const DiagnosticErrorGraph = struct {
+    const no_edge = std.math.maxInt(usize);
+    const Edge = struct { parent: usize, next: usize };
+    allocator: Allocator,
+    heads: []usize,
+    edges: std.ArrayList(Edge) = .empty,
+    lookup_values: []?CheckedExprId,
+    current: ?usize = null,
+
+    fn init(allocator: Allocator, bodies: CheckedBodyStoreView, bindings: DiagnosticErrorBindings) Allocator.Error!DiagnosticErrorGraph {
+        const heads = try allocator.alloc(usize, bodies.exprCount() + bodies.patternCount() + bodies.statementCount());
+        @memset(heads, no_edge);
+        errdefer allocator.free(heads);
+        const lookup_values = try allocator.alloc(?CheckedExprId, bodies.exprCount());
+        @memset(lookup_values, null);
+        errdefer allocator.free(lookup_values);
+        var by_pattern = collections.DenseMap(CheckedPatternId, CheckedExprId).init(allocator);
+        defer by_pattern.deinit();
+        for (bindings.roots.roots) |root| {
+            if (root.pattern) |pattern| try by_pattern.put(pattern, root.expr);
+        }
+        for (bindings.refs.records) |record| {
+            const ref = switch (record.ref) {
+                .top_level_const => |use| use.const_ref,
+                .selected_hoisted_const => |use| use.const_use.const_ref,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .imported_const,
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                .platform_required_proc,
+                .promoted_top_level_proc,
+                => continue,
+            };
+            if (!checkedArtifactKeyEql(ref.artifact, bindings.module)) continue;
+            if (bindings.const_templates.get(ref).state == .unimplemented) continue;
+            lookup_values[@intFromEnum(record.expr)] = switch (ref.owner) {
+                .top_level_binding => |owner| by_pattern.get(owner.pattern) orelse
+                    checkedArtifactInvariant("checked constant dependency had no initializer root", .{}),
+                .hoisted_expr => |owner| owner.expr,
+            };
+        }
+        return .{ .allocator = allocator, .heads = heads, .lookup_values = lookup_values };
+    }
+
+    fn deinit(self: *DiagnosticErrorGraph) void {
+        self.edges.deinit(self.allocator);
+        self.allocator.free(self.heads);
+        self.allocator.free(self.lookup_values);
+    }
+
+    fn enter(self: *DiagnosticErrorGraph, node: usize) Allocator.Error!?usize {
+        const previous = self.current;
+        if (previous) |parent| {
+            try self.edges.append(self.allocator, .{ .parent = parent, .next = self.heads[node] });
+            self.heads[node] = self.edges.items.len - 1;
+        }
+        self.current = node;
+        return previous;
+    }
+
+    fn flag(node: usize, exprs: []bool, patterns: []bool, statements: []bool) *bool {
+        if (node < exprs.len) return &exprs[node];
+        if (node - exprs.len < patterns.len) return &patterns[node - exprs.len];
+        return &statements[node - exprs.len - patterns.len];
+    }
+
+    fn propagate(self: *DiagnosticErrorGraph, exprs: []bool, patterns: []bool, statements: []bool) Allocator.Error!void {
+        var work = std.ArrayList(usize).empty;
+        defer work.deinit(self.allocator);
+        for (0..self.heads.len) |node| {
+            if (flag(node, exprs, patterns, statements).*) try work.append(self.allocator, node);
+        }
+        while (work.pop()) |node| {
+            var edge_index = self.heads[node];
+            while (edge_index != no_edge) {
+                const edge = self.edges.items[edge_index];
+                edge_index = edge.next;
+                const parent_error = flag(edge.parent, exprs, patterns, statements);
+                if (parent_error.*) continue;
+                parent_error.* = true;
+                try work.append(self.allocator, edge.parent);
+            }
+        }
+    }
+};
+
 fn publishCheckedBodyDiagnosticErrors(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
     bodies: CheckedBodyStoreView,
     dispatch_operands: []const []const CheckedExprId,
     expr_contains_diagnostic_error: []bool,
+    comptime follow_constants: bool,
+    bindings: if (follow_constants) DiagnosticErrorBindings else void,
 ) Allocator.Error!void {
     if (expr_contains_diagnostic_error.len != bodies.exprCount()) {
         checkedArtifactInvariant("checked diagnostic-error column length mismatch", .{});
@@ -13244,11 +13357,14 @@ fn publishCheckedBodyDiagnosticErrors(
     @memset(pattern_states, .fresh);
     @memset(statement_states, .fresh);
 
+    var graph = if (follow_constants) try DiagnosticErrorGraph.init(allocator, bodies, bindings) else {};
+    defer if (follow_constants) graph.deinit();
+
     var type_scan = CheckedTypeErrorScan{ .checked_types = checked_types };
     var type_errors = CheckedTypeErrorTraversal.init(allocator, &type_scan);
     defer type_errors.deinit();
 
-    var scan = CheckedBodyDiagnosticErrorScan{
+    var scan = CheckedBodyDiagnosticErrorScan(follow_constants){
         .bodies = bodies,
         .type_errors = &type_errors,
         .dispatch_operands = dispatch_operands,
@@ -13258,284 +13374,307 @@ fn publishCheckedBodyDiagnosticErrors(
         .expr_states = expr_states,
         .pattern_states = pattern_states,
         .statement_states = statement_states,
+        .graph = if (follow_constants) &graph else {},
     };
 
     var expr_raw: usize = 0;
     while (expr_raw < bodies.exprCount()) : (expr_raw += 1) {
         expr_contains_diagnostic_error[expr_raw] = try scan.expr(@enumFromInt(expr_raw));
     }
+    if (follow_constants) try graph.propagate(expr_contains_diagnostic_error, pattern_contains_diagnostic_error, statement_contains_diagnostic_error);
 }
 
-const CheckedBodyDiagnosticErrorScan = struct {
-    bodies: CheckedBodyStoreView,
-    type_errors: *CheckedTypeErrorTraversal,
-    dispatch_operands: []const []const CheckedExprId,
-    expr_contains_diagnostic_error: []bool,
-    pattern_contains_diagnostic_error: []bool,
-    statement_contains_diagnostic_error: []bool,
-    expr_states: []DiagnosticErrorVisitState,
-    pattern_states: []DiagnosticErrorVisitState,
-    statement_states: []DiagnosticErrorVisitState,
+// Specialize away all recovery bookkeeping on the ordinary publication path.
+fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
+    return struct {
+        bodies: CheckedBodyStoreView,
+        type_errors: *CheckedTypeErrorTraversal,
+        dispatch_operands: []const []const CheckedExprId,
+        expr_contains_diagnostic_error: []bool,
+        pattern_contains_diagnostic_error: []bool,
+        statement_contains_diagnostic_error: []bool,
+        expr_states: []DiagnosticErrorVisitState,
+        pattern_states: []DiagnosticErrorVisitState,
+        statement_states: []DiagnosticErrorVisitState,
+        graph: if (follow_constants) *DiagnosticErrorGraph else void,
 
-    fn expr(self: *CheckedBodyDiagnosticErrorScan, expr_id: CheckedExprId) Allocator.Error!bool {
-        const index = @intFromEnum(expr_id);
-        if (index >= self.bodies.exprCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing expression", .{});
-        switch (self.expr_states[index]) {
-            .done => return self.expr_contains_diagnostic_error[index],
-            .active => checkedArtifactInvariant("checked diagnostic-error expression relation contains a cycle", .{}),
-            .fresh => {},
+        fn expr(self: *@This(), expr_id: CheckedExprId) Allocator.Error!bool {
+            const index = @intFromEnum(expr_id);
+            if (index >= self.bodies.exprCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing expression", .{});
+            const previous = if (follow_constants) try self.graph.enter(index) else null;
+            defer if (follow_constants) {
+                self.graph.current = previous;
+            };
+            switch (self.expr_states[index]) {
+                .done => return self.expr_contains_diagnostic_error[index],
+                .active => if (follow_constants) return false else checkedArtifactInvariant("checked diagnostic-error expression relation contains a cycle", .{}),
+                .fresh => {},
+            }
+            self.expr_states[index] = .active;
+            const checked_expr = self.bodies.expr(expr_id);
+            // Total dispatch resolution can report a rejected target after source
+            // bodies were published. Preserve that explicit seed while propagating
+            // it through the same expression dependencies as other checking errors.
+            const result = (follow_constants and self.bodies.exprContainsDiagnosticError(expr_id)) or
+                (try self.type_errors.visit(checked_expr.ty)) or
+                (try self.exprDataContainsDiagnosticError(checked_expr)) or
+                (if (follow_constants) if (self.graph.lookup_values[index]) |value| try self.expr(value) else false else false);
+            self.expr_contains_diagnostic_error[index] = result;
+            self.expr_states[index] = .done;
+            return result;
         }
-        self.expr_states[index] = .active;
-        const checked_expr = self.bodies.expr(expr_id);
-        const result = (try self.type_errors.visit(checked_expr.ty)) or
-            try self.exprDataContainsDiagnosticError(checked_expr);
-        self.expr_contains_diagnostic_error[index] = result;
-        self.expr_states[index] = .done;
-        return result;
-    }
 
-    fn pattern(self: *CheckedBodyDiagnosticErrorScan, pattern_id: CheckedPatternId) Allocator.Error!bool {
-        const index = @intFromEnum(pattern_id);
-        if (index >= self.bodies.patternCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing pattern", .{});
-        switch (self.pattern_states[index]) {
-            .done => return self.pattern_contains_diagnostic_error[index],
-            .active => checkedArtifactInvariant("checked diagnostic-error pattern relation contains a cycle", .{}),
-            .fresh => {},
+        fn pattern(self: *@This(), pattern_id: CheckedPatternId) Allocator.Error!bool {
+            const index = @intFromEnum(pattern_id);
+            if (index >= self.bodies.patternCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing pattern", .{});
+            const previous = if (follow_constants) try self.graph.enter(self.bodies.exprCount() + index) else null;
+            defer if (follow_constants) {
+                self.graph.current = previous;
+            };
+            switch (self.pattern_states[index]) {
+                .done => return self.pattern_contains_diagnostic_error[index],
+                .active => if (follow_constants) return false else checkedArtifactInvariant("checked diagnostic-error pattern relation contains a cycle", .{}),
+                .fresh => {},
+            }
+            self.pattern_states[index] = .active;
+            const checked_pattern = self.bodies.pattern(pattern_id);
+            const result = (try self.type_errors.visit(checked_pattern.ty)) or
+                try self.patternDataContainsDiagnosticError(checked_pattern.data);
+            self.pattern_contains_diagnostic_error[index] = result;
+            self.pattern_states[index] = .done;
+            return result;
         }
-        self.pattern_states[index] = .active;
-        const checked_pattern = self.bodies.pattern(pattern_id);
-        const result = (try self.type_errors.visit(checked_pattern.ty)) or
-            try self.patternDataContainsDiagnosticError(checked_pattern.data);
-        self.pattern_contains_diagnostic_error[index] = result;
-        self.pattern_states[index] = .done;
-        return result;
-    }
 
-    fn statement(self: *CheckedBodyDiagnosticErrorScan, statement_id: CheckedStatementId) Allocator.Error!bool {
-        const index = @intFromEnum(statement_id);
-        if (index >= self.bodies.statementCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing statement", .{});
-        switch (self.statement_states[index]) {
-            .done => return self.statement_contains_diagnostic_error[index],
-            .active => checkedArtifactInvariant("checked diagnostic-error statement relation contains a cycle", .{}),
-            .fresh => {},
+        fn statement(self: *@This(), statement_id: CheckedStatementId) Allocator.Error!bool {
+            const index = @intFromEnum(statement_id);
+            if (index >= self.bodies.statementCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing statement", .{});
+            const previous = if (follow_constants) try self.graph.enter(self.bodies.exprCount() + self.bodies.patternCount() + index) else null;
+            defer if (follow_constants) {
+                self.graph.current = previous;
+            };
+            switch (self.statement_states[index]) {
+                .done => return self.statement_contains_diagnostic_error[index],
+                .active => if (follow_constants) return false else checkedArtifactInvariant("checked diagnostic-error statement relation contains a cycle", .{}),
+                .fresh => {},
+            }
+            self.statement_states[index] = .active;
+            const result = try self.statementDataContainsDiagnosticError(self.bodies.statement(statement_id).data);
+            self.statement_contains_diagnostic_error[index] = result;
+            self.statement_states[index] = .done;
+            return result;
         }
-        self.statement_states[index] = .active;
-        const result = try self.statementDataContainsDiagnosticError(self.bodies.statement(statement_id).data);
-        self.statement_contains_diagnostic_error[index] = result;
-        self.statement_states[index] = .done;
-        return result;
-    }
 
-    fn exprDataContainsDiagnosticError(self: *CheckedBodyDiagnosticErrorScan, checked_expr: CheckedExpr) Allocator.Error!bool {
-        return switch (checked_expr.data) {
-            .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending expression", .{}),
-            .runtime_error => true,
-            .str,
-            .list,
-            .tuple,
-            => |items| self.exprSpan(items),
-            .match_ => |match| blk: {
-                if (try self.expr(match.cond)) break :blk true;
-                for (match.branches) |branch| {
-                    for (branch.patternsSlice(self.bodies)) |branch_pattern| {
-                        if (try self.pattern(branch_pattern.pattern)) break :blk true;
+        fn exprDataContainsDiagnosticError(self: *@This(), checked_expr: CheckedExpr) Allocator.Error!bool {
+            return switch (checked_expr.data) {
+                .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending expression", .{}),
+                .runtime_error => true,
+                .str,
+                .list,
+                .tuple,
+                => |items| self.exprSpan(items),
+                .match_ => |match| blk: {
+                    if (try self.expr(match.cond)) break :blk true;
+                    for (match.branches) |branch| {
+                        for (branch.patternsSlice(self.bodies)) |branch_pattern| {
+                            if (try self.pattern(branch_pattern.pattern)) break :blk true;
+                        }
+                        if (branch.guard) |guard| {
+                            if (try self.expr(guard)) break :blk true;
+                        }
+                        if (try self.expr(branch.value)) break :blk true;
                     }
-                    if (branch.guard) |guard| {
-                        if (try self.expr(guard)) break :blk true;
+                    break :blk false;
+                },
+                .if_ => |if_| blk: {
+                    for (if_.branches) |branch| {
+                        if (try self.expr(branch.cond)) break :blk true;
+                        if (try self.expr(branch.body)) break :blk true;
                     }
-                    if (try self.expr(branch.value)) break :blk true;
-                }
-                break :blk false;
-            },
-            .if_ => |if_| blk: {
-                for (if_.branches) |branch| {
-                    if (try self.expr(branch.cond)) break :blk true;
-                    if (try self.expr(branch.body)) break :blk true;
-                }
-                break :blk try self.expr(if_.final_else);
-            },
-            .call => |call| (try self.expr(call.func)) or
-                (try self.exprSpan(call.args)) or
-                try self.type_errors.visit(call.source_fn_ty_payload),
-            .record => |record| blk: {
-                if (record.ext) |ext| {
-                    if (try self.expr(ext)) break :blk true;
-                }
-                for (record.fields) |field| {
-                    if (try self.expr(field.value)) break :blk true;
-                }
-                break :blk false;
-            },
-            .block => |block| blk: {
-                for (block.statements) |statement_id| {
-                    if (try self.statement(statement_id)) break :blk true;
-                }
-                break :blk try self.expr(block.final_expr);
-            },
-            .tag => |tag| self.exprSpan(tag.args),
-            .nominal => |nominal| self.expr(nominal.backing_expr),
-            .closure => |closure| blk: {
-                if (try self.expr(closure.lambda)) break :blk true;
-                for (closure.captures) |capture| {
-                    if (try self.pattern(capture.pattern)) break :blk true;
-                }
-                break :blk false;
-            },
-            .lambda => |lambda| (try self.patternSpan(lambda.args)) or
-                try self.expr(lambda.body),
-            .binop => |binop| (try self.expr(binop.lhs)) or
-                try self.expr(binop.rhs),
-            .unary_minus,
-            .unary_not,
-            .dbg,
-            .expect,
-            => |child| self.expr(child),
-            .field_access => |field| self.expr(field.receiver),
-            .dispatch_call,
-            .method_eq,
-            .type_dispatch_call,
-            => blk: {
-                const raw = @intFromEnum(checked_expr.id);
-                if (raw >= self.dispatch_operands.len) {
-                    checkedArtifactInvariant("checked diagnostic-error scan referenced missing dispatch operands", .{});
-                }
-                break :blk try self.exprSpan(self.dispatch_operands[raw]);
-            },
-            .interpolation => |interpolation| blk: {
-                if (try self.type_errors.visit(interpolation.step_fn_ty)) break :blk true;
-                if (try self.expr(interpolation.first)) break :blk true;
-                for (interpolation.parts) |part| {
-                    if (try self.expr(part.value)) break :blk true;
-                    if (try self.expr(part.following_segment)) break :blk true;
-                }
-                break :blk false;
-            },
-            .structural_eq => |eq| (try self.expr(eq.lhs)) or
-                try self.expr(eq.rhs),
-            .structural_hash => |hash| (try self.expr(hash.value)) or
-                try self.expr(hash.hasher),
-            .tuple_access => |access| self.expr(access.tuple),
-            .expect_err => |expect_err| self.expr(expect_err.expr),
-            .return_ => |ret| self.expr(ret.expr),
-            .for_ => |for_| (try self.pattern(for_.pattern)) or
-                (try self.expr(for_.expr)) or
-                try self.expr(for_.body),
-            .hosted_lambda => |hosted| self.patternSpan(hosted.args),
-            .run_low_level => |run| self.exprSpan(run.args),
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .bytes_literal,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .empty_list,
-            .empty_record,
-            .zero_argument_tag,
-            .crash,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            => false,
-        };
-    }
-
-    fn patternDataContainsDiagnosticError(self: *CheckedBodyDiagnosticErrorScan, data: CheckedPatternData) Allocator.Error!bool {
-        return switch (data) {
-            .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending pattern", .{}),
-            .runtime_error => true,
-            .as => |as| self.pattern(as.pattern),
-            .applied_tag => |tag| self.patternSpan(tag.args),
-            .nominal => |nominal| self.pattern(nominal.backing_pattern),
-            .record_destructure => |destructs| blk: {
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required => |child_pattern| child_pattern,
-                        .sub_pattern => |child_pattern| child_pattern,
-                        .rest => |child_pattern| child_pattern,
-                    };
-                    if (try self.pattern(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .list => |list| (try self.patternSpan(list.patterns)) or blk: {
-                const rest = list.rest orelse break :blk false;
-                const rest_pattern = rest.pattern orelse break :blk false;
-                break :blk try self.pattern(rest_pattern);
-            },
-            .tuple => |items| self.patternSpan(items),
-            .numeral_literal => |literal| blk: {
-                const conversion = literal.conversion orelse break :blk false;
-                break :blk try self.expr(conversion);
-            },
-            .str_literal => |literal| blk: {
-                const conversion = literal.conversion orelse break :blk false;
-                break :blk try self.expr(conversion);
-            },
-            .str_interpolation => |str| blk: {
-                for (str.steps) |step| {
-                    const capture = step.capture orelse continue;
-                    if (try self.pattern(capture)) break :blk true;
-                }
-                break :blk false;
-            },
-            .assign,
-            .underscore,
-            => false,
-        };
-    }
-
-    fn statementDataContainsDiagnosticError(self: *CheckedBodyDiagnosticErrorScan, data: CheckedStatementData) Allocator.Error!bool {
-        return switch (data) {
-            .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending statement", .{}),
-            .runtime_error => true,
-            .decl => |decl| (try self.pattern(decl.pattern)) or
-                try self.expr(decl.expr),
-            .var_ => |var_| (try self.pattern(var_.pattern)) or
-                try self.expr(var_.expr),
-            .var_uninitialized => |var_| self.pattern(var_.pattern),
-            .reassign => |reassign| (try self.pattern(reassign.pattern)) or
-                try self.expr(reassign.expr),
-            .dbg,
-            .expr,
-            .expect,
-            => |expr_id| self.expr(expr_id),
-            .for_ => |for_| (try self.pattern(for_.pattern)) or
-                (try self.expr(for_.expr)) or
-                try self.expr(for_.body),
-            .while_ => |while_| (try self.expr(while_.cond)) or
-                try self.expr(while_.body),
-            .infinite_loop => |loop| (try self.expr(loop.cond)) or
-                try self.expr(loop.body),
-            .breakable_loop => |loop| (try self.expr(loop.cond)) or
-                try self.expr(loop.body),
-            .return_ => |ret| self.expr(ret.expr),
-            .crash,
-            .break_,
-            .import_,
-            .alias_decl,
-            .where_alias_decl,
-            .nominal_decl,
-            .type_anno,
-            .type_var_alias,
-            => false,
-        };
-    }
-
-    fn exprSpan(self: *CheckedBodyDiagnosticErrorScan, exprs: []const CheckedExprId) Allocator.Error!bool {
-        for (exprs) |expr_id| {
-            if (try self.expr(expr_id)) return true;
+                    break :blk try self.expr(if_.final_else);
+                },
+                .call => |call| (try self.expr(call.func)) or
+                    (try self.exprSpan(call.args)) or
+                    try self.type_errors.visit(call.source_fn_ty_payload),
+                .record => |record| blk: {
+                    if (record.ext) |ext| {
+                        if (try self.expr(ext)) break :blk true;
+                    }
+                    for (record.fields) |field| {
+                        if (try self.expr(field.value)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .block => |block| blk: {
+                    for (block.statements) |statement_id| {
+                        if (try self.statement(statement_id)) break :blk true;
+                    }
+                    break :blk try self.expr(block.final_expr);
+                },
+                .tag => |tag| self.exprSpan(tag.args),
+                .nominal => |nominal| self.expr(nominal.backing_expr),
+                .closure => |closure| blk: {
+                    if (try self.expr(closure.lambda)) break :blk true;
+                    for (closure.captures) |capture| {
+                        if (try self.pattern(capture.pattern)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .lambda => |lambda| (try self.patternSpan(lambda.args)) or
+                    try self.expr(lambda.body),
+                .binop => |binop| (try self.expr(binop.lhs)) or
+                    try self.expr(binop.rhs),
+                .unary_minus,
+                .unary_not,
+                .dbg,
+                .expect,
+                => |child| self.expr(child),
+                .field_access => |field| self.expr(field.receiver),
+                .dispatch_call,
+                .method_eq,
+                .type_dispatch_call,
+                => blk: {
+                    const raw = @intFromEnum(checked_expr.id);
+                    if (raw >= self.dispatch_operands.len) {
+                        checkedArtifactInvariant("checked diagnostic-error scan referenced missing dispatch operands", .{});
+                    }
+                    break :blk try self.exprSpan(self.dispatch_operands[raw]);
+                },
+                .interpolation => |interpolation| blk: {
+                    if (try self.type_errors.visit(interpolation.step_fn_ty)) break :blk true;
+                    if (try self.expr(interpolation.first)) break :blk true;
+                    for (interpolation.parts) |part| {
+                        if (try self.expr(part.value)) break :blk true;
+                        if (try self.expr(part.following_segment)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .structural_eq => |eq| (try self.expr(eq.lhs)) or
+                    try self.expr(eq.rhs),
+                .structural_hash => |hash| (try self.expr(hash.value)) or
+                    try self.expr(hash.hasher),
+                .tuple_access => |access| self.expr(access.tuple),
+                .expect_err => |expect_err| self.expr(expect_err.expr),
+                .return_ => |ret| self.expr(ret.expr),
+                .for_ => |for_| (try self.pattern(for_.pattern)) or
+                    (try self.expr(for_.expr)) or
+                    try self.expr(for_.body),
+                .hosted_lambda => |hosted| self.patternSpan(hosted.args),
+                .run_low_level => |run| self.exprSpan(run.args),
+                .numeral,
+                .str_from_quote,
+                .str_segment,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .empty_list,
+                .empty_record,
+                .zero_argument_tag,
+                .crash,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                => false,
+            };
         }
-        return false;
-    }
 
-    fn patternSpan(self: *CheckedBodyDiagnosticErrorScan, patterns: []const CheckedPatternId) Allocator.Error!bool {
-        for (patterns) |pattern_id| {
-            if (try self.pattern(pattern_id)) return true;
+        fn patternDataContainsDiagnosticError(self: *@This(), data: CheckedPatternData) Allocator.Error!bool {
+            return switch (data) {
+                .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending pattern", .{}),
+                .runtime_error => true,
+                .as => |as| self.pattern(as.pattern),
+                .applied_tag => |tag| self.patternSpan(tag.args),
+                .nominal => |nominal| self.pattern(nominal.backing_pattern),
+                .record_destructure => |destructs| blk: {
+                    for (destructs) |destruct| {
+                        const child = switch (destruct.kind) {
+                            .required => |child_pattern| child_pattern,
+                            .sub_pattern => |child_pattern| child_pattern,
+                            .rest => |child_pattern| child_pattern,
+                        };
+                        if (try self.pattern(child)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .list => |list| (try self.patternSpan(list.patterns)) or blk: {
+                    const rest = list.rest orelse break :blk false;
+                    const rest_pattern = rest.pattern orelse break :blk false;
+                    break :blk try self.pattern(rest_pattern);
+                },
+                .tuple => |items| self.patternSpan(items),
+                .numeral_literal => |literal| blk: {
+                    const conversion = literal.conversion orelse break :blk false;
+                    break :blk try self.expr(conversion);
+                },
+                .str_literal => |literal| blk: {
+                    const conversion = literal.conversion orelse break :blk false;
+                    break :blk try self.expr(conversion);
+                },
+                .str_interpolation => |str| blk: {
+                    for (str.steps) |step| {
+                        const capture = step.capture orelse continue;
+                        if (try self.pattern(capture)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .assign,
+                .underscore,
+                => false,
+            };
         }
-        return false;
-    }
-};
+
+        fn statementDataContainsDiagnosticError(self: *@This(), data: CheckedStatementData) Allocator.Error!bool {
+            return switch (data) {
+                .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending statement", .{}),
+                .runtime_error => true,
+                .decl => |decl| (try self.pattern(decl.pattern)) or
+                    try self.expr(decl.expr),
+                .var_ => |var_| (try self.pattern(var_.pattern)) or
+                    try self.expr(var_.expr),
+                .var_uninitialized => |var_| self.pattern(var_.pattern),
+                .reassign => |reassign| (try self.pattern(reassign.pattern)) or
+                    try self.expr(reassign.expr),
+                .dbg,
+                .expr,
+                .expect,
+                => |expr_id| self.expr(expr_id),
+                .for_ => |for_| (try self.pattern(for_.pattern)) or
+                    (try self.expr(for_.expr)) or
+                    try self.expr(for_.body),
+                .while_ => |while_| (try self.expr(while_.cond)) or
+                    try self.expr(while_.body),
+                .infinite_loop => |loop| (try self.expr(loop.cond)) or
+                    try self.expr(loop.body),
+                .breakable_loop => |loop| (try self.expr(loop.cond)) or
+                    try self.expr(loop.body),
+                .return_ => |ret| self.expr(ret.expr),
+                .crash,
+                .break_,
+                .import_,
+                .alias_decl,
+                .where_alias_decl,
+                .nominal_decl,
+                .type_anno,
+                .type_var_alias,
+                => false,
+            };
+        }
+
+        fn exprSpan(self: *@This(), exprs: []const CheckedExprId) Allocator.Error!bool {
+            for (exprs) |expr_id| {
+                if (try self.expr(expr_id)) return true;
+            }
+            return false;
+        }
+
+        fn patternSpan(self: *@This(), patterns: []const CheckedPatternId) Allocator.Error!bool {
+            for (patterns) |pattern_id| {
+                if (try self.pattern(pattern_id)) return true;
+            }
+            return false;
+        }
+    };
+}
 
 /// Runtime divergence for one checked body under a concrete dispatch-evidence
 /// vector. CheckedBodyStore owns dependency propagation; specialization
@@ -17525,7 +17664,10 @@ const EvidencePass = struct {
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
-    checked_bodies: *const CheckedBodyStore,
+    checked_bodies: *CheckedBodyStore,
+    /// Only actual rejected sites request diagnostic propagation. This flag
+    /// gates recovery work; it never suppresses independent compile-time roots.
+    rejected_dispatches: bool = false,
     local_method_registry: *const static_dispatch.MethodRegistry,
     import_views: CheckedImportViews,
     plan_table: *static_dispatch.StaticDispatchPlanTable,
@@ -17612,7 +17754,7 @@ const EvidencePass = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         checked_types: *const CheckedTypePublication,
-        checked_bodies: *const CheckedBodyStore,
+        checked_bodies: *CheckedBodyStore,
         local_method_registry: *const static_dispatch.MethodRegistry,
         import_views: CheckedImportViews,
         plan_table: *static_dispatch.StaticDispatchPlanTable,
@@ -18736,6 +18878,10 @@ const EvidencePass = struct {
             .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => null,
         };
         self.plan_resolved[raw] = true;
+        if (plan.resolution == .checked_error) {
+            self.checked_bodies.stored_exprs.items[@intFromEnum(plan.expr)].contains_diagnostic_error = true;
+            self.rejected_dispatches = true;
+        }
     }
 
     fn resolveIteratorPlan(self: *EvidencePass, plan_id: static_dispatch.IteratorForPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
@@ -19799,7 +19945,7 @@ fn resolveTotalDispatchPlans(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
-    checked_bodies: *const CheckedBodyStore,
+    checked_bodies: *CheckedBodyStore,
     local_method_registry: *const static_dispatch.MethodRegistry,
     import_views: CheckedImportViews,
     plan_table: *static_dispatch.StaticDispatchPlanTable,
@@ -19812,7 +19958,7 @@ fn resolveTotalDispatchPlans(
     platform_requirement_solutions: []const requirement_solution.SolutionInput,
     platform_requirement_root_evidence: []artifact_serialize.Span,
     template_root_evidence: []?artifact_serialize.Span,
-) Allocator.Error!void {
+) Allocator.Error!bool {
     var pass = EvidencePass.init(
         allocator,
         module,
@@ -19834,6 +19980,7 @@ fn resolveTotalDispatchPlans(
     );
     defer pass.deinit();
     try pass.run();
+    return pass.rejected_dispatches;
 }
 
 fn sealConstEvalTemplatesForRoots(
@@ -25842,6 +25989,16 @@ fn publishCompileTimeRootRequestEligibility(
         // only add a secondary compile-time crash for its replacement node.
         const eligible = context_free and !checked_bodies.exprContainsDiagnosticError(root.expr);
         root.request_eligibility = if (eligible) .eligible else .ineligible;
+    }
+}
+
+/// Solved root types are unchanged by diagnostic propagation. Only remove
+/// newly erroneous requests; do not repeat context-free type traversal.
+fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, roots: []CompileTimeRoot) void {
+    for (roots) |*root| {
+        if (compileTimeRootRequestIsEligible(root.*) and bodies.exprContainsDiagnosticError(root.expr)) {
+            root.request_eligibility = .ineligible;
+        }
     }
 }
 
@@ -34979,8 +35136,8 @@ pub fn publishFromTypedModule(
 
     if (rejected_bindings) {
         try checked_bodies.propagateRejectedCallableBindings(allocator, artifact_key, &resolved_value_refs, &top_level_procedure_bindings, &callable_eval_templates, &compile_time_roots);
-        try checked_bodies.republishRejectedBindingFacts(allocator, checked_types, &static_dispatch_plans);
-        try publishCompileTimeRootRequestEligibility(allocator, module, &checked_type_publication, checked_bodies, compile_time_roots.roots);
+        try checked_bodies.republishDiagnosticErrorFacts(allocator, checked_types, &static_dispatch_plans, null);
+        excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
     }
 
     var template_iterator_refs = TemplateIteratorRefs{};
@@ -35011,7 +35168,7 @@ pub fn publishFromTypedModule(
     defer allocator.free(template_root_evidence);
     @memset(template_root_evidence, null);
 
-    try resolveTotalDispatchPlans(
+    const rejected_dispatches = try resolveTotalDispatchPlans(
         allocator,
         module,
         &canonical_names,
@@ -35049,7 +35206,17 @@ pub fn publishFromTypedModule(
         &static_dispatch_plans,
         &checked_procedure_templates,
     );
-    try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
+    if (rejected_dispatches) {
+        try checked_bodies.republishDiagnosticErrorFacts(allocator, checked_types, &static_dispatch_plans, .{
+            .module = artifact_key,
+            .refs = &resolved_value_refs,
+            .roots = &compile_time_roots,
+            .const_templates = &const_templates,
+        });
+        excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
+    } else {
+        try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
+    }
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -37598,7 +37765,7 @@ test "checked diagnostic-error fact propagates through body dependencies and typ
 
     const dispatch_operands = [_][]const CheckedExprId{ &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &dispatch_operand };
     var contains_diagnostic_error = [_]bool{false} ** exprs.len;
-    try publishCheckedBodyDiagnosticErrors(gpa, &checked_types, store.view(), &dispatch_operands, &contains_diagnostic_error);
+    try publishCheckedBodyDiagnosticErrors(gpa, &checked_types, store.view(), &dispatch_operands, &contains_diagnostic_error, false, {});
 
     try std.testing.expectEqualSlices(bool, &.{ true, true, true, true, false, true, true }, &contains_diagnostic_error);
 }

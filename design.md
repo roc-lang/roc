@@ -8731,6 +8731,28 @@ declaration, so the distinction lives in the lookup result, not in
 `MethodTargetKind`. `EvidencePass` resolves a `rejected` lookup to
 `checked_error` and adds no second diagnostic at the dispatch site.
 
+Total dispatch resolution also records a diagnostic-error seed on that exact
+checked expression. A literal's earlier `custom_dispatch` selection proves its
+callable relation, but its selected declaration can subsequently be rejected,
+including by final strict-demand cycle checking. Once all plans are resolved,
+checked-module construction propagates these seeds through the existing body
+diagnostic analysis and refreshes root eligibility before creating executable
+root requests. Both the conversion root and any enclosing constant roots are
+ineligible; independent roots still evaluate. `unreachable` is not a diagnostic
+seed. The existing expression fact carries this state through serialization;
+the resolution pass merely records whether recovery propagation is needed, so
+successful modules allocate no new index and perform no additional traversal.
+The ordinary body scan is specialized at compile time to omit recovery-graph
+bookkeeping. Error propagation only removes newly erroneous root requests; it
+does not repeat the already-completed context-free type traversal.
+On that recovery path, resolved local constant references supply initializer
+dependencies as well as the ordinary expression, pattern, and statement edges.
+The body traversal records reverse edges in contiguous scratch storage, and a
+monotone worklist propagates each new error once. References through delayed
+function bodies may form cycles; their provisional traversal answers are not
+final until the worklist closes the graph. Independent cycles remain error-free.
+This scratch is released before compile-time evaluation and is never serialized.
+
 `checked_error` and `unreachable` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
 call, so neither can return a dispatch result value. For `checked_error`, this is
@@ -8747,6 +8769,9 @@ or lowers the body. Callable, dispatcher, operand, and result types may be
 instantiated only after this callable-or-crash gate. The crash branch uses the
 contextual result cell solely to represent the non-returning expression; it
 never instantiates the rejected callable's type or contributes a type relation.
+Literal-conversion lowering, including its compile-time entry wrapper, passes
+the same callable proof into raw conversion lowering. It cannot instantiate a
+conversion callable or request its target through an unchecked plan.
 
 An ordinary function-valued binding whose bound expression is already a checked
 `runtime_error` likewise has no callable target. Initial checked-binding construction
