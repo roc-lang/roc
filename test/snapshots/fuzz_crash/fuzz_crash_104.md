@@ -48,7 +48,8 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 e = {
-	(0).0.{}
+	(0) #
+		.0.{}
 }
 ~~~
 # CANONICALIZE

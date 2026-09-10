@@ -17870,7 +17870,9 @@ const EvidencePass = struct {
             if (!solution.is_function) continue;
 
             params.clearRetainingCapacity();
-            try self.enumerateParams(solution.solved_var, &params);
+            // The app definition owns the complete scheme, including captured
+            // codec requirements absent from the platform's copied type root.
+            try self.enumerateParams(ModuleEnv.varFrom(solution.def), &params);
             var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
             defer entries.deinit(self.allocator);
             try entries.ensureTotalCapacity(self.allocator, params.items.len);
@@ -32271,6 +32273,13 @@ pub const CheckedModuleArtifact = struct {
             if (solution.value_kind != .procedure_value) continue;
             if (@as(u64, solution.root_evidence.start) + solution.root_evidence.len > self.static_dispatch_plans.evidence_refs.len) {
                 std.debug.panic("checked artifact invariant violated: platform requirement root evidence was outside the app evidence table", .{});
+            }
+            // Direct procedures consume this vector as template arguments.
+            // Evaluated callable bindings instead retain the returned value's
+            // evidence in their compile-time root payload.
+            if (self.checked_procedure_templates.lookupByDef(solution.def)) |template_ref| {
+                const template = self.checked_procedure_templates.get(template_ref.template);
+                std.debug.assert(solution.root_evidence.len == template.evidence_params.len);
             }
         }
 

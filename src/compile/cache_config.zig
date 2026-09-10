@@ -186,7 +186,10 @@ pub const Constants = struct {
     ///     classifications across checked-environment rechecks.
     /// 86: Hoisted-root pruning resolves associated lookup identities through
     ///     the expression's owning module, including imported callable bodies.
-    pub const CACHE_VERSION = 86;
+    /// 87: Pure function types carry no effect dependencies; unifying an
+    ///     effect-polymorphic function with a pure one makes each dependency
+    ///     pure.
+    pub const CACHE_VERSION = 87;
 };
 
 /// Configuration for the Roc cache system.

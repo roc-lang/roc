@@ -11938,14 +11938,16 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
         .err, .field_presence => .pure,
         .flex, .rigid => .unresolved,
         .structure => |flat| switch (flat) {
-            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                var result: FunctionEffectState = switch (flat) {
-                    .fn_pure => .pure,
-                    .fn_effectful => .effectful,
-                    .fn_unbound => if (func.effect_deps.len() == 0) .unresolved else .pure,
-                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
-                };
-                if (result == .effectful) break :blk result;
+            // A pure function type carries no effect dependencies: unifying an
+            // effect-polymorphic function with a pure one makes each
+            // dependency pure and discharges the formula.
+            .fn_pure => |func| blk: {
+                std.debug.assert(func.effect_deps.len() == 0);
+                break :blk .pure;
+            },
+            .fn_effectful => .effectful,
+            .fn_unbound => |func| blk: {
+                var result: FunctionEffectState = if (func.effect_deps.len() == 0) .unresolved else .pure;
 
                 var i: u32 = 0;
                 while (i < func.effect_deps.len()) : (i += 1) {
@@ -11974,6 +11976,9 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
 
 fn recordCurrentFunctionEffectDependency(self: *Self, function_var: Var) Allocator.Error!void {
     if (self.function_effect_dependency_frame_starts.items.len == 0) return;
+    // The unifier rewrites a dependency in place when a pure function type
+    // demands it, which needs the dependency to already have a function shape.
+    std.debug.assert(self.varIsFunctionType(function_var) or self.types.resolveVar(function_var).desc.content == .err);
     const root = self.types.resolveVar(function_var).var_;
     const start = self.function_effect_dependency_frame_starts.items[self.function_effect_dependency_frame_starts.items.len - 1];
     for (self.pending_function_effect_dependencies.items[start..]) |existing| {
@@ -14028,7 +14033,7 @@ fn runGroupBoundary(
         if (replayed_before_capture or replayed_after_capture) continue;
         if (self.pending_dispatch_targets.items.len == pending_before) break;
     }
-    try self.finalizeFunctionEffectsAtBoundary(roots, env);
+    try self.finalizeFunctionEffectsAtBoundary(roots);
     // Invariant D: every remaining deferred dispatch constraint targets a
     // checked def, an annotated scheme, or a still-flex receiver.
     std.debug.assert(self.pending_dispatch_targets.items.len == self.currentFramePendingTargetsTop());
@@ -14039,7 +14044,7 @@ fn runGroupBoundary(
 /// scheme generalizes. Unresolved results remain `fn_unbound` because their
 /// dependency formula is part of the generalized scheme and will be resolved
 /// after call-site arguments instantiate and unify it.
-fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
+fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot) Allocator.Error!void {
     for (roots) |root| {
         const resolved = self.types.resolveVar(root.interface);
         const flat = switch (resolved.desc.content) {
@@ -14049,15 +14054,9 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot, e
         if (try self.functionEffectState(resolved.var_) != .effectful) continue;
         switch (flat) {
             .fn_unbound => |func| try self.types.setVarContent(resolved.var_, .{ .structure = .{ .fn_effectful = func } }),
-            .fn_pure => |func| {
-                // The body was still effect-polymorphic when it met a pure
-                // annotation, but a dependency became positive later in this
-                // recursive group. Re-run ordinary effect unification now so
-                // the annotation mismatch is reported instead of mutating the
-                // annotated type behind the user's back.
-                const effectful = try self.freshFromContent(.{ .structure = .{ .fn_effectful = func } }, env, self.getRegionAt(resolved.var_));
-                _ = try self.unifyInContext(resolved.var_, effectful, env, .type_annotation);
-            },
+            // A pure function type has no effect dependencies, so its effect
+            // state is always pure.
+            .fn_pure => unreachable,
             .fn_effectful => {},
             .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => continue,
         }

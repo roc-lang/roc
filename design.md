@@ -2368,6 +2368,14 @@ or checked-error. `platformRequirementSolutionTableFromInputs` and
 `EvidencePass.run` consume that verdict directly; they never infer success by
 inspecting solved type shape or by comparing the eventual runtime value kind.
 
+A procedure requirement's root evidence follows the complete scheme of its
+recorded app definition, including captured codec requirements. The copied
+platform requirement type supplies the solved interface, not the scheme's
+evidence identity. Checked output validates a direct procedure's root vector
+against the app template's parameter count. Monotype selects this root evidence
+before materializing an edge for a direct call, procedure value, or interface
+relation; downstream specialization receives only that selected edge.
+
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
 that wants to expose an app-provided value to its host defines an explicit
@@ -4319,6 +4327,8 @@ const IteratorKind = enum(u8) {
     drop_first,
     concat,
     append,
+    with_index,
+    step_by,
     forced_dynamic,
 };
 
@@ -4954,6 +4964,24 @@ pattern, but that unused output identity does not replace the known-value
 substitution. Cloning never relies on later lowering to reconstruct lexical
 scope from reused local ids: distinct emitted binders are distinct explicit
 identities before Lambda Solved or LIR lowering consumes them.
+
+Every SpecConstr clone reads only source: the expressions that existed when
+the clone began, plus the templates it builds from source parts in order to
+clone them, such as a let-of-case dispatch. Emitted output carries rewrite
+decisions the clone already made. A
+retained call is one an active inline frame declined, and a selected arm is
+one the value evidence resolved; reading output back as source repeats those
+decisions outside the frames and budgets that justified them. A retained
+self-call re-read that way inlines again with no active frame for its callee,
+and only the code-growth fuel ends the cycle. Case-of-case distribution
+therefore consumes the symbolic arm values recorded when each `match` or `if`
+was emitted: it selects outer arms and recurses through branch-built arms from
+those values, keeps an emitted arm's statements as they stand, and leaves an
+arm whose value is opaque as a residual match. Strict bindings introduced by
+distribution join the retained arm statements in the same block, so another
+distribution keeps every binding referenced by the recorded result value.
+A Debug validator rejects any clone-source read of an expression the clone
+emitted.
 
 #### Constant Storage
 
@@ -7796,6 +7824,9 @@ Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
 retained hidden method contracts. Descendant contexts then use ordinary live
 bindings; decoding stored evidence never attaches graph cells to durable data.
+An initializer template with no requirements derives no method evidence. A use
+of its returned value can still carry a checked recipe for a callable stored
+inside that value; that recipe is separate from the initializer edge.
 Restoring a compile-time evaluation template installs its checked scheme and
 fresh substitution in the body context even when its method evidence is already
 supplied or empty. Pending callable evaluation wrappers install the same frame

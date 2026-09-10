@@ -466,6 +466,9 @@ const CustomCase = enum {
     glue_unlisted_hosted_declaration,
     glue_try_box_model_unknown_payload,
     glue_unresolved_by_value_errors,
+    glue_record_function_field,
+    glue_recursive_slot_box,
+    glue_generic_callable_arg,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
@@ -959,6 +962,9 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: platform hosted declaration missing from the hosted section stops without panic", .body = .{ .custom = .glue_unlisted_hosted_declaration } },
     .{ .id = 0, .suite = .glue, .name = "issue 9824: ZigGlue sizes an unknown Box payload as a pointer at both widths", .body = .{ .custom = .glue_try_box_model_unknown_payload } },
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: function argument mentioning a generic type parameter is a glue error", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -3087,6 +3093,9 @@ fn runCustomCase(
         .glue_unlisted_hosted_declaration => customGlueUnlistedHostedDeclaration(io, allocator, &env, &timer, timeout_ms),
         .glue_try_box_model_unknown_payload => customGlueTryBoxModelUnknownPayload(io, allocator, &env, &timer, timeout_ms),
         .glue_unresolved_by_value_errors => customGlueUnresolvedByValueErrors(io, allocator, &env, &timer, timeout_ms),
+        .glue_record_function_field => customGlueRecordFunctionField(io, allocator, &env, &timer, timeout_ms),
+        .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
+        .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -9651,6 +9660,133 @@ fn customGlueUnresolvedByValueErrors(io: std.Io, allocator: Allocator, env: *con
     return null;
 }
 
+fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A platform whose provided entrypoint returns an opaque nominal record
+    // holding a function-typed field. Layout selection stores such a record
+    // behind a compiler-owned box (the recursive-slot storage for closures
+    // that capture the record), so the host receives a pointer to a payload
+    // struct whose only field is an erased callable. Glue describes exactly
+    // that committed layout.
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/record-function-field/main.roc" },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "invariant violated" },
+            .{ .stream = .stderr, .text = "Segmentation fault" },
+            .{ .stream = .stderr, .text = "SIGSEGV" },
+        },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
+
+    // The payload struct is one pointer-sized erased callable at both widths,
+    // the entrypoint returns a pointer to it, releasing the returned box
+    // composes the box policy over the payload's policy, and the payload's
+    // own decref and incref release and retain the callable.
+    for ([_][]const u8{
+        "    @\"first\": RocErasedCallable,",
+        "        decrefErasedCallable(value.@\"first\", roc_host);",
+        "        increfErasedCallable(value.@\"first\", amount);",
+        "if (@sizeOf(Value) != 8) @compileError",
+        "if (@sizeOf(Value) != 4) @compileError",
+        "pub extern fn shape(arg0: *anyopaque) callconv(.c) *Value;",
+        "if (T == *Value) return RocBoxRelease(*Value, Value, ValueRelease);",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig file missing boxed opaque record ABI text {s}", .{needle});
+        }
+    }
+    return null;
+}
+
+fn customGlueRecursiveSlotBox(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Inside a recursive type group the compiler boxes struct-to-child edges
+    // as recursive-slot storage while each type's own layout stays by value,
+    // so the same checked type is boxed in one slot and inline in another.
+    // Glue gives every boxed slot a box wrapper entry over the by-value type,
+    // whichever parent reaches the type first, and the generated Zig's
+    // comptime size assertions hold for every declared type.
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/recursive-slot-box/main.roc" },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "invariant violated" },
+        },
+    })) |failure| return failure;
+
+    const test_zig_content = std.fmt.allocPrint(allocator,
+        \\const std = @import("std");
+        \\const abi = @import("{s}");
+        \\comptime {{
+        \\    std.testing.refAllDecls(abi);
+        \\}}
+        \\export fn _roc_glue_recursive_slot_check() usize {{
+        \\    return @sizeOf(abi.TypesValue) + @sizeOf(abi.TypesNode) + @sizeOf(abi.TypesTree) + @sizeOf(abi.TypesChain);
+        \\}}
+    , .{"roc_platform_abi.zig"}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_content }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+    const emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{test_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate emit flag: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        test_zig_path,
+        emit_flag,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    const rust_output_dir = createWorkSubdir(io, allocator, env, "rust-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/RustGlue.roc", rust_output_dir, "test/glue/recursive-slot-box/main.roc" },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "invariant violated" },
+        },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A function stored inside a generic nominal whose argument mentions the
+    // type parameter inside a record has no checked type for its
+    // instantiation, so glue cannot ask the compiler for that argument's
+    // layout. Glue reports the type and the boundary value instead of
+    // describing the uninstantiated template to the host.
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/generic-callable-arg/main.roc" },
+        .exit = .failure,
+        .contains = &.{
+            .{ .stream = .stderr, .text = "stored inside a generic type" },
+            .{ .stream = .stderr, .text = "y : U64" },
+            .{ .stream = .stderr, .text = "in the signature of `handler`" },
+        },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "invariant violated" },
+        },
+    })) |failure| return failure;
+    return null;
+}
+
 fn customGlueCHeader(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
@@ -10446,8 +10582,8 @@ fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *con
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
     for ([_][]const u8{
-        "@\"init!\": *anyopaque",
-        "@\"render!\": *anyopaque",
+        "@\"init!\": RocErasedCallable",
+        "@\"render!\": RocErasedCallable",
         "pub const HostSet_mouseArgs = if (@sizeOf(usize) == 4) extern struct",
         "pub extern fn roc_host_set_mouse(arg0: HostSet_mouseArgs) callconv(.c) void;",
     }) |needle| {
