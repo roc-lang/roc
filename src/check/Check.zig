@@ -72241,6 +72241,147 @@ fn recordUpdateRootAuthorityFreshContext(test_env: anytype) ImportResolution {
     );
 }
 
+const record_update_unset_only_owner_retirement_source =
+    \\import RecordUpdateUnsetOnlyOwnerA exposing [Status]
+    \\
+    \\first : a -> a where [a.Status]
+    \\first = |value| { ..value, x: _ }
+;
+
+const RecordUpdateUnsetOnlyOwnerTopology = struct {
+    record_expr: CIR.Expr.Idx,
+    lookup_expr: CIR.Expr.Idx,
+    unset_field: CIR.UnsetField.Idx,
+};
+
+fn recordUpdateUnsetOnlyOwnerTopology(
+    test_env: anytype,
+) error{TestUnexpectedResult}!RecordUpdateUnsetOnlyOwnerTopology {
+    const cir = test_env.module_env;
+    const def_idx = test_env.can.explicitRootDefByName("first") orelse
+        return error.TestUnexpectedResult;
+    const def = cir.store.getDef(def_idx);
+    const lambda = cir.store.getExpr(def.expr);
+    if (lambda != .e_lambda) return error.TestUnexpectedResult;
+    const patterns = cir.store.slicePatterns(lambda.e_lambda.args);
+    if (patterns.len != 1 or cir.store.getPattern(patterns[0]) != .assign) {
+        return error.TestUnexpectedResult;
+    }
+    const record_expr = lambda.e_lambda.body;
+    const record = cir.store.getExpr(record_expr);
+    if (record != .e_record or record.e_record.ext == null or
+        cir.store.sliceRecordFields(record.e_record.fields).len != 0)
+    {
+        return error.TestUnexpectedResult;
+    }
+    const unsets = cir.store.sliceUnsetFields(record.e_record.unsets);
+    if (unsets.len != 1) return error.TestUnexpectedResult;
+    const lookup_expr = record.e_record.ext.?;
+    const lookup = cir.store.getExpr(lookup_expr);
+    if (lookup != .e_lookup_local or lookup.e_lookup_local.pattern_idx != patterns[0]) {
+        return error.TestUnexpectedResult;
+    }
+    return .{
+        .record_expr = record_expr,
+        .lookup_expr = lookup_expr,
+        .unset_field = unsets[0],
+    };
+}
+
+const record_update_interleaved_owner_retirement_source =
+    \\import RecordUpdateInterleavedOwnerA exposing [Status]
+    \\
+    \\first : a -> a where [a.Status]
+    \\first = |value| {
+    \\    ..value,
+    \\    a: { ..{ seed: 1.U8 }, seed: 2.U8 },
+    \\    z: 3.U8,
+    \\}
+;
+
+const RecordUpdateInterleavedOwnerTopology = struct {
+    outer_expr: CIR.Expr.Idx,
+    lookup_expr: CIR.Expr.Idx,
+    nested_expr: CIR.Expr.Idx,
+    nested_base_expr: CIR.Expr.Idx,
+    nested_field_expr: CIR.Expr.Idx,
+    outer_after_expr: CIR.Expr.Idx,
+};
+
+fn recordUpdateInterleavedOwnerTopology(
+    test_env: anytype,
+) error{TestUnexpectedResult}!RecordUpdateInterleavedOwnerTopology {
+    const cir = test_env.module_env;
+    const def_idx = test_env.can.explicitRootDefByName("first") orelse
+        return error.TestUnexpectedResult;
+    const def = cir.store.getDef(def_idx);
+    const lambda = cir.store.getExpr(def.expr);
+    if (lambda != .e_lambda) return error.TestUnexpectedResult;
+    const patterns = cir.store.slicePatterns(lambda.e_lambda.args);
+    if (patterns.len != 1 or cir.store.getPattern(patterns[0]) != .assign) {
+        return error.TestUnexpectedResult;
+    }
+    const outer_expr = lambda.e_lambda.body;
+    const outer = cir.store.getExpr(outer_expr);
+    if (outer != .e_record or outer.e_record.ext == null or
+        cir.store.sliceUnsetFields(outer.e_record.unsets).len != 0)
+    {
+        return error.TestUnexpectedResult;
+    }
+    const outer_fields = cir.store.sliceRecordFields(outer.e_record.fields);
+    if (outer_fields.len != 2) return error.TestUnexpectedResult;
+    const first_field = cir.store.getRecordField(outer_fields[0]);
+    const second_field = cir.store.getRecordField(outer_fields[1]);
+    if (!std.mem.eql(u8, cir.getIdent(first_field.name), "a") or
+        !std.mem.eql(u8, cir.getIdent(second_field.name), "z"))
+    {
+        return error.TestUnexpectedResult;
+    }
+    const lookup_expr = outer.e_record.ext.?;
+    const lookup = cir.store.getExpr(lookup_expr);
+    if (lookup != .e_lookup_local or lookup.e_lookup_local.pattern_idx != patterns[0]) {
+        return error.TestUnexpectedResult;
+    }
+    const nested_expr = first_field.value;
+    const nested = cir.store.getExpr(nested_expr);
+    if (nested != .e_record or nested.e_record.ext == null or
+        cir.store.sliceUnsetFields(nested.e_record.unsets).len != 0)
+    {
+        return error.TestUnexpectedResult;
+    }
+    const nested_fields = cir.store.sliceRecordFields(nested.e_record.fields);
+    if (nested_fields.len != 1) return error.TestUnexpectedResult;
+    const nested_field = cir.store.getRecordField(nested_fields[0]);
+    if (!std.mem.eql(u8, cir.getIdent(nested_field.name), "seed")) {
+        return error.TestUnexpectedResult;
+    }
+    const nested_base_expr = nested.e_record.ext.?;
+    const nested_base = cir.store.getExpr(nested_base_expr);
+    if (nested_base != .e_record or nested_base.e_record.ext != null or
+        cir.store.sliceUnsetFields(nested_base.e_record.unsets).len != 0)
+    {
+        return error.TestUnexpectedResult;
+    }
+    const nested_base_fields = cir.store.sliceRecordFields(nested_base.e_record.fields);
+    if (nested_base_fields.len != 1 or
+        !std.mem.eql(
+            u8,
+            cir.getIdent(cir.store.getRecordField(nested_base_fields[0]).name),
+            "seed",
+        ))
+    {
+        return error.TestUnexpectedResult;
+    }
+    return .{
+        .outer_expr = outer_expr,
+        .lookup_expr = lookup_expr,
+        .nested_expr = nested_expr,
+        .nested_base_expr = nested_base_expr,
+        .nested_field_expr = nested_field.value,
+        .outer_after_expr = second_field.value,
+    };
+}
+
 const nested_record_update_owner_retirement_source =
     \\import RecordUpdateNestedOwnerA exposing [Status]
     \\
@@ -72330,6 +72471,201 @@ fn uniqueRecordUpdateOwnerPlanPair(
         .base = base_plan orelse return error.TestUnexpectedResult,
         .field = field_plan orelse return error.TestUnexpectedResult,
     };
+}
+
+const RecordUpdateOwnerPlanSet = struct {
+    base: u32,
+    fields: [2]u32,
+    fields_len: u32,
+};
+
+fn uniqueRecordUpdateOwnerPlanSet(
+    cir: *const ModuleEnv,
+    owner_expr: CIR.Expr.Idx,
+    expected_fields_len: u32,
+) error{TestUnexpectedResult}!RecordUpdateOwnerPlanSet {
+    if (expected_fields_len > 2) return error.TestUnexpectedResult;
+    const none = ModuleEnv.ExpectedConsumptionPlan.none;
+    var result = RecordUpdateOwnerPlanSet{
+        .base = none,
+        .fields = .{ none, none },
+        .fields_len = expected_fields_len,
+    };
+    for (cir.expected_consumption_plans.items.items, 0..) |plan, plan_index| {
+        if (plan.owner_node != @intFromEnum(owner_expr)) continue;
+        switch (plan.decodedRole() orelse return error.TestUnexpectedResult) {
+            .record_update_base => {
+                if (result.base != none or plan.slot != 0) return error.TestUnexpectedResult;
+                result.base = @intCast(plan_index);
+            },
+            .record_update_field => {
+                if (plan.slot >= expected_fields_len or result.fields[plan.slot] != none) {
+                    return error.TestUnexpectedResult;
+                }
+                result.fields[plan.slot] = @intCast(plan_index);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    if (result.base == none) return error.TestUnexpectedResult;
+    for (result.fields[0..expected_fields_len]) |field| {
+        if (field == none) return error.TestUnexpectedResult;
+    }
+    return result;
+}
+
+const CompletedRecordUpdateOwnerPlanSet = struct {
+    owner: RetiredRecordUpdateOwnerSnapshot,
+    plans: RecordUpdateOwnerPlanSet,
+};
+
+fn expectCompletedRecordUpdateOwnerPlanSet(
+    cir: *const ModuleEnv,
+    owner_expr: CIR.Expr.Idx,
+    base_expr: CIR.Expr.Idx,
+    field_exprs: []const CIR.Expr.Idx,
+    expected_unsets_len: u32,
+) !CompletedRecordUpdateOwnerPlanSet {
+    if (field_exprs.len > 2) return error.TestUnexpectedResult;
+    const plans = try uniqueRecordUpdateOwnerPlanSet(
+        cir,
+        owner_expr,
+        @intCast(field_exprs.len),
+    );
+    const owner = retiredRecordUpdateOwnerSnapshot(
+        cir,
+        @intFromEnum(owner_expr),
+        .retired,
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@intFromEnum(base_expr), owner.syntax.base_expr);
+    try std.testing.expectEqual(@as(u32, @intCast(field_exprs.len)), owner.syntax.fields_len);
+    try std.testing.expectEqual(expected_unsets_len, owner.syntax.unsets_len);
+    try std.testing.expectEqual(
+        @as(u32, @intCast(field_exprs.len + 1)),
+        owner.retirement.retired_consumers_len,
+    );
+
+    const base_plan = cir.expected_consumption_plans.items.items[plans.base];
+    try std.testing.expect(base_plan.hasLegalTags());
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.source_root_copy_checked_error,
+        base_plan.decodedOutcome().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_base_checked_error,
+        base_plan.decodedReason().?,
+    );
+    try std.testing.expectEqual(@intFromEnum(base_expr), base_plan.site_node);
+    try std.testing.expect(expectedRecordUpdateBaseSourceRetirementIsLocallyValid(cir, base_plan));
+    for (field_exprs, 0..) |field_expr, slot| {
+        const field_plan = cir.expected_consumption_plans.items.items[plans.fields[slot]];
+        try std.testing.expect(field_plan.hasLegalTags());
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error,
+            field_plan.decodedOutcome().?,
+        );
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_field_base_checked_error,
+            field_plan.decodedReason().?,
+        );
+        try std.testing.expectEqual(@intFromEnum(field_expr), field_plan.site_node);
+        try std.testing.expectEqual(@as(u32, @intCast(slot)), field_plan.slot);
+        try std.testing.expectEqual(plans.base, field_plan.failure_cause_plan_index);
+        try std.testing.expect(expectedCauseOwnersEqual(
+            base_plan.failure_owner,
+            field_plan.failure_owner,
+        ));
+    }
+
+    const consumers = cir.expected_retired_consumers.items.items[owner.retirement.retired_consumers_start..][0..owner.retirement.retired_consumers_len];
+    try std.testing.expect(expectedRetiredRecordUpdateOwnerRangeIsLocallyValid(
+        &cir.types,
+        cir,
+        owner.retirement,
+        owner.retirement_index,
+        consumers,
+    ));
+    var saw_base = false;
+    var saw_fields = [_]bool{ false, false };
+    for (consumers) |consumer| {
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedRetiredConsumer.RetirementOnlyReason.record_update_retired_after_base_checked_error,
+            consumer.decodedRetirementOnlyReason().?,
+        );
+        try std.testing.expect(consumer.decodedReason() == null);
+        if (consumer.plan_index == plans.base) {
+            try std.testing.expect(!saw_base);
+            saw_base = true;
+            continue;
+        }
+        var matched_field = false;
+        for (plans.fields[0..plans.fields_len], 0..) |field_plan_index, slot| {
+            if (consumer.plan_index != field_plan_index) continue;
+            try std.testing.expect(!saw_fields[slot]);
+            saw_fields[slot] = true;
+            matched_field = true;
+        }
+        if (!matched_field) return error.TestUnexpectedResult;
+    }
+    try std.testing.expect(saw_base);
+    for (saw_fields[0..plans.fields_len]) |saw_field| {
+        try std.testing.expect(saw_field);
+    }
+    return .{ .owner = owner, .plans = plans };
+}
+
+fn expectHealthyRecordUpdatePlanSet(
+    cir: *const ModuleEnv,
+    owner_expr: CIR.Expr.Idx,
+    base_expr: CIR.Expr.Idx,
+    field_expr: CIR.Expr.Idx,
+    plans: RecordUpdateOwnerPlanSet,
+) !void {
+    try std.testing.expectEqual(@as(u32, 1), plans.fields_len);
+    const base_plan = cir.expected_consumption_plans.items.items[plans.base];
+    try std.testing.expect(base_plan.hasLegalTags());
+    try std.testing.expectEqual(@intFromEnum(owner_expr), base_plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(base_expr), base_plan.site_node);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.source_root_copy,
+        base_plan.decodedOutcome().?,
+    );
+    try std.testing.expect(base_plan.decodedReason() == null);
+    try std.testing.expect(base_plan.decodedSourceRetirementIndex() == null);
+    try std.testing.expect(expectedCauseOwnersEqual(
+        base_plan.failure_owner,
+        ModuleEnv.CauseOwner.inactive(),
+    ));
+    try std.testing.expect(expectedRecordUpdateBasePlanMatchesStep(cir, base_plan));
+    const base_authority = expectedRecordUpdateBaseAuthority(base_plan) orelse
+        return error.TestUnexpectedResult;
+
+    const field_plan_index = plans.fields[0];
+    const field_plan = cir.expected_consumption_plans.items.items[field_plan_index];
+    try std.testing.expect(field_plan.hasLegalTags());
+    try std.testing.expectEqual(@intFromEnum(owner_expr), field_plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(field_expr), field_plan.site_node);
+    try std.testing.expectEqual(@as(u32, 0), field_plan.slot);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.anchored,
+        field_plan.decodedOutcome().?,
+    );
+    try std.testing.expect(field_plan.decodedReason() == null);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        field_plan.failure_cause_plan_index,
+    );
+    try std.testing.expect(expectedCauseOwnersEqual(
+        field_plan.failure_owner,
+        ModuleEnv.CauseOwner.inactive(),
+    ));
+    try std.testing.expect(expectedFreshShapePlanMatchesCir(cir, field_plan));
+    try std.testing.expect(expectedRecordUpdateFieldBeginsAtBase(
+        cir,
+        field_plan_index,
+        field_plan,
+        base_authority,
+    ));
 }
 
 fn uniqueRecordUpdateOwnerRetirementDraft(
@@ -72481,6 +72817,328 @@ const NestedRecordUpdatePoisonOrder = enum {
     outer_then_inner,
     inner_then_outer,
 };
+
+test "record-update owner retirement: unset-only update owns only its base plan" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var failure_stage: []const u8 = "provider";
+    errdefer std.debug.print(
+        "unset-only record-update owner-retirement fixture failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var provider = try TestEnv.init(
+        "RecordUpdateUnsetOnlyOwnerA",
+        direct_binder_transaction_provider_source,
+    );
+    defer provider.deinit();
+    try provider.assertNoErrors();
+    var fresh_env = try TestEnv.initUncheckedWithImportForTesting(
+        "RecordUpdateUnsetOnlyOwnerB",
+        record_update_unset_only_owner_retirement_source,
+        "RecordUpdateUnsetOnlyOwnerA",
+        &provider,
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+    const fresh_topology = try recordUpdateUnsetOnlyOwnerTopology(&fresh_env);
+
+    failure_stage = "staged producer";
+    var consumer = try TestEnv.initUncheckedWithImportForTesting(
+        "RecordUpdateUnsetOnlyOwnerB",
+        record_update_unset_only_owner_retirement_source,
+        "RecordUpdateUnsetOnlyOwnerA",
+        &provider,
+    );
+    defer consumer.deinit();
+    try consumer.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+    const topology = try recordUpdateUnsetOnlyOwnerTopology(&consumer);
+    try std.testing.expect(std.meta.eql(fresh_topology, topology));
+    var env = try stageDirectBinderCallPairThroughPrePoison(&consumer);
+    defer consumer.checker.env_pool.release(env);
+    const checker = &consumer.checker;
+    const cir = consumer.module_env;
+
+    const draft = try uniqueRecordUpdateOwnerRetirementDraft(checker, topology.record_expr);
+    const pending_plans = try uniqueRecordUpdateOwnerPlanSet(cir, topology.record_expr, 0);
+    try std.testing.expectEqual(draft.base_plan_index, pending_plans.base);
+    try std.testing.expect(recordUpdateOwnerExpectedMembershipAtProducer(
+        checker,
+        topology.record_expr,
+        draft.base_plan_index,
+        draft.base_cause,
+    ));
+    var owner_registration_count: usize = 0;
+    for (checker.record_update_expected_plan_registrations.items) |registration| {
+        if (registration.owner_expr != topology.record_expr) continue;
+        owner_registration_count += 1;
+        try std.testing.expectEqual(pending_plans.base, registration.plan_index);
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedConsumptionPlan.Role.record_update_base,
+            registration.role,
+        );
+        try std.testing.expectEqual(@as(u32, 0), registration.slot);
+        try std.testing.expectEqual(topology.lookup_expr, registration.site);
+    }
+    try std.testing.expectEqual(@as(usize, 1), owner_registration_count);
+    const pending_base = cir.expected_consumption_plans.items.items[pending_plans.base];
+    const source_retirement = pending_base.decodedSourceRetirementIndex() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        source_retirement,
+        pendingExpressionRetirementAtProducer(checker, topology.lookup_expr).?,
+    );
+    try std.testing.expect(draft.retirement_index != source_retirement);
+    try std.testing.expectEqualStrings(
+        "x",
+        cir.getIdent(cir.store.getUnsetField(topology.unset_field).name),
+    );
+
+    failure_stage = "unmodified production tail";
+    try checker.checkFileFromPrePoison(&env);
+    try std.testing.expect(cir.store.getExpr(topology.record_expr) == .e_runtime_error);
+    try std.testing.expect(cir.store.getExpr(topology.lookup_expr) == .e_runtime_error);
+    const lookup = try uniqueDirectBinderLookupTestProof(cir);
+    const completed = try expectCompletedRecordUpdateOwnerPlanSet(
+        cir,
+        topology.record_expr,
+        topology.lookup_expr,
+        &[_]CIR.Expr.Idx{},
+        1,
+    );
+    try std.testing.expectEqual(
+        lookup.lookup_retirement_index,
+        cir.expected_consumption_plans.items.items[
+            completed.plans.base
+        ].decodedSourceRetirementIndex().?,
+    );
+    try std.testing.expect(completed.owner.retirement_index != lookup.lookup_retirement_index);
+    try expectDirectBinderTransientListsEmpty(checker);
+    try std.testing.expect(checker.record_update_expected_plan_registrations_consumed);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checker.record_update_expected_plan_registrations.items.len,
+    );
+
+    failure_stage = "closed reason corruptions";
+    const retired_consumer_index = completed.owner.retirement.retired_consumers_start;
+    const retired_consumer = &cir.expected_retired_consumers.items.items[
+        retired_consumer_index
+    ];
+    const saved_retired_consumer = retired_consumer.*;
+    for (std.enums.values(ModuleEnv.ExpectedConsumptionPlan.Reason)) |ordinary_reason| {
+        retired_consumer.reason = @intFromEnum(ordinary_reason);
+        try std.testing.expectEqual(ordinary_reason, retired_consumer.decodedReason().?);
+        try std.testing.expect(retired_consumer.decodedRetirementOnlyReason() == null);
+        try std.testing.expect(!validateExpectedFailureRetirementLocal(&cir.types, cir));
+        retired_consumer.* = saved_retired_consumer;
+        try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    }
+    for ([_]u32{ 0x8000_0001, std.math.maxInt(u32) }) |unknown_reason| {
+        retired_consumer.reason = unknown_reason;
+        try std.testing.expect(retired_consumer.decodedReason() == null);
+        try std.testing.expect(retired_consumer.decodedRetirementOnlyReason() == null);
+        try std.testing.expect(!validateExpectedFailureRetirementLocal(&cir.types, cir));
+        retired_consumer.* = saved_retired_consumer;
+        try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    }
+
+    const completed_base_plan = &cir.expected_consumption_plans.items.items[
+        completed.plans.base
+    ];
+    const saved_base_plan = completed_base_plan.*;
+    completed_base_plan.reason = @intFromEnum(
+        ModuleEnv.ExpectedRetiredConsumer.RetirementOnlyReason.record_update_retired_after_base_checked_error,
+    );
+    try std.testing.expect(completed_base_plan.decodedReason() == null);
+    try std.testing.expect(!completed_base_plan.hasLegalTags());
+    try std.testing.expect(!validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(!validateExpectedFailureRetirementLocal(&cir.types, cir));
+    completed_base_plan.* = saved_base_plan;
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+
+    failure_stage = "terminal local and fresh admission";
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+    const context = recordUpdateRootAuthorityFreshContext(&fresh_env);
+    try validateExpectedFailureContext(cir, context);
+    try validateWhereMarkerCopySourceNamespaces(cir, consumer.builtin_module.env, context);
+    _ = try checker.validatedModule();
+    try std.testing.expectEqual(@as(usize, 0), checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try consumer.typeProblemCount());
+}
+
+test "record-update owner retirement: healthy nested field interleaves arbitrary plan indices" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var failure_stage: []const u8 = "provider";
+    errdefer std.debug.print(
+        "interleaved record-update owner-retirement fixture failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var provider = try TestEnv.init(
+        "RecordUpdateInterleavedOwnerA",
+        direct_binder_transaction_provider_source,
+    );
+    defer provider.deinit();
+    try provider.assertNoErrors();
+    var fresh_env = try TestEnv.initUncheckedWithImportForTesting(
+        "RecordUpdateInterleavedOwnerB",
+        record_update_interleaved_owner_retirement_source,
+        "RecordUpdateInterleavedOwnerA",
+        &provider,
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+    const fresh_topology = try recordUpdateInterleavedOwnerTopology(&fresh_env);
+
+    failure_stage = "staged producer";
+    var consumer = try TestEnv.initUncheckedWithImportForTesting(
+        "RecordUpdateInterleavedOwnerB",
+        record_update_interleaved_owner_retirement_source,
+        "RecordUpdateInterleavedOwnerA",
+        &provider,
+    );
+    defer consumer.deinit();
+    try consumer.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+    const topology = try recordUpdateInterleavedOwnerTopology(&consumer);
+    try std.testing.expect(std.meta.eql(fresh_topology, topology));
+    var env = try stageDirectBinderCallPairThroughPrePoison(&consumer);
+    defer consumer.checker.env_pool.release(env);
+    const checker = &consumer.checker;
+    const cir = consumer.module_env;
+
+    const outer_plans = try uniqueRecordUpdateOwnerPlanSet(cir, topology.outer_expr, 2);
+    const nested_plans = try uniqueRecordUpdateOwnerPlanSet(cir, topology.nested_expr, 1);
+    try std.testing.expect(outer_plans.base < outer_plans.fields[0]);
+    try std.testing.expect(outer_plans.fields[0] < nested_plans.base);
+    try std.testing.expect(nested_plans.base < nested_plans.fields[0]);
+    try std.testing.expect(nested_plans.fields[0] < outer_plans.fields[1]);
+    const outer_draft = try uniqueRecordUpdateOwnerRetirementDraft(checker, topology.outer_expr);
+    try std.testing.expectEqual(outer_plans.base, outer_draft.base_plan_index);
+    try std.testing.expect(recordUpdateOwnerExpectedMembershipAtProducer(
+        checker,
+        topology.outer_expr,
+        outer_draft.base_plan_index,
+        outer_draft.base_cause,
+    ));
+    try std.testing.expect(validateRecordUpdateExpectedPlanRegistrations(checker));
+    var outer_registration_count: usize = 0;
+    var nested_registration_count: usize = 0;
+    for (checker.record_update_expected_plan_registrations.items) |registration| {
+        if (registration.owner_expr == topology.outer_expr) outer_registration_count += 1;
+        if (registration.owner_expr == topology.nested_expr) nested_registration_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), outer_registration_count);
+    try std.testing.expectEqual(@as(usize, 2), nested_registration_count);
+    var nested_draft_count: usize = 0;
+    for (checker.record_update_owner_retirement_drafts.items) |draft| {
+        nested_draft_count += @intFromBool(draft.owner_expr == topology.nested_expr);
+    }
+    try std.testing.expectEqual(@as(usize, 0), nested_draft_count);
+    try std.testing.expect(checker.erroneous_value_exprs.contains(topology.outer_expr));
+    try std.testing.expect(!checker.erroneous_value_exprs.contains(topology.nested_expr));
+    try expectHealthyRecordUpdatePlanSet(
+        cir,
+        topology.nested_expr,
+        topology.nested_base_expr,
+        topology.nested_field_expr,
+        nested_plans,
+    );
+
+    const pending_outer_base = cir.expected_consumption_plans.items.items[outer_plans.base];
+    const pending_source_retirement = pending_outer_base.decodedSourceRetirementIndex() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        pending_source_retirement,
+        pendingExpressionRetirementAtProducer(checker, topology.lookup_expr).?,
+    );
+    try std.testing.expect(outer_draft.retirement_index != pending_source_retirement);
+    const outer_sites = [_]CIR.Expr.Idx{ topology.nested_expr, topology.outer_after_expr };
+    for (outer_plans.fields, 0..) |field_plan_index, slot| {
+        const field_plan = cir.expected_consumption_plans.items.items[field_plan_index];
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error,
+            field_plan.decodedOutcome().?,
+        );
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_field_base_checked_error,
+            field_plan.decodedReason().?,
+        );
+        try std.testing.expectEqual(@intFromEnum(outer_sites[slot]), field_plan.site_node);
+        try std.testing.expectEqual(@as(u32, @intCast(slot)), field_plan.slot);
+        try std.testing.expectEqual(outer_plans.base, field_plan.failure_cause_plan_index);
+        try std.testing.expect(expectedCauseOwnersEqual(
+            pending_outer_base.failure_owner,
+            field_plan.failure_owner,
+        ));
+    }
+
+    failure_stage = "unmodified production tail";
+    try checker.checkFileFromPrePoison(&env);
+    try std.testing.expect(cir.store.getExpr(topology.outer_expr) == .e_runtime_error);
+    try std.testing.expect(cir.store.getExpr(topology.lookup_expr) == .e_runtime_error);
+    try std.testing.expect(cir.store.getExpr(topology.nested_expr) == .e_record);
+    try std.testing.expect(cir.store.getExpr(topology.nested_base_expr) == .e_record);
+    const lookup = try uniqueDirectBinderLookupTestProof(cir);
+    const completed_outer = try expectCompletedRecordUpdateOwnerPlanSet(
+        cir,
+        topology.outer_expr,
+        topology.lookup_expr,
+        &outer_sites,
+        0,
+    );
+    try std.testing.expectEqual(
+        lookup.lookup_retirement_index,
+        cir.expected_consumption_plans.items.items[
+            completed_outer.plans.base
+        ].decodedSourceRetirementIndex().?,
+    );
+    try std.testing.expect(
+        completed_outer.owner.retirement_index != lookup.lookup_retirement_index,
+    );
+    const terminal_nested_plans = try uniqueRecordUpdateOwnerPlanSet(
+        cir,
+        topology.nested_expr,
+        1,
+    );
+    try expectHealthyRecordUpdatePlanSet(
+        cir,
+        topology.nested_expr,
+        topology.nested_base_expr,
+        topology.nested_field_expr,
+        terminal_nested_plans,
+    );
+    const outer_consumers = cir.expected_retired_consumers.items.items[completed_outer.owner.retirement.retired_consumers_start..][0..completed_outer.owner.retirement.retired_consumers_len];
+    for (outer_consumers) |consumer_row| {
+        try std.testing.expect(consumer_row.plan_index != terminal_nested_plans.base);
+        try std.testing.expect(consumer_row.plan_index != terminal_nested_plans.fields[0]);
+    }
+    for (cir.expected_consumer_retirements.items.items) |retirement| {
+        try std.testing.expect(
+            retirement.decodedOwnerKind() != .expression or
+                retirement.retired_node != @intFromEnum(topology.nested_expr),
+        );
+    }
+    try expectDirectBinderTransientListsEmpty(checker);
+    try std.testing.expect(checker.record_update_expected_plan_registrations_consumed);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checker.record_update_expected_plan_registrations.items.len,
+    );
+
+    failure_stage = "terminal local and fresh admission";
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+    const context = recordUpdateRootAuthorityFreshContext(&fresh_env);
+    try validateExpectedFailureContext(cir, context);
+    try validateWhereMarkerCopySourceNamespaces(cir, consumer.builtin_module.env, context);
+    _ = try checker.validatedModule();
+    try std.testing.expectEqual(@as(usize, 0), checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try consumer.typeProblemCount());
+}
 
 test "record-update owner retirement: nested checked base supports both owner poison orders" {
     const TestEnv = @import("test/TestEnv.zig");

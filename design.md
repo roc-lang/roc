@@ -2274,6 +2274,13 @@ consumer predicate permits only `record_update_base` and
 `record_update_field_base_checked_error` with its upstream `P_B`. The new
 consumer reason therefore does not admit a third, unproduced base-plan
 `checked_error` outcome through the generic plan legality table.
+The two finite reason vocabularies occupy disjoint raw halves:
+every `ExpectedConsumptionPlan.Reason` value is less than `0x8000_0000`, and
+every `ExpectedRetiredConsumer.RetirementOnlyReason` value is at least
+`0x8000_0000`. Except for `ExpectedConsumptionPlan.none` in an inactive
+optional plan-reason field, an undeclared raw reason in either half remains
+invalid. A future extension must preserve this partition; compile-time checks
+enforce it when either vocabulary is extended.
 Produced replay uses the retired outer and retired base with those completed
 rows. Fresh-canonical replay requires a live outer record and compares its
 decoded base, field, and unset topology with the snapshot-derived candidate
@@ -6190,34 +6197,33 @@ inverse remain completion dependencies: retargeting both an origin's owner
 and base to a sibling can satisfy the per-row live source-edge check while
 orphaning the original owner and duplicating the sibling. The mandatory base
 plan and exact live/retired owner converse declared above must close this gap.
-The current `wpvvswsl` checkpoint (cache version 85) adds those mandatory
-base plans and exact source-retirement reuse. Its explicit context-mode
-correction and removal of unused dedicated retirement machinery have passed
-semantic preflight and independent static review. The authentic direct-binder
-error test still rejects the erased outer record; both base and outer are
-normally poisoned. The checked-base `R_U` owner-retirement rule above has
-received exact-text design approval and is being implemented to address that
-failure. Its first coherent integration at `03284444` passes semantic
-preflight and the direct one-field runtime diagnostic, including local and
-fresh admission. The normal producer-regenerated gate also passes (2/2 tests,
-7/7 steps). Continued review required pre-invalidation completion to
-revalidate semantic base-cause ownership, not only equal cause fields; that
-fix at `69db2011` has independent static acceptance and green semantic and
-direct runtime regression (2/2 tests). The existing combined regression passes
-36/37 tests, with only the expected stale cache golden failing; native/wasm
-serialization sizes pass. The measured schema-85 golden is updated and its
-focused retry passes (2/2 tests, 25/25 steps). The pending-inner-retirement
-phase defect is repaired by exact, nonrecursive immediate-source identity
-validation. At `fc78e9a1`, semantic checking and the direct runtime regression
-pass (3/3 tests), including an authentic nested base with both enclosing-owner
-retirement orders, the real checker tail, fresh admission and equal canonical
-bytes. The final combined gate passes 38/38 tests and 41/41 steps, including
-regenerated Builtins, the measured cache golden, serialization and native/wasm
-sizes. Independent review accepts this bounded WIP checkpoint, not complete
-record-update or checked-boundary admission. Zero-field/unset and preexisting-base cases,
-arbitrary interleaving, corruption, allocation-failure, repeated rebuild and
-serialization gates remain pending, as do later established-base failure
-causes and complete source-site reachability authority.
+Published `wpvvswsl` / `95dfea5a` (cache version 85) adds those mandatory
+base plans, exact source-retirement reuse, and checked-base `R_U` owner
+retirement. It preserves original plan outcomes and causes, authenticates
+semantic cause ownership before invalidation, and validates the immediate
+pending/completed base lifecycle without recursive cause traversal. Authentic
+one-field and nested-base fixtures pass the real checker tail and fresh
+admission; both enclosing-owner retirement orders produce equal canonical
+bytes. Its final combined gate passes 38/38 tests and 41/41 steps, including
+regenerated Builtins, the measured schema-85 golden, serialization and
+native/wasm sizes. Independent review accepts this bounded WIP checkpoint,
+not complete record-update or checked-boundary admission.
+
+Child `txopxlzx` adds authentic unset-only (zero supplied fields) and healthy
+nested-field interleaving coverage, plus retirement-only reason-domain tests.
+The unset-only fixture owns exactly one base-plan consumer. The interleaving
+fixture pins actual producer ordering and excludes healthy inner plans from
+the outer retirement after remapping. Real consumer/plan reason corruptions
+must reject, and restoration must pass. The finite numeric-half guard changes
+no current legal reason values or schema layout. Semantic preflight and direct
+runtime diagnostics pass (5/5 tests). The normal combined gate passes 41/41
+tests and 41/41 steps, including regenerated Builtins, the schema-85 golden,
+serialization and native/wasm sizes. Independent adversarial review accepts
+this bounded slice; the driver is publishing it as an incomplete WIP.
+Preexisting-base cases, unrelated retirement ranges, broader corruption,
+new-producer allocation-failure, repeated rebuild and active serialization
+gates remain pending, as do later established-base failure causes and complete
+source-site reachability authority.
 These are checked-boundary prerequisites, not
 completion of option (e)'s nested-row rejection or the direct-result/Try
 runtime adapters. Those mechanisms and full-suite verification remain open;

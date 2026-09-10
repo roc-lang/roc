@@ -4344,10 +4344,13 @@ pub const ExpectedRetiredConsumer = extern struct {
 
         comptime {
             for (std.meta.fields(ExpectedConsumptionPlan.Reason)) |plan_reason| {
-                for (std.meta.fields(@This())) |retirement_reason| {
-                    if (plan_reason.value == retirement_reason.value) {
-                        @compileError("retirement-only reasons must remain disjoint from Expected plan reasons");
-                    }
+                if (plan_reason.value >= 0x8000_0000) {
+                    @compileError("Expected plan reasons must remain in the low raw-value half");
+                }
+            }
+            for (std.meta.fields(@This())) |retirement_reason| {
+                if (retirement_reason.value < 0x8000_0000) {
+                    @compileError("retirement-only reasons must remain in the high raw-value half");
                 }
             }
         }
@@ -12524,6 +12527,67 @@ test "expected consumption legality covers every closed tag" {
     }
     for (seen_reasons) |seen| try std.testing.expect(seen);
     for (seen_owner_kinds) |seen| try std.testing.expect(seen);
+}
+
+test "expected retired consumer reasons occupy their finite raw namespace" {
+    const retirement_reason =
+        ExpectedRetiredConsumer.RetirementOnlyReason.record_update_retired_after_base_checked_error;
+    try std.testing.expectEqual(@as(u32, 0x8000_0000), @intFromEnum(retirement_reason));
+
+    var consumer = ExpectedRetiredConsumer{
+        .plan_index = 0,
+        .owner_node = 1,
+        .site_node = 2,
+        .role = @intFromEnum(ExpectedConsumptionPlan.Role.record_update_base),
+        .slot = 0,
+        .raw_owner_var = 3,
+        .raw_consumer_var = 4,
+        .reason = @intFromEnum(retirement_reason),
+    };
+    try std.testing.expect(consumer.decodedReason() == null);
+    try std.testing.expectEqual(retirement_reason, consumer.decodedRetirementOnlyReason().?);
+
+    for (std.enums.values(ExpectedConsumptionPlan.Reason)) |reason| {
+        const raw: u32 = @intFromEnum(reason);
+        try std.testing.expect(raw < 0x8000_0000);
+        consumer.reason = raw;
+        try std.testing.expectEqual(reason, consumer.decodedReason().?);
+        try std.testing.expect(consumer.decodedRetirementOnlyReason() == null);
+    }
+    for (std.enums.values(ExpectedRetiredConsumer.RetirementOnlyReason)) |reason| {
+        const raw: u32 = @intFromEnum(reason);
+        try std.testing.expect(raw >= 0x8000_0000);
+        consumer.reason = raw;
+        try std.testing.expect(consumer.decodedReason() == null);
+        try std.testing.expectEqual(reason, consumer.decodedRetirementOnlyReason().?);
+    }
+
+    for ([_]u32{ 0x7fff_ffff, 0x8000_0001, std.math.maxInt(u32) }) |unknown| {
+        consumer.reason = unknown;
+        try std.testing.expect(consumer.decodedReason() == null);
+        try std.testing.expect(consumer.decodedRetirementOnlyReason() == null);
+    }
+
+    const none = ExpectedConsumptionPlan.none;
+    var plan = ExpectedConsumptionPlan{
+        .owner_node = 1,
+        .site_node = 2,
+        .role = @intFromEnum(ExpectedConsumptionPlan.Role.record_update_base),
+        .slot = 0,
+        .outcome = @intFromEnum(ExpectedConsumptionPlan.Outcome.source_root_copy),
+        .reason = none,
+        .raw_consumer_var = 4,
+        .parent_authority = ExpectedMarkerAuthority.inactive(),
+        .produced_copy_step = 5,
+        .produced_occurrence_offset = 0,
+        .produced_side = @intFromEnum(WhereMarkerCopyOccurrenceSide.destination),
+        .call_root_plan_index = none,
+        .failure_owner = CauseOwner.inactive(),
+        .failure_cause_plan_index = none,
+    };
+    try std.testing.expect(plan.hasLegalTags());
+    plan.reason = @intFromEnum(retirement_reason);
+    try std.testing.expect(!plan.hasLegalTags());
 }
 
 test "expected consumption owner absence is canonical" {

@@ -735,14 +735,15 @@ described in full, with trailers; W6b currently has its provisional title):
 | `ssvqsxro` / `cc8ace35` | W6b recovery/metadata checkpoint | pushed WIP; bounded 59-test gate green, but full checker gate is red: 1,257/1,383 pass, 6 fail, 120 crash |
 | `qpmsttws` / `e67aaeb8` | W6b allocation-witness/cache prerequisite checkpoint | pushed and PR read-back verified; independent review accepted, combined gate 29/29 tests, 41/41 steps; cache version 83; WIP, not whole-W6b acceptance |
 | `zkmyrwqu` / `1f69432c` | W6b record-update root-request mechanics | pushed WIP and PR read-back verified; final gate green (26/26 tests, 38/38 steps); review accepts mechanics only, complete admission ownership/retirement remains REQUEST CHANGES |
-| `wpvvswsl` | W6b checked-base record-update retirements | reviewed bounded WIP checkpoint; final gate 38/38 tests, 41/41 steps; complete ownership and W6b remain unaccepted |
+| `wpvvswsl` / `95dfea5a` | W6b checked-base record-update retirements | pushed and PR read-back verified; reviewed bounded WIP, final gate 38/38 tests, 41/41 steps; complete ownership and W6b remain unaccepted |
+| `txopxlzx` | W6b checked-base boundary coverage | reviewed bounded WIP; unset-only, healthy nested-field interleaving, reason-domain tests pass; final gate 41/41 tests, 41/41 steps; driver preparing publication |
 
-The current implementation checkpoint is `wpvvswsl`, directly above the
-previously published `zkmyrwqu` / `1f69432c` and `qpmsttws` / `e67aaeb8`.
-Publication uses `jared/polarity` and draft PR #10434. The driver advances the
-bookmark and updates the PR only after independent scoped review and frozen
-verification, then reads back the exact remote head and PR body. This new
-checkpoint is explicitly incomplete; the next test/admission slice is separate.
+The local and remote `jared/polarity` bookmarks now point at `wpvvswsl` /
+`95dfea5a`, directly above `zkmyrwqu` / `1f69432c` and `qpmsttws` / `e67aaeb8`.
+The driver verified the exact remote head and updated PR #10434 body with draft
+status intact. This published checkpoint is explicitly incomplete. New child
+`txopxlzx` owns the verified next boundary-test slice, whose publication is
+being prepared after its final 41/41-test, 41/41-step gate.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -3809,6 +3810,48 @@ subsets below do not override this latest checkpoint.
   Later documentation/description edits do not alter that tested source.
   Complete ownership, the remaining negative/OOM/active-serde matrix, R2/R3,
   call-formal failures, option-(e) rejection and adapters remain open.
+- Publication is complete and read-back verified: `wpvvswsl` is Git commit
+  `95dfea5a272b2c0263b15248a4a328e558799285`, pushed by fast-forward from
+  `1f69432c` to `jared/polarity`. Draft PR #10434 has that exact head and the
+  exact updated body, with `isDraft == true`. Artifacts in
+  `/private/tmp/polarity-live-owner-gates.JLEzuh/` include
+  `r1-checkpoint-description.txt`, `pr-body-r1-checkpoint.md`, and
+  `r1-pr-readback.json`. The driver created clean child
+  `txopxlzxxsymywntzkktrlpvkyxvyxpl` and dispatched the same sol-ultra author
+  for real zero-supplied-field/unset-only, healthy nested-field arbitrary-index,
+  and retirement-only reason-domain coverage; independent sol-ultra review
+  follows. New-producer OOM/corruption/active-serde, complete admission, R2/R3,
+  and the rest of W6b remain separate mandatory tasks.
+
+- The early boundary slice in `txopxlzx`, frozen at `7b0637e5`, passes
+  semantic preflight (session 95275), direct checker diagnostics (session
+  89661, 4/4 tests), and the normal reason-domain gate (session 14157, 9/9
+  tests, 7/7 steps, regenerated Builtins). Independent adversarial review
+  accepts only its numeric-half reason rule and authentic unset-only
+  base-plan-only retirement fixture. The healthy nested-field interleaving
+  fixture and real reason-corruption/restoration tests are still being added;
+  this child is not yet published. Its numeric-half guard strengthens the
+  future-extension invariant without changing current legal values or the
+  schema-85 layout. The inactive optional plan-reason `none` sentinel is
+  explicitly exempt from the undeclared-reason prohibition.
+
+- The complete boundary-test slice is frozen at `9e1bf6d8`: semantic
+  preflight 16551 and direct runtime 50549 pass (5/5 tests), including healthy
+  nested-field interleaving and authentic consumer/plan reason corruption
+  with restoration. Normal combined gate 7662 passes 41/41 tests and 41/41
+  steps: canonicalization 9, types 10, checker 17, compile/serde 5, regenerated
+  Builtins, measured schema-85 golden, and native/wasm sizes. Independent
+  adversarial review accepts this bounded slice. Check SHA-256 is
+  `7e3ab156d98a1546267fa15d4d2e2b18267f41144bc1106c6211d040e559787f`;
+  ModuleEnv remains
+  `b6d2a1bf372b4b85352f77f805361a95a8e36632567338a911590c535c0d1de6`.
+  Documentation edits do not change the frozen compiler source. The driver
+  is describing and publishing `txopxlzx` as `WIP: verify checked-base
+  record-update ownership boundaries`, then continuing with actual-producer
+  allocation-failure and rollback coverage. No broader R1/W6b completion is
+  claimed. Exact local artifacts are `boundary-complete-final-regression.txt`,
+  `boundary-checkpoint-description.txt`, and `pr-body-boundary-checkpoint.md`
+  under `/private/tmp/polarity-live-owner-gates.JLEzuh/`.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
