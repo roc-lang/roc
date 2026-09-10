@@ -15482,17 +15482,60 @@ const ProcBodyBuilder = struct {
         var source_index = items.len;
         while (source_index > 0) {
             source_index -= 1;
-            continuation = try self.restoreConstIntoStorageRep(
-                source_field_locals[source_index].?,
-                store_module,
-                type_module,
-                items[source_index],
-                fields[source_index].ty,
-                source_field_reps[source_index],
-                continuation,
-            );
+            continuation = if (fields[source_index].kind.tag == .optional)
+                try self.restoreConstOptionalSlotInto(
+                    source_field_locals[source_index].?,
+                    store_module,
+                    type_module,
+                    items[source_index],
+                    fields[source_index].ty,
+                    source_field_reps[source_index],
+                    continuation,
+                )
+            else
+                try self.restoreConstIntoStorageRep(
+                    source_field_locals[source_index].?,
+                    store_module,
+                    type_module,
+                    items[source_index],
+                    fields[source_index].ty,
+                    source_field_reps[source_index],
+                    continuation,
+                );
         }
         return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
+    }
+
+    /// An optional field's stored node is its presence slot, while its checked
+    /// field type names only the payload. Restore the slot using the planner's
+    /// explicit presence representation and restore Present's child at that
+    /// checked payload type.
+    fn restoreConstOptionalSlotInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        node: checked.ConstNodeId,
+        payload_ty: checked.CheckedTypeId,
+        slot_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const stored = store_module.const_store.get(node);
+        if (stored != .tag) boxyLowerInvariant("stored optional field did not carry its presence tag");
+        const slot = self.parent.plan.representations.items[@intFromEnum(slot_rep)];
+        const present = slot.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("stored optional field had no planned presence slot");
+        const variant = self.plannedTagVariantByText(slot_rep, stored.tag.tag_name);
+        const payload_tys: []const checked.CheckedTypeId = if (variant.index == present) &.{payload_ty} else &.{};
+        return try self.restoreConstPlannedTagPayloadsInto(
+            target,
+            store_module,
+            type_module,
+            variant,
+            stored.tag,
+            payload_tys,
+            next,
+        );
     }
 
     fn restoreConstTagInto(
@@ -15657,13 +15700,31 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const checked_tag = constTagPayloadTypes(type_module, checked_ty, tag.tag_name);
-        const name = checked_tag.name;
-        const payload_tys = checked_tag.payload_tys;
+        return try self.restoreConstPlannedTagPayloadsInto(
+            target,
+            store_module,
+            type_module,
+            self.tagVariantForModule(rep, type_module, checked_tag.name),
+            tag,
+            checked_tag.payload_tys,
+            next,
+        );
+    }
+
+    fn restoreConstPlannedTagPayloadsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        variant: TagVariantLookup,
+        tag: anytype,
+        payload_tys: []const checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         if (payload_tys.len != tag.payloads.len) {
             boxyLowerInvariant("ConstStore tag payload count differed from checked tag type");
         }
 
-        const variant = self.tagVariantForModule(rep, type_module, name);
         const payload_children = self.parent.plan.childSlice(variant.payloads);
         if (payload_children.len != tag.payloads.len) {
             boxyLowerInvariant("ConstStore tag payload count disagreed with its boxy representation");
