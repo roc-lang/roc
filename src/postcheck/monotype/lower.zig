@@ -7841,6 +7841,7 @@ const Builder = struct {
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 const fn_target = try self.lowerDraftNestedFromContext(
                     &fn_ctx,
+                    fn_ctx.draft.current_owner,
                     checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def),
                     nested,
                     fn_template.source_fn_ty,
@@ -7974,6 +7975,7 @@ const Builder = struct {
     fn lowerDraftNestedFromContext(
         self: *Builder,
         source_ctx: *BodyContext,
+        request_owner: DraftOwner,
         expr_id: checked.CheckedExprId,
         nested: Ast.NestedFn,
         source_fn_ty: checked.CheckedTypeId,
@@ -8107,7 +8109,7 @@ const Builder = struct {
                             const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                             const exact_interface = source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node);
                             const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
+                                request_owner,
                                 spec.fn_id,
                             );
                             if (!draftOpenCandidateQualifies(
@@ -8145,7 +8147,7 @@ const Builder = struct {
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                 if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                if (!source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id)) continue;
+                if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
                 const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!selection.add(raw_spec, false)) {
                     Common.invariant("checked recursive nested reference matched more than one in-progress specialization on its ownership chain");
@@ -8159,7 +8161,7 @@ const Builder = struct {
             // checked cells before reusing the in-progress definition.
             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
             const active_recursive_edge = spec.state == .lowering and
-                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
+                source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id);
             if (active_recursive_edge) {
                 // A recursive edge into a function with no arguments carries
                 // its recursive value flow through the result alone.
@@ -10865,6 +10867,7 @@ const Builder = struct {
         if (lambda_expr.data != .lambda) Common.invariant("stored capturing function did not reference a checked lambda");
         const restored_fn = try self.lowerDraftNestedFromContext(
             &fn_ctx,
+            fn_ctx.draft.current_owner,
             lambda_expr_id,
             nested,
             template.source_fn_ty,
@@ -32261,6 +32264,8 @@ const BodyContext = struct {
         };
         const lexical_owner_scope = try self.draft.enterOwner(context.lexical_owner);
         defer lexical_owner_scope.leave();
+        // Recursion belongs to the requesting body, retained by the owner
+        // scope, while specialization identity uses the declaration owner.
         // The declaration context's capture types are part of the
         // specialization identity: two enclosing instantiations can request
         // this local procedure at the same monomorphic function type while
@@ -32273,6 +32278,7 @@ const BodyContext = struct {
         }
         return try self.builder.lowerDraftNestedFromContext(
             self,
+            lexical_owner_scope.previous,
             local.expr,
             nested,
             source_fn_ty,
@@ -34523,6 +34529,7 @@ const BodyContext = struct {
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
+                    fn_ctx.draft.current_owner,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
                     source_fn_ty,
@@ -34695,6 +34702,7 @@ const BodyContext = struct {
         const restored_fn_id = switch (lambda_expr.data) {
             .lambda => try self.builder.lowerDraftNestedFromContext(
                 &fn_ctx,
+                fn_ctx.draft.current_owner,
                 lambda_expr_id,
                 capture_nested,
                 fn_value.source_fn_ty,
@@ -34878,6 +34886,7 @@ const BodyContext = struct {
         const restored_fn_id = switch (lambda_expr.data) {
             .lambda => try self.builder.lowerDraftNestedFromContext(
                 &fn_ctx,
+                fn_ctx.draft.current_owner,
                 lambda_expr_id,
                 capture_nested,
                 template.source_fn_ty,
@@ -38462,6 +38471,7 @@ const BodyContext = struct {
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
             self,
+            self.draft.current_owner,
             expr_id,
             nested,
             source_fn_ty,
@@ -38595,6 +38605,7 @@ const BodyContext = struct {
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
             self,
+            self.draft.current_owner,
             expr_id,
             nested,
             source_fn_ty,

@@ -8019,6 +8019,10 @@ argument must overlap the root's initially snapshotted argument classes before
 the edge can be classified as recursive. This is the same explicit ownership
 rule used by draft-local procedures and prevents either an accidental second
 body for the root or a merge of unrelated sibling requests.
+Local procedure requests retain the requesting body's owner separately from
+entering the declaration's lexical owner. Recursive-edge ancestry consumes the
+requesting owner; specialization identity and captures consume the declaration
+owner. Entering a declaration context must not erase the active recursive edge.
 
 Checking must also validate a mono-specialization default against the complete
 method callable type before placing direct evidence in the checked dispatch
