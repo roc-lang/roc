@@ -6233,7 +6233,8 @@ lower-level copy test remains covered. Semantic and targeted runtime checks
 pass, and the final normal gate passes 43/43 tests and 41/41 steps, including
 regenerated Builtins, the schema-85 golden, serialization and native/wasm sizes.
 Independent adversarial review accepts this bounded slice, whose push and
-exact draft-PR head/body readback are verified. Child `mpqnvuvq` implements
+exact draft-PR head/body readback are verified. Published `mpqnvuvq` /
+`9c295876` implements
 allocation-failure and same-instance retry coverage for actual central
 checked-base outer-retirement completion, including subtree invalidation and
 replacement. Its authentic calibration and exhaustive allocation loop pass a
@@ -6244,10 +6245,23 @@ the real checker tail and distinct fresh admission. Independent adversarial
 review gives final bounded ACCEPT after pinning the unresolved literal phase.
 The final normal producer-regenerated gate passes 45/45 tests and 41/41 steps,
 including shared helpers, the schema-85 golden, serialization and native/wasm
-sizes. Formatting and exact source hashes match review; publication is
-underway. Checked-error
-base publication and outer-retirement reservation allocation coverage remain
-open; this does not certify complete record-update admission.
+sizes. Formatting and exact source hashes match review; push and exact draft-PR
+head/body readback are verified. Reviewed checkpoint `mwttkmrx` adds actual
+checked-error base-plan publication allocation coverage, retaining authentic
+producer-returned status, live expression frames and existing source-retirement
+authority. Its isolated calibration passes semantic and runtime checks and
+independent bounded review. The full snapshot, exhaustive allocation loop and
+outer local-transaction rollback tests pass the 12/12 diagnostic runtime gate.
+The final source also passes semantic validation and independent full-delta
+bounded review after moving allocator-identity assertions into same-instance
+rollback only. The final normal producer-regenerated gate passes 51/51 tests
+and 41/41 steps, including shared direct-binder helpers, the schema-85 golden,
+serialization and native/wasm sizes. Formatting and compiler hashes match the
+reviewed freeze; publication is pending. The failure fixtures give
+the retained Env the same failing allocator used by publication. This isolated
+producer seam does not claim full-file chronology or terminal admission.
+Outer-retirement reservation allocation coverage remains open;
+this does not certify complete record-update admission.
 Preexisting-base cases, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
 gates remain pending, as do later established-base failure causes and complete

@@ -738,16 +738,18 @@ described in full, with trailers; W6b currently has its provisional title):
 | `wpvvswsl` / `95dfea5a` | W6b checked-base record-update retirements | pushed and PR read-back verified; reviewed bounded WIP, final gate 38/38 tests, 41/41 steps; complete ownership and W6b remain unaccepted |
 | `txopxlzx` / `10f613d6` | W6b checked-base boundary coverage | pushed and exact PR readback verified; reviewed bounded WIP; final gate 41/41 tests, 41/41 steps |
 | `onmovlvr` / `92741c58` | W6b actual base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final gate 43/43 tests, 41/41 steps |
-| `mpqnvuvq` | W6b checked-base owner completion atomicity | reviewed bounded WIP; direct 9/9 and final normal 45/45 tests, 41/41 steps pass; publication underway |
+| `mpqnvuvq` / `9c295876` | W6b checked-base owner completion atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 45/45 tests, 41/41 steps pass |
+| `mwttkmrx` | W6b checked-error base-plan publication atomicity | reviewed bounded WIP; final normal 51/51 tests, 41/41 steps pass; publication pending |
 
-The local and remote `jared/polarity` bookmarks now point at `onmovlvr` /
-`92741c58`, directly above `txopxlzx` / `10f613d6`, `wpvvswsl` / `95dfea5a`,
+The local and remote `jared/polarity` bookmarks now point at `mpqnvuvq` /
+`9c295876`, directly above `onmovlvr` / `92741c58`, `txopxlzx` / `10f613d6`,
+`wpvvswsl` / `95dfea5a`,
 `zkmyrwqu` / `1f69432c`
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`mpqnvuvq` owns the central owner-retirement completion allocation-test
-slice and is not part of that publication.
+`mwttkmrx` owns the reviewed and verified checked-error base-plan publication
+allocation-test slice, whose publication is now pending.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -4014,6 +4016,109 @@ subsets below do not override this latest checkpoint.
   error base publication and R_U reservation OOM, broader R1 admission and
   active serialization, R2/R3, call-formal failures, option (e), runtime adapters
   and full W6b verification remain open.
+
+- Publication of `mpqnvuvq` is complete: Git commit
+  `9c2958760ad72b819f301f75e5146b7fc4f303e7` was fast-forwarded from `92741c58`
+  to `jared/polarity`. PR #10434's exact head, full updated body and draft status
+  were verified; `ru-completion-pr-readback.json` records that readback. The
+  driver opened clean child `mwttkmrxotzsqxsmoyuunuxtrlyrlryl` and explicitly
+  dispatched the same sol-ultra author plus independent sol-ultra planning
+  reviewer for checked-error P_B publication allocation coverage. The new seam
+  must retain one real Env and the actual base `checkExpr` return status, stop
+  before `publishRecordUpdateBasePlan`, preserve authentic pending R_B and its
+  upstream annotation authority, then exercise the shared producer transaction
+  with exact rollback and same-instance retry. No fabricated/deleted authority,
+  solved-state status reconstruction, or premature terminal validator is allowed.
+  R_U reservation and the broader remaining work stay separate; no new-child
+  verification is claimed yet.
+
+- The checked-error P_B planning audit confirms that source-retirement binding
+  itself is allocation-free: both live-pending and preexisting-malformed paths
+  validate and reuse an existing R_B. The new sweep therefore targets the
+  surrounding publication/copy transaction while preserving the authentic
+  R_A/F_A to R_B/F_B recovery prefix. Its initial calibration uses actual
+  annotated-lambda and record expression frames with one caller-owned Env,
+  checks the base once, and publishes P_B while those frames remain live.
+  This is an isolated producer seam, not a full checkFile/checkDef chronology;
+  it does not claim predeclaration or terminal artifact admission. Exact new-
+  copy and registration assertions must not inherit an inappropriate global
+  canonical proof check from an earlier test helper. The stage is being
+  implemented; no calibration or allocation-test result is claimed yet.
+
+- The isolated checked-error P_B calibration is frozen at `7512d489`, Check
+  SHA-256 `b4a56e583c755d286de9eb6686bdaf199a605cb3c2516f9b3facc27df12c661c`.
+  Semantic 72226 passes on the first run. Focused runtime 85114 and a separately
+  dispatched actual-code review are in progress. The driver paused the author
+  at this coherent landed boundary for early feedback; the exhaustive snapshot
+  and allocation-failure loop have not been implemented in this slice yet.
+
+- Checked-error P_B calibration runtime 85114 passes 2/2 on that same source.
+  The driver resumed the author for exact recovery/context snapshots,
+  exhaustive measured publication failures, same-instance retry and a bounded
+  outer LocalMarkerCopyTransaction rollback case. The actual base check's
+  returned cause and live frame/Env context are retained throughout. The normal
+  gate for this task will additionally run the existing direct-binder source,
+  lookup-publication and lookup-completion transaction tests affected by common
+  test-site helper generalization. No full-slice acceptance is claimed yet.
+
+- The actual calibration review gives bounded ACCEPT at `7512d489` /
+  `b4a56e58`. The full checked-error P_B slice is now frozen at `ab828f96`,
+  Check SHA-256
+  `9c78317fe05471165d62b98cb135df2b733d285df752610328287d9cc93ade12`.
+  Semantic 26688 passes; direct runtime 1659 and a separately dispatched
+  full-delta adversarial review are running. The exhaustive fixtures construct
+  their stable Env using the same disabled FailingAllocator subsequently used
+  for publication, so retained VarPool allocation sites remain in the sweep.
+  Snapshots pin the actual recovery prefix, durable/private transaction state,
+  Env and checker context, source nodes, value lookup and error bits. A separate
+  outer LocalMarkerCopyTransaction test checks rollback over that nonempty
+  prefix and same-instance retry. Publication and full-slice acceptance remain
+  pending; no terminal artifact or complete R1 acceptance is claimed.
+
+- Full checked-error P_B direct runtime 1659 passes 12/12 on the frozen
+  `9c78317f` source, including all three new tests and the preceding owner,
+  established-publication and completion-allocation controls. The normal
+  producer-regenerated combined gate 69757 is running with the three added
+  direct-binder helper regressions. Independent full-delta review and
+  publication remain pending.
+
+- Actual full-delta review identified an oracle robustness issue: allocator
+  handle identity belongs only in same-instance rollback, not the semantic
+  comparison between calibration and failure fixtures. Current TestEnv uses
+  the shared testing allocator, so the passing runtime did not expose this
+  coupling. The driver stopped normal gate 69757 with exit 130 before editing;
+  it has no completed gate result. The author is narrowly thawed to move those
+  three handle checks to `expectSameInstanceRollback`, followed by a fresh
+  source freeze, validation and review.
+
+- The sole review correction is frozen at `69a8ab9d`, Check SHA-256
+  `a451728dbc9173074f847d3a4055854a2a6f0db2e971a66de0ad900d36f9982b`.
+  Formatting is unchanged. All three allocator-handle comparisons now live
+  only in the same-instance rollback oracle; semantic cross-fixture equality
+  remains independent of allocation identity. Semantic 21251 is running, and
+  the reviewer has the exact new hash for the final full-delta verdict.
+
+- Semantic 21251 passes on `a451728d`. The independent full-delta adversarial
+  reviewer gives final bounded static ACCEPT for `69a8ab9d` and that exact
+  source hash, including the allocator-oracle correction. Review accepts the
+  authentic retained status and live frames, exhaustive measured allocation
+  sweep, full logical rollback with same-instance ownership checks, retry
+  equivalence and outer local-transaction prefix preservation. Normal combined
+  gate 6063 is running on the final source. This verdict does not claim that
+  gate passed, full checkDef/predeclaration fidelity, R_U reservation, terminal
+  R1 admission or option-(e) completion. Both agents are independently planning
+  a subsequent reservation-only slice without editing the frozen source.
+
+- The final normal gate 6063 passes 51/51 tests and 41/41 steps on the exact
+  independently reviewed `a451728d` compiler source: canonicalization 9,
+  types 10, checker 27 and compile/serde 5. It regenerates Builtins and includes
+  the three older direct-binder source/lookup/completion helper regressions,
+  schema-85 cache golden, serialization and native/wasm sizes. Formatting and
+  all four tracked compiler hashes match the freeze. The driver is preparing
+  the full jj description, WIP push and exact draft-PR head/body readback.
+  No production or schema behavior changed in this task. Next is a separately
+  reviewed reservation-only test slice using the authentic unset-only
+  pre-unset producer cut; no next-task source edits have begun.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
