@@ -2970,7 +2970,10 @@ pub const ExpectedConsumptionPlan = extern struct {
     /// identifies the durable cause; this index independently authenticates
     /// the exact prior-plan causal path.
     failure_cause_plan_index: u32,
-    reserved_0: u32 = 0,
+    /// Exact retirement authorizing destruction of a checked-error
+    /// record-update base. Zero is inactive; an active value is the retirement
+    /// index plus one so retirement index zero remains representable.
+    source_retirement_index_plus_one: u32 = 0,
 
     pub const SafeList = collections.SafeList(@This());
     pub const none = std.math.maxInt(u32);
@@ -2996,6 +2999,13 @@ pub const ExpectedConsumptionPlan = extern struct {
 
     pub const Outcome = enum(u32) {
         anchored,
+        /// A record-update base copy rooted directly at its exact CIR source.
+        /// Unlike an anchored Expected projection, it has no earlier parent
+        /// authority; the produced destination-root occurrence is the proof.
+        source_root_copy,
+        /// The same real base copy when checking the source expression already
+        /// returned an exact typed failure owner.
+        source_root_copy_checked_error,
         /// A producer-authored root which is not itself copied from an earlier
         /// Expected endpoint. The plan itself, together with its exact
         /// `raw_consumer_var`, is the authority endpoint.
@@ -3093,6 +3103,11 @@ pub const ExpectedConsumptionPlan = extern struct {
         return std.enums.fromInt(WhereMarkerCopyOccurrenceSide, self.produced_side);
     }
 
+    pub fn decodedSourceRetirementIndex(self: @This()) ?u32 {
+        if (self.source_retirement_index_plus_one == 0) return null;
+        return self.source_retirement_index_plus_one - 1;
+    }
+
     /// The exact copy-root side which carries the result of an anchored
     /// Expected consumer. The branch seed is the only branch role which
     /// produces an anchored copy; contributions and the final relation use
@@ -3121,9 +3136,10 @@ pub const ExpectedConsumptionPlan = extern struct {
     /// interpreting any referenced indexes. Checked-artifact admission owns
     /// the corresponding bounds and semantic replay.
     pub fn hasLegalTags(self: @This()) bool {
-        if (self.reserved_0 != 0) return false;
         const role = self.decodedRole() orelse return false;
         const outcome = self.decodedOutcome() orelse return false;
+        if ((self.decodedSourceRetirementIndex() != null) !=
+            (outcome == .source_root_copy_checked_error)) return false;
         const reason: ?Reason = if (self.reason == none)
             null
         else
@@ -3170,15 +3186,28 @@ pub const ExpectedConsumptionPlan = extern struct {
                     .relation_plan => true,
                     .evidence_free_plan => true,
                 },
-            .producer_root => !parent_present and !produced_any,
-            .evidence_free => parent_present and
+            .source_root_copy => self.source_retirement_index_plus_one == 0 and
+                role == .record_update_base and
+                reason == null and !owner_present and !parent_present and
+                produced_all and self.decodedProducedSide().? == .destination,
+            .source_root_copy_checked_error => self.decodedSourceRetirementIndex() != null and
+                role == .record_update_base and
+                reason == .record_update_base_checked_error and owner_present and
+                owner_relation == .direct_source_retirement and !parent_present and
+                produced_all and self.decodedProducedSide().? == .destination,
+            .producer_root => self.source_retirement_index_plus_one == 0 and
+                !parent_present and !produced_any,
+            .evidence_free => self.source_retirement_index_plus_one == 0 and parent_present and
                 self.parent_authority.decodedKind().? == .evidence_free_plan and
                 !produced_any,
-            .retained => parent_present and !produced_any,
-            .related => parent_present and !produced_any,
-            .not_projected => !produced_any and
+            .retained => self.source_retirement_index_plus_one == 0 and
+                parent_present and !produced_any,
+            .related => self.source_retirement_index_plus_one == 0 and
+                parent_present and !produced_any,
+            .not_projected => self.source_retirement_index_plus_one == 0 and !produced_any and
                 (owner_relation != .none or !parent_present),
-            .checked_error => !produced_any and switch (owner_relation) {
+            .checked_error => self.source_retirement_index_plus_one == 0 and
+                !produced_any and switch (owner_relation) {
                 .direct_source_retirement, .upstream_retirement => parent_present,
                 .none, .same_node_retirement => true,
             },
@@ -3207,9 +3236,16 @@ pub const ExpectedConsumptionPlan = extern struct {
         if (!planCauseAllowed(.none, owner_kind) or has_failure_cause_plan) return false;
         return switch (outcome) {
             .anchored => true,
+            .source_root_copy => role == .record_update_base,
             .producer_root => role == .call_argument,
             .related => role == .branch_contribution or role == .branch_final,
-            .evidence_free, .retained, .not_projected, .checked_error, .reserved => false,
+            .source_root_copy_checked_error,
+            .evidence_free,
+            .retained,
+            .not_projected,
+            .checked_error,
+            .reserved,
+            => false,
         };
     }
 
@@ -3230,7 +3266,6 @@ pub const ExpectedConsumptionPlan = extern struct {
             .aggregate_child_relation_suppressed,
             .aggregate_retired_after_child_relation,
             .aggregate_retired_by_parent_branch_failure,
-            .record_update_base_checked_error,
             .record_update_field_base_checked_error,
             .record_update_projection_mismatch,
             .record_update_field_checked_error,
@@ -3262,6 +3297,7 @@ pub const ExpectedConsumptionPlan = extern struct {
             .default_parameter_constraint_rejected,
             .default_recursive_rejected,
             => .checked_error,
+            .record_update_base_checked_error => .source_root_copy_checked_error,
         };
     }
 
@@ -3280,7 +3316,6 @@ pub const ExpectedConsumptionPlan = extern struct {
             .aggregate_child_relation_rejected,
             .aggregate_child_relation_suppressed,
             .record_update_base_checked_error,
-            .record_update_field_base_checked_error,
             .record_update_field_checked_error,
             .branch_expected_direct_error,
             .branch_body_error_short_circuit,
@@ -3316,6 +3351,7 @@ pub const ExpectedConsumptionPlan = extern struct {
             .default_parameter_constraint_rejected,
             .default_recursive_rejected,
             => .same_node_retirement,
+            .record_update_field_base_checked_error => .upstream_retirement,
         };
     }
 
@@ -3335,14 +3371,13 @@ pub const ExpectedConsumptionPlan = extern struct {
                 .branch_expected_direct_error,
                 .branch_body_error_short_circuit,
                 => planCauseAllowed(.any, owner_kind),
-                .record_update_base_checked_error,
-                .record_update_field_base_checked_error,
                 .record_update_field_checked_error,
                 .branch_expected_compatibility_rejected,
                 .branch_accumulator_fold_rejected,
                 .call_callee_checked_error,
                 .default_expr_checked_error,
                 => planCauseAllowed(.retirement_or_diagnostic, owner_kind),
+                .record_update_base_checked_error => planCauseAllowed(.any, owner_kind),
                 .call_operand_checked_error => planCauseAllowed(.retirement, owner_kind),
                 .parent_evidence_free,
                 .aggregate_no_expected,
@@ -3352,6 +3387,7 @@ pub const ExpectedConsumptionPlan = extern struct {
                 .aggregate_retired_by_parent_branch_failure,
                 .branch_retired_after_failure,
                 .branch_retired_after_ambiguity_verdict,
+                .record_update_field_base_checked_error,
                 .record_update_projection_mismatch,
                 .record_update_field_relation_rejected,
                 .branch_no_expected_result,
@@ -4300,12 +4336,33 @@ pub const ExpectedRetiredConsumer = extern struct {
 
     pub const SafeList = collections.SafeList(@This());
 
+    /// Finite reasons which belong only to a retirement's durable consumer
+    /// range. They deliberately do not extend `ExpectedConsumptionPlan.Reason`:
+    /// the referenced plan keeps its producer-authored outcome and cause.
+    pub const RetirementOnlyReason = enum(u32) {
+        record_update_retired_after_base_checked_error = 0x8000_0000,
+
+        comptime {
+            for (std.meta.fields(ExpectedConsumptionPlan.Reason)) |plan_reason| {
+                for (std.meta.fields(@This())) |retirement_reason| {
+                    if (plan_reason.value == retirement_reason.value) {
+                        @compileError("retirement-only reasons must remain disjoint from Expected plan reasons");
+                    }
+                }
+            }
+        }
+    };
+
     pub fn decodedRole(self: @This()) ?ExpectedConsumptionPlan.Role {
         return std.enums.fromInt(ExpectedConsumptionPlan.Role, self.role);
     }
 
     pub fn decodedReason(self: @This()) ?ExpectedConsumptionPlan.Reason {
         return std.enums.fromInt(ExpectedConsumptionPlan.Reason, self.reason);
+    }
+
+    pub fn decodedRetirementOnlyReason(self: @This()) ?RetirementOnlyReason {
+        return std.enums.fromInt(RetirementOnlyReason, self.reason);
     }
 };
 
@@ -12666,9 +12723,9 @@ test "expected consumption endpoints are canonical for anchored and producer roo
     };
     try std.testing.expect(plan.hasLegalTags());
 
-    plan.reserved_0 = 1;
+    plan.source_retirement_index_plus_one = 1;
     try std.testing.expect(!plan.hasLegalTags());
-    plan.reserved_0 = 0;
+    plan.source_retirement_index_plus_one = 0;
 
     plan.parent_authority.payload.copy_occurrence.occurrence_offset = none;
     try std.testing.expect(!plan.hasLegalTags());

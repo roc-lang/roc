@@ -2069,12 +2069,259 @@ copy/root occurrence. A related outcome is legal only for a branch contribution
 or final row; it has mandatory parent authority, no reason or failure owner,
 and no produced copy coordinate. Every other non-copy outcome names its finite
 producer-proven reason when its outcome class requires one.
+The record-update base has two additional closed copy outcomes because its
+copy starts at a syntax-owned source rather than at an earlier Expected
+authority. `source_root_copy` is legal only for `record_update_base`, has no
+reason or failure owner, and retains the exact produced destination-root
+occurrence. `source_root_copy_checked_error` has the same role and produced
+endpoint, but also requires `record_update_base_checked_error` and the exact
+typed cause returned by checking the base expression. That cause may use any
+closed `CauseOwner` arm which `CheckedExprStatus` can actually carry. Admission
+uses an exhaustive arm-specific switch: an Expected failure, consumer
+retirement, CIR diagnostic, or provider checked-error publication is legal
+only when that arm's existing semantic validator proves its exact producer and
+causal ownership by this `base_expr`. The cause may own `base_expr` directly,
+or at least one distinct syntax-valid Expected plan owned by `base_expr` may
+carry the identical nested cause returned by its child; the base plan itself
+cannot supply this edge. Canonical plan order is not causal authority for this
+cross-owner relation. Multiple distinct authentic child
+slots may carry the same propagated cause and are not collapsed into a unique
+path. An inactive or unknown arm, mere index validity, and a same-shaped
+cross-owner cause are rejected. Both outcomes require an inactive parent
+authority, an inactive call-root-plan word, and
+`failure_cause_plan_index == none`. The trailing physical word is the closed
+`source_retirement_index_plus_one` coordinate: raw zero is its sole inactive
+encoding, and raw `n > 0` names retirement index `n - 1`; producer encoding
+rejects overflow. It is active exactly for `source_root_copy_checked_error`.
+The success arm and every other Expected outcome require zero. The success
+arm's failure owner is inactive; the checked-error arm admits only its exact
+reason, cause, and source-retirement coordinate. The base row's complete
+semantic key is
+`{ owner_node = record_expr, site_node = base_expr,
+role = record_update_base, slot = 0,
+raw_consumer_var = varFrom(base_expr) }`. Its produced side is destination and
+selects the step's exact root occurrence. The raw consumer remains
+the syntax request `V == varFrom(base_expr)`; the produced occurrence retains
+the actual root selected by the copy and therefore does not recast a redirected
+`V` as that selected root. No call `producer_root` encoding or call-root-plan
+word is reused for either record-update outcome.
+
+The checked-status cause and the later destructive rewrite are separate
+authorities. `failure_owner` states why checking the base failed;
+`source_retirement_index_plus_one` states which exact expression retirement
+authorizes the base node's final runtime-error representation. When checking
+returns a checked-error status, the base plan/copy/registration transaction
+first validates that status cause through its declared direct or nested causal
+edge, then independently binds the plan to the unique producer-owned
+retirement of `base_expr`. A retirement named by a propagated child cause is
+not thereby the base's retirement. Conversely, a non-retirement status cause
+does not exclude an exact retirement lifecycle already owned by the base. A
+canonicalization-authored malformed base reuses its already-complete
+`preexisting_runtime_error` row and exact malformed-expression publication.
+For a still-live base, an existing pending checker retirement may be reused
+only through exactly one closed checker-local owner lifecycle: either one
+aggregate Expected-retirement draft with its exact plan range and reason, or
+one homogeneous ineligible-failure draft group whose members all name the
+same retirement, producer kind, and exact base-owned failures. The aggregate
+call-operand lifecycle additionally owns its homogeneous `call_operand`
+failure-draft members naming that same retirement. The checked-base
+record-update owner draft declared below is one further closed lifecycle: the
+draft binds that retirement to the complete arbitrary-index base/field
+membership and typed checked-base cause. The registrations identify only the
+unchanged `P_B` and `P_F` rows; they never name `R_U`. Producer-side status
+validation and
+`pendingExpressionRetirementAtProducer` recognize that exact draft directly,
+including when a nested record update is the base of another update; they do
+not rediscover it by scanning nodes or solved types. No other mixing of these
+draft families is legal. Matching a raw node number, merely finding one draft,
+or finding a retirement through the status cause is not authority to borrow
+it. Every currently reachable checked-status producer in this statement-level
+base domain already owns one of those exact retirement lifecycles. If a future
+checked-status producer reaches this boundary without one, that is an
+invariant violation: the producer must first declare and publish exact
+retirement authority, its lifecycle, and an authentic test; an existing closed
+kind may be used only when that producer satisfies its declared contract. The
+record-update transaction does not manufacture a zero-consumer retirement,
+borrow another owner's row, or infer missing destructive authority from the
+final type graph. Existing retirement kinds remain completed by their existing
+owning drafts, and a preexisting malformed base is already in its final
+representation.
+
+Terminal validation decodes retirement rows without recursively consulting a
+record-update plan, then separately validates the plan-to-retirement join.
+Every checked-error base plan names exactly one legal expression retirement
+whose `retired_node` is its exact `site_node`; a successful base and every
+non-base outcome name no source retirement. For a checker rewrite, the
+distinct fresh canonical request has a live base node whose tag and complete
+payload equal the retirement snapshot, while the checked candidate has the
+exact final malformed node and diagnostic.
+For a preexisting runtime error, candidate and fresh contexts instead both use
+the retired-base phase and replay the same exact malformed publication,
+retirement, payload, and diagnostic.
+Neither arm admits an arbitrary malformed tag. Before owner retirement, the
+outer record is a live `expr_record` and its supplied fields are ordinary live
+expression children. The checked-base owner-retirement rule below preserves
+that exact pre-rewrite record topology when the outer expression must also be
+replaced.
+
+Contextual replay selects one explicit phase from the admission request; it
+does not infer freshness from pointer identity. During `produced` replay the
+resolution environment is the just-checked candidate itself. The local
+producer and terminal validators have already authenticated the checked base
+plan, its completed source retirement, and its internal owner/base edge, so
+contextual replay requires that same candidate edge in the retired-base phase
+but does not compare a retirement snapshot with the already-rewritten node.
+During `fresh_canonical` replay, a checker-rewrite retirement instead requires
+the independently supplied canonical environment to contain the live original
+base at that exact edge and requires its tag and all payload words to equal the
+retirement snapshot. A `preexisting_runtime_error` uses the retired-base phase
+in both candidate and fresh environments and replays its exact malformed
+publication and diagnostic. During `recovery_forbidden` replay, every
+checked-error base outcome is rejected; clean-cache validation has no recovery
+authority with which to admit it. A successful `source_root_copy` uses the
+live-base phase in every replay mode. These modes neither repair a missing
+source edge nor weaken the plan-to-retirement inverse.
+
+A checked base is also a complete typed trigger for retirement of its enclosing
+record-update expression. After the base and every supplied field have
+published their exact arbitrary-index registrations, the record-update
+producer reserves one outer retirement `R_U` and a private owner draft. `R_U`
+uses the existing `checker_rewrite_expected` kind, snapshots the live outer
+`expr_record`, owns no Expected failures or rejection owner, and is distinct
+from the base-child retirement `R_B` named by the base plan. The draft retains
+the outer expression, `R_U`, the exact base plan and its checked-status cause,
+and the original outer tag and all sixteen payload bytes. Reservation verifies
+that the registered owner set contains exactly one
+`source_root_copy_checked_error` base plan and one
+`record_update_field_base_checked_error` plan for each supplied field. Every
+field plan names that base plan through its upstream coordinate and carries the
+same typed cause. Zero supplied fields still produce the one base member.
+Nested Expected producers may interleave their own plan indices and are not
+members of this owner set.
+
+The owner frame receives `CauseOwner.expected_consumer_retirement(R_U)` from
+this producer transaction. That explicit cause, rather than a later
+`varContainsError` observation, authorizes enqueueing and replacement of the
+outer record update. The base plan remains
+`source_root_copy_checked_error`, retains its original typed cause and `R_B`,
+and every skipped field plan remains its original upstream checked-error row.
+They are not restamped to name `R_U`. Instead, `R_U` owns one durable
+`ExpectedRetiredConsumer` row for each exact registered plan index. Those rows
+use the new finite reason
+`record_update_retired_after_base_checked_error`, whose owner relation is
+same-node retirement, while their referenced plans retain their earlier
+outcomes. Thus the durable authority graph is `R_U -> {P_B, P_F...} -> R_B`;
+`P_B` is its sole typed trigger and `R_U` owns no Expected-failure row. `R_U`
+must differ from `R_B`, but no numeric retirement-index order between them is
+authority: rebuild completes the full retirement map before remapping either
+plan coordinate. `R_U` is not a second claim over the base node or its cause.
+
+The global registration stream is append-only before its first rebuild; it
+does not promise plan-index order or adjacency. Central completion is legal
+only after the enclosing Probe has committed and `probe_depth == 0`; this guard
+is checked before any reservation or mutation because filling a previously
+reserved consumer prefix, removing the owner draft, and replacing the CIR node
+are not length-only Probe rollback operations. At that boundary, immediately
+before subtree invalidation, central replacement selects the unique owner
+draft, filters and revalidates its complete exact arbitrary-index membership
+and unchanged original node, then fallibly reserves the complete durable
+retired-consumer suffix. This consumes explicit registered plan indices and
+does not reconstruct membership. The base child may still have its original
+expression or may already be malformed because erroneous expressions have no
+semantic hash-iteration order; the exact pending producer lifecycle or
+completed `R_B` authenticates those two phases. Only then may invalidation run.
+After successful invalidation, central replacement appends the exact rows into
+the reserved suffix, sorts only that new suffix by
+`expectedRetiredConsumerLessThan`, fills `R_U`'s snapshot, range, and final
+diagnostic, removes the draft, and replaces the outer node without another
+fallible operation. A Probe that fails before this depth-zero boundary
+preserves the pending retirement, draft, registration stream, and every durable
+pool together. A second retirement for the same outer expression, a missing or
+duplicated registration, a foreign owner plan, or a changed base cause is an
+invariant violation.
+
+Producer replay selects the base's current phase from the exact `P_B.site`
+node and pairs it with that plan's explicit `R_B`: a live base requires its
+unchanged unique pending producer draft, while a malformed base requires the
+completed scalar retirement inverse. A pending nested `R_U` is authenticated
+by its own row, draft, and shallow plan membership at that explicit phase, and
+its immediate `P_B` must name a distinct `R_B` whose owner is that exact base
+site. A live `R_B` is authenticated by its unique shallow pending lifecycle; a
+retired `R_B` by the completed scalar inverse. Every pending row has inactive
+diagnostic, consumer, failure, and rejection fields and zero reserved words.
+This immediate check does not recursively walk the nested cause chain;
+terminal validation separately closes every complete group and cause edge.
+Thus completing `R_B` does not make its unchanged checker-rewrite kind a false
+claim that the base is still live.
+
+Terminal validation handles this reason through a record-update-specific
+consumer-range arm; the literal-aggregate range rules are unchanged. It safely
+decodes `R_U`'s saved `expr_record` payload and its backing rows. This scalar
+snapshot decoder proves only bounds, tags, the exact base child, supplied-field
+count and ordered field name/value sites, and ordered unset names; it does not
+consult the owner plan group or its causes. A separate nonrecursive group pass
+requires the consumer set to be exactly the one base plan plus every supplied-
+field plan, then requires every referenced plan's unchanged base or upstream
+checked-error outcome and the exact `R_B` edge. Thus a plan-to-step topology
+check may consume the scalar owner snapshot without recursively invoking the
+same `R_U` group validator.
+
+`record_update_retired_after_base_checked_error` is a retirement-row-only
+reason, never a legal `ExpectedConsumptionPlan.reason`. Its dedicated retired-
+consumer predicate permits only `record_update_base` and
+`record_update_field`, while the group pass requires the base member to remain
+`source_root_copy_checked_error` and each field member to remain
+`record_update_field_base_checked_error` with its upstream `P_B`. The new
+consumer reason therefore does not admit a third, unproduced base-plan
+`checked_error` outcome through the generic plan legality table.
+Produced replay uses the retired outer and retired base with those completed
+rows. Fresh-canonical replay requires a live outer record and compares its
+decoded base, field, and unset topology with the snapshot-derived candidate
+topology; comparing payload indices alone is insufficient because their
+backing rows are mutable serialized data. The base phase in that fresh record
+is live for a checker rewrite and retired for a preexisting runtime error.
+Recovery-forbidden replay rejects `R_U` and its checked plans.
+
+Checked-boundary rebuilding is illegal with an incomplete owner draft. It
+remaps every arbitrary consumer plan reference, `R_U`, `R_B`, the base plan's
+source-retirement coordinate, and every upstream field-plan coordinate in one
+transaction. Completion-time appends may follow the nonsemantic erroneous-map
+iteration order; rebuilding uses the existing disjoint-range validation and
+canonically repacks every owned consumer suffix into retirement-row order
+before admission. A pending nonempty aggregate retirement before or after
+`R_U` therefore cannot make append order into serialized authority. Repeated
+rebuild and mutable or readonly serialization preserve the exact retirement
+graph and fresh-context topology. Clean-cache validation rejects the owner
+retirement together with all other recovery rows. This finite rule covers an
+outer retirement caused by its exact checked-base status. An established base
+followed by a projection mismatch, supplied-field failure, unset failure, or
+final record relation failure requires its own separately declared typed owner
+cause; none is inferred from this rule or from the final solved type.
+
+The base plan, copy, registration, and binding to the already-authored source
+retirement are one nested Probe and outer local-copy transaction. OOM preserves
+their incoming lengths and every durable pool. Checked-boundary rebuilding
+runs only after the source retirement's owning draft has completed, orders the
+retirement pool before relocating the plan, remaps the source-retirement
+coordinate through the exact retirement map, and preserves both the original
+status cause and rewrite identity across repeated rebuild and serialization.
+Clean-cache admission rejects every retirement and every checked-error,
+reserved, or unknown Expected outcome, including this base outcome.
+
 Aggregate projections, branch accumulators and contributions, record-update
 base/field projections, nominal backings, call formals, and default-field
-checks occupy distinct finite roles. Admission enumerates the eligible CIR
-nodes and slots and proves a bijection between those sites and their plan rows;
-separately, every anchored row and every expected-copy origin are bijective.
-Thus a same-shaped node cannot be substituted for the actual consumer, and
+checks occupy distinct finite roles. The current in-progress record-update
+slice validates every durable base or field plan against its exact owner and
+slot, every durable base copy step against exactly one base plan, and every
+field slot of an owner named by those durable rows. It does not infer that the
+checker reached every retained raw `expr_record` node. A future source-site
+reachability authority must close the converse for deletion of a whole base
+plan, copy step, and field-plan bundle; canonical retention, solved types, and
+late graph walks cannot reconstruct that authority. Other producer families
+remain governed by their separately declared inventory and bijection
+requirements; this staged record-update rule does not certify their pending
+implementation gaps. Thus a
+same-shaped node cannot be substituted for an actual published consumer, and
 neither settled type equality nor duplicated unchecked metadata supplies
 authority. A record update first eagerly copies its exact base expression
 under a `.record_update_base { record_expr, base_expr, root_binding }`
@@ -2110,6 +2357,59 @@ coordinated checked-side retarget is supplied only by a distinct fresh or
 admitted resolution context, which replays the same edge against its canonical
 source. A monomorphic call analogously uses a call-formal producer root rather
 than pretending a SchemeUse occurred.
+The base copy, its mandatory base plan, and a checker-local registration of
+that exact plan index are one rollback unit. Each supplied field plan and its
+registration are likewise one rollback unit. The registrations are an
+explicit arbitrary-index set, not a range: checking one field may publish
+nested consumers before the next field is reached. The checker never derives
+membership by scanning solved types or by assuming adjacency. For a retained
+live record update, admission enumerates the durable plans by their exact owner
+and syntax sites; it does not consume checker-local registrations. Those
+registrations preserve the same producer-authored arbitrary-index membership
+for the separate destructive-retirement transaction. Before checked-boundary
+canonical rebuilding, the checker validates every registration against its
+exact still-current durable plan. An explicit checker-local lifecycle bit
+distinguishes the initial recorded phase from the consumed phase, so deleting
+all registrations before the first rebuild cannot masquerade as successful
+consumption. A failed rebuild retains its incoming lifecycle phase and handles;
+the first successful rebuild commit clears the recorded set and changes the bit
+to consumed infallibly rather than leaving stale pre-rebuild plan indices
+available.
+Repeated rebuild requires the consumed bit and an explicitly empty transient
+set, and admission continues to depend only on the durable plans. The source
+payload and the durable plans are
+bijective: there is exactly one base plan even when there are zero supplied
+fields, exactly one field plan for every supplied field, and no extra plan;
+the base plan in turn names exactly one `record_update_base` step whose origin
+has the same owner and base child, and every such step is named by exactly one
+base plan. The step's produced destination occurrence and the base plan's
+produced occurrence are identical. Field projections retain their existing
+parent/projection/support chain, but that chain must begin at this owner's
+base endpoint. Thus moving both `record_expr` and `base_expr` to a same-root
+sibling, duplicating a base step, or orphaning either side is corrupt even when
+all raw variables currently resolve together.
+When the base status is checked-error, every skipped field plan keeps the base
+plan's produced occurrence as its parent, carries the identical typed cause,
+and names the strictly earlier base plan through `failure_cause_plan_index`.
+Its outcome is `checked_error`, its sole reason is
+`record_update_field_base_checked_error`, and it carries no produced endpoint
+or call-root-plan word. The reason-to-owner table classifies this as an
+upstream relation. This is an explicit upstream edge from the field to the one
+base failure, not a second unlinked direct-source claim.
+
+This staged inverse authorizes a malformed record-update owner only through
+the checked-base `R_U` rule above and its complete arbitrary-index group. The
+authentic direct-binder error regression is its required accepted side:
+ordinary checking poisons both the base and outer update, while the unchanged
+base plan, source-retirement join, skipped-field plans, and `R_U` consumer
+range retain the exact typed cause. A record-update owner retired after an
+already-established base because of a projection mismatch, supplied-field
+failure, unset failure, or final record relation remains rejected until the
+separate R2/R3 producer rules declare its cause and group. Deleting the whole
+base-plan, copy-step, and field-plan bundle likewise remains outside this
+slice until an explicit source-site reachability authority closes that
+converse. Neither a saved payload nor final solved roots may recover either
+missing authority, and normal poisoning is not changed to keep an owner live.
 An aggregate has one owner projection, plus one plan row for every CIR child
 contribution slot; child rows may deliberately select the same occurrence when
 the expected graph aliases those slots. A branch has three explicit phases:
@@ -5879,8 +6179,8 @@ Implementation checkpoint (2026-09-10): W6a is implemented. W6b's ordinary
 and virtual-ingress fresh-flex allocation witnesses, exact allocation-claim
 uniqueness, interpolation-role validation, and canonical empty-list cache
 serialization are implemented and independently reviewed in WIP change
-`qpmsttws` (cache version 83). The next WIP task, `zkmyrwqu` (cache version
-84), implements the exact record-update root-request bridge declared below;
+`qpmsttws` (cache version 83). Published WIP `zkmyrwqu` (cache version
+84, Git commit `1f69432c`) implements the exact record-update root-request bridge declared below;
 its focused types, checker corruption/serialization, exhaustive staged
 allocation-failure tests, and measured cache golden pass. Adversarial review
 accepts only these lower-level mechanics as an incomplete WIP checkpoint;
@@ -5890,6 +6190,34 @@ inverse remain completion dependencies: retargeting both an origin's owner
 and base to a sibling can satisfy the per-row live source-edge check while
 orphaning the original owner and duplicating the sibling. The mandatory base
 plan and exact live/retired owner converse declared above must close this gap.
+The current `wpvvswsl` checkpoint (cache version 85) adds those mandatory
+base plans and exact source-retirement reuse. Its explicit context-mode
+correction and removal of unused dedicated retirement machinery have passed
+semantic preflight and independent static review. The authentic direct-binder
+error test still rejects the erased outer record; both base and outer are
+normally poisoned. The checked-base `R_U` owner-retirement rule above has
+received exact-text design approval and is being implemented to address that
+failure. Its first coherent integration at `03284444` passes semantic
+preflight and the direct one-field runtime diagnostic, including local and
+fresh admission. The normal producer-regenerated gate also passes (2/2 tests,
+7/7 steps). Continued review required pre-invalidation completion to
+revalidate semantic base-cause ownership, not only equal cause fields; that
+fix at `69db2011` has independent static acceptance and green semantic and
+direct runtime regression (2/2 tests). The existing combined regression passes
+36/37 tests, with only the expected stale cache golden failing; native/wasm
+serialization sizes pass. The measured schema-85 golden is updated and its
+focused retry passes (2/2 tests, 25/25 steps). The pending-inner-retirement
+phase defect is repaired by exact, nonrecursive immediate-source identity
+validation. At `fc78e9a1`, semantic checking and the direct runtime regression
+pass (3/3 tests), including an authentic nested base with both enclosing-owner
+retirement orders, the real checker tail, fresh admission and equal canonical
+bytes. The final combined gate passes 38/38 tests and 41/41 steps, including
+regenerated Builtins, the measured cache golden, serialization and native/wasm
+sizes. Independent review accepts this bounded WIP checkpoint, not complete
+record-update or checked-boundary admission. Zero-field/unset and preexisting-base cases,
+arbitrary interleaving, corruption, allocation-failure, repeated rebuild and
+serialization gates remain pending, as do later established-base failure
+causes and complete source-site reachability authority.
 These are checked-boundary prerequisites, not
 completion of option (e)'s nested-row rejection or the direct-result/Try
 runtime adapters. Those mechanisms and full-suite verification remain open;
@@ -9271,6 +9599,17 @@ inventory without inspecting solved types, records the complete ordered
 reachability closure privately, reserves all durable invalidation membership,
 then commits map entries, literal-plan retirement, and omitted-default
 compaction without another fallible operation.
+The checked-base record-update owner retirement is a finite central-replacement
+arm of that transaction. At depth zero it consumes the exact pending `R_U`
+draft and its arbitrary-index registrations and reserves the durable suffix
+before subtree invalidation. It then infallibly appends and sorts only that new
+suffix before publishing the snapshot, range, diagnostic, draft removal, and
+runtime-error node. It does not restamp `P_B` or any `P_F`; their existing
+outcomes and typed causes remain the referenced members of `R_U`. Accepted:
+the direct-binder checked-base update retires with that complete group,
+including nested or interleaved producer plans. Rejected: missing, duplicated,
+foreign-owner, or cause-divergent membership, completion under a Probe, and
+every later established-base R2/R3 cause without its own declared rule.
 
 - `recheckNominalConstructorBackings`—policy: Nominal Constructor Backing
   Relation, "Settled-State Re-Decision" (above). This is the one probe of

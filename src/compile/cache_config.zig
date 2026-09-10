@@ -201,7 +201,9 @@ pub const Constants = struct {
     ///     descriptors require canonical zero capacity.
     /// 84: Record-update base-copy origins distinguish a direct raw request
     ///     from an authenticated redirected identity-share root selection.
-    pub const CACHE_VERSION = 84;
+    /// 85: Record-update Expected plans retain their syntax-owned base-copy
+    ///     outcome and exact checked-error causal edge.
+    pub const CACHE_VERSION = 85;
 };
 
 /// Configuration for the Roc cache system.

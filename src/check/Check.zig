@@ -700,6 +700,19 @@ aggregate_expected_retirement_drafts: std.ArrayListUnmanaged(AggregateExpectedRe
 /// ownership by scanning settled plans or the (possibly poisoned) CIR node.
 /// Entries are append-only within Probe scopes.
 expected_owner_plan_ranges: std.ArrayListUnmanaged(ExpectedOwnerPlanRange),
+/// Exact checker-local membership for record-update base and supplied-field
+/// plans. Field checking can interleave nested Expected producers, so this is
+/// an arbitrary-index registration stream rather than an owned range.
+record_update_expected_plan_registrations: std.ArrayListUnmanaged(RecordUpdateExpectedPlanRegistration),
+/// Pending checked-base record-update owner retirements. Each draft binds the
+/// reserved outer retirement to the complete arbitrary-index base/field plan
+/// membership before destructive replacement erases the record payload.
+record_update_owner_retirement_drafts: std.ArrayListUnmanaged(RecordUpdateOwnerRetirementDraft),
+/// False while the registration stream names pre-rebuild plan indices. The
+/// first successful checked-boundary rebuild consumes that stream; a later
+/// rebuild requires the explicit consumed phase rather than treating a
+/// spuriously empty first stream as valid.
+record_update_expected_plan_registrations_consumed: bool,
 /// Tracks unannotated expression identities whose checked value type contains
 /// an error and therefore cannot be used to introduce a parent call relation.
 call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
@@ -8157,7 +8170,7 @@ fn validateWhereMarkerCopySourceNamespaces(
     builtin_env: *const ModuleEnv,
     context: ImportResolution,
 ) W6bSemanticValidationError!void {
-    try validateRecordUpdateBaseOriginContext(env, context.resolution_env);
+    try validateRecordUpdateBaseOriginContext(env, context);
     const steps = env.where_marker_copy_steps.items.items;
     const occurrences = env.where_marker_copy_occurrences.items.items;
     const pairs = env.where_marker_copy_pairs.items.items;
@@ -8290,9 +8303,15 @@ fn validateWhereMarkerCopySourceNamespaces(
     if (!validateSelectedMethodDecisionsContext(env, builtin_env, context)) return error.CorruptArtifact;
 }
 
-fn recordUpdateBaseOriginMatchesCanonicalEdge(
+const RecordUpdateBaseNodePhase = enum {
+    live,
+    retired,
+};
+
+fn recordUpdateBaseOriginMatchesCanonicalEdgeAtPhase(
     env: *const ModuleEnv,
     origin: ModuleEnv.WhereMarkerRecordUpdateBaseOrigin,
+    phase: RecordUpdateBaseNodePhase,
 ) bool {
     if (origin.record_expr >= env.store.nodes.len() or
         origin.base_expr >= env.store.nodes.len())
@@ -8301,24 +8320,210 @@ fn recordUpdateBaseOriginMatchesCanonicalEdge(
     }
     const record_node = env.store.nodes.get(@enumFromInt(origin.record_expr));
     const base_node = env.store.nodes.get(@enumFromInt(origin.base_expr));
-    if (record_node.tag != .expr_record or !isExprNodeTag(base_node.tag)) return false;
+    if (record_node.tag != .expr_record or switch (phase) {
+        .live => !isExprNodeTag(base_node.tag),
+        .retired => base_node.tag != .malformed,
+    }) return false;
     const record = record_node.getPayload().expr_record;
     if (record.fields_ext_idx >= env.store.span_with_node_data.items.items.len) return false;
     const fields_ext = env.store.span_with_node_data.items.items[record.fields_ext_idx];
     return fields_ext.node != 0 and fields_ext.node == origin.base_expr;
 }
 
+fn recordUpdateBaseOriginMatchesCanonicalEdge(
+    env: *const ModuleEnv,
+    origin: ModuleEnv.WhereMarkerRecordUpdateBaseOrigin,
+) bool {
+    return recordUpdateBaseOriginMatchesCanonicalEdgeAtPhase(env, origin, .live);
+}
+
+fn recordUpdateBaseStepHasRetiredSource(
+    cir: *const ModuleEnv,
+    step_index: u32,
+    origin: ModuleEnv.WhereMarkerRecordUpdateBaseOrigin,
+) bool {
+    const owner = retiredRecordUpdateOwnerSnapshot(
+        cir,
+        origin.record_expr,
+        .retired,
+    ) orelse return false;
+    if (owner.syntax.base_expr != origin.base_expr) {
+        return false;
+    }
+    var matching_plans: usize = 0;
+    for (cir.expected_consumption_plans.items.items) |plan| {
+        if (plan.owner_node != origin.record_expr or plan.site_node != origin.base_expr or
+            plan.decodedRole() != .record_update_base or
+            plan.decodedOutcome() != .source_root_copy_checked_error or
+            plan.produced_copy_step != step_index or
+            plan.produced_occurrence_offset !=
+                cir.where_marker_copy_steps.items.items[step_index].root_occurrence_offset or
+            !expectedRecordUpdateBaseSourceRetirementIsLocallyValid(cir, plan))
+        {
+            continue;
+        }
+        matching_plans += 1;
+    }
+    return matching_plans == 1;
+}
+
+fn recordUpdateBaseResolutionPhase(
+    env: *const ModuleEnv,
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+    replay: ImportResolution.ExpectedFailureReplay,
+) W6bSemanticValidationError!RecordUpdateBaseNodePhase {
+    return switch (plan.decodedOutcome() orelse return error.CorruptArtifact) {
+        .source_root_copy => .live,
+        .source_root_copy_checked_error => switch (replay) {
+            .produced => .retired,
+            .recovery_forbidden => return error.CorruptArtifact,
+            .fresh_canonical => blk: {
+                const retirement_index = plan.decodedSourceRetirementIndex() orelse
+                    return error.CorruptArtifact;
+                if (retirement_index >= env.expected_consumer_retirements.items.items.len) {
+                    return error.CorruptArtifact;
+                }
+                break :blk switch (env.expected_consumer_retirements.items.items[
+                    retirement_index
+                ].decodedKind() orelse return error.CorruptArtifact) {
+                    .preexisting_runtime_error => .retired,
+                    .checker_rewrite_expected,
+                    .checker_rewrite_ineligible,
+                    => .live,
+                    .checker_poison_expected_pattern => return error.CorruptArtifact,
+                };
+            },
+        },
+        else => return error.CorruptArtifact,
+    };
+}
+
+fn recordUpdateBaseResolutionSyntax(
+    resolution_env: *const ModuleEnv,
+    owner_node: u32,
+    phase: RecordUpdateBaseNodePhase,
+    replay: ImportResolution.ExpectedFailureReplay,
+) ?ExpectedRecordUpdateSyntax {
+    return switch (replay) {
+        .produced => expectedRecordUpdateSyntaxForOwnerPhase(
+            resolution_env,
+            owner_node,
+            phase,
+        ),
+        .fresh_canonical,
+        .recovery_forbidden,
+        => expectedRecordUpdateSyntaxAtPhase(
+            resolution_env,
+            owner_node,
+            phase,
+        ),
+    };
+}
+
 fn validateRecordUpdateBaseOriginContext(
     env: *const ModuleEnv,
-    resolution_env: *const ModuleEnv,
+    context: ImportResolution,
 ) W6bSemanticValidationError!void {
-    for (env.where_marker_copy_steps.items.items) |step| {
+    const resolution_env = context.resolution_env;
+    for (env.where_marker_copy_steps.items.items, 0..) |step, step_index| {
         if (step.decodedKind() != .record_update_base) continue;
         const origin = step.origin.record_update_base;
-        if (!recordUpdateBaseOriginMatchesCanonicalEdge(env, origin) or
-            !recordUpdateBaseOriginMatchesCanonicalEdge(resolution_env, origin))
+        var matching_plan: ?ModuleEnv.ExpectedConsumptionPlan = null;
+        for (env.expected_consumption_plans.items.items) |plan| {
+            if (plan.decodedRole() != .record_update_base or
+                plan.produced_copy_step != @as(u32, @intCast(step_index)) or
+                !expectedRecordUpdateBasePlanMatchesStep(env, plan)) continue;
+            if (matching_plan != null) return error.CorruptArtifact;
+            matching_plan = plan;
+        }
+        const plan = matching_plan orelse return error.CorruptArtifact;
+        const resolution_phase = try recordUpdateBaseResolutionPhase(
+            env,
+            plan,
+            context.expected_failure_replay,
+        );
+        const resolution_syntax = recordUpdateBaseResolutionSyntax(
+            resolution_env,
+            origin.record_expr,
+            resolution_phase,
+            context.expected_failure_replay,
+        ) orelse return error.CorruptArtifact;
+        if (origin.record_expr != plan.owner_node or
+            origin.base_expr != resolution_syntax.base_expr)
         {
             return error.CorruptArtifact;
+        }
+    }
+    for (env.expected_consumption_plans.items.items) |plan| {
+        if (plan.decodedRole() != .record_update_base) continue;
+        const outcome = plan.decodedOutcome() orelse return error.CorruptArtifact;
+        const local_phase: RecordUpdateBaseNodePhase = switch (outcome) {
+            .source_root_copy => .live,
+            .source_root_copy_checked_error => .retired,
+            else => return error.CorruptArtifact,
+        };
+        const local = expectedRecordUpdateSyntaxForOwnerPhase(
+            env,
+            plan.owner_node,
+            local_phase,
+        ) orelse return error.CorruptArtifact;
+        const resolution_phase = try recordUpdateBaseResolutionPhase(
+            env,
+            plan,
+            context.expected_failure_replay,
+        );
+        const fresh_syntax = recordUpdateBaseResolutionSyntax(
+            resolution_env,
+            plan.owner_node,
+            resolution_phase,
+            context.expected_failure_replay,
+        ) orelse return error.CorruptArtifact;
+        if (local.base_expr != plan.site_node or fresh_syntax.base_expr != plan.site_node or
+            !expectedRecordUpdateSyntaxesEqual(env, local, resolution_env, fresh_syntax))
+        {
+            return error.CorruptArtifact;
+        }
+        if (plan.decodedOutcome() == .source_root_copy_checked_error) {
+            const retirement_index = plan.decodedSourceRetirementIndex() orelse
+                return error.CorruptArtifact;
+            if (retirement_index >= env.expected_consumer_retirements.items.items.len) {
+                return error.CorruptArtifact;
+            }
+            const retirement = env.expected_consumer_retirements.items.items[retirement_index];
+            switch (context.expected_failure_replay) {
+                .produced => {},
+                .recovery_forbidden => return error.CorruptArtifact,
+                .fresh_canonical => switch (retirement.decodedKind() orelse
+                    return error.CorruptArtifact) {
+                    .preexisting_runtime_error => {
+                        if (fresh_syntax.base_expr >= resolution_env.store.nodes.len()) {
+                            return error.CorruptArtifact;
+                        }
+                        const fresh_node = resolution_env.store.nodes.get(
+                            @enumFromInt(fresh_syntax.base_expr),
+                        );
+                        if (fresh_node.tag != .malformed or
+                            retirement.original_node_tag != @intFromEnum(fresh_node.tag) or
+                            !std.meta.eql(
+                                retirement.original_payload,
+                                @as([4]u32, @bitCast(fresh_node.getPayload())),
+                            ) or !expectedConsumerRetirementNodeIsLocallyValid(
+                            resolution_env,
+                            retirement,
+                        )) {
+                            return error.CorruptArtifact;
+                        }
+                    },
+                    .checker_rewrite_expected,
+                    .checker_rewrite_ineligible,
+                    => if (!expectedRetirementOriginalExprMatchesFresh(
+                        env,
+                        resolution_env,
+                        retirement_index,
+                    )) return error.CorruptArtifact,
+                    .checker_poison_expected_pattern => return error.CorruptArtifact,
+                },
+            }
         }
     }
 }
@@ -9861,7 +10066,14 @@ fn validateExpectedBranchPlanGroup(
                             return false;
                         }
                     },
-                    .anchored, .producer_root, .evidence_free, .not_projected, .reserved => return false,
+                    .anchored,
+                    .source_root_copy,
+                    .source_root_copy_checked_error,
+                    .producer_root,
+                    .evidence_free,
+                    .not_projected,
+                    .reserved,
+                    => return false,
                 }
             }
 
@@ -9899,10 +10111,25 @@ fn validateExpectedBranchPlanGroup(
                         return false;
                     }
                 },
-                .anchored, .producer_root, .evidence_free, .retained, .not_projected, .reserved => return false,
+                .anchored,
+                .source_root_copy,
+                .source_root_copy_checked_error,
+                .producer_root,
+                .evidence_free,
+                .retained,
+                .not_projected,
+                .reserved,
+                => return false,
             }
         },
-        .related, .producer_root, .evidence_free, .retained, .reserved => return false,
+        .related,
+        .source_root_copy,
+        .source_root_copy_checked_error,
+        .producer_root,
+        .evidence_free,
+        .retained,
+        .reserved,
+        => return false,
     }
     return true;
 }
@@ -10033,6 +10260,617 @@ fn expectedFreshShapePlanMatchesCir(
         .default_field,
         => false,
     };
+}
+
+const ExpectedRecordUpdateSyntax = struct {
+    base_expr: u32,
+    fields_start: u32,
+    fields_len: u32,
+    unsets_start: u32,
+    unsets_len: u32,
+};
+
+fn expectedRecordUpdateSyntaxFromPayload(
+    cir: *const ModuleEnv,
+    payload: CIR.Node.Payload,
+    base_phase: RecordUpdateBaseNodePhase,
+) ?ExpectedRecordUpdateSyntax {
+    const record = payload.expr_record;
+    if (!std.mem.allEqual(u8, &record._padding, 0) or record._reserved != 0 or
+        record.fields_ext_idx >= cir.store.span_with_node_data.items.items.len or
+        record.unsets_span2_idx >= cir.store.span2_data.items.items.len)
+    {
+        return null;
+    }
+    const fields_ext = cir.store.span_with_node_data.items.items[record.fields_ext_idx];
+    const unsets = cir.store.span2_data.items.items[record.unsets_span2_idx];
+    if (fields_ext.node == 0 or fields_ext.node >= cir.store.nodes.len() or
+        switch (base_phase) {
+            .live => !isExprNodeTag(cir.store.nodes.get(@enumFromInt(fields_ext.node)).tag),
+            .retired => cir.store.nodes.get(@enumFromInt(fields_ext.node)).tag != .malformed,
+        } or
+        !rangeFits(fields_ext.start, fields_ext.len, cir.store.index_data.items.items.len) or
+        !rangeFits(unsets.start, unsets.len, cir.store.index_data.items.items.len))
+    {
+        return null;
+    }
+    const field_nodes = cir.store.index_data.items.items[fields_ext.start..][0..fields_ext.len];
+    for (field_nodes) |field_node| {
+        if (field_node >= cir.store.nodes.len()) return null;
+        const field = cir.store.nodes.get(@enumFromInt(field_node));
+        const field_payload = if (field.tag == .record_field)
+            field.getPayload().record_field
+        else
+            return null;
+        if (!std.mem.allEqual(u8, &field_payload._padding, 0) or
+            field_payload._reserved != 0 or field_payload.expr >= cir.store.nodes.len() or
+            !isExprNodeTag(cir.store.nodes.get(@enumFromInt(field_payload.expr)).tag))
+        {
+            return null;
+        }
+    }
+    const unset_nodes = cir.store.index_data.items.items[unsets.start..][0..unsets.len];
+    for (unset_nodes) |unset_node| {
+        if (unset_node >= cir.store.nodes.len()) return null;
+        const unset = cir.store.nodes.get(@enumFromInt(unset_node));
+        const unset_payload = if (unset.tag == .record_unset_field)
+            unset.getPayload().record_unset_field
+        else
+            return null;
+        if (!std.mem.allEqual(u8, &unset_payload._padding, 0) or
+            unset_payload._reserved != 0)
+        {
+            return null;
+        }
+    }
+    return .{
+        .base_expr = fields_ext.node,
+        .fields_start = fields_ext.start,
+        .fields_len = fields_ext.len,
+        .unsets_start = unsets.start,
+        .unsets_len = unsets.len,
+    };
+}
+
+fn expectedRecordUpdateSyntaxAtPhase(
+    cir: *const ModuleEnv,
+    owner_node: u32,
+    base_phase: RecordUpdateBaseNodePhase,
+) ?ExpectedRecordUpdateSyntax {
+    if (owner_node >= cir.store.nodes.len()) return null;
+    const node = cir.store.nodes.get(@enumFromInt(owner_node));
+    if (node.tag != .expr_record) return null;
+    return expectedRecordUpdateSyntaxFromPayload(cir, node.getPayload(), base_phase);
+}
+
+fn expectedRecordUpdateSyntax(
+    cir: *const ModuleEnv,
+    owner_node: u32,
+) ?ExpectedRecordUpdateSyntax {
+    return expectedRecordUpdateSyntaxAtPhase(cir, owner_node, .live);
+}
+
+const RetiredRecordUpdateOwnerSnapshot = struct {
+    retirement_index: u32,
+    retirement: ModuleEnv.ExpectedConsumerRetirement,
+    syntax: ExpectedRecordUpdateSyntax,
+};
+
+fn retiredRecordUpdateOwnerSnapshot(
+    cir: *const ModuleEnv,
+    owner_node: u32,
+    base_phase: RecordUpdateBaseNodePhase,
+) ?RetiredRecordUpdateOwnerSnapshot {
+    var selected: ?RetiredRecordUpdateOwnerSnapshot = null;
+    for (cir.expected_consumer_retirements.items.items, 0..) |retirement, retirement_index| {
+        if (retirement.retired_node != owner_node or
+            retirement.decodedOwnerKind() != .expression or
+            retirement.decodedKind() != .checker_rewrite_expected or
+            retirement.decodedOriginalNodeTag() != .expr_record)
+        {
+            continue;
+        }
+        if (!retirement.hasLegalTags() or retirement.expected_failures_len != 0 or
+            retirement.expected_failures_start != 0 or
+            retirement.rejection_owner_kind != ModuleEnv.ExpectedConsumerRetirement.none or
+            !expectedConsumerRetirementNodeIsLocallyValid(cir, retirement) or
+            !rangeFits(
+                retirement.retired_consumers_start,
+                retirement.retired_consumers_len,
+                cir.expected_retired_consumers.items.items.len,
+            ))
+        {
+            return null;
+        }
+        const consumers = cir.expected_retired_consumers.items.items[retirement.retired_consumers_start..][0..retirement.retired_consumers_len];
+        if (consumers.len == 0) return null;
+        for (consumers) |consumer| {
+            if (consumer.decodedRetirementOnlyReason() !=
+                .record_update_retired_after_base_checked_error)
+            {
+                return null;
+            }
+        }
+        const payload: CIR.Node.Payload = @bitCast(retirement.original_payload);
+        const syntax = expectedRecordUpdateSyntaxFromPayload(
+            cir,
+            payload,
+            base_phase,
+        ) orelse return null;
+        if (selected != null) return null;
+        selected = .{
+            .retirement_index = @intCast(retirement_index),
+            .retirement = retirement,
+            .syntax = syntax,
+        };
+    }
+    return selected;
+}
+
+fn expectedRecordUpdateSyntaxForOwnerPhase(
+    cir: *const ModuleEnv,
+    owner_node: u32,
+    base_phase: RecordUpdateBaseNodePhase,
+) ?ExpectedRecordUpdateSyntax {
+    if (expectedRecordUpdateSyntaxAtPhase(cir, owner_node, base_phase)) |syntax| {
+        return syntax;
+    }
+    return (retiredRecordUpdateOwnerSnapshot(cir, owner_node, base_phase) orelse
+        return null).syntax;
+}
+
+fn expectedRecordUpdateSyntaxAtCurrentPhase(
+    cir: *const ModuleEnv,
+    owner_node: u32,
+) ?ExpectedRecordUpdateSyntax {
+    if (expectedRecordUpdateSyntaxForOwnerPhase(cir, owner_node, .live)) |live| {
+        return live;
+    }
+    return expectedRecordUpdateSyntaxForOwnerPhase(cir, owner_node, .retired);
+}
+
+fn expectedRecordUpdateSyntaxesEqual(
+    left_cir: *const ModuleEnv,
+    left: ExpectedRecordUpdateSyntax,
+    right_cir: *const ModuleEnv,
+    right: ExpectedRecordUpdateSyntax,
+) bool {
+    if (left.base_expr != right.base_expr or left.fields_len != right.fields_len or
+        left.unsets_len != right.unsets_len)
+    {
+        return false;
+    }
+    for (0..@as(usize, left.fields_len)) |slot| {
+        const left_field_raw = left_cir.store.index_data.items.items[
+            @as(usize, left.fields_start) + slot
+        ];
+        const right_field_raw = right_cir.store.index_data.items.items[
+            @as(usize, right.fields_start) + slot
+        ];
+        if (left_field_raw >= left_cir.store.nodes.len() or
+            right_field_raw >= right_cir.store.nodes.len()) return false;
+        const left_field = left_cir.store.nodes.get(@enumFromInt(left_field_raw));
+        const right_field = right_cir.store.nodes.get(@enumFromInt(right_field_raw));
+        if (left_field.tag != .record_field or right_field.tag != .record_field) return false;
+        const left_payload = left_field.getPayload().record_field;
+        const right_payload = right_field.getPayload().record_field;
+        if (left_payload.name != right_payload.name or left_payload.expr != right_payload.expr) {
+            return false;
+        }
+    }
+    for (0..@as(usize, left.unsets_len)) |slot| {
+        const left_unset_raw = left_cir.store.index_data.items.items[
+            @as(usize, left.unsets_start) + slot
+        ];
+        const right_unset_raw = right_cir.store.index_data.items.items[
+            @as(usize, right.unsets_start) + slot
+        ];
+        if (left_unset_raw >= left_cir.store.nodes.len() or
+            right_unset_raw >= right_cir.store.nodes.len()) return false;
+        const left_unset = left_cir.store.nodes.get(@enumFromInt(left_unset_raw));
+        const right_unset = right_cir.store.nodes.get(@enumFromInt(right_unset_raw));
+        if (left_unset.tag != .record_unset_field or
+            right_unset.tag != .record_unset_field or
+            left_unset.getPayload().record_unset_field.name !=
+                right_unset.getPayload().record_unset_field.name)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn expectedRecordUpdateFieldSite(
+    cir: *const ModuleEnv,
+    update: ExpectedRecordUpdateSyntax,
+    slot: u32,
+) ?u32 {
+    if (slot >= update.fields_len) return null;
+    const field_node = cir.store.index_data.items.items[update.fields_start + slot];
+    if (field_node >= cir.store.nodes.len()) return null;
+    const node = cir.store.nodes.get(@enumFromInt(field_node));
+    if (node.tag != .record_field) return null;
+    return node.getPayload().record_field.expr;
+}
+
+fn expectedRecordUpdateBaseAuthority(
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+) ?ModuleEnv.ExpectedMarkerAuthority {
+    if (!plan.hasLegalTags() or plan.decodedRole() != .record_update_base or
+        plan.decodedProducedSide() != .destination)
+    {
+        return null;
+    }
+    return .{
+        .kind = @intFromEnum(ModuleEnv.ExpectedMarkerAuthority.Kind.copy_occurrence),
+        .payload = .{ .copy_occurrence = .{
+            .copy_step = plan.produced_copy_step,
+            .occurrence_offset = plan.produced_occurrence_offset,
+            .side = @intFromEnum(ModuleEnv.WhereMarkerCopyOccurrenceSide.destination),
+        } },
+    };
+}
+
+fn expectedRecordUpdateCausePlanHasLiveOwnerSite(
+    types: *const types_mod.Store,
+    cir: *const ModuleEnv,
+    plan_index: u32,
+    owner_node: u32,
+    cause: ModuleEnv.CauseOwner,
+) bool {
+    const plans = cir.expected_consumption_plans.items.items;
+    if (plan_index >= plans.len) return false;
+    const plan = plans[plan_index];
+    if (!plan.hasLegalTags() or plan.owner_node != owner_node or
+        !expectedCauseOwnersEqual(plan.failure_owner, cause))
+    {
+        return false;
+    }
+    const reason = plan.decodedReason() orelse return false;
+    if (ModuleEnv.ExpectedConsumptionPlan.ownerRelationForReason(reason) == .none) {
+        return false;
+    }
+    const role = plan.decodedRole() orelse return false;
+    return switch (role) {
+        .aggregate_owner => blk: {
+            if (plan.site_node != owner_node or plan.slot != 0 or
+                owner_node >= cir.store.nodes.len()) break :blk false;
+            break :blk switch (cir.store.nodes.get(@enumFromInt(owner_node)).tag) {
+                .expr_list, .expr_tuple, .expr_record, .expr_tag => true,
+                else => false,
+            };
+        },
+        .list_element,
+        .tuple_element,
+        .record_field,
+        .tag_payload,
+        .record_update_field,
+        .lambda_return,
+        => expectedFreshShapePlanMatchesCir(cir, plan),
+        .record_update_base => blk: {
+            const update = expectedRecordUpdateSyntax(cir, owner_node) orelse break :blk false;
+            break :blk plan.site_node == update.base_expr and plan.slot == 0 and
+                expectedRecordUpdateBasePlanMatchesStep(cir, plan);
+        },
+        .branch_seed, .branch_contribution, .branch_final => validateExpectedBranchPlans(types, cir),
+        .call_root, .call_argument => validateExpectedCallPlans(cir),
+        .nominal_decl, .nominal_backing, .default_field => false,
+    };
+}
+
+fn expectedRecordUpdateBaseCauseIsLocallyValid(
+    types: *const types_mod.Store,
+    cir: *const ModuleEnv,
+    base_expr: u32,
+    base_plan_index: u32,
+    cause: ModuleEnv.CauseOwner,
+) bool {
+    if (!cause.hasCanonicalTags(true)) return false;
+    const cause_kind = cause.decodedKind() orelse return false;
+    const semantically_valid = switch (cause_kind) {
+        .expected_failure => blk: {
+            const reference = cause.payload.expected_failure;
+            if (reference.index >= cir.expected_failures.items.items.len) break :blk false;
+            const failure = cir.expected_failures.items.items[reference.index];
+            break :blk failure.hasLegalTagsAt(reference.index) and
+                expectedFailureSubjectIsLocallyValid(
+                    types,
+                    cir,
+                    failure,
+                    reference.index,
+                );
+        },
+        .expected_consumer_retirement => blk: {
+            const reference = cause.payload.expected_consumer_retirement;
+            if (reference.index >= cir.expected_consumer_retirements.items.items.len) {
+                break :blk false;
+            }
+            const retirement = cir.expected_consumer_retirements.items.items[reference.index];
+            break :blk retirement.hasLegalTags() and
+                expectedConsumerRetirementNodeIsLocallyValid(cir, retirement);
+        },
+        .cir_diagnostic => blk: {
+            const diagnostic = cause.payload.cir_diagnostic.index;
+            var found = false;
+            for (cir.malformed_expression_publications.items.items) |publication| {
+                if (publication.diagnostic_index == diagnostic and
+                    malformedExpressionPublicationIsLocallyValid(cir, publication))
+                {
+                    found = true;
+                }
+            }
+            break :blk found;
+        },
+        // The dependency publication is authenticated by contextual admission.
+        // This local layer still requires a base-owned failure/plan edge below.
+        .provider_where_alias_checked_error => true,
+    };
+    if (!semantically_valid) return false;
+
+    const directly_owned = switch (cause_kind) {
+        .expected_failure => blk: {
+            const failure = cir.expected_failures.items.items[
+                cause.payload.expected_failure.index
+            ];
+            break :blk failure.decodedOwnerKind() == .expression and
+                failure.owner_node == base_expr;
+        },
+        .expected_consumer_retirement => blk: {
+            const retirement = cir.expected_consumer_retirements.items.items[
+                cause.payload.expected_consumer_retirement.index
+            ];
+            break :blk retirement.decodedOwnerKind() == .expression and
+                retirement.retired_node == base_expr;
+        },
+        .cir_diagnostic => malformedExpressionPublicationContains(
+            cir,
+            base_expr,
+            cause.payload.cir_diagnostic.index,
+        ),
+        .provider_where_alias_checked_error => blk: {
+            var found = false;
+            for (cir.expected_failures.items.items, 0..) |failure, failure_index| {
+                if (failure.decodedOwnerKind() != .expression or
+                    failure.owner_node != base_expr or
+                    !expectedCauseOwnersEqual(failure.cause_owner, cause) or
+                    !failure.hasLegalTagsAt(@intCast(failure_index)) or
+                    !expectedFailureSubjectIsLocallyValid(
+                        types,
+                        cir,
+                        failure,
+                        @intCast(failure_index),
+                    ))
+                {
+                    continue;
+                }
+                found = true;
+            }
+            break :blk found;
+        },
+    };
+    if (directly_owned) return true;
+
+    for (cir.expected_consumption_plans.items.items, 0..) |_, plan_index| {
+        if (plan_index == @as(usize, base_plan_index)) continue;
+        if (expectedRecordUpdateCausePlanHasLiveOwnerSite(
+            types,
+            cir,
+            @intCast(plan_index),
+            base_expr,
+            cause,
+        )) return true;
+    }
+    return false;
+}
+
+fn expectedRecordUpdateBasePlanMatchesStep(
+    cir: *const ModuleEnv,
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+) bool {
+    if (plan.produced_copy_step >= cir.where_marker_copy_steps.items.items.len) return false;
+    const step = cir.where_marker_copy_steps.items.items[plan.produced_copy_step];
+    if (step.decodedKind() != .record_update_base or
+        step.root_occurrence_offset != plan.produced_occurrence_offset or
+        !rangeFits(
+            step.occurrences_start,
+            step.occurrences_len,
+            cir.where_marker_copy_occurrences.items.items.len,
+        ) or step.root_occurrence_offset >= step.occurrences_len)
+    {
+        return false;
+    }
+    const origin = step.origin.record_update_base;
+    const base_phase: RecordUpdateBaseNodePhase = switch (plan.decodedOutcome() orelse return false) {
+        .source_root_copy => .live,
+        .source_root_copy_checked_error => if (origin.base_expr < cir.store.nodes.len() and
+            cir.store.nodes.get(@enumFromInt(origin.base_expr)).tag == .malformed)
+            .retired
+        else
+            .live,
+        else => return false,
+    };
+    const update = expectedRecordUpdateSyntaxForOwnerPhase(
+        cir,
+        origin.record_expr,
+        base_phase,
+    ) orelse return false;
+    return origin.record_expr == plan.owner_node and
+        origin.base_expr == plan.site_node and update.base_expr == origin.base_expr;
+}
+
+fn expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+    cir: *const ModuleEnv,
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+) bool {
+    if (plan.decodedOutcome() != .source_root_copy_checked_error) return false;
+    const retirement_index = plan.decodedSourceRetirementIndex() orelse return false;
+    if (retirement_index >= cir.expected_consumer_retirements.items.items.len) return false;
+    const retirement = cir.expected_consumer_retirements.items.items[retirement_index];
+    if (!retirement.hasLegalTags() or retirement.decodedOwnerKind() != .expression or
+        retirement.retired_node != plan.site_node or
+        !expectedConsumerRetirementNodeIsLocallyValid(cir, retirement))
+    {
+        return false;
+    }
+    return switch (retirement.decodedKind() orelse return false) {
+        .preexisting_runtime_error => plan.failure_owner.decodedExpectedConsumerRetirement() != null and
+            plan.failure_owner.payload.expected_consumer_retirement.index == retirement_index,
+        .checker_rewrite_expected,
+        .checker_rewrite_ineligible,
+        => true,
+        .checker_poison_expected_pattern => false,
+    };
+}
+
+fn expectedRecordUpdateFieldBeginsAtBase(
+    cir: *const ModuleEnv,
+    plan_index: u32,
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+    base_authority: ModuleEnv.ExpectedMarkerAuthority,
+) bool {
+    if (expectedMarkerAuthoritiesEqual(plan.parent_authority, base_authority)) {
+        if (plan.decodedOutcome() != .anchored) return true;
+        if (plan.produced_copy_step >= cir.where_marker_copy_steps.items.items.len) return false;
+        const projection = cir.where_marker_copy_steps.items.items[plan.produced_copy_step];
+        return projection.decodedKind() == .aggregate_expected_projection and
+            projection.origin.aggregate_expected_projection.consumer_node == plan.owner_node and
+            projection.origin.aggregate_expected_projection.expected_plan_index == plan_index and
+            expectedMarkerAuthoritiesEqual(
+                projection.origin.aggregate_expected_projection.parent_authority,
+                base_authority,
+            );
+    }
+    if (plan.parent_authority.decodedKind() != .copy_occurrence) return false;
+    const parent = plan.parent_authority.payload.copy_occurrence;
+    if (parent.side != @intFromEnum(ModuleEnv.WhereMarkerCopyOccurrenceSide.destination) or
+        parent.copy_step >= cir.where_marker_copy_steps.items.items.len)
+    {
+        return false;
+    }
+    const projection = cir.where_marker_copy_steps.items.items[parent.copy_step];
+    return projection.decodedKind() == .aggregate_expected_projection and
+        projection.root_occurrence_offset == parent.occurrence_offset and
+        projection.origin.aggregate_expected_projection.consumer_node == plan.owner_node and
+        projection.origin.aggregate_expected_projection.expected_plan_index == plan_index and
+        expectedMarkerAuthoritiesEqual(
+            projection.origin.aggregate_expected_projection.parent_authority,
+            base_authority,
+        );
+}
+
+fn validateExpectedRecordUpdatePlans(
+    types: *const types_mod.Store,
+    cir: *const ModuleEnv,
+) bool {
+    const plans = cir.expected_consumption_plans.items.items;
+
+    for (plans, 0..) |plan, plan_index_usize| {
+        const role = plan.decodedRole() orelse return false;
+        if (role != .record_update_base and role != .record_update_field) continue;
+        const update = expectedRecordUpdateSyntaxAtCurrentPhase(
+            cir,
+            plan.owner_node,
+        ) orelse return false;
+        const plan_index: u32 = @intCast(plan_index_usize);
+        if (!plan.hasLegalTags()) return false;
+
+        if (role == .record_update_base) {
+            const outcome = plan.decodedOutcome() orelse return false;
+            if (plan.site_node != update.base_expr or plan.slot != 0 or
+                plan.raw_consumer_var != update.base_expr or
+                !expectedRecordUpdateBasePlanMatchesStep(cir, plan))
+            {
+                return false;
+            }
+            switch (outcome) {
+                .source_root_copy => {},
+                .source_root_copy_checked_error => if (!expectedRecordUpdateBaseCauseIsLocallyValid(
+                    types,
+                    cir,
+                    update.base_expr,
+                    plan_index,
+                    plan.failure_owner,
+                ) or !expectedRecordUpdateBaseSourceRetirementIsLocallyValid(cir, plan)) return false,
+                else => return false,
+            }
+            var base_count: usize = 0;
+            var field_count: usize = 0;
+            for (plans) |owned| {
+                if (owned.owner_node != plan.owner_node) continue;
+                switch (owned.decodedRole() orelse return false) {
+                    .record_update_base => base_count += 1,
+                    .record_update_field => field_count += 1,
+                    else => return false,
+                }
+            }
+            if (base_count != 1 or field_count != @as(usize, update.fields_len)) return false;
+            for (0..@as(usize, update.fields_len)) |slot_usize| {
+                const slot: u32 = @intCast(slot_usize);
+                const site = expectedRecordUpdateFieldSite(cir, update, slot) orelse return false;
+                var slot_count: usize = 0;
+                for (plans) |owned| {
+                    if (owned.owner_node == plan.owner_node and
+                        owned.decodedRole() == .record_update_field and
+                        owned.slot == slot and owned.site_node == site)
+                    {
+                        slot_count += 1;
+                    }
+                }
+                if (slot_count != 1) return false;
+            }
+            continue;
+        }
+
+        const field_site = expectedRecordUpdateFieldSite(cir, update, plan.slot) orelse
+            return false;
+        if (plan.site_node != field_site) {
+            return false;
+        }
+        var base_plan_index: ?u32 = null;
+        for (plans, 0..) |candidate, candidate_index| {
+            if (candidate.owner_node != plan.owner_node or
+                candidate.decodedRole() != .record_update_base)
+            {
+                continue;
+            }
+            if (base_plan_index != null) return false;
+            base_plan_index = @intCast(candidate_index);
+        }
+        const base_index = base_plan_index orelse return false;
+        if (base_index >= plan_index) return false;
+        const base_plan = plans[base_index];
+        const base_authority = expectedRecordUpdateBaseAuthority(base_plan) orelse return false;
+        if (!expectedRecordUpdateFieldBeginsAtBase(cir, plan_index, plan, base_authority)) {
+            return false;
+        }
+        if (base_plan.decodedOutcome() == .source_root_copy_checked_error) {
+            if (plan.decodedOutcome() != .checked_error or
+                plan.decodedReason() != .record_update_field_base_checked_error or
+                plan.failure_cause_plan_index != base_index or
+                !expectedCauseOwnersEqual(plan.failure_owner, base_plan.failure_owner) or
+                !expectedMarkerAuthoritiesEqual(plan.parent_authority, base_authority))
+            {
+                return false;
+            }
+        } else if (plan.decodedReason() == .record_update_field_base_checked_error) {
+            return false;
+        }
+    }
+
+    for (cir.where_marker_copy_steps.items.items, 0..) |step, step_index| {
+        if (step.decodedKind() != .record_update_base) continue;
+        var matching_plans: usize = 0;
+        for (plans) |plan| {
+            if (plan.decodedRole() == .record_update_base and
+                plan.produced_copy_step == @as(u32, @intCast(step_index)) and
+                expectedRecordUpdateBasePlanMatchesStep(cir, plan))
+            {
+                matching_plans += 1;
+            }
+        }
+        if (matching_plans != 1) return false;
+    }
+    return true;
 }
 
 const ExpectedCallChildPhase = enum {
@@ -11445,6 +12283,15 @@ fn expectedCauseOwnersEqual(
                 left_provider.reserved_0 == right_provider.reserved_0;
         },
     };
+}
+
+/// These record-update rows transport an already-owned ExpectedFailure cause;
+/// they do not become a second owner of that failure publication.
+fn recordUpdateExpectedPlanCarriesCausalReference(
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+) bool {
+    return plan.decodedOutcome() == .source_root_copy_checked_error or
+        plan.decodedReason() == .record_update_field_base_checked_error;
 }
 
 fn expectedFailuresEqual(
@@ -12924,7 +13771,9 @@ fn expectedConsumerRetirementNodeIsLocallyValid(
             cir.store.isDiagnosticIndex(@enumFromInt(retirement.diagnostic_index)) and
             cir.store.getExpr(@enumFromInt(raw_node)).e_runtime_error.diagnostic ==
                 @as(CIR.Diagnostic.Idx, @enumFromInt(retirement.diagnostic_index)),
-        .checker_rewrite_expected, .checker_rewrite_ineligible => owner_kind == .expression and
+        .checker_rewrite_expected,
+        .checker_rewrite_ineligible,
+        => owner_kind == .expression and
             isExprNodeTag(original_tag) and
             node.tag == .malformed and
             cir.store.isDiagnosticIndex(@enumFromInt(retirement.diagnostic_index)) and
@@ -12954,7 +13803,14 @@ fn expectedRetiredPlanOutcomeIsLocallyValid(
                     expectedCauseOwnerIsLocallyValid(cir, plan.failure_owner) and
                     plan.failure_cause_plan_index == none;
             },
-            .related, .producer_root, .retained, .not_projected, .reserved => false,
+            .related,
+            .source_root_copy,
+            .source_root_copy_checked_error,
+            .producer_root,
+            .retained,
+            .not_projected,
+            .reserved,
+            => false,
         },
         .aggregate_retired_by_parent_branch_failure => return switch (outcome) {
             .anchored, .evidence_free => true,
@@ -12962,7 +13818,14 @@ fn expectedRetiredPlanOutcomeIsLocallyValid(
                 plan.parent_authority.kind == ModuleEnv.ExpectedMarkerAuthority.none and
                 plan.failure_owner.kind == ModuleEnv.CauseOwner.none and
                 plan.failure_cause_plan_index == none,
-            .related, .producer_root, .retained, .checked_error, .reserved => false,
+            .related,
+            .source_root_copy,
+            .source_root_copy_checked_error,
+            .producer_root,
+            .retained,
+            .checked_error,
+            .reserved,
+            => false,
         },
         .branch_retired_after_failure => return switch (plan.decodedRole() orelse return false) {
             .branch_seed => outcome == .anchored,
@@ -12976,7 +13839,14 @@ fn expectedRetiredPlanOutcomeIsLocallyValid(
                         expectedCauseOwnerIsLocallyValid(cir, plan.failure_owner) and
                         plan.failure_cause_plan_index == none;
                 },
-                .anchored, .producer_root, .evidence_free, .not_projected, .reserved => false,
+                .anchored,
+                .source_root_copy,
+                .source_root_copy_checked_error,
+                .producer_root,
+                .evidence_free,
+                .not_projected,
+                .reserved,
+                => false,
             },
             .branch_final => switch (outcome) {
                 .related => true,
@@ -12984,7 +13854,15 @@ fn expectedRetiredPlanOutcomeIsLocallyValid(
                     plan.failure_owner.decodedExpectedConsumerRetirement() != null and
                     plan.failure_owner.payload.expected_consumer_retirement.index == retirement_index and
                     plan.failure_cause_plan_index == none,
-                .anchored, .producer_root, .evidence_free, .retained, .not_projected, .reserved => false,
+                .anchored,
+                .source_root_copy,
+                .source_root_copy_checked_error,
+                .producer_root,
+                .evidence_free,
+                .retained,
+                .not_projected,
+                .reserved,
+                => false,
             },
             .aggregate_owner,
             .list_element,
@@ -13015,6 +13893,8 @@ fn expectedRetiredPlanOutcomeIsLocallyValid(
                     plan.failure_owner.kind == ModuleEnv.CauseOwner.none and
                     plan.failure_cause_plan_index == none,
                 .anchored,
+                .source_root_copy,
+                .source_root_copy_checked_error,
                 .producer_root,
                 .evidence_free,
                 .not_projected,
@@ -13515,6 +14395,122 @@ fn expectedRetiredBranchContributionCount(
     };
 }
 
+fn expectedRetiredRecordUpdateOwnerRangeIsLocallyValid(
+    types: *const types_mod.Store,
+    cir: *const ModuleEnv,
+    retirement: ModuleEnv.ExpectedConsumerRetirement,
+    retirement_index: u32,
+    consumers: []const ModuleEnv.ExpectedRetiredConsumer,
+) bool {
+    const owner = retiredRecordUpdateOwnerSnapshot(
+        cir,
+        retirement.retired_node,
+        .retired,
+    ) orelse return false;
+    if (owner.retirement_index != retirement_index or
+        owner.retirement.retired_node != retirement.retired_node or
+        consumers.len != @as(usize, owner.syntax.fields_len) + 1)
+    {
+        return false;
+    }
+    const plans = cir.expected_consumption_plans.items.items;
+    var base_plan_index: ?u32 = null;
+    var base_plan_value: ?ModuleEnv.ExpectedConsumptionPlan = null;
+    for (consumers, 0..) |consumer, consumer_offset| {
+        if (consumer.reserved_0 != 0 or
+            consumer.decodedRetirementOnlyReason() !=
+                .record_update_retired_after_base_checked_error or
+            consumer.decodedReason() != null or consumer.plan_index >= plans.len or
+            consumer.owner_node != retirement.retired_node or
+            consumer.raw_owner_var != retirement.retired_node or
+            consumer.owner_node >= cir.store.nodes.len() or
+            consumer.site_node >= cir.store.nodes.len() or
+            consumer.raw_owner_var >= types.len() or consumer.raw_consumer_var >= types.len() or
+            (consumer_offset != 0 and !expectedRetiredConsumerLessThan(
+                {},
+                consumers[consumer_offset - 1],
+                consumer,
+            )))
+        {
+            return false;
+        }
+        const plan = plans[consumer.plan_index];
+        if (!plan.hasLegalTags() or consumer.owner_node != plan.owner_node or
+            consumer.site_node != plan.site_node or consumer.role != plan.role or
+            consumer.slot != plan.slot or consumer.raw_consumer_var != plan.raw_consumer_var)
+        {
+            return false;
+        }
+        switch (consumer.decodedRole() orelse return false) {
+            .record_update_base => {
+                if (base_plan_index != null or consumer.slot != 0 or
+                    consumer.site_node != owner.syntax.base_expr or
+                    plan.decodedOutcome() != .source_root_copy_checked_error or
+                    plan.decodedReason() != .record_update_base_checked_error or
+                    !expectedRecordUpdateBasePlanMatchesStep(cir, plan) or
+                    !expectedRecordUpdateBaseCauseIsLocallyValid(
+                        types,
+                        cir,
+                        owner.syntax.base_expr,
+                        consumer.plan_index,
+                        plan.failure_owner,
+                    ) or !expectedRecordUpdateBaseSourceRetirementIsLocallyValid(cir, plan))
+                {
+                    return false;
+                }
+                const source_retirement = plan.decodedSourceRetirementIndex() orelse return false;
+                if (source_retirement == retirement_index) return false;
+                base_plan_index = consumer.plan_index;
+                base_plan_value = plan;
+            },
+            .record_update_field => {},
+            else => return false,
+        }
+    }
+    const base_index = base_plan_index orelse return false;
+    const base_plan = base_plan_value orelse return false;
+    const base_authority = expectedRecordUpdateBaseAuthority(base_plan) orelse return false;
+    for (0..@as(usize, owner.syntax.fields_len)) |slot_usize| {
+        const slot: u32 = @intCast(slot_usize);
+        const site = expectedRecordUpdateFieldSite(cir, owner.syntax, slot) orelse return false;
+        var count: usize = 0;
+        for (consumers) |consumer| {
+            if (consumer.decodedRole() != .record_update_field or
+                consumer.slot != slot or consumer.site_node != site)
+            {
+                continue;
+            }
+            const plan = plans[consumer.plan_index];
+            if (plan.decodedOutcome() != .checked_error or
+                plan.decodedReason() != .record_update_field_base_checked_error or
+                plan.failure_cause_plan_index != base_index or
+                !expectedCauseOwnersEqual(plan.failure_owner, base_plan.failure_owner) or
+                !expectedRecordUpdateFieldBeginsAtBase(
+                    cir,
+                    consumer.plan_index,
+                    plan,
+                    base_authority,
+                ))
+            {
+                return false;
+            }
+            count += 1;
+        }
+        if (count != 1) return false;
+    }
+    for (plans, 0..) |plan, plan_index| {
+        if (plan.owner_node != retirement.retired_node) continue;
+        const role = plan.decodedRole() orelse return false;
+        if (role != .record_update_base and role != .record_update_field) return false;
+        var count: usize = 0;
+        for (consumers) |consumer| {
+            count += @intFromBool(consumer.plan_index == @as(u32, @intCast(plan_index)));
+        }
+        if (count != 1) return false;
+    }
+    return true;
+}
+
 fn expectedRetiredConsumerRangeIsLocallyValid(
     types: *const types_mod.Store,
     cir: *const ModuleEnv,
@@ -13523,6 +14519,17 @@ fn expectedRetiredConsumerRangeIsLocallyValid(
     consumers: []const ModuleEnv.ExpectedRetiredConsumer,
 ) bool {
     if (consumers.len == 0) return retirement.retired_consumers_len == 0;
+    if (consumers[0].decodedRetirementOnlyReason()) |reason| {
+        return switch (reason) {
+            .record_update_retired_after_base_checked_error => expectedRetiredRecordUpdateOwnerRangeIsLocallyValid(
+                types,
+                cir,
+                retirement,
+                retirement_index,
+                consumers,
+            ),
+        };
+    }
     const plans = cir.expected_consumption_plans.items.items;
     const retirement_reason = consumers[0].decodedReason() orelse return false;
     var aggregate_direct_failures: usize = 0;
@@ -14232,11 +15239,12 @@ fn validateExpectedFailureRetirementLocal(
                 @intCast(retirement_index),
                 consumers,
             )) return false;
-            const retired_reason = consumers[0].decodedReason() orelse return false;
             const ambiguity_owned = retirement.decodedRejectionOwnerKind() ==
                 .expected_ambiguity_retirement;
-            const ambiguity_reason = retired_reason == .branch_retired_after_ambiguity_verdict or
-                retired_reason == .call_retired;
+            const ambiguity_reason = if (consumers[0].decodedReason()) |retired_reason|
+                retired_reason == .branch_retired_after_ambiguity_verdict or
+                    retired_reason == .call_retired
+            else if (consumers[0].decodedRetirementOnlyReason()) |_| false else return false;
             if (ambiguity_reason != ambiguity_owned) {
                 return false;
             }
@@ -14284,6 +15292,7 @@ fn validateExpectedFailureRetirementLocal(
     for (failures, 0..) |_, failure_index| {
         var owner_count: usize = 0;
         for (plans) |plan| {
+            if (recordUpdateExpectedPlanCarriesCausalReference(plan)) continue;
             if (plan.failure_owner.decodedExpectedFailure()) |owner| {
                 if (owner.index == failure_index) owner_count += 1;
             }
@@ -14607,7 +15616,12 @@ fn validateWhereMarkerCopyProofLocal(
                 const origin = step.origin.record_update_base;
                 const root_occurrence = occurrences[step.root_occurrence_offset];
                 if (origin.base_expr >= type_len or
-                    !recordUpdateBaseOriginMatchesCanonicalEdge(cir, origin) or
+                    (!recordUpdateBaseOriginMatchesCanonicalEdge(cir, origin) and
+                        !recordUpdateBaseStepHasRetiredSource(
+                            cir,
+                            @intCast(step_index),
+                            origin,
+                        )) or
                     origin.decodedRootBinding() == null)
                 {
                     return false;
@@ -15355,6 +16369,7 @@ fn validateLocalW6bProof(
     return validateExpectedFailureRetirementLocal(types, cir) and
         validateExternalCacheSeedsLocal(cir) and
         validateWhereMarkerCopyProofLocal(types, cir) and
+        validateExpectedRecordUpdatePlans(types, cir) and
         validateExpectedBranchPlans(types, cir) and
         validateExpectedCallPlans(cir);
 }
@@ -15827,6 +16842,22 @@ fn rejectCacheRecoveryPublicationsEarly(env: *const ModuleEnv) W6bSemanticValida
 
 fn validateCleanCacheW6bState(env: *const ModuleEnv) W6bSemanticValidationError!void {
     try rejectCacheRecoveryPublicationsEarly(env);
+    if (env.expected_consumer_retirements.items.items.len != 0) {
+        return error.CorruptArtifact;
+    }
+    for (env.expected_consumption_plans.items.items) |plan| {
+        switch (plan.decodedOutcome() orelse return error.CorruptArtifact) {
+            .source_root_copy_checked_error, .checked_error, .reserved => return error.CorruptArtifact,
+            .anchored,
+            .source_root_copy,
+            .producer_root,
+            .evidence_free,
+            .retained,
+            .related,
+            .not_projected,
+            => {},
+        }
+    }
     for (env.where_alias_declaration_publications.items.items) |publication| {
         if (publication.decodedOutcome() != .ready) return error.CorruptArtifact;
     }
@@ -16220,6 +17251,9 @@ fn initAssumePrepared(
         .active_direct_binder_failures = .empty,
         .aggregate_expected_retirement_drafts = .empty,
         .expected_owner_plan_ranges = .empty,
+        .record_update_expected_plan_registrations = .empty,
+        .record_update_owner_retirement_drafts = .empty,
+        .record_update_expected_plan_registrations_consumed = false,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
@@ -16363,6 +17397,8 @@ pub fn deinit(self: *Self) void {
     self.active_direct_binder_failures.deinit(self.gpa);
     self.aggregate_expected_retirement_drafts.deinit(self.gpa);
     self.expected_owner_plan_ranges.deinit(self.gpa);
+    self.record_update_expected_plan_registrations.deinit(self.gpa);
+    self.record_update_owner_retirement_drafts.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.host_boundary_annotations.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
@@ -17360,10 +18396,215 @@ fn replaceExprWithRuntimeError(
     expr_idx: CIR.Expr.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
+    const record_update_owner = try self.prepareRecordUpdateOwnerRetirement(
+        expr_idx,
+        diagnostic_idx,
+    );
     try self.invalidateExprSubtreeMetadata(expr_idx);
+    if (record_update_owner) |prepared| {
+        self.commitRecordUpdateOwnerRetirement(prepared, diagnostic_idx);
+        self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+        return;
+    }
     try self.completeAggregateExpectedRetirement(expr_idx, diagnostic_idx);
     try self.completeIneligibleFailureRetirement(expr_idx, diagnostic_idx);
     self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+}
+
+const PreparedRecordUpdateOwnerRetirement = struct {
+    draft_index: usize,
+    draft: RecordUpdateOwnerRetirementDraft,
+    retired_consumers_start: usize,
+    member_count: usize,
+};
+
+fn prepareRecordUpdateOwnerRetirement(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) Allocator.Error!?PreparedRecordUpdateOwnerRetirement {
+    var draft_index: ?usize = null;
+    for (self.record_update_owner_retirement_drafts.items, 0..) |draft, index| {
+        if (draft.owner_expr != expr_idx) continue;
+        if (draft_index != null) {
+            std.debug.panic("record-update owner reached multiple checked-base retirements", .{});
+        }
+        draft_index = index;
+    }
+    const selected_index = draft_index orelse return null;
+    if (self.probe_depth != 0) {
+        std.debug.panic("record-update owner retirement completed inside a Probe", .{});
+    }
+    if (!self.cir.store.isDiagnosticIndex(diagnostic_idx)) {
+        std.debug.panic("record-update owner retirement lost its runtime-error diagnostic", .{});
+    }
+    const draft = self.record_update_owner_retirement_drafts.items[selected_index];
+    for (self.aggregate_expected_retirement_drafts.items) |other| {
+        if (other.owner_expr == expr_idx) {
+            std.debug.panic("record-update owner retirement mixed an aggregate lifecycle", .{});
+        }
+    }
+    for (self.annotation_expected_failure_drafts.items) |other| {
+        if (other.owner_expr == expr_idx) {
+            std.debug.panic("record-update owner retirement mixed a failure lifecycle", .{});
+        }
+    }
+    if (draft.base_plan_index >= self.cir.expected_consumption_plans.items.items.len or
+        draft.retirement_index >= self.cir.expected_consumer_retirements.items.items.len)
+    {
+        std.debug.panic("record-update owner retirement lost its durable coordinates", .{});
+    }
+    const node = self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(expr_idx));
+    if (node.tag != .expr_record or draft.original_node_tag != @intFromEnum(node.tag) or
+        !std.meta.eql(
+            draft.original_payload,
+            @as([4]u32, @bitCast(node.getPayload())),
+        ))
+    {
+        std.debug.panic("record-update owner retirement changed its original record", .{});
+    }
+    const base_plan = self.cir.expected_consumption_plans.items.items[draft.base_plan_index];
+    const base_node = if (base_plan.site_node < self.cir.store.nodes.len())
+        self.cir.store.nodes.get(@enumFromInt(base_plan.site_node))
+    else
+        std.debug.panic("record-update owner retirement lost its base node", .{});
+    const base_phase: RecordUpdateBaseNodePhase = if (base_node.tag == .malformed)
+        .retired
+    else if (isExprNodeTag(base_node.tag))
+        .live
+    else
+        std.debug.panic("record-update owner retirement found an invalid base phase", .{});
+    if (!recordUpdateOwnerExpectedMembershipAtPhase(
+        self,
+        expr_idx,
+        draft.base_plan_index,
+        draft.base_cause,
+        base_phase,
+    ) or !recordUpdateBaseCauseIsValidAtProducer(
+        self,
+        @enumFromInt(base_plan.site_node),
+        draft.base_plan_index,
+        draft.base_cause,
+    )) {
+        std.debug.panic("record-update owner retirement changed its exact plan membership", .{});
+    }
+    const source_retirement_index = base_plan.decodedSourceRetirementIndex() orelse
+        std.debug.panic("record-update owner retirement lost its base retirement", .{});
+    if (base_phase == .retired) {
+        if (!expectedRecordUpdateBaseSourceRetirementIsLocallyValid(self.cir, base_plan)) {
+            std.debug.panic("record-update owner retirement lost its completed base lifecycle", .{});
+        }
+    } else {
+        const pending = pendingExpressionRetirementAtProducer(
+            self,
+            @enumFromInt(base_plan.site_node),
+        ) orelse std.debug.panic("record-update owner retirement lost its pending base lifecycle", .{});
+        if (pending != source_retirement_index) {
+            std.debug.panic("record-update owner retirement changed its pending base lifecycle", .{});
+        }
+    }
+    const retirement = self.cir.expected_consumer_retirements.items.items[
+        draft.retirement_index
+    ];
+    if (retirement.retired_node != @intFromEnum(expr_idx) or
+        retirement.decodedOwnerKind() != .expression or
+        retirement.decodedKind() != .checker_rewrite_expected or
+        retirement.original_node_tag != draft.original_node_tag or
+        !std.meta.eql(retirement.original_payload, draft.original_payload) or
+        retirement.diagnostic_index != ModuleEnv.ExpectedConsumerRetirement.none or
+        retirement.retired_consumers_start != 0 or retirement.retired_consumers_len != 0 or
+        retirement.expected_failures_start != 0 or retirement.expected_failures_len != 0 or
+        retirement.rejection_owner_kind != ModuleEnv.ExpectedConsumerRetirement.none or
+        retirement.rejection_owner_index != ModuleEnv.ExpectedConsumerRetirement.none or
+        retirement.rejection_subject_var != ModuleEnv.ExpectedConsumerRetirement.none or
+        retirement.reserved_0 != 0 or retirement.reserved_1 != 0)
+    {
+        std.debug.panic("record-update owner retirement changed before completion", .{});
+    }
+    var member_count: usize = 0;
+    for (self.record_update_expected_plan_registrations.items) |registration| {
+        member_count += @intFromBool(registration.owner_expr == expr_idx);
+    }
+    if (member_count == 0) {
+        std.debug.panic("record-update owner retirement lost its base registration", .{});
+    }
+    const retired_consumers_start = self.cir.expected_retired_consumers.items.items.len;
+    try self.cir.expected_retired_consumers.items.ensureUnusedCapacity(
+        self.cir.gpa,
+        member_count,
+    );
+    return .{
+        .draft_index = selected_index,
+        .draft = draft,
+        .retired_consumers_start = retired_consumers_start,
+        .member_count = member_count,
+    };
+}
+
+fn commitRecordUpdateOwnerRetirement(
+    self: *Self,
+    prepared: PreparedRecordUpdateOwnerRetirement,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    if (self.probe_depth != 0 or
+        self.cir.expected_retired_consumers.items.items.len != prepared.retired_consumers_start or
+        prepared.draft_index >= self.record_update_owner_retirement_drafts.items.len)
+    {
+        std.debug.panic("record-update owner retirement changed after reservation", .{});
+    }
+    const current_draft = self.record_update_owner_retirement_drafts.items[
+        prepared.draft_index
+    ];
+    if (current_draft.owner_expr != prepared.draft.owner_expr or
+        current_draft.retirement_index != prepared.draft.retirement_index or
+        current_draft.base_plan_index != prepared.draft.base_plan_index or
+        !expectedCauseOwnersEqual(current_draft.base_cause, prepared.draft.base_cause) or
+        current_draft.original_node_tag != prepared.draft.original_node_tag or
+        !std.meta.eql(current_draft.original_payload, prepared.draft.original_payload))
+    {
+        std.debug.panic("record-update owner retirement changed after reservation", .{});
+    }
+    const plans = self.cir.expected_consumption_plans.items.items;
+    var appended: usize = 0;
+    for (self.record_update_expected_plan_registrations.items) |registration| {
+        if (registration.owner_expr != prepared.draft.owner_expr) continue;
+        const plan = plans[registration.plan_index];
+        self.cir.expected_retired_consumers.items.appendAssumeCapacity(.{
+            .plan_index = registration.plan_index,
+            .owner_node = plan.owner_node,
+            .site_node = plan.site_node,
+            .role = plan.role,
+            .slot = plan.slot,
+            .raw_owner_var = @intFromEnum(prepared.draft.owner_expr),
+            .raw_consumer_var = plan.raw_consumer_var,
+            .reason = @intFromEnum(
+                ModuleEnv.ExpectedRetiredConsumer.RetirementOnlyReason.record_update_retired_after_base_checked_error,
+            ),
+        });
+        appended += 1;
+    }
+    if (appended != prepared.member_count) {
+        std.debug.panic("record-update owner retirement changed its reserved member count", .{});
+    }
+    const new_consumers = self.cir.expected_retired_consumers.items.items[prepared.retired_consumers_start..];
+    std.mem.sortUnstable(
+        ModuleEnv.ExpectedRetiredConsumer,
+        new_consumers,
+        {},
+        expectedRetiredConsumerLessThan,
+    );
+    for (new_consumers[1..], new_consumers[0 .. new_consumers.len - 1]) |current, prior| {
+        if (std.meta.eql(current, prior)) {
+            std.debug.panic("record-update owner retirement duplicated one consumer", .{});
+        }
+    }
+    const retirement = &self.cir.expected_consumer_retirements.items.items[
+        prepared.draft.retirement_index
+    ];
+    retirement.retired_consumers_start = @intCast(prepared.retired_consumers_start);
+    retirement.retired_consumers_len = @intCast(prepared.member_count);
+    retirement.diagnostic_index = @intFromEnum(diagnostic_idx);
+    _ = self.record_update_owner_retirement_drafts.swapRemove(prepared.draft_index);
 }
 
 fn directBinderLookupFailureHasBasicRetirementIdentity(
@@ -17870,7 +19111,14 @@ fn completeAggregateExpectedRetirement(
                     }
                     child_relation_failures += 1;
                 },
-                .related, .producer_root, .retained, .not_projected, .reserved => std.debug.panic(
+                .related,
+                .source_root_copy,
+                .source_root_copy_checked_error,
+                .producer_root,
+                .retained,
+                .not_projected,
+                .reserved,
+                => std.debug.panic(
                     "aggregate child retirement contained an unestablished consumer",
                     .{},
                 ),
@@ -17890,6 +19138,8 @@ fn completeAggregateExpectedRetirement(
                     parent_retired_no_expected_rows += 1;
                 },
                 .producer_root,
+                .source_root_copy,
+                .source_root_copy_checked_error,
                 .related,
                 .retained,
                 .checked_error,
@@ -17905,6 +19155,8 @@ fn completeAggregateExpectedRetirement(
                     std.debug.panic("retired branch seed contained an invalid outcome", .{})) {
                     .anchored => {},
                     .related,
+                    .source_root_copy,
+                    .source_root_copy_checked_error,
                     .producer_root,
                     .evidence_free,
                     .retained,
@@ -17932,6 +19184,8 @@ fn completeAggregateExpectedRetirement(
                         }
                     },
                     .anchored,
+                    .source_root_copy,
+                    .source_root_copy_checked_error,
                     .producer_root,
                     .evidence_free,
                     .not_projected,
@@ -17955,6 +19209,8 @@ fn completeAggregateExpectedRetirement(
                             std.debug.panic("retired branch final changed its same-node rejection", .{});
                         },
                         .anchored,
+                        .source_root_copy,
+                        .source_root_copy_checked_error,
                         .producer_root,
                         .evidence_free,
                         .retained,
@@ -17996,6 +19252,8 @@ fn completeAggregateExpectedRetirement(
                     std.debug.panic("ambiguity-retired branch contribution had an invalid outcome", .{})) {
                     .related, .retained => {},
                     .anchored,
+                    .source_root_copy,
+                    .source_root_copy_checked_error,
                     .producer_root,
                     .evidence_free,
                     .not_projected,
@@ -24846,6 +26104,17 @@ const CheckedBoundaryRebuild = struct {
                 .anchored => if (!parent_present or !produced_present) {
                     @panic("anchored Expected-consumption plan omitted an exact endpoint");
                 },
+                .source_root_copy => if (parent_present or !produced_present or
+                    reason != null or plan.failure_owner.kind != ModuleEnv.CauseOwner.none)
+                {
+                    @panic("record-update source-root plan had noncanonical success fields");
+                },
+                .source_root_copy_checked_error => if (parent_present or !produced_present or
+                    reason != .record_update_base_checked_error or
+                    plan.failure_owner.kind == ModuleEnv.CauseOwner.none)
+                {
+                    @panic("record-update source-root plan lost its exact checked-error fields");
+                },
                 .related => if (!parent_present or produced_present or reason != null or
                     plan.failure_owner.kind != ModuleEnv.CauseOwner.none)
                 {
@@ -24887,6 +26156,11 @@ const CheckedBoundaryRebuild = struct {
                 old_expected_failures.len,
                 old_expected_retirements.len,
             );
+            if (plan.decodedSourceRetirementIndex()) |source_retirement_index| {
+                if (source_retirement_index >= old_expected_retirements.len) {
+                    @panic("record-update base plan named an absent source retirement");
+                }
+            }
             if (plan.failure_cause_plan_index != none and
                 (plan.failure_cause_plan_index >= old_expected_plans.len or
                     plan.failure_cause_plan_index == plan_index))
@@ -25011,6 +26285,7 @@ const CheckedBoundaryRebuild = struct {
         defer self.gpa.free(referenced_expected_failures);
         @memset(referenced_expected_failures, 0);
         for (old_expected_plans) |plan| {
+            if (recordUpdateExpectedPlanCarriesCausalReference(plan)) continue;
             if (plan.failure_owner.decodedExpectedFailure()) |owner| {
                 referenced_expected_failures[owner.index] +|= 1;
             }
@@ -26672,6 +27947,16 @@ const CheckedBoundaryRebuild = struct {
                 expected_failure_map,
                 expected_retirement_map,
             );
+            if (plan.decodedSourceRetirementIndex()) |old_retirement_index| {
+                if (old_retirement_index >= expected_retirement_map.len or
+                    expected_retirement_map[old_retirement_index] == none or
+                    expected_retirement_map[old_retirement_index] == std.math.maxInt(u32))
+                {
+                    @panic("record-update base plan lost its exact source retirement");
+                }
+                plan.source_retirement_index_plus_one =
+                    expected_retirement_map[old_retirement_index] + 1;
+            }
             _ = try replacement_expected_plans.append(self.cir.gpa, plan);
         }
 
@@ -26943,6 +28228,20 @@ const CheckedBoundaryRebuild = struct {
                 retirement.retired_consumers_len,
             );
             const retired_consumers = old_expected_retired_consumers[retirement.retired_consumers_start..][0..retirement.retired_consumers_len];
+            const record_update_owner_retirement = retired_consumers.len != 0 and
+                retired_consumers[0].decodedRetirementOnlyReason() ==
+                    .record_update_retired_after_base_checked_error;
+            if (record_update_owner_retirement and
+                !expectedRetiredRecordUpdateOwnerRangeIsLocallyValid(
+                    self.types,
+                    self.cir,
+                    old_expected_retirements[old_retirement_index],
+                    old_retirement_index,
+                    retired_consumers,
+                ))
+            {
+                @panic("record-update owner retirement lost its exact plan group before relocation");
+            }
             for (retired_consumers) |old_consumer| {
                 if (old_consumer.plan_index >= old_expected_plans.len or
                     old_consumer.raw_owner_var >= self.types.len() or
@@ -26953,150 +28252,168 @@ const CheckedBoundaryRebuild = struct {
                 const old_plan = old_expected_plans[old_consumer.plan_index];
                 const consumer_role = old_consumer.decodedRole() orelse
                     @panic("Expected-retired consumer had an invalid role");
-                const consumer_reason = old_consumer.decodedReason() orelse
-                    @panic("Expected-retired consumer had an invalid reason");
-                if (ModuleEnv.ExpectedConsumptionPlan.ownerRelationForReason(consumer_reason) !=
-                    .same_node_retirement or
-                    !ModuleEnv.ExpectedConsumptionPlan.legalCombination(
-                        consumer_role,
-                        .checked_error,
-                        consumer_reason,
-                        .expected_consumer_retirement,
-                        false,
-                    ) or
-                    old_consumer.owner_node != old_plan.owner_node or
-                    old_consumer.site_node != old_plan.site_node or
-                    old_consumer.role != old_plan.role or
-                    old_consumer.slot != old_plan.slot or
-                    old_consumer.raw_owner_var != old_plan.owner_node or
-                    old_consumer.raw_consumer_var != old_plan.raw_consumer_var)
-                {
-                    @panic("Expected-retired consumer disagreed with its exact same-node plan");
-                }
-                switch (old_plan.decodedOutcome() orelse
-                    @panic("Expected-retired consumer named a plan with invalid outcome")) {
-                    .anchored => {
-                        if (old_plan.decodedReason() != null or
-                            old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none)
-                        {
-                            @panic("retired successful Expected plan carried failure fields");
-                        }
-                    },
-                    .related => {
-                        if (old_plan.decodedReason() != null or
-                            old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
-                            old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
-                        {
-                            @panic("retired successful Expected relation carried failure fields");
-                        }
-                    },
-                    .evidence_free => {
-                        if (old_plan.decodedReason() != .parent_evidence_free or
-                            old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none)
-                        {
-                            @panic("retired evidence-free Expected plan carried failure fields");
-                        }
-                    },
-                    .retained => {
-                        if (old_plan.decodedReason() != .branch_body_already_expected or
-                            old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
-                            old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
-                        {
-                            @panic("retired retained branch plan changed its predecessor relation");
-                        }
-                    },
-                    .not_projected => {
-                        if (consumer_reason == .call_retired or
-                            consumer_reason == .call_retired_after_operand_checked_error)
-                        {
-                            if (consumer_role != .call_root or
-                                old_plan.decodedReason() != .call_shape_ready or
-                                old_plan.call_root_plan_index != ModuleEnv.ExpectedConsumptionPlan.none or
+                if (record_update_owner_retirement) {
+                    if (old_consumer.decodedRetirementOnlyReason() !=
+                        .record_update_retired_after_base_checked_error or
+                        old_consumer.decodedReason() != null or
+                        old_consumer.owner_node != old_plan.owner_node or
+                        old_consumer.site_node != old_plan.site_node or
+                        old_consumer.role != old_plan.role or
+                        old_consumer.slot != old_plan.slot or
+                        old_consumer.raw_owner_var != old_plan.owner_node or
+                        old_consumer.raw_consumer_var != old_plan.raw_consumer_var)
+                    {
+                        @panic("record-update owner retirement changed its exact plan row");
+                    }
+                } else {
+                    const consumer_reason = old_consumer.decodedReason() orelse
+                        @panic("Expected-retired consumer had an invalid reason");
+                    if (ModuleEnv.ExpectedConsumptionPlan.ownerRelationForReason(consumer_reason) !=
+                        .same_node_retirement or
+                        !ModuleEnv.ExpectedConsumptionPlan.legalCombination(
+                            consumer_role,
+                            .checked_error,
+                            consumer_reason,
+                            .expected_consumer_retirement,
+                            false,
+                        ) or
+                        old_consumer.owner_node != old_plan.owner_node or
+                        old_consumer.site_node != old_plan.site_node or
+                        old_consumer.role != old_plan.role or
+                        old_consumer.slot != old_plan.slot or
+                        old_consumer.raw_owner_var != old_plan.owner_node or
+                        old_consumer.raw_consumer_var != old_plan.raw_consumer_var)
+                    {
+                        @panic("Expected-retired consumer disagreed with its exact same-node plan");
+                    }
+                    switch (old_plan.decodedOutcome() orelse
+                        @panic("Expected-retired consumer named a plan with invalid outcome")) {
+                        .anchored => {
+                            if (old_plan.decodedReason() != null or
+                                old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none)
+                            {
+                                @panic("retired successful Expected plan carried failure fields");
+                            }
+                        },
+                        .related => {
+                            if (old_plan.decodedReason() != null or
                                 old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
                                 old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
                             {
-                                @panic("retired call changed its exact root plan");
+                                @panic("retired successful Expected relation carried failure fields");
                             }
-                        } else if (consumer_reason != .aggregate_retired_by_parent_branch_failure or
-                            old_plan.decodedReason() != .aggregate_no_expected or
-                            old_plan.parent_authority.kind != ModuleEnv.ExpectedMarkerAuthority.none or
+                        },
+                        .evidence_free => {
+                            if (old_plan.decodedReason() != .parent_evidence_free or
+                                old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none)
+                            {
+                                @panic("retired evidence-free Expected plan carried failure fields");
+                            }
+                        },
+                        .retained => {
+                            if (old_plan.decodedReason() != .branch_body_already_expected or
+                                old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
+                                old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
+                            {
+                                @panic("retired retained branch plan changed its predecessor relation");
+                            }
+                        },
+                        .not_projected => {
+                            if (consumer_reason == .call_retired or
+                                consumer_reason == .call_retired_after_operand_checked_error)
+                            {
+                                if (consumer_role != .call_root or
+                                    old_plan.decodedReason() != .call_shape_ready or
+                                    old_plan.call_root_plan_index != ModuleEnv.ExpectedConsumptionPlan.none or
+                                    old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
+                                    old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
+                                {
+                                    @panic("retired call changed its exact root plan");
+                                }
+                            } else if (consumer_reason != .aggregate_retired_by_parent_branch_failure or
+                                old_plan.decodedReason() != .aggregate_no_expected or
+                                old_plan.parent_authority.kind != ModuleEnv.ExpectedMarkerAuthority.none or
+                                old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
+                                old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
+                            {
+                                @panic("retired no-Expected aggregate changed its exact benign outcome");
+                            }
+                        },
+                        .checked_error => {
+                            if (consumer_reason == .aggregate_retired_after_child_relation) {
+                                const plan_reason = old_plan.decodedReason() orelse
+                                    @panic("retired aggregate child lost its direct failure reason");
+                                if ((plan_reason != .aggregate_child_relation_rejected and
+                                    plan_reason != .aggregate_child_relation_suppressed) or
+                                    !old_plan.failure_owner.hasCanonicalTags(true) or
+                                    old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
+                                {
+                                    @panic("retired aggregate child changed its direct failure");
+                                }
+                            } else if (consumer_reason == .aggregate_retired_by_parent_branch_failure) {
+                                @panic("successful parent-retired aggregate contained a failed plan");
+                            } else if (consumer_reason == .branch_retired_after_failure) {
+                                switch (consumer_role) {
+                                    .branch_contribution => {
+                                        const plan_reason = old_plan.decodedReason() orelse
+                                            @panic("retired branch contribution lost its direct failure reason");
+                                        if ((plan_reason != .branch_body_error_short_circuit and
+                                            plan_reason != .branch_expected_compatibility_rejected and
+                                            plan_reason != .branch_accumulator_fold_rejected) or
+                                            !old_plan.failure_owner.hasCanonicalTags(true) or
+                                            old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
+                                        {
+                                            @panic("retired branch contribution changed its direct failure");
+                                        }
+                                    },
+                                    .branch_final => {
+                                        if (old_plan.decodedReason() != .branch_final_relation_rejected or
+                                            old_plan.failure_owner.decodedExpectedConsumerRetirement() == null or
+                                            old_plan.failure_owner.payload.expected_consumer_retirement.index !=
+                                                old_retirement_index or
+                                            old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
+                                        {
+                                            @panic("retired branch final changed its same-node rejection");
+                                        }
+                                    },
+                                    .branch_seed,
+                                    .aggregate_owner,
+                                    .list_element,
+                                    .tuple_element,
+                                    .record_field,
+                                    .tag_payload,
+                                    .record_update_base,
+                                    .record_update_field,
+                                    .nominal_decl,
+                                    .nominal_backing,
+                                    .call_root,
+                                    .call_argument,
+                                    .default_field,
+                                    .lambda_return,
+                                    => @panic("retired branch failure occupied an invalid role"),
+                                }
+                            } else if (old_plan.decodedReason() != consumer_reason or
+                                old_plan.failure_owner.decodedExpectedConsumerRetirement() == null or
+                                old_plan.failure_owner.payload.expected_consumer_retirement.index != old_retirement_index)
+                            {
+                                @panic("failed Expected plan disagreed with its same-node retirement");
+                            }
+                        },
+                        .source_root_copy,
+                        .source_root_copy_checked_error,
+                        => @panic("record-update source-root plan entered an undeclared retirement"),
+                        .producer_root => if ((consumer_reason != .call_retired and
+                            consumer_reason != .call_retired_after_operand_checked_error) or
+                            consumer_role != .call_argument or
+                            old_plan.decodedReason() != null or
+                            old_plan.call_root_plan_index == ModuleEnv.ExpectedConsumptionPlan.none or
                             old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
                             old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
                         {
-                            @panic("retired no-Expected aggregate changed its exact benign outcome");
-                        }
-                    },
-                    .checked_error => {
-                        if (consumer_reason == .aggregate_retired_after_child_relation) {
-                            const plan_reason = old_plan.decodedReason() orelse
-                                @panic("retired aggregate child lost its direct failure reason");
-                            if ((plan_reason != .aggregate_child_relation_rejected and
-                                plan_reason != .aggregate_child_relation_suppressed) or
-                                !old_plan.failure_owner.hasCanonicalTags(true) or
-                                old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
-                            {
-                                @panic("retired aggregate child changed its direct failure");
-                            }
-                        } else if (consumer_reason == .aggregate_retired_by_parent_branch_failure) {
-                            @panic("successful parent-retired aggregate contained a failed plan");
-                        } else if (consumer_reason == .branch_retired_after_failure) {
-                            switch (consumer_role) {
-                                .branch_contribution => {
-                                    const plan_reason = old_plan.decodedReason() orelse
-                                        @panic("retired branch contribution lost its direct failure reason");
-                                    if ((plan_reason != .branch_body_error_short_circuit and
-                                        plan_reason != .branch_expected_compatibility_rejected and
-                                        plan_reason != .branch_accumulator_fold_rejected) or
-                                        !old_plan.failure_owner.hasCanonicalTags(true) or
-                                        old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
-                                    {
-                                        @panic("retired branch contribution changed its direct failure");
-                                    }
-                                },
-                                .branch_final => {
-                                    if (old_plan.decodedReason() != .branch_final_relation_rejected or
-                                        old_plan.failure_owner.decodedExpectedConsumerRetirement() == null or
-                                        old_plan.failure_owner.payload.expected_consumer_retirement.index !=
-                                            old_retirement_index or
-                                        old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
-                                    {
-                                        @panic("retired branch final changed its same-node rejection");
-                                    }
-                                },
-                                .branch_seed,
-                                .aggregate_owner,
-                                .list_element,
-                                .tuple_element,
-                                .record_field,
-                                .tag_payload,
-                                .record_update_base,
-                                .record_update_field,
-                                .nominal_decl,
-                                .nominal_backing,
-                                .call_root,
-                                .call_argument,
-                                .default_field,
-                                .lambda_return,
-                                => @panic("retired branch failure occupied an invalid role"),
-                            }
-                        } else if (old_plan.decodedReason() != consumer_reason or
-                            old_plan.failure_owner.decodedExpectedConsumerRetirement() == null or
-                            old_plan.failure_owner.payload.expected_consumer_retirement.index != old_retirement_index)
-                        {
-                            @panic("failed Expected plan disagreed with its same-node retirement");
-                        }
-                    },
-                    .producer_root => if ((consumer_reason != .call_retired and
-                        consumer_reason != .call_retired_after_operand_checked_error) or
-                        consumer_role != .call_argument or
-                        old_plan.decodedReason() != null or
-                        old_plan.call_root_plan_index == ModuleEnv.ExpectedConsumptionPlan.none or
-                        old_plan.failure_owner.kind != ModuleEnv.CauseOwner.none or
-                        old_plan.failure_cause_plan_index != ModuleEnv.ExpectedConsumptionPlan.none)
-                    {
-                        @panic("retired call changed an exact argument producer root");
-                    },
-                    .reserved => @panic("retirement named an Expected plan without an established consumer"),
+                            @panic("retired call changed an exact argument producer root");
+                        },
+                        .reserved => @panic("retirement named an Expected plan without an established consumer"),
+                    }
                 }
                 if (retired_plan_membership[old_consumer.plan_index]) {
                     @panic("one Expected-consumption plan appeared in multiple retirement rows");
@@ -28333,10 +29650,25 @@ const CheckedBoundaryRebuild = struct {
         self.predeclared_anno_drafts.clearRetainingCapacity();
         self.predeclared_anno_events.clearRetainingCapacity();
         self.predeclared_anno_orphan_pairs.clearRetainingCapacity();
+        if (!self.record_update_expected_plan_registrations_consumed) {
+            self.record_update_expected_plan_registrations.clearRetainingCapacity();
+            self.record_update_expected_plan_registrations_consumed = true;
+        } else if (self.record_update_expected_plan_registrations.items.len != 0) {
+            @panic("consumed record-update registrations became nonempty during rebuild");
+        }
     }
 };
 
 fn rebuildCheckedBoundaryWhereMethodState(self: *Self) Allocator.Error!void {
+    if (self.probe_depth != 0) {
+        @panic("checked-boundary rebuild cannot run inside a Probe transaction");
+    }
+    if (self.record_update_owner_retirement_drafts.items.len != 0) {
+        @panic("checked-boundary rebuild found an incomplete record-update owner retirement");
+    }
+    if (!self.validateRecordUpdateExpectedPlanRegistrations()) {
+        @panic("record-update Expected plan registrations lost their producer membership");
+    }
     var transaction = CheckedBoundaryRebuild.init(self);
     defer transaction.deinit();
     try transaction.validateAndOrder();
@@ -33843,6 +35175,9 @@ fn validateProducedW6bState(self: *Self) Allocator.Error!void {
     if (self.annotation_expected_failure_drafts.items.len != 0) {
         @panic("checked module retained an incomplete annotation failure retirement draft");
     }
+    if (self.record_update_owner_retirement_drafts.items.len != 0) {
+        @panic("checked module retained an incomplete record-update owner retirement draft");
+    }
     if (self.direct_formal_failure_sources.items.len != 0 or
         self.active_direct_binder_failures.items.len != 0)
     {
@@ -33863,6 +35198,9 @@ fn validateProducedW6bState(self: *Self) Allocator.Error!void {
     }
     if (!validateExpectedFailureRetirementLocal(self.types, self.cir)) {
         @panic("checked module produced invalid local Expected failure/retirement data");
+    }
+    if (!validateExpectedRecordUpdatePlans(self.types, self.cir)) {
+        @panic("checked module produced invalid record-update Expected plan topology");
     }
     if (!validateExpectedBranchPlans(self.types, self.cir)) {
         @panic("checked module produced invalid branch Expected plan topology");
@@ -42981,6 +44319,23 @@ const ExpectedOwnerPlanRange = struct {
     },
 };
 
+const RecordUpdateExpectedPlanRegistration = struct {
+    owner_expr: CIR.Expr.Idx,
+    plan_index: u32,
+    role: ModuleEnv.ExpectedConsumptionPlan.Role,
+    slot: u32,
+    site: CIR.Expr.Idx,
+};
+
+const RecordUpdateOwnerRetirementDraft = struct {
+    owner_expr: CIR.Expr.Idx,
+    retirement_index: u32,
+    base_plan_index: u32,
+    base_cause: ModuleEnv.CauseOwner,
+    original_node_tag: u32,
+    original_payload: [4]u32,
+};
+
 const GenTypeAnnoCtx = union(enum) {
     annotation: AnnotationGenCtx,
     type_decl: struct {
@@ -48478,6 +49833,798 @@ fn reserveExpectedFreshShapeSlot(
     };
 }
 
+fn preflightRecordUpdateExpectedPlanRegistration(
+    self: *Self,
+    owner: CIR.Expr.Idx,
+    role: ModuleEnv.ExpectedConsumptionPlan.Role,
+    slot: u32,
+) std.mem.Allocator.Error!void {
+    if (self.record_update_expected_plan_registrations_consumed) {
+        std.debug.panic("record-update Expected plan was published after registration consumption", .{});
+    }
+    if (self.probe_depth == 0) {
+        std.debug.panic("record-update Expected plan was reserved outside a Probe transaction", .{});
+    }
+    if (role != .record_update_base and role != .record_update_field) {
+        std.debug.panic("record-update registration received a foreign Expected role", .{});
+    }
+    for (self.record_update_expected_plan_registrations.items) |registration| {
+        if (registration.owner_expr == owner and
+            registration.role == role and registration.slot == slot)
+        {
+            std.debug.panic("record-update Expected slot was registered twice", .{});
+        }
+    }
+    try self.record_update_expected_plan_registrations.ensureUnusedCapacity(self.gpa, 1);
+}
+
+fn validateRecordUpdateExpectedPlanRegistrations(self: *const Self) bool {
+    const registrations = self.record_update_expected_plan_registrations.items;
+    if (self.record_update_expected_plan_registrations_consumed) {
+        return registrations.len == 0;
+    }
+    const plans = self.cir.expected_consumption_plans.items.items;
+    for (registrations, 0..) |registration, registration_index| {
+        if (registration.plan_index >= plans.len) return false;
+        const plan = plans[registration.plan_index];
+        if (!plan.hasLegalTags() or
+            plan.owner_node != @intFromEnum(registration.owner_expr) or
+            plan.site_node != @intFromEnum(registration.site) or
+            plan.decodedRole() != registration.role or
+            plan.slot != registration.slot or
+            (registration.role != .record_update_base and
+                registration.role != .record_update_field))
+        {
+            return false;
+        }
+        for (registrations[0..registration_index]) |prior| {
+            if (prior.plan_index == registration.plan_index or
+                (prior.owner_expr == registration.owner_expr and
+                    prior.role == registration.role and prior.slot == registration.slot))
+            {
+                return false;
+            }
+        }
+    }
+    for (plans, 0..) |plan, plan_index| {
+        const role = plan.decodedRole() orelse return false;
+        if (role != .record_update_base and role != .record_update_field) continue;
+        var registration_count: usize = 0;
+        for (registrations) |registration| {
+            if (registration.plan_index == @as(u32, @intCast(plan_index))) {
+                registration_count += 1;
+            }
+        }
+        if (registration_count != 1) return false;
+    }
+    return true;
+}
+
+fn registerRecordUpdateExpectedPlanAssumeCapacity(
+    self: *Self,
+    registration: RecordUpdateExpectedPlanRegistration,
+) void {
+    if (registration.plan_index >= self.cir.expected_consumption_plans.items.items.len) {
+        std.debug.panic("record-update registration named an absent Expected plan", .{});
+    }
+    const plan = self.cir.expected_consumption_plans.items.items[registration.plan_index];
+    if (!plan.hasLegalTags() or plan.decodedOutcome() == .reserved or
+        plan.owner_node != @intFromEnum(registration.owner_expr) or
+        plan.site_node != @intFromEnum(registration.site) or
+        plan.decodedRole() != registration.role or plan.slot != registration.slot)
+    {
+        std.debug.panic("record-update registration changed its exact producer plan", .{});
+    }
+    self.record_update_expected_plan_registrations.appendAssumeCapacity(registration);
+}
+
+fn recordUpdateOwnerExpectedMembershipAtPhase(
+    self: *const Self,
+    owner_expr: CIR.Expr.Idx,
+    base_plan_index: u32,
+    base_cause: ModuleEnv.CauseOwner,
+    base_phase: RecordUpdateBaseNodePhase,
+) bool {
+    if (self.record_update_expected_plan_registrations_consumed or
+        base_plan_index >= self.cir.expected_consumption_plans.items.items.len)
+    {
+        return false;
+    }
+    const owner_raw: u32 = @intFromEnum(owner_expr);
+    const update = expectedRecordUpdateSyntaxAtPhase(
+        self.cir,
+        owner_raw,
+        base_phase,
+    ) orelse return false;
+    const plans = self.cir.expected_consumption_plans.items.items;
+    const base_plan = plans[base_plan_index];
+    if (!base_plan.hasLegalTags() or
+        base_plan.owner_node != owner_raw or
+        base_plan.site_node != update.base_expr or
+        base_plan.decodedRole() != .record_update_base or
+        base_plan.slot != 0 or
+        base_plan.decodedOutcome() != .source_root_copy_checked_error or
+        base_plan.decodedReason() != .record_update_base_checked_error or
+        !expectedCauseOwnersEqual(base_plan.failure_owner, base_cause) or
+        !expectedRecordUpdateBasePlanMatchesStep(self.cir, base_plan))
+    {
+        return false;
+    }
+    const base_authority = expectedRecordUpdateBaseAuthority(base_plan) orelse return false;
+
+    var owner_registration_count: usize = 0;
+    var base_registration_count: usize = 0;
+    for (self.record_update_expected_plan_registrations.items) |registration| {
+        if (registration.owner_expr != owner_expr) continue;
+        owner_registration_count += 1;
+        if (registration.plan_index >= plans.len) return false;
+        const plan = plans[registration.plan_index];
+        if (!plan.hasLegalTags() or plan.owner_node != owner_raw or
+            plan.site_node != @intFromEnum(registration.site) or
+            plan.decodedRole() != registration.role or plan.slot != registration.slot)
+        {
+            return false;
+        }
+        switch (registration.role) {
+            .record_update_base => {
+                if (registration.plan_index != base_plan_index or
+                    registration.slot != 0 or registration.site != @as(CIR.Expr.Idx, @enumFromInt(update.base_expr)))
+                {
+                    return false;
+                }
+                base_registration_count += 1;
+            },
+            .record_update_field => {
+                const field_site = expectedRecordUpdateFieldSite(
+                    self.cir,
+                    update,
+                    registration.slot,
+                ) orelse return false;
+                if (field_site != @intFromEnum(registration.site) or
+                    plan.decodedOutcome() != .checked_error or
+                    plan.decodedReason() != .record_update_field_base_checked_error or
+                    plan.failure_cause_plan_index != base_plan_index or
+                    !expectedCauseOwnersEqual(plan.failure_owner, base_cause) or
+                    !expectedFreshShapePlanMatchesCir(self.cir, plan) or
+                    !expectedRecordUpdateFieldBeginsAtBase(
+                        self.cir,
+                        registration.plan_index,
+                        plan,
+                        base_authority,
+                    ))
+                {
+                    return false;
+                }
+            },
+            else => return false,
+        }
+    }
+    if (base_registration_count != 1 or
+        owner_registration_count != @as(usize, update.fields_len) + 1)
+    {
+        return false;
+    }
+    for (0..@as(usize, update.fields_len)) |slot_usize| {
+        const slot: u32 = @intCast(slot_usize);
+        const site = expectedRecordUpdateFieldSite(self.cir, update, slot) orelse return false;
+        var count: usize = 0;
+        for (self.record_update_expected_plan_registrations.items) |registration| {
+            if (registration.owner_expr == owner_expr and
+                registration.role == .record_update_field and
+                registration.slot == slot and @intFromEnum(registration.site) == site)
+            {
+                count += 1;
+            }
+        }
+        if (count != 1) return false;
+    }
+    for (plans, 0..) |plan, plan_index| {
+        if (plan.owner_node != owner_raw) continue;
+        const role = plan.decodedRole() orelse return false;
+        if (role != .record_update_base and role != .record_update_field) return false;
+        var count: usize = 0;
+        for (self.record_update_expected_plan_registrations.items) |registration| {
+            count += @intFromBool(
+                registration.owner_expr == owner_expr and
+                    registration.plan_index == @as(u32, @intCast(plan_index)),
+            );
+        }
+        if (count != 1) return false;
+    }
+    return true;
+}
+
+fn recordUpdateOwnerExpectedMembershipAtProducer(
+    self: *const Self,
+    owner_expr: CIR.Expr.Idx,
+    base_plan_index: u32,
+    base_cause: ModuleEnv.CauseOwner,
+) bool {
+    if (base_plan_index >= self.cir.expected_consumption_plans.items.items.len) return false;
+    const base_plan = self.cir.expected_consumption_plans.items.items[base_plan_index];
+    const source_retirement_index = base_plan.decodedSourceRetirementIndex() orelse return false;
+    if (source_retirement_index >= self.cir.expected_consumer_retirements.items.items.len or
+        base_plan.site_node >= self.cir.store.nodes.len())
+    {
+        return false;
+    }
+    const base_expr: CIR.Expr.Idx = @enumFromInt(base_plan.site_node);
+    const base_node = self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(base_expr));
+    const base_phase: RecordUpdateBaseNodePhase = if (base_node.tag == .malformed)
+        .retired
+    else if (isExprNodeTag(base_node.tag))
+        .live
+    else
+        return false;
+    const source_lifecycle_matches = switch (base_phase) {
+        .retired => expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+            self.cir,
+            base_plan,
+        ),
+        .live => blk: {
+            const pending = pendingExpressionRetirementAtProducer(
+                self,
+                base_expr,
+            ) orelse break :blk false;
+            break :blk pending == source_retirement_index;
+        },
+    };
+    return source_lifecycle_matches and recordUpdateOwnerExpectedMembershipAtPhase(
+        self,
+        owner_expr,
+        base_plan_index,
+        base_cause,
+        base_phase,
+    );
+}
+
+fn reserveRecordUpdateOwnerRetirement(
+    self: *Self,
+    owner_expr: CIR.Expr.Idx,
+    base_plan_index: u32,
+    base_cause: ModuleEnv.CauseOwner,
+) Allocator.Error!ModuleEnv.CauseOwner {
+    if (self.probe_depth == 0 or
+        !recordUpdateOwnerExpectedMembershipAtProducer(
+            self,
+            owner_expr,
+            base_plan_index,
+            base_cause,
+        ))
+    {
+        std.debug.panic("record-update checked base lost its complete owner membership", .{});
+    }
+    for (self.record_update_owner_retirement_drafts.items) |draft| {
+        if (draft.owner_expr == owner_expr) {
+            std.debug.panic("record-update owner reserved multiple checked-base retirements", .{});
+        }
+    }
+    for (self.aggregate_expected_retirement_drafts.items) |draft| {
+        if (draft.owner_expr == owner_expr) {
+            std.debug.panic("record-update owner mixed aggregate retirement lifecycles", .{});
+        }
+    }
+    for (self.annotation_expected_failure_drafts.items) |draft| {
+        if (draft.owner_expr == owner_expr) {
+            std.debug.panic("record-update owner mixed failure retirement lifecycles", .{});
+        }
+    }
+    const owner_raw: u32 = @intFromEnum(owner_expr);
+    for (self.cir.expected_consumer_retirements.items.items) |retirement| {
+        if (retirement.decodedOwnerKind() == .expression and
+            retirement.retired_node == owner_raw)
+        {
+            std.debug.panic("record-update owner retirement collided with another lifecycle", .{});
+        }
+    }
+    const node = self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(owner_expr));
+    if (node.tag != .expr_record) {
+        std.debug.panic("record-update owner retirement lost its live record", .{});
+    }
+    const source_retirement = self.cir.expected_consumption_plans.items.items[
+        base_plan_index
+    ].decodedSourceRetirementIndex() orelse
+        std.debug.panic("record-update checked base omitted its source retirement", .{});
+    const source_retirement_complete = expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+        self.cir,
+        self.cir.expected_consumption_plans.items.items[base_plan_index],
+    );
+    const pending_source_retirement = if (source_retirement_complete) null else pendingExpressionRetirementAtProducer(
+        self,
+        @enumFromInt(self.cir.expected_consumption_plans.items.items[base_plan_index].site_node),
+    );
+    if (!source_retirement_complete and
+        (pending_source_retirement == null or pending_source_retirement.? != source_retirement))
+    {
+        std.debug.panic("record-update checked base changed its source retirement", .{});
+    }
+
+    try self.cir.expected_consumer_retirements.items.ensureUnusedCapacity(
+        self.cir.gpa,
+        1,
+    );
+    try self.record_update_owner_retirement_drafts.ensureUnusedCapacity(self.gpa, 1);
+    const retirement_index: u32 = @intCast(
+        self.cir.expected_consumer_retirements.items.items.len,
+    );
+    const payload: [4]u32 = @bitCast(node.getPayload());
+    self.cir.expected_consumer_retirements.items.appendAssumeCapacity(.{
+        .retired_node = owner_raw,
+        .owner_kind = @intFromEnum(ModuleEnv.ExpectedConsumerRetirement.OwnerKind.expression),
+        .original_node_tag = @intFromEnum(node.tag),
+        .original_payload = payload,
+        .kind = @intFromEnum(ModuleEnv.ExpectedConsumerRetirement.Kind.checker_rewrite_expected),
+        .retired_consumers_start = 0,
+        .retired_consumers_len = 0,
+        .diagnostic_index = ModuleEnv.ExpectedConsumerRetirement.none,
+        .expected_failures_start = 0,
+        .expected_failures_len = 0,
+        .rejection_owner_kind = ModuleEnv.ExpectedConsumerRetirement.none,
+        .rejection_owner_index = ModuleEnv.ExpectedConsumerRetirement.none,
+        .rejection_subject_var = ModuleEnv.ExpectedConsumerRetirement.none,
+    });
+    self.record_update_owner_retirement_drafts.appendAssumeCapacity(.{
+        .owner_expr = owner_expr,
+        .retirement_index = retirement_index,
+        .base_plan_index = base_plan_index,
+        .base_cause = base_cause,
+        .original_node_tag = @intFromEnum(node.tag),
+        .original_payload = payload,
+    });
+    return ModuleEnv.CauseOwner.expectedConsumerRetirement(retirement_index);
+}
+
+fn annotationFailureKindMatchesDraftProducer(
+    kind: ModuleEnv.ExpectedFailure.Kind,
+    producer: AnnotationExpectedFailureDraft.ProducerKind,
+) bool {
+    return switch (producer) {
+        .annotation => switch (kind) {
+            .annotation_malformed_type,
+            .annotation_malformed_where,
+            .annotation_invalid_tag_child,
+            .annotation_where_receiver_not_introduced,
+            .annotation_where_alias_not_alias,
+            .annotation_recursive_where_alias,
+            .annotation_where_alias_publication_error,
+            .annotation_where_alias_unresolved,
+            .annotation_where_alias_arity,
+            .annotation_where_alias_in_type_position,
+            .annotation_builtin_not_type,
+            .annotation_recursive_type_decl,
+            .annotation_type_decl_poisoned,
+            .annotation_type_formal_poisoned,
+            .annotation_type_apply_arity,
+            .annotation_alias_row_rejected,
+            .annotation_external_type_unresolved,
+            .annotation_child_failure,
+            .annotation_duplicate_where_signature_rejected,
+            => true,
+            .direct_binder_lookup_checked_error,
+            .annotated_binding_lookup_checked_error,
+            .call_operand_checked_error,
+            .nominal_pattern_external_unresolved,
+            .nominal_pattern_decl_poisoned,
+            .nominal_pattern_opaque_inaccessible,
+            .nominal_pattern_backing_unavailable,
+            .nominal_pattern_backing_checked_error,
+            .nominal_pattern_backing_relation_rejected,
+            .aggregate_child_relation_rejected,
+            => false,
+        },
+        .direct_binder_lookup => kind == .direct_binder_lookup_checked_error,
+        .annotated_binding_lookup => kind == .annotated_binding_lookup_checked_error,
+        .call_operand => kind == .call_operand_checked_error,
+    };
+}
+
+const PendingExpressionRetirementIdentity = struct {
+    retirement_index: u32,
+    record_update_owner: ?RecordUpdateOwnerRetirementDraft,
+};
+
+fn pendingExpectedConsumerRetirementHasCanonicalInactiveWords(
+    retirement: ModuleEnv.ExpectedConsumerRetirement,
+) bool {
+    return retirement.diagnostic_index == ModuleEnv.ExpectedConsumerRetirement.none and
+        retirement.retired_consumers_start == 0 and retirement.retired_consumers_len == 0 and
+        retirement.expected_failures_start == 0 and retirement.expected_failures_len == 0 and
+        retirement.rejection_owner_kind == ModuleEnv.ExpectedConsumerRetirement.none and
+        retirement.rejection_owner_index == ModuleEnv.ExpectedConsumerRetirement.none and
+        retirement.rejection_subject_var == ModuleEnv.ExpectedConsumerRetirement.none and
+        retirement.reserved_0 == 0 and retirement.reserved_1 == 0;
+}
+
+/// Select the one already-authored shallow pending retirement identity for a
+/// live expression. This authenticates the exact producer-owned draft family
+/// and row without recursively replaying a nested checked-base cause graph.
+fn pendingExpressionRetirementIdentityAtProducer(
+    self: *const Self,
+    base_expr: CIR.Expr.Idx,
+) ?PendingExpressionRetirementIdentity {
+    const base_raw: u32 = @intFromEnum(base_expr);
+    if (base_raw >= self.cir.store.nodes.len()) return null;
+    const node = self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(base_expr));
+    if (!isExprNodeTag(node.tag)) {
+        std.debug.panic("pending record-update base retirement lost its live expression", .{});
+    }
+
+    var aggregate: ?AggregateExpectedRetirementDraft = null;
+    for (self.aggregate_expected_retirement_drafts.items) |draft| {
+        if (draft.owner_expr != base_expr) continue;
+        if (aggregate != null) {
+            std.debug.panic("record-update base had multiple aggregate retirement lifecycles", .{});
+        }
+        aggregate = draft;
+    }
+
+    var annotation_retirement: ?u32 = null;
+    var annotation_producer: ?AnnotationExpectedFailureDraft.ProducerKind = null;
+    var annotation_count: usize = 0;
+    for (self.annotation_expected_failure_drafts.items, 0..) |draft, draft_index| {
+        if (draft.owner_expr != base_expr) continue;
+        if (draft.retirement_index >= self.cir.expected_consumer_retirements.items.items.len or
+            draft.failure_index >= self.cir.expected_failures.items.items.len)
+        {
+            std.debug.panic("record-update base failure draft lost its retirement or failure", .{});
+        }
+        if (annotation_retirement) |selected| {
+            if (selected != draft.retirement_index) {
+                std.debug.panic("record-update base failure drafts named multiple retirements", .{});
+            }
+        } else {
+            annotation_retirement = draft.retirement_index;
+        }
+        if (annotation_producer) |selected| {
+            if (selected != draft.producer_kind) {
+                std.debug.panic("record-update base mixed failure-draft producer kinds", .{});
+            }
+        } else {
+            annotation_producer = draft.producer_kind;
+        }
+        const failure = self.cir.expected_failures.items.items[draft.failure_index];
+        if (!failure.hasLegalTagsAt(draft.failure_index) or
+            failure.decodedOwnerKind() != .expression or
+            failure.owner_node != base_raw or
+            !annotationFailureKindMatchesDraftProducer(
+                failure.decodedKind() orelse
+                    std.debug.panic("record-update base failure draft had an unknown kind", .{}),
+                draft.producer_kind,
+            ) or !failure.cause_owner.hasCanonicalTags(true))
+        {
+            std.debug.panic("record-update base failure draft changed its exact producer edge", .{});
+        }
+        for (self.annotation_expected_failure_drafts.items[0..draft_index]) |prior| {
+            if (prior.owner_expr == base_expr and prior.failure_index == draft.failure_index) {
+                std.debug.panic("record-update base failure lifecycle duplicated one failure", .{});
+            }
+        }
+        annotation_count += 1;
+    }
+
+    var record_update_owner: ?RecordUpdateOwnerRetirementDraft = null;
+    for (self.record_update_owner_retirement_drafts.items) |draft| {
+        if (draft.owner_expr != base_expr) continue;
+        if (record_update_owner != null) {
+            std.debug.panic("record-update base had multiple checked-base owner lifecycles", .{});
+        }
+        record_update_owner = draft;
+    }
+    if (record_update_owner) |draft| {
+        if (aggregate != null or annotation_count != 0 or
+            draft.retirement_index >= self.cir.expected_consumer_retirements.items.items.len or
+            draft.base_plan_index >= self.cir.expected_consumption_plans.items.items.len)
+        {
+            std.debug.panic("record-update base mixed its checked-base owner lifecycle", .{});
+        }
+        const base_plan = self.cir.expected_consumption_plans.items.items[
+            draft.base_plan_index
+        ];
+        if (base_plan.site_node >= self.cir.store.nodes.len()) {
+            std.debug.panic("record-update base owner lifecycle lost its base site", .{});
+        }
+        const source_node = self.cir.store.nodes.get(@enumFromInt(base_plan.site_node));
+        const base_phase: RecordUpdateBaseNodePhase = if (source_node.tag == .malformed)
+            .retired
+        else if (isExprNodeTag(source_node.tag))
+            .live
+        else
+            std.debug.panic("record-update base owner lifecycle found an invalid base phase", .{});
+        if (!recordUpdateOwnerExpectedMembershipAtPhase(
+            self,
+            draft.owner_expr,
+            draft.base_plan_index,
+            draft.base_cause,
+            base_phase,
+        )) {
+            std.debug.panic("record-update base mixed its checked-base owner lifecycle", .{});
+        }
+        const retirement = self.cir.expected_consumer_retirements.items.items[
+            draft.retirement_index
+        ];
+        if (retirement.retired_node != base_raw or
+            retirement.decodedOwnerKind() != .expression or
+            retirement.decodedKind() != .checker_rewrite_expected or
+            retirement.original_node_tag != draft.original_node_tag or
+            !std.meta.eql(retirement.original_payload, draft.original_payload) or
+            !pendingExpectedConsumerRetirementHasCanonicalInactiveWords(retirement) or
+            draft.original_node_tag != @intFromEnum(node.tag) or
+            !std.meta.eql(
+                draft.original_payload,
+                @as([4]u32, @bitCast(node.getPayload())),
+            ))
+        {
+            std.debug.panic("record-update base changed its checked-base owner lifecycle", .{});
+        }
+        for (self.cir.expected_consumer_retirements.items.items, 0..) |other, other_index| {
+            if (other_index != draft.retirement_index and
+                other.decodedOwnerKind() == .expression and other.retired_node == base_raw)
+            {
+                std.debug.panic("record-update base had multiple retirement rows", .{});
+            }
+        }
+        return .{
+            .retirement_index = draft.retirement_index,
+            .record_update_owner = draft,
+        };
+    }
+
+    const selected_index: u32 = if (aggregate) |draft| blk: {
+        if (draft.retirement_index >= self.cir.expected_consumer_retirements.items.items.len or
+            (draft.plans_len == 0 and
+                (draft.plans_start != 0 or
+                    draft.retired_reason != .branch_body_error_short_circuit)) or
+            (draft.plans_len != 0 and !rangeFits(
+                draft.plans_start,
+                draft.plans_len,
+                self.cir.expected_consumption_plans.items.items.len,
+            )))
+        {
+            std.debug.panic("record-update base aggregate lifecycle lost its plan range", .{});
+        }
+        const owns_call_failures =
+            draft.retired_reason == .call_retired_after_operand_checked_error;
+        if ((owns_call_failures and draft.plans_len < 2) or
+            owns_call_failures != (annotation_count != 0) or
+            (owns_call_failures and
+                (annotation_producer == null or
+                    annotation_producer.? != .call_operand or
+                    annotation_retirement == null or
+                    annotation_retirement.? != draft.retirement_index)))
+        {
+            std.debug.panic("record-update base aggregate lifecycle mixed failure producers", .{});
+        }
+        break :blk draft.retirement_index;
+    } else blk: {
+        const selected = annotation_retirement orelse return null;
+        if (annotation_count == 0 or annotation_producer == null or
+            annotation_producer.? == .call_operand)
+        {
+            std.debug.panic("record-update base had an incomplete ineligible retirement lifecycle", .{});
+        }
+        break :blk selected;
+    };
+
+    const retirement = self.cir.expected_consumer_retirements.items.items[selected_index];
+    const expected_kind: ModuleEnv.ExpectedConsumerRetirement.Kind = if (aggregate) |draft|
+        if (draft.plans_len == 0) .checker_rewrite_ineligible else .checker_rewrite_expected
+    else
+        .checker_rewrite_ineligible;
+    if (retirement.retired_node != base_raw or
+        retirement.decodedOwnerKind() != .expression or
+        retirement.decodedKind() != expected_kind or
+        retirement.original_node_tag != @intFromEnum(node.tag) or
+        !std.meta.eql(
+            retirement.original_payload,
+            @as([4]u32, @bitCast(node.getPayload())),
+        ) or !pendingExpectedConsumerRetirementHasCanonicalInactiveWords(retirement))
+    {
+        std.debug.panic("record-update base changed its pending retirement lifecycle", .{});
+    }
+    for (self.cir.expected_consumer_retirements.items.items, 0..) |other, other_index| {
+        if (other_index != selected_index and
+            other.decodedOwnerKind() == .expression and other.retired_node == base_raw)
+        {
+            std.debug.panic("record-update base had multiple retirement rows", .{});
+        }
+    }
+    return .{
+        .retirement_index = selected_index,
+        .record_update_owner = null,
+    };
+}
+
+/// Select the one pending lifecycle and, for a nested checked-base owner,
+/// authenticate its immediate source-retirement edge without recursively
+/// traversing the nested cause graph.
+fn pendingExpressionRetirementAtProducer(
+    self: *const Self,
+    base_expr: CIR.Expr.Idx,
+) ?u32 {
+    const identity = pendingExpressionRetirementIdentityAtProducer(self, base_expr) orelse
+        return null;
+    const draft = identity.record_update_owner orelse return identity.retirement_index;
+    const base_plan = self.cir.expected_consumption_plans.items.items[draft.base_plan_index];
+    const source_retirement_index = base_plan.decodedSourceRetirementIndex() orelse
+        std.debug.panic("record-update base owner lifecycle lost its source retirement", .{});
+    if (source_retirement_index == identity.retirement_index or
+        source_retirement_index >= self.cir.expected_consumer_retirements.items.items.len or
+        base_plan.site_node >= self.cir.store.nodes.len())
+    {
+        std.debug.panic("record-update base owner lifecycle changed its immediate source", .{});
+    }
+    const source_retirement = self.cir.expected_consumer_retirements.items.items[
+        source_retirement_index
+    ];
+    if (source_retirement.decodedOwnerKind() != .expression or
+        source_retirement.retired_node != base_plan.site_node)
+    {
+        std.debug.panic("record-update base owner lifecycle changed its source owner", .{});
+    }
+    const source_node = self.cir.store.nodes.get(@enumFromInt(base_plan.site_node));
+    if (source_node.tag == .malformed) {
+        if (!expectedRecordUpdateBaseSourceRetirementIsLocallyValid(self.cir, base_plan)) {
+            std.debug.panic("record-update base owner lifecycle lost its completed source", .{});
+        }
+    } else if (isExprNodeTag(source_node.tag)) {
+        const source_identity = pendingExpressionRetirementIdentityAtProducer(
+            self,
+            @enumFromInt(base_plan.site_node),
+        ) orelse std.debug.panic("record-update base owner lifecycle lost its pending source", .{});
+        if (source_identity.retirement_index != source_retirement_index) {
+            std.debug.panic("record-update base owner lifecycle changed its pending source", .{});
+        }
+    } else {
+        std.debug.panic("record-update base owner lifecycle found an invalid source phase", .{});
+    }
+    return identity.retirement_index;
+}
+
+fn recordUpdateBaseCauseIsValidAtProducer(
+    self: *const Self,
+    base_expr: CIR.Expr.Idx,
+    base_plan_index: u32,
+    cause: ModuleEnv.CauseOwner,
+) bool {
+    const base_raw: u32 = @intFromEnum(base_expr);
+    if (!cause.hasCanonicalTags(true)) return false;
+    const reference = cause.decodedExpectedConsumerRetirement() orelse
+        return expectedRecordUpdateBaseCauseIsLocallyValid(
+            self.types,
+            self.cir,
+            base_raw,
+            base_plan_index,
+            cause,
+        );
+    if (reference.index >= self.cir.expected_consumer_retirements.items.items.len) {
+        return false;
+    }
+    const retirement = self.cir.expected_consumer_retirements.items.items[reference.index];
+    if (retirement.decodedOwnerKind() != .expression or
+        retirement.retired_node >= self.cir.store.nodes.len())
+    {
+        return false;
+    }
+    const retirement_is_authentic = if (expectedConsumerRetirementNodeIsLocallyValid(
+        self.cir,
+        retirement,
+    )) true else blk: {
+        const pending = pendingExpressionRetirementAtProducer(
+            self,
+            @enumFromInt(retirement.retired_node),
+        ) orelse break :blk false;
+        break :blk pending == reference.index;
+    };
+    if (!retirement_is_authentic) return false;
+    if (retirement.retired_node == base_raw) return true;
+    for (self.cir.expected_consumption_plans.items.items, 0..) |_, plan_index| {
+        if (plan_index == @as(usize, base_plan_index)) continue;
+        if (expectedRecordUpdateCausePlanHasLiveOwnerSite(
+            self.types,
+            self.cir,
+            @intCast(plan_index),
+            base_raw,
+            cause,
+        )) return true;
+    }
+    return false;
+}
+
+fn recordUpdateBaseSourceRetirement(
+    self: *Self,
+    base_expr: CIR.Expr.Idx,
+    plan_index: u32,
+    cause: ModuleEnv.CauseOwner,
+) Allocator.Error!u32 {
+    const base_raw: u32 = @intFromEnum(base_expr);
+    const node = self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(base_expr));
+    if (!recordUpdateBaseCauseIsValidAtProducer(
+        self,
+        base_expr,
+        plan_index,
+        cause,
+    )) {
+        std.debug.panic("record-update base lost its exact checked-status cause", .{});
+    }
+    if (node.tag == .malformed) {
+        const reference = cause.decodedExpectedConsumerRetirement() orelse
+            std.debug.panic("preexisting record-update base lacked its retirement cause", .{});
+        if (reference.index >= self.cir.expected_consumer_retirements.items.items.len) {
+            std.debug.panic("preexisting record-update base cited an absent retirement", .{});
+        }
+        const retirement = self.cir.expected_consumer_retirements.items.items[reference.index];
+        if (retirement.decodedOwnerKind() != .expression or
+            retirement.retired_node != base_raw or
+            retirement.decodedKind() != .preexisting_runtime_error or
+            !expectedConsumerRetirementNodeIsLocallyValid(self.cir, retirement))
+        {
+            std.debug.panic("record-update base changed its preexisting runtime-error authority", .{});
+        }
+        return reference.index;
+    }
+    if (pendingExpressionRetirementAtProducer(self, base_expr)) |retirement_index| {
+        return retirement_index;
+    }
+    std.debug.panic(
+        "record-update checked-error base lacked producer-authored retirement authority",
+        .{},
+    );
+}
+
+fn completeExpectedRecordUpdateBasePlan(
+    self: *Self,
+    plan_index: u32,
+    produced: ExpectedMarkerAnchor,
+    status: CheckedExprStatus,
+    source_retirement_index: ?u32,
+) void {
+    const none = ModuleEnv.ExpectedConsumptionPlan.none;
+    if (plan_index >= self.cir.expected_consumption_plans.items.items.len) {
+        std.debug.panic("record-update base completion named an absent Expected plan", .{});
+    }
+    const plan = &self.cir.expected_consumption_plans.items.items[plan_index];
+    if (plan.decodedRole() != .record_update_base or plan.decodedOutcome() != .reserved or
+        produced.side != .destination)
+    {
+        std.debug.panic("record-update base completion lost its reserved producer", .{});
+    }
+    plan.parent_authority = ModuleEnv.ExpectedMarkerAuthority.inactive();
+    plan.produced_copy_step = produced.copy_step;
+    plan.produced_occurrence_offset = produced.occurrence_offset;
+    plan.produced_side = @intFromEnum(produced.side);
+    plan.call_root_plan_index = none;
+    plan.failure_cause_plan_index = none;
+    switch (status) {
+        .established => {
+            if (source_retirement_index != null) {
+                std.debug.panic("successful record-update base named a source retirement", .{});
+            }
+            plan.outcome = @intFromEnum(ModuleEnv.ExpectedConsumptionPlan.Outcome.source_root_copy);
+            plan.reason = none;
+            plan.failure_owner = ModuleEnv.CauseOwner.inactive();
+            plan.source_retirement_index_plus_one = 0;
+        },
+        .checked_error => |cause| {
+            const retirement_index = source_retirement_index orelse
+                std.debug.panic("checked-error record-update base omitted its source retirement", .{});
+            if (!cause.hasCanonicalTags(true) or retirement_index == std.math.maxInt(u32)) {
+                std.debug.panic("record-update base carried a noncanonical checked-error cause", .{});
+            }
+            plan.outcome = @intFromEnum(
+                ModuleEnv.ExpectedConsumptionPlan.Outcome.source_root_copy_checked_error,
+            );
+            plan.reason = @intFromEnum(
+                ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_base_checked_error,
+            );
+            plan.failure_owner = cause;
+            plan.source_retirement_index_plus_one = retirement_index + 1;
+        },
+    }
+    if (!plan.hasLegalTags()) {
+        std.debug.panic("record-update base completed a noncanonical Expected plan", .{});
+    }
+}
+
 fn setExpectedFreshShapeSlotsOutcome(
     self: *Self,
     slots: []const ExpectedFreshShapeSlot,
@@ -48695,6 +50842,7 @@ const ExpectedStoredValueRelationOutcome = union(enum) {
 fn projectExpectedRecordUpdateField(
     self: *Self,
     consumer_expr: CIR.Expr.Idx,
+    base_plan_index: u32,
     expected: Expected.ExpectedType,
     shape_var: Var,
     slot: *ExpectedFreshShapeSlot,
@@ -48708,6 +50856,11 @@ fn projectExpectedRecordUpdateField(
     }
     var publication = try self.beginLocalMarkerCopyTransaction(env);
     defer publication.rollback();
+    try self.preflightRecordUpdateExpectedPlanRegistration(
+        consumer_expr,
+        slot.role,
+        slot.slot,
+    );
     slot.* = try self.reserveExpectedFreshShapeSlot(
         consumer_expr,
         slot.site,
@@ -48715,6 +50868,13 @@ fn projectExpectedRecordUpdateField(
         slot.slot,
         slot.raw_fresh_var,
     );
+    const registration = RecordUpdateExpectedPlanRegistration{
+        .owner_expr = consumer_expr,
+        .plan_index = slot.expected_plan,
+        .role = slot.role,
+        .slot = slot.slot,
+        .site = slot.site,
+    };
 
     switch (expected.status) {
         .established => {},
@@ -48731,6 +50891,10 @@ fn projectExpectedRecordUpdateField(
                 failure.cause,
                 failure_cause_plan_index,
             );
+            if (failure_cause_plan_index != base_plan_index) {
+                std.debug.panic("record-update field lost its exact upstream base plan", .{});
+            }
+            self.registerRecordUpdateExpectedPlanAssumeCapacity(registration);
             publication.commit();
             return .{ .suppressed = failure.cause };
         },
@@ -48790,6 +50954,7 @@ fn projectExpectedRecordUpdateField(
                 cause,
                 ModuleEnv.ExpectedConsumptionPlan.none,
             );
+            self.registerRecordUpdateExpectedPlanAssumeCapacity(registration);
             publication.commit();
             return .{ .rejected = cause };
         },
@@ -48831,6 +50996,7 @@ fn projectExpectedRecordUpdateField(
     else
         .{ .copy_occurrence = root_anchor };
     self.completeExpectedFreshShapeSlots(&slots, plan_parent, child_anchor);
+    self.registerRecordUpdateExpectedPlanAssumeCapacity(registration);
     publication.commit();
     return .{ .established = .{
         .var_ = self.expectedMarkerAnchorRawVar(child_anchor),
@@ -49101,7 +51267,15 @@ fn commitProjectedStoredValue(
         else
             null,
         .evidence_free => plan_before.raw_consumer_var,
-        .related, .producer_root, .retained, .not_projected, .checked_error, .reserved => null,
+        .related,
+        .source_root_copy,
+        .source_root_copy_checked_error,
+        .producer_root,
+        .retained,
+        .not_projected,
+        .checked_error,
+        .reserved,
+        => null,
     };
     if (!plan_before.hasLegalTags() or
         plan_expected_raw != @intFromEnum(expected.var_) or
@@ -50335,6 +52509,23 @@ noinline fn checkExprRecord(
         does_fx = record_base_outcome.does_fx or does_fx;
 
         const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
+        var base_publication = try self.beginLocalMarkerCopyTransaction(env);
+        defer base_publication.rollback();
+        try self.preflightRecordUpdateExpectedPlanRegistration(
+            expr_idx,
+            .record_update_base,
+            0,
+        );
+        const base_plan_index: u32 = @intFromEnum(try self.cir.expected_consumption_plans.append(
+            self.cir.gpa,
+            reservedExpectedPlan(
+                expr_idx,
+                record_being_updated_expr,
+                .record_update_base,
+                0,
+                record_being_updated_var,
+            ),
+        ));
         const base_copy = try self.instantiateVarWithMarkerCopy(
             record_being_updated_var,
             env,
@@ -50350,6 +52541,28 @@ noinline fn checkExprRecord(
                 std.debug.panic("record-update base did not publish expected support", .{}),
             .destination,
         );
+        const source_retirement_index: ?u32 = switch (record_base_outcome.status) {
+            .established => null,
+            .checked_error => |cause| try self.recordUpdateBaseSourceRetirement(
+                record_being_updated_expr,
+                base_plan_index,
+                cause,
+            ),
+        };
+        self.completeExpectedRecordUpdateBasePlan(
+            base_plan_index,
+            base_anchor,
+            record_base_outcome.status,
+            source_retirement_index,
+        );
+        self.registerRecordUpdateExpectedPlanAssumeCapacity(.{
+            .owner_expr = expr_idx,
+            .plan_index = base_plan_index,
+            .role = .record_update_base,
+            .slot = 0,
+            .site = record_being_updated_expr,
+        });
+        base_publication.commit();
         const record_being_updated_name: ?Ident.Idx = self.getExprPatternIdent(record_being_updated_expr);
 
         // Process each field
@@ -50402,6 +52615,7 @@ noinline fn checkExprRecord(
             } };
             const slot_projection = try self.projectExpectedRecordUpdateField(
                 expr_idx,
+                base_plan_index,
                 .{
                     .var_ = base_copy.var_,
                     .context = update_context,
@@ -50410,7 +52624,7 @@ noinline fn checkExprRecord(
                         .established => .established,
                         .checked_error => |cause| .{ .checked_error = .{
                             .cause = cause,
-                            .route = .direct,
+                            .route = .{ .upstream_plan = base_plan_index },
                         } },
                     },
                 },
@@ -50457,6 +52671,23 @@ noinline fn checkExprRecord(
                 env,
                 update_context,
             );
+        }
+
+        switch (record_base_outcome.status) {
+            .established => {},
+            .checked_error => |base_cause| {
+                var owner_retirement = try self.beginProbe(env);
+                var owner_retirement_open = true;
+                defer if (owner_retirement_open) owner_retirement.rollback();
+                const cause = try self.reserveRecordUpdateOwnerRetirement(
+                    expr_idx,
+                    base_plan_index,
+                    base_cause,
+                );
+                owner_retirement.commit();
+                owner_retirement_open = false;
+                frame.checked_status = .{ .checked_error = cause };
+            },
         }
 
         // Process each unset field. The probe mirrors `.?`-access
@@ -59287,6 +61518,8 @@ const Probe = struct {
     active_direct_binder_failures_len: usize,
     aggregate_expected_retirement_drafts_len: usize,
     expected_owner_plan_ranges_len: usize,
+    record_update_expected_plan_registrations_len: usize,
+    record_update_owner_retirement_drafts_len: usize,
     default_decisions_len: usize,
     default_decision_contributors_len: usize,
     selected_method_decisions_len: usize,
@@ -59443,6 +61676,12 @@ const Probe = struct {
         );
         self.check.expected_owner_plan_ranges.shrinkRetainingCapacity(
             self.expected_owner_plan_ranges_len,
+        );
+        self.check.record_update_expected_plan_registrations.shrinkRetainingCapacity(
+            self.record_update_expected_plan_registrations_len,
+        );
+        self.check.record_update_owner_retirement_drafts.shrinkRetainingCapacity(
+            self.record_update_owner_retirement_drafts_len,
         );
         self.check.cir.default_decisions.items.shrinkRetainingCapacity(self.default_decisions_len);
         self.check.cir.default_decision_contributors.items.shrinkRetainingCapacity(
@@ -59619,6 +61858,10 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const active_direct_binder_failures_len = self.active_direct_binder_failures.items.len;
     const aggregate_expected_retirement_drafts_len = self.aggregate_expected_retirement_drafts.items.len;
     const expected_owner_plan_ranges_len = self.expected_owner_plan_ranges.items.len;
+    const record_update_expected_plan_registrations_len =
+        self.record_update_expected_plan_registrations.items.len;
+    const record_update_owner_retirement_drafts_len =
+        self.record_update_owner_retirement_drafts.items.len;
     const default_decisions_len = self.cir.default_decisions.items.items.len;
     const default_decision_contributors_len = self.cir.default_decision_contributors.items.items.len;
     const selected_method_decisions_len = self.cir.selected_method_decisions.items.items.len;
@@ -59710,6 +61953,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .active_direct_binder_failures_len = active_direct_binder_failures_len,
         .aggregate_expected_retirement_drafts_len = aggregate_expected_retirement_drafts_len,
         .expected_owner_plan_ranges_len = expected_owner_plan_ranges_len,
+        .record_update_expected_plan_registrations_len = record_update_expected_plan_registrations_len,
+        .record_update_owner_retirement_drafts_len = record_update_owner_retirement_drafts_len,
         .default_decisions_len = default_decisions_len,
         .default_decision_contributors_len = default_decision_contributors_len,
         .selected_method_decisions_len = selected_method_decisions_len,
@@ -64179,6 +66424,10 @@ fn expectDirectBinderTransientListsEmpty(checker: *const Self) !void {
     try std.testing.expectEqual(
         @as(usize, 0),
         checker.active_direct_binder_failures.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checker.record_update_owner_retirement_drafts.items.len,
     );
 }
 
@@ -69990,6 +72239,606 @@ fn recordUpdateRootAuthorityFreshContext(test_env: anytype) ImportResolution {
         },
         test_env.checker.platform_dependency_index,
     );
+}
+
+const nested_record_update_owner_retirement_source =
+    \\import RecordUpdateNestedOwnerA exposing [Status]
+    \\
+    \\first : a -> a where [a.Status]
+    \\first = |value| { ..({ ..value, inner: 1.U8 }), outer: 2.U8 }
+;
+
+const NestedRecordUpdateOwnerTopology = struct {
+    outer_expr: CIR.Expr.Idx,
+    inner_expr: CIR.Expr.Idx,
+    lookup_expr: CIR.Expr.Idx,
+    outer_field_expr: CIR.Expr.Idx,
+    inner_field_expr: CIR.Expr.Idx,
+};
+
+fn nestedRecordUpdateOwnerTopology(
+    test_env: anytype,
+) error{TestUnexpectedResult}!NestedRecordUpdateOwnerTopology {
+    const cir = test_env.module_env;
+    const def_idx = test_env.can.explicitRootDefByName("first") orelse
+        return error.TestUnexpectedResult;
+    const def = cir.store.getDef(def_idx);
+    const lambda = cir.store.getExpr(def.expr);
+    if (lambda != .e_lambda) return error.TestUnexpectedResult;
+    const patterns = cir.store.slicePatterns(lambda.e_lambda.args);
+    if (patterns.len != 1 or cir.store.getPattern(patterns[0]) != .assign) {
+        return error.TestUnexpectedResult;
+    }
+    const outer_expr = lambda.e_lambda.body;
+    const outer = cir.store.getExpr(outer_expr);
+    if (outer != .e_record or outer.e_record.ext == null) {
+        return error.TestUnexpectedResult;
+    }
+    const outer_fields = cir.store.sliceRecordFields(outer.e_record.fields);
+    if (outer_fields.len != 1 or cir.store.sliceUnsetFields(outer.e_record.unsets).len != 0) {
+        return error.TestUnexpectedResult;
+    }
+    const inner_expr = outer.e_record.ext.?;
+    const inner = cir.store.getExpr(inner_expr);
+    if (inner != .e_record or inner.e_record.ext == null) {
+        return error.TestUnexpectedResult;
+    }
+    const inner_fields = cir.store.sliceRecordFields(inner.e_record.fields);
+    if (inner_fields.len != 1 or cir.store.sliceUnsetFields(inner.e_record.unsets).len != 0) {
+        return error.TestUnexpectedResult;
+    }
+    const lookup_expr = inner.e_record.ext.?;
+    const lookup = cir.store.getExpr(lookup_expr);
+    if (lookup != .e_lookup_local or lookup.e_lookup_local.pattern_idx != patterns[0]) {
+        return error.TestUnexpectedResult;
+    }
+    return .{
+        .outer_expr = outer_expr,
+        .inner_expr = inner_expr,
+        .lookup_expr = lookup_expr,
+        .outer_field_expr = cir.store.getRecordField(outer_fields[0]).value,
+        .inner_field_expr = cir.store.getRecordField(inner_fields[0]).value,
+    };
+}
+
+const RecordUpdateOwnerPlanPair = struct {
+    base: u32,
+    field: u32,
+};
+
+fn uniqueRecordUpdateOwnerPlanPair(
+    cir: *const ModuleEnv,
+    owner_expr: CIR.Expr.Idx,
+) error{TestUnexpectedResult}!RecordUpdateOwnerPlanPair {
+    var base_plan: ?u32 = null;
+    var field_plan: ?u32 = null;
+    for (cir.expected_consumption_plans.items.items, 0..) |plan, plan_index| {
+        if (plan.owner_node != @intFromEnum(owner_expr)) continue;
+        switch (plan.decodedRole() orelse return error.TestUnexpectedResult) {
+            .record_update_base => {
+                if (base_plan != null) return error.TestUnexpectedResult;
+                base_plan = @intCast(plan_index);
+            },
+            .record_update_field => {
+                if (field_plan != null) return error.TestUnexpectedResult;
+                field_plan = @intCast(plan_index);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    return .{
+        .base = base_plan orelse return error.TestUnexpectedResult,
+        .field = field_plan orelse return error.TestUnexpectedResult,
+    };
+}
+
+fn uniqueRecordUpdateOwnerRetirementDraft(
+    checker: *const Self,
+    owner_expr: CIR.Expr.Idx,
+) error{TestUnexpectedResult}!RecordUpdateOwnerRetirementDraft {
+    var selected: ?RecordUpdateOwnerRetirementDraft = null;
+    for (checker.record_update_owner_retirement_drafts.items) |draft| {
+        if (draft.owner_expr != owner_expr) continue;
+        if (selected != null) return error.TestUnexpectedResult;
+        selected = draft;
+    }
+    return selected orelse error.TestUnexpectedResult;
+}
+
+const PendingNestedRecordUpdateOwnerProof = struct {
+    outer_retirement: u32,
+    inner_retirement: u32,
+    lookup_retirement: u32,
+    outer_plans: RecordUpdateOwnerPlanPair,
+    inner_plans: RecordUpdateOwnerPlanPair,
+};
+
+fn expectPendingNestedRecordUpdateOwnerProof(
+    checker: *const Self,
+    topology: NestedRecordUpdateOwnerTopology,
+) !PendingNestedRecordUpdateOwnerProof {
+    const cir = checker.cir;
+    try std.testing.expect(cir.store.getExpr(topology.outer_expr) == .e_record);
+    try std.testing.expect(cir.store.getExpr(topology.inner_expr) == .e_record);
+    try std.testing.expect(cir.store.getExpr(topology.lookup_expr) == .e_lookup_local);
+    try std.testing.expect(checker.erroneous_value_exprs.contains(topology.outer_expr));
+    try std.testing.expect(checker.erroneous_value_exprs.contains(topology.inner_expr));
+
+    const outer = try uniqueRecordUpdateOwnerRetirementDraft(checker, topology.outer_expr);
+    const inner = try uniqueRecordUpdateOwnerRetirementDraft(checker, topology.inner_expr);
+    const outer_plans = try uniqueRecordUpdateOwnerPlanPair(cir, topology.outer_expr);
+    const inner_plans = try uniqueRecordUpdateOwnerPlanPair(cir, topology.inner_expr);
+    try std.testing.expectEqual(outer.base_plan_index, outer_plans.base);
+    try std.testing.expectEqual(inner.base_plan_index, inner_plans.base);
+    try std.testing.expect(recordUpdateOwnerExpectedMembershipAtProducer(
+        checker,
+        topology.inner_expr,
+        inner.base_plan_index,
+        inner.base_cause,
+    ));
+    try std.testing.expect(recordUpdateOwnerExpectedMembershipAtProducer(
+        checker,
+        topology.outer_expr,
+        outer.base_plan_index,
+        outer.base_cause,
+    ));
+
+    const inner_base = cir.expected_consumption_plans.items.items[inner_plans.base];
+    const outer_base = cir.expected_consumption_plans.items.items[outer_plans.base];
+    const inner_field = cir.expected_consumption_plans.items.items[inner_plans.field];
+    const outer_field = cir.expected_consumption_plans.items.items[outer_plans.field];
+    const lookup_retirement = inner_base.decodedSourceRetirementIndex() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@intFromEnum(topology.lookup_expr), inner_base.site_node);
+    try std.testing.expectEqual(@intFromEnum(topology.inner_expr), outer_base.site_node);
+    try std.testing.expectEqual(inner.retirement_index, outer_base.decodedSourceRetirementIndex().?);
+    try std.testing.expect(expectedCauseOwnersEqual(
+        inner.base_cause,
+        ModuleEnv.CauseOwner.expectedConsumerRetirement(lookup_retirement),
+    ));
+    try std.testing.expect(expectedCauseOwnersEqual(
+        outer.base_cause,
+        ModuleEnv.CauseOwner.expectedConsumerRetirement(inner.retirement_index),
+    ));
+    try std.testing.expectEqual(inner_plans.base, inner_field.failure_cause_plan_index);
+    try std.testing.expectEqual(outer_plans.base, outer_field.failure_cause_plan_index);
+    try std.testing.expectEqual(@intFromEnum(topology.inner_field_expr), inner_field.site_node);
+    try std.testing.expectEqual(@intFromEnum(topology.outer_field_expr), outer_field.site_node);
+    try std.testing.expectEqual(
+        lookup_retirement,
+        pendingExpressionRetirementAtProducer(checker, topology.lookup_expr).?,
+    );
+    try std.testing.expectEqual(
+        inner.retirement_index,
+        pendingExpressionRetirementAtProducer(checker, topology.inner_expr).?,
+    );
+    try std.testing.expectEqual(
+        outer.retirement_index,
+        pendingExpressionRetirementAtProducer(checker, topology.outer_expr).?,
+    );
+    try std.testing.expect(outer.retirement_index != inner.retirement_index);
+    try std.testing.expect(outer.retirement_index != lookup_retirement);
+    try std.testing.expect(inner.retirement_index != lookup_retirement);
+    return .{
+        .outer_retirement = outer.retirement_index,
+        .inner_retirement = inner.retirement_index,
+        .lookup_retirement = lookup_retirement,
+        .outer_plans = outer_plans,
+        .inner_plans = inner_plans,
+    };
+}
+
+fn expectCompletedRecordUpdateOwnerPair(
+    cir: *const ModuleEnv,
+    owner_expr: CIR.Expr.Idx,
+    base_expr: CIR.Expr.Idx,
+    field_expr: CIR.Expr.Idx,
+) !RetiredRecordUpdateOwnerSnapshot {
+    const owner = retiredRecordUpdateOwnerSnapshot(
+        cir,
+        @intFromEnum(owner_expr),
+        .retired,
+    ) orelse return error.TestUnexpectedResult;
+    const plans = try uniqueRecordUpdateOwnerPlanPair(cir, owner_expr);
+    const base_plan = cir.expected_consumption_plans.items.items[plans.base];
+    const field_plan = cir.expected_consumption_plans.items.items[plans.field];
+    try std.testing.expectEqual(@intFromEnum(base_expr), owner.syntax.base_expr);
+    try std.testing.expectEqual(@as(u32, 1), owner.syntax.fields_len);
+    try std.testing.expectEqual(@intFromEnum(base_expr), base_plan.site_node);
+    try std.testing.expectEqual(@intFromEnum(field_expr), field_plan.site_node);
+    try std.testing.expectEqual(plans.base, field_plan.failure_cause_plan_index);
+    try std.testing.expectEqual(@as(u32, 2), owner.retirement.retired_consumers_len);
+    const consumers = cir.expected_retired_consumers.items.items[owner.retirement.retired_consumers_start..][0..owner.retirement.retired_consumers_len];
+    try std.testing.expect(expectedRetiredRecordUpdateOwnerRangeIsLocallyValid(
+        &cir.types,
+        cir,
+        owner.retirement,
+        owner.retirement_index,
+        consumers,
+    ));
+    var saw_base = false;
+    var saw_field = false;
+    for (consumers) |consumer| {
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedRetiredConsumer.RetirementOnlyReason.record_update_retired_after_base_checked_error,
+            consumer.decodedRetirementOnlyReason().?,
+        );
+        if (consumer.plan_index == plans.base) {
+            try std.testing.expect(!saw_base);
+            saw_base = true;
+        } else if (consumer.plan_index == plans.field) {
+            try std.testing.expect(!saw_field);
+            saw_field = true;
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+    try std.testing.expect(saw_base and saw_field);
+    return owner;
+}
+
+const NestedRecordUpdatePoisonOrder = enum {
+    outer_then_inner,
+    inner_then_outer,
+};
+
+test "record-update owner retirement: nested checked base supports both owner poison orders" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var failure_stage: []const u8 = "provider";
+    var poison_order: NestedRecordUpdatePoisonOrder = .outer_then_inner;
+    errdefer std.debug.print(
+        "nested record-update owner-retirement fixture failed at {s}, order {s}\n",
+        .{ failure_stage, @tagName(poison_order) },
+    );
+
+    var provider = try TestEnv.init(
+        "RecordUpdateNestedOwnerA",
+        direct_binder_transaction_provider_source,
+    );
+    defer provider.deinit();
+    try provider.assertNoErrors();
+    var fresh_env = try TestEnv.initUncheckedWithImportForTesting(
+        "RecordUpdateNestedOwnerB",
+        nested_record_update_owner_retirement_source,
+        "RecordUpdateNestedOwnerA",
+        &provider,
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+    const fresh_topology = try nestedRecordUpdateOwnerTopology(&fresh_env);
+
+    var outer_first_bytes: ?[]u8 = null;
+    defer if (outer_first_bytes) |bytes| std.testing.allocator.free(bytes);
+    const orders = [_]NestedRecordUpdatePoisonOrder{ .outer_then_inner, .inner_then_outer };
+    for (orders) |order| {
+        poison_order = order;
+        failure_stage = "staged producer";
+        var consumer = try TestEnv.initUncheckedWithImportForTesting(
+            "RecordUpdateNestedOwnerB",
+            nested_record_update_owner_retirement_source,
+            "RecordUpdateNestedOwnerA",
+            &provider,
+        );
+        defer consumer.deinit();
+        try consumer.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+        const topology = try nestedRecordUpdateOwnerTopology(&consumer);
+        try std.testing.expect(std.meta.eql(fresh_topology, topology));
+        var env = try stageDirectBinderCallPairThroughPrePoison(&consumer);
+        defer consumer.checker.env_pool.release(env);
+        const checker = &consumer.checker;
+        const cir = consumer.module_env;
+        const pending = try expectPendingNestedRecordUpdateOwnerProof(checker, topology);
+
+        failure_stage = "real leaf value-use sweep";
+        try checker.poisonErroneousValueUses();
+        try std.testing.expect(cir.store.getExpr(topology.lookup_expr) == .e_runtime_error);
+        try std.testing.expect(cir.store.getExpr(topology.inner_expr) == .e_record);
+        try std.testing.expect(cir.store.getExpr(topology.outer_expr) == .e_record);
+        try std.testing.expect(expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+            cir,
+            cir.expected_consumption_plans.items.items[pending.inner_plans.base],
+        ));
+        try std.testing.expectEqual(
+            pending.inner_retirement,
+            pendingExpressionRetirementAtProducer(checker, topology.inner_expr).?,
+        );
+        const outer_draft = try uniqueRecordUpdateOwnerRetirementDraft(
+            checker,
+            topology.outer_expr,
+        );
+        try std.testing.expect(recordUpdateOwnerExpectedMembershipAtProducer(
+            checker,
+            topology.outer_expr,
+            outer_draft.base_plan_index,
+            outer_draft.base_cause,
+        ));
+
+        const inner_diagnostic = try checker.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = checker.cir.store.getExprRegion(topology.inner_expr),
+        } });
+        const outer_diagnostic = try checker.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = checker.cir.store.getExprRegion(topology.outer_expr),
+        } });
+        failure_stage = "selected central replacement order";
+        switch (order) {
+            .outer_then_inner => {
+                try checker.replaceExprWithRuntimeError(topology.outer_expr, outer_diagnostic);
+                try std.testing.expect(cir.store.getExpr(topology.outer_expr) == .e_runtime_error);
+                try std.testing.expect(cir.store.getExpr(topology.inner_expr) == .e_record);
+                try std.testing.expectEqual(
+                    pending.inner_retirement,
+                    pendingExpressionRetirementAtProducer(checker, topology.inner_expr).?,
+                );
+                try checker.replaceExprWithRuntimeError(topology.inner_expr, inner_diagnostic);
+            },
+            .inner_then_outer => {
+                try checker.replaceExprWithRuntimeError(topology.inner_expr, inner_diagnostic);
+                try std.testing.expect(cir.store.getExpr(topology.inner_expr) == .e_runtime_error);
+                try std.testing.expect(cir.store.getExpr(topology.outer_expr) == .e_record);
+                try std.testing.expect(expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+                    cir,
+                    cir.expected_consumption_plans.items.items[pending.outer_plans.base],
+                ));
+                try checker.replaceExprWithRuntimeError(topology.outer_expr, outer_diagnostic);
+            },
+        }
+
+        failure_stage = "unmodified production tail";
+        try checker.checkFileFromPrePoison(&env);
+        try std.testing.expect(cir.store.getExpr(topology.lookup_expr) == .e_runtime_error);
+        try std.testing.expect(cir.store.getExpr(topology.inner_expr) == .e_runtime_error);
+        try std.testing.expect(cir.store.getExpr(topology.outer_expr) == .e_runtime_error);
+        const lookup = try uniqueDirectBinderLookupTestProof(cir);
+        const inner = try expectCompletedRecordUpdateOwnerPair(
+            cir,
+            topology.inner_expr,
+            topology.lookup_expr,
+            topology.inner_field_expr,
+        );
+        const outer = try expectCompletedRecordUpdateOwnerPair(
+            cir,
+            topology.outer_expr,
+            topology.inner_expr,
+            topology.outer_field_expr,
+        );
+        const terminal_inner_plans = try uniqueRecordUpdateOwnerPlanPair(cir, topology.inner_expr);
+        const terminal_outer_plans = try uniqueRecordUpdateOwnerPlanPair(cir, topology.outer_expr);
+        try std.testing.expectEqual(
+            lookup.lookup_retirement_index,
+            cir.expected_consumption_plans.items.items[
+                terminal_inner_plans.base
+            ].decodedSourceRetirementIndex().?,
+        );
+        try std.testing.expectEqual(
+            inner.retirement_index,
+            cir.expected_consumption_plans.items.items[
+                terminal_outer_plans.base
+            ].decodedSourceRetirementIndex().?,
+        );
+        try std.testing.expect(inner.retirement_index != lookup.lookup_retirement_index);
+        try std.testing.expect(outer.retirement_index != inner.retirement_index);
+        try expectDirectBinderTransientListsEmpty(checker);
+        try std.testing.expect(checker.record_update_expected_plan_registrations_consumed);
+        try std.testing.expectEqual(
+            @as(usize, 0),
+            checker.record_update_expected_plan_registrations.items.len,
+        );
+        try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+        try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+        try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+        const context = recordUpdateRootAuthorityFreshContext(&fresh_env);
+        try validateExpectedFailureContext(cir, context);
+        try validateWhereMarkerCopySourceNamespaces(cir, consumer.builtin_module.env, context);
+        _ = try checker.validatedModule();
+        try std.testing.expectEqual(@as(usize, 0), checker.problems.problems.items.len);
+        try std.testing.expectEqual(@as(usize, 0), try consumer.typeProblemCount());
+
+        const serialized = try serializeModuleEnvForCanonicalComparison(
+            std.testing.allocator,
+            cir,
+        );
+        if (outer_first_bytes) |expected| {
+            defer std.testing.allocator.free(serialized);
+            try std.testing.expectEqualSlices(u8, expected, serialized);
+        } else {
+            outer_first_bytes = serialized;
+        }
+    }
+}
+
+test "record-update owner retirement: direct-binder checked base retires its exact plan group" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var failure_stage: []const u8 = "provider";
+    errdefer std.debug.print("record-update owner-retirement fixture failed at {s}\n", .{failure_stage});
+
+    var provider = try TestEnv.init(
+        "RecordUpdateLiveOwnerA",
+        direct_binder_transaction_provider_source,
+    );
+    defer provider.deinit();
+    try provider.assertNoErrors();
+
+    const source =
+        \\import RecordUpdateLiveOwnerA exposing [Status]
+        \\
+        \\first : a -> a where [a.Status]
+        \\first = |value| { ..value, x: 1.U8 }
+    ;
+    failure_stage = "checked consumer";
+    var consumer = try TestEnv.initWithImport(
+        "RecordUpdateLiveOwnerB",
+        source,
+        "RecordUpdateLiveOwnerA",
+        &provider,
+    );
+    defer consumer.deinit();
+    try consumer.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+    try std.testing.expectEqual(@as(usize, 0), consumer.checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try consumer.typeProblemCount());
+
+    failure_stage = "fresh canonical topology";
+    var fresh_env = try TestEnv.initUncheckedWithImportForTesting(
+        "RecordUpdateLiveOwnerB",
+        source,
+        "RecordUpdateLiveOwnerA",
+        &provider,
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{ "Type Not Exposed", "Undeclared Type" });
+    const fresh_cir = fresh_env.module_env;
+    const def_idx = fresh_env.can.explicitRootDefByName("first") orelse
+        return error.TestUnexpectedResult;
+    const fresh_def = fresh_cir.store.getDef(def_idx);
+    const fresh_lambda = fresh_cir.store.getExpr(fresh_def.expr);
+    if (fresh_lambda != .e_lambda) return error.TestUnexpectedResult;
+    const patterns = fresh_cir.store.slicePatterns(fresh_lambda.e_lambda.args);
+    if (patterns.len != 1 or fresh_cir.store.getPattern(patterns[0]) != .assign) {
+        return error.TestUnexpectedResult;
+    }
+    const record_expr = fresh_lambda.e_lambda.body;
+    const fresh_record = fresh_cir.store.getExpr(record_expr);
+    if (fresh_record != .e_record or fresh_record.e_record.ext == null) {
+        return error.TestUnexpectedResult;
+    }
+    const base_expr = fresh_record.e_record.ext.?;
+    const fresh_base = fresh_cir.store.getExpr(base_expr);
+    if (fresh_base != .e_lookup_local or
+        fresh_base.e_lookup_local.pattern_idx != patterns[0])
+    {
+        return error.TestUnexpectedResult;
+    }
+    const fields = fresh_cir.store.sliceRecordFields(fresh_record.e_record.fields);
+    if (fields.len != 1) return error.TestUnexpectedResult;
+    const field_expr = fresh_cir.store.getRecordField(fields[0]).value;
+
+    failure_stage = "terminal producer ownership";
+    const cir = consumer.module_env;
+    try std.testing.expect(cir.store.getExpr(record_expr) == .e_runtime_error);
+    try std.testing.expect(cir.store.getExpr(base_expr) == .e_runtime_error);
+    const lookup = try uniqueDirectBinderLookupTestProof(cir);
+    const lookup_failure = cir.expected_failures.items.items[lookup.failure_index];
+    try std.testing.expectEqual(@intFromEnum(base_expr), lookup_failure.owner_node);
+    try std.testing.expectEqual(
+        @intFromEnum(base_expr),
+        cir.expected_consumer_retirements.items.items[
+            lookup.lookup_retirement_index
+        ].retired_node,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.Kind.checker_rewrite_ineligible,
+        cir.expected_consumer_retirements.items.items[
+            lookup.lookup_retirement_index
+        ].decodedKind().?,
+    );
+
+    var base_plan_index: ?u32 = null;
+    var field_plan_index: ?u32 = null;
+    for (cir.expected_consumption_plans.items.items, 0..) |plan, plan_index| {
+        if (plan.owner_node != @intFromEnum(record_expr)) continue;
+        switch (plan.decodedRole() orelse return error.TestUnexpectedResult) {
+            .record_update_base => {
+                if (base_plan_index != null) return error.TestUnexpectedResult;
+                base_plan_index = @intCast(plan_index);
+            },
+            .record_update_field => {
+                if (field_plan_index != null) return error.TestUnexpectedResult;
+                field_plan_index = @intCast(plan_index);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    const base_plan_raw = base_plan_index orelse return error.TestUnexpectedResult;
+    const field_plan_raw = field_plan_index orelse return error.TestUnexpectedResult;
+    const base_plan = cir.expected_consumption_plans.items.items[base_plan_raw];
+    const field_plan = cir.expected_consumption_plans.items.items[field_plan_raw];
+    try std.testing.expect(base_plan.hasLegalTags());
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.source_root_copy_checked_error,
+        base_plan.decodedOutcome().?,
+    );
+    try std.testing.expectEqual(@intFromEnum(record_expr), base_plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(base_expr), base_plan.site_node);
+    try std.testing.expectEqual(@as(u32, 0), base_plan.slot);
+    try std.testing.expectEqual(@intFromEnum(base_expr), base_plan.raw_consumer_var);
+    try std.testing.expectEqual(
+        lookup.lookup_retirement_index,
+        base_plan.decodedSourceRetirementIndex().?,
+    );
+    try std.testing.expect(expectedCauseOwnersEqual(
+        base_plan.failure_owner,
+        ModuleEnv.CauseOwner.expectedConsumerRetirement(lookup.lookup_retirement_index),
+    ));
+    try std.testing.expect(field_plan.hasLegalTags());
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error,
+        field_plan.decodedOutcome().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_field_base_checked_error,
+        field_plan.decodedReason().?,
+    );
+    try std.testing.expectEqual(@intFromEnum(field_expr), field_plan.site_node);
+    try std.testing.expectEqual(@as(u32, 0), field_plan.slot);
+    try std.testing.expectEqual(base_plan_raw, field_plan.failure_cause_plan_index);
+    try std.testing.expect(expectedCauseOwnersEqual(
+        base_plan.failure_owner,
+        field_plan.failure_owner,
+    ));
+    const outer = retiredRecordUpdateOwnerSnapshot(
+        cir,
+        @intFromEnum(record_expr),
+        .retired,
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(outer.retirement_index != lookup.lookup_retirement_index);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumerRetirement.Kind.checker_rewrite_expected,
+        outer.retirement.decodedKind().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), outer.retirement.expected_failures_len);
+    try std.testing.expectEqual(@as(u32, 2), outer.retirement.retired_consumers_len);
+    try std.testing.expectEqual(@intFromEnum(base_expr), outer.syntax.base_expr);
+    try std.testing.expectEqual(@as(u32, 1), outer.syntax.fields_len);
+    const outer_consumers = cir.expected_retired_consumers.items.items[outer.retirement.retired_consumers_start..][0..outer.retirement.retired_consumers_len];
+    try std.testing.expect(expectedRetiredRecordUpdateOwnerRangeIsLocallyValid(
+        &cir.types,
+        cir,
+        outer.retirement,
+        outer.retirement_index,
+        outer_consumers,
+    ));
+    var saw_base = false;
+    var saw_field = false;
+    for (outer_consumers) |retired_consumer| {
+        try std.testing.expectEqual(
+            ModuleEnv.ExpectedRetiredConsumer.RetirementOnlyReason.record_update_retired_after_base_checked_error,
+            retired_consumer.decodedRetirementOnlyReason().?,
+        );
+        try std.testing.expect(retired_consumer.decodedReason() == null);
+        if (retired_consumer.plan_index == base_plan_raw) {
+            try std.testing.expect(!saw_base);
+            saw_base = true;
+        } else if (retired_consumer.plan_index == field_plan_raw) {
+            try std.testing.expect(!saw_field);
+            saw_field = true;
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+    try std.testing.expect(saw_base and saw_field);
+    try expectDirectBinderTransientListsEmpty(&consumer.checker);
+
+    failure_stage = "terminal local and fresh admission";
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+    const context = recordUpdateRootAuthorityFreshContext(&fresh_env);
+    try validateExpectedFailureContext(cir, context);
+    try validateWhereMarkerCopySourceNamespaces(
+        cir,
+        consumer.builtin_module.env,
+        context,
+    );
+    _ = try consumer.checker.validatedModule();
 }
 
 test "record-update root authority: direct and redirected selections survive rebuild serde and fresh admission" {

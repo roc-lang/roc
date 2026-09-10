@@ -734,12 +734,15 @@ described in full, with trailers; W6b currently has its provisional title):
 | `ktlykkxv` | W6a | implemented; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
 | `ssvqsxro` / `cc8ace35` | W6b recovery/metadata checkpoint | pushed WIP; bounded 59-test gate green, but full checker gate is red: 1,257/1,383 pass, 6 fail, 120 crash |
 | `qpmsttws` / `e67aaeb8` | W6b allocation-witness/cache prerequisite checkpoint | pushed and PR read-back verified; independent review accepted, combined gate 29/29 tests, 41/41 steps; cache version 83; WIP, not whole-W6b acceptance |
-| `zkmyrwqu` | W6b record-update root-request mechanics | final combined gate green (26/26 tests, 38/38 steps); reviewer accepts lower-level mechanics only, requests changes for complete admission ownership/retirement; prepared for WIP publication |
+| `zkmyrwqu` / `1f69432c` | W6b record-update root-request mechanics | pushed WIP and PR read-back verified; final gate green (26/26 tests, 38/38 steps); review accepts mechanics only, complete admission ownership/retirement remains REQUEST CHANGES |
+| `wpvvswsl` | W6b checked-base record-update retirements | reviewed bounded WIP checkpoint; final gate 38/38 tests, 41/41 steps; complete ownership and W6b remain unaccepted |
 
-The local and remote `jared/polarity` bookmarks point at `qpmsttws` /
-`e67aaeb8`, directly above `ssvqsxro` / `cc8ace35`. The driver verified the
-remote head and read back the updated PR description with draft status intact.
-New task `zkmyrwqu` is a separate child and is not part of that publication.
+The current implementation checkpoint is `wpvvswsl`, directly above the
+previously published `zkmyrwqu` / `1f69432c` and `qpmsttws` / `e67aaeb8`.
+Publication uses `jared/polarity` and draft PR #10434. The driver advances the
+bookmark and updates the PR only after independent scoped review and frozen
+verification, then reads back the exact remote head and PR body. This new
+checkpoint is explicitly incomplete; the next test/admission slice is separate.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -768,8 +771,8 @@ accepted as a bounded task with combined gate `42891` green: 29/29 tests,
 
 The fresh-flex witness and canonical-empty `SafeMultiList` serialization
 prerequisite is now accepted and pushed as `e67aaeb8`, with the combined
-29/29-test gate above. The active task is the separate record-update
-root-request bridge (`zkmyrwqu`, cache version 84): preserve the actual raw
+29/29-test gate above. The subsequent record-update
+root-request bridge (`zkmyrwqu`, cache version 84) is pushed as `1f69432c`: it preserves the actual raw
 `R -> R` shared occurrence when the syntax's request `V` already redirects
 to `R`, and validate the exact record-to-base source edge. Its types-only
 gate passes 10/10 tests and independent types review accepts that slice.
@@ -781,8 +784,8 @@ four compile/serde tests pass; measured version-84 golden retry passes 2/2.
 Review accepts the lower-level mechanics only as an incomplete WIP checkpoint,
 not complete admission: the owner bijection and retired-owner lifecycle remain
 unimplemented requirements. Final shared-helper/bridge/schema gate `99548`
-passes 26/26 tests and 38/38 steps. The driver is publishing this accurately
-scoped WIP checkpoint, then opening the separate ownership/retirement task.
+passes 26/26 tests and 38/38 steps. The driver published this accurately
+scoped WIP checkpoint and opened `wpvvswsl` for ownership/retirement.
 Incremental watcher `44170` was stopped after repeated generated object
 linker errors; regular builds with minimal diagnostics are the current
 verification mode. No disk-space error occurred and `.zig-cache` was not pruned.
@@ -3358,6 +3361,454 @@ subsets below do not override this latest checkpoint.
   coauthor trailer and a PR body carrying the exact admission finding and
   remaining failures. This is publication of accepted lower-level mechanics,
   not completion of record-update admission, W6b, or the feature.
+- Publication completed: `zkmyrwqu` is Git commit
+  `1f69432c86d3945b48623b97fed51b7da880eb64`, fast-forwarded from `e67aaeb8`
+  on `jared/polarity`. Draft PR #10434's body and head were read back and
+  matched exactly. The new child `wpvvswsl` owns the mandatory base-plan and
+  live/retired ownership repair. Its preflight must explicitly define base
+  plan storage (the existing `producer_root` surface is call-argument-only),
+  arbitrary-index field registrations (nested checks interleave plan rows),
+  and exact early/late error causes without rewriting successful projection
+  plans. Zero-field and unset/final-relation failure paths require explicit
+  treatment; a field-only inverse cannot discharge the review finding.
+- Current-source next-task baseline `15948` reproduced all four retirement
+  failures on pushed `1f69432c`: 1/5 tests passed (aggregator), four crashed,
+  5/7 steps. Empty-record and missing-field updates fail exact erased-plan
+  replay; field mismatch 3 and wrong optional payload fail local copy-proof
+  validation after owner erasure. Report:
+  `record-ownership-retirement-four-baseline.txt`. The baseline compiler is
+  unchanged from the accepted mechanical checkpoint. Design preflight is
+  still required before the next implementation; this is diagnostic evidence,
+  not a new regression introduced by the pending ownership task.
+- The next implementation is deliberately staged. First, `wpvvswsl` adds
+  the live-owner inverse with mandatory base plans, including zero-field
+  updates. The declared `source_root_copy` and
+  `source_root_copy_checked_error` outcomes retain the existing actual base
+  copy, exact syntax request, and produced destination root; neither reuses
+  call-only `producer_root`. A checked-error base carries its exact typed
+  cause, and skipped fields point upstream to the earlier base plan while
+  retaining its copy endpoint. Producer registrations preserve arbitrary
+  plan indices, while cache admission independently enumerates durable rows.
+  The author wrote the design declaration before compiler edits; independent
+  preflight review is completing.
+  Required follow-on slices are R1 (the four reproduced retirement cases and
+  exact live/retired group converse), R2 (immediate unset and final-relation
+  outcomes), and R3 (annotation/enclosing-producer retirement). Successful
+  field projections remain immutable; late failures need separate typed
+  failure rows, not an `anchored_checked_error` restamp. Deferred unset kind
+  checks currently emit diagnostics only and are not falsely claimed as
+  rewrite causes. This first live-owner slice alone will not certify complete
+  record-update admission or W6b.
+- Independent final design preflight is ACCEPT: the complete base semantic
+  key, inactive/reserved fields, exact produced root, closed cause-arm
+  ownership replay, skipped-field upstream edge, and transient/durable
+  distinction are declared. The driver authorized implementation of the
+  bounded live-owner slice. Both endpoint-bearing outcomes must participate
+  in legality, ordering, root retention, reachability, remapping and serde;
+  they must not inherit call-only `producer_root` behavior or silently vanish
+  through an anchored-only switch. The author will freeze an early compilable
+  delta before expanding the full adversarial matrix.
+- First implementation diagnostic freeze `af654f08` contains the new outcome
+  vocabulary, transient registration init/deinit/Probe rollback, mandatory
+  base plan/copy/registration transaction, field registrations and upstream
+  base-cause links, and partial exhaustive-switch integration. Live admission
+  inverse, new tests and cache-version-85 bump are not yet implemented.
+  Non-emitting checker preflight `7759` completed in 22.78 seconds and found
+  one reported compiler error: the direct-source inner reason switch must
+  explicitly reject `record_update_field_base_checked_error` now that its
+  outer relation is upstream. The author was thawed to correct it and
+  continue. No runtime gate was run on this partial implementation.
+  Frozen Check digest:
+  `19aa786ba256ee2078c41ba1bb4f69f02705eaaa084421e21e943003f33664a0`.
+  New task artifacts are in `/private/tmp/polarity-live-owner-gates.JLEzuh/`:
+  `first-diagnostic-freeze.diff` and `first-semantic-diagnostic.txt`.
+- Targeted semantic retry `54769` is GREEN (exit 0, 23.96 seconds) on frozen
+  `49047994`, after only that explicit impossible-reason switch correction.
+  Check digest is unchanged; ModuleEnv digest is
+  `729dc5f78cfa919dd8f55f32497c9161053a7dcaf2327844394b65adde35d4f9`.
+  Report: `first-semantic-switch-retry.txt` in the new task artifact directory.
+  This is a non-emitting compile check, not executed tests. The author resumed
+  live admission, exact cause replay/ownership-count integration, tests and
+  the separate cache-version bump. The old copy-only OOM fixture remains a
+  lower-level test; the new outer transaction needs its own authentic staged
+  plan/copy/registration failure sweep.
+- Driver/adversarial review sharpened two integration requirements before
+  the next freeze. A base may propagate a nested child's cause through its
+  own exact, syntax-valid Expected plan; direct `failure.owner_node == base`
+  alone is too narrow, while index validity or an arbitrary descendant is
+  insufficient. Such a base plan is a causal reference, not a second owner
+  in either ExpectedFailure ownership counter. The transient registration
+  list also needs an explicit recorded/consumed lifecycle: first rebuild
+  validates complete membership even for an empty list, failure preserves
+  incoming state and handles, and successful commit clears/consumes it
+  infallibly. Repeated rebuild must not leave stale plan indices or use
+  list emptiness as evidence of consumption. These are being implemented and
+  reviewed; the new live inverse and these additions have no executed gate
+  yet. Per-slot uniqueness/coverage and genuine structural base copies are
+  explicit requirements for the upcoming adversarial matrix.
+- A further read-only audit confirmed that the existing independent fresh
+  context checks the record extension/base edge, not supplied-field or unset
+  topology. The first live-owner slice therefore claims the exact base
+  owner/plan/step converse and candidate-local field-slot membership; it must
+  not claim fresh-authenticated field topology. Coordinated candidate field
+  payload plus plan retarget is a required R1/full-admission follow-up, to be
+  closed with exact semantic topology checks rather than whole-CIR payload
+  bytes. Canonical ordering does preserve base-before-field for the same
+  owner: the base has no plan-valued dependencies and its role sorts first.
+  It does not prove an arbitrary nested-cause support plan has a lower final
+  index than the outer base plan. Causal support must use a valid authored
+  route without that unsupported cross-owner index assumption, and multiple
+  valid routes carrying the same cause must remain accepted.
+- The coherent live-owner freeze now wires the base/plan/step inverse into
+  both produced and rehydrated validation, checks exact candidate-local field
+  slots with no extra roles, and implements commit-only registration
+  consumption. Cache version is 85; its measured hash golden is still pending.
+  The early semantic gate found two local `fresh` naming collisions; both
+  were corrected. Retry `68319` is GREEN (exit 0, 24.32 seconds) on frozen
+  `0a733218`, Check digest
+  `004c2d8baa086ea7b8a0713232a6b818d7c3c8195776cd632835fda8bc87709b`.
+  Normal positive runtime gate `86253` is running against that frozen code;
+  no new live-ownership tests have been added yet. Reports are
+  `first-positive-semantic-all-renames.txt` and `first-positive-runtime.txt`
+  in the live-owner artifact directory above.
+  Adversarial review requires an explicit clean-cache rejection of every
+  checked-error/reserved Expected plan and every consumer retirement; the
+  current clean-cache helper omits these pools. It also confirmed that a
+  propagated cause supported by an aggregate plan inherits the existing lack
+  of a durable live aggregate eligibility converse. That remains a required
+  full-admission dependency, not independent fresh-authenticated authority.
+  Eligibility of unvisited updates beneath rejected canonical parents is
+  under audit. The author remains frozen during the runtime gate; the next
+  implementation step includes the cache gate and an authentic production
+  helper for exhaustive base-plan/copy/registration OOM tests.
+- Review found a current-slice blocker in the new checked-error base arm:
+  `ExprCheckFrame.finish` records every checked-error expression for terminal
+  poisoning, which changes the base child to `.malformed`, while both current
+  record-update base decoders require an `expr_*` child. The outer update may
+  remain live, so this is not the deferred record-owner retirement problem.
+  The arm needs an explicit, typed base-child retirement/lifecycle contract
+  and an authentic checked-error positive through the complete checker tail.
+  The driver assigned design-first repair and independent preflight; blanket
+  acceptance of malformed children or solved-type reconstruction is forbidden.
+  The current runtime gate is positive-only and cannot discharge this finding.
+- Positive runtime gate `86253` is GREEN: 6/6 tests and 7/7 build steps on
+  the frozen `004c2d8b` Check source. This covers both existing root-authority
+  tests, ordinary update 1/2, nominal-extension lifting, and the test
+  aggregator. The author was thawed for the required base-child retirement
+  contract, clean-cache gate, production transaction helper and new tests.
+  An early coherent freeze must include an authentic checked-error positive
+  before expanding the complete corruption/OOM matrix. These passing positive
+  controls do not close the error-path review blocker or certify admission.
+- A second concrete review finding concerns the domain of the reverse
+  syntax-to-plan inventory. Chained-range canonicalization retains already
+  stored operands when replacing the outer expression with a malformed root.
+  A record update in that discarded operand subtree is never checked, yet
+  the current all-node scan requires a base plan for it. The call inventory
+  already documents this class of unvisited canonical nodes. This cannot be
+  repaired by a solved-type or shape-based exemption. Before acceptance, the
+  task must either consume exact earlier-authored retained/reached authority
+  or narrow its WIP claim and checks to the plan/step/live-owner converse,
+  leaving missing-whole-bundle detection as an explicit mandatory authority
+  dependency. The driver requested an audit of existing explicit canonical
+  roots and traversal data before choosing; no eligibility workaround is
+  authorized. The authentic failed-base repair remains the next small gate.
+- The failed-base lifecycle design received independent exact-text ACCEPT
+  for `design.md`'s Expected-consumption declaration and Rewrite Inventory.
+  The plan's existing trailing word becomes a closed plus-one source-retirement
+  coordinate, active only for the checked-error base outcome. It preserves the
+  original status cause separately from the later destructive rewrite.
+  Preexisting malformed bases reuse their exact completed publication and
+  retirement; live bases reuse an explicit owning producer or reserve the
+  dedicated `checker_rewrite_record_update_base` kind only when the base owns
+  no Expected plans or retirement-producing drafts/groups. The dedicated
+  draft completes at central replacement, with exact original payload,
+  Probe/OOM ownership, rebuild remapping and serde preservation. Scalar
+  retirement validation precedes the nonrecursive plan/retirement converse.
+  The driver and reviewer read the complete declaration before authorizing
+  compiler edits. The next freeze must include one authentic full-tail error
+  test; the separate all-node eligibility finding is not waived by this
+  preflight acceptance.
+- The driver resolved the eligibility scope after the independent audit:
+  existing module roots, demand traversal and hoist walkers do not encode the
+  checker's reached/short-circuited decision. A new late structural walk would
+  not supply that missing producer authority. This WIP will therefore validate
+  the plan/base-copy-step/live-owner converse and exact candidate-local field
+  membership for published owners, not require a plan for every raw record
+  node. The author must declare that staged scope before removing both local
+  and fresh-context all-node scans, and add the genuine discarded chained-range
+  subtree regression. A missing base plan with a remaining step is still
+  corrupt, including a zero-field update; coordinated deletion of the complete
+  plan-and-step bundle cannot yet be detected. A durable earlier-authored
+  eligibility/reached token and the complete source-site bijection remain
+  mandatory full-admission work. This narrows the checkpoint claim, not the
+  final W6b requirement, and must be explicit in review and publication.
+- The first coherent base-lifecycle implementation freeze is `3d4af296`.
+  Non-emitting semantic gate `22114` is GREEN (exit 0, 24.49 seconds), with
+  Check digest
+  `0515343358286a06370792253d7e1a69c24901fd185f32e32487feb907ccbf9f`
+  and ModuleEnv digest
+  `2736425ebb4a17559d4162e2f90f6cc831dad4d24cf7642ac058a19b7e2613fc`.
+  It includes the plus-one coordinate, dedicated retirement kind/draft,
+  central completion guarded outside a Probe only when that draft exists,
+  closed pending producer selection, phase-aware fresh replay, relocation,
+  clean-cache rejection and the scoped published-owner inventory. The
+  accidental intermediate ExternalLookupToken rename was restored before
+  this freeze; the coordinate exists only on ExpectedConsumptionPlan.
+  Reports: `base-lifecycle-first-freeze.diff` and
+  `base-lifecycle-first-semantic.txt` in the live-owner artifact directory.
+  This is compile readiness only: no new runtime fixture or complete matrix
+  exists at this freeze. Independent frozen-code review is in progress.
+  The next small task is an authentic direct-binder error fixture: that
+  existing producer emits a checked-error status without itself marking the
+  lookup's raw type erroneous, so it may retain a live outer update. It must
+  reuse the existing ineligible lookup retirement, not fabricate the new
+  dedicated kind. A malformed raw base, by contrast, can poison the entire
+  update even with an outer annotation; normal poisoning must not be changed
+  to force this bounded fixture to pass.
+- The authentic direct-binder fixture is added in frozen `dbdb36b3`
+  (Check digest
+  `45e0511e4b7497122d0defcfe99f9f94c7161ae5cd7cf70a2e23cb800fbcd179`).
+  Its semantic gate `69154`, now including the new live-ownership test body,
+  is GREEN (exit 0, 23.22 seconds). Normal runtime gate `27042` is running
+  that fixture alongside the six existing controls. Reports:
+  `direct-binder-error-fixture-freeze.diff`,
+  `direct-binder-error-fixture-semantic.txt`, and
+  `direct-binder-error-fixture-runtime.txt`. No runtime result is claimed yet.
+  Frozen review found another current-slice obligation: a nested child cause
+  must replay through the retired base's exact retained-consumer membership
+  and original payload/slot once the aggregate base is malformed. The current
+  fallback to live-only base syntax rejects that authentic route. A
+  phase-aware, exact retired-group join and a genuine nested aggregate-base
+  fixture are queued after this gate; generic malformed acceptance remains
+  forbidden. The reviewer separately verified that current non-retirement
+  status producers have no pending-versus-terminal validation blocker.
+- Runtime `27042` is RED: 6/7 tests passed and the new direct-binder fixture
+  crashed in `validateExpectedRecordUpdatePlans` during produced validation
+  (5/7 build steps). All six existing controls remained green. The driver
+  assigned targeted diagnosis of the exact local predicate before extending
+  the matrix. A separate confirmed contextual blocker follows it: the new
+  record-update context helper currently drops `ImportResolution`'s replay
+  mode, then treats the producer's already-poisoned environment as fresh
+  canonical input. The repair must consume the existing explicit produced /
+  fresh-canonical / recovery-forbidden mode, not infer it from pointer
+  equality or skip contextual validation globally. Only the failing
+  live-ownership section will be rerun until it passes; the nested fixture
+  remains queued behind this direct-case gate.
+- The temporary, test-only diagnostic freeze `d1cf2d94` passed semantic
+  gate `58638`. Targeted runtime `41977` is RED (1/2 tests passed, one
+  crash): both the outer record owner (node 17) and base (node 14) are
+  malformed, while the supplied field remains live. The base plan's legal
+  tags, status cause, source-retirement join, cardinality and the skipped
+  field's base authority/upstream cause all pass. The first rejection is
+  therefore the live-outer-owner precondition, not a broken base-retirement
+  reference. This authentic fixture enters the deferred R1 outer-record
+  retirement domain. Author and reviewer are investigating whether a genuine
+  live-outer checked-error source exists; normal poisoning must not change
+  to manufacture one. If that boundary is not independently reachable, the
+  task must integrate the exact outer retirement lifecycle before claiming
+  a runtime-positive checked-error path. The separate explicit context-mode
+  repair is still pending. Reports: `direct-binder-local-diagnostic-freeze.diff`,
+  `direct-binder-local-diagnostic-semantic.txt`, and
+  `direct-binder-local-diagnostic-runtime.txt` in the live-owner artifact
+  directory. The diagnostic is temporary and must be removed before acceptance.
+- Independent producer tracing ruled out a zero-field direct-binder variant
+  before any fixture edit or additional runtime build: malformed where-alias
+  checking marks the formal's owner type erroneous; the lookup unifies with
+  that formal, and even an empty update performs the final base-to-owner
+  relation. Ordinary expression completion therefore poisons the outer owner.
+  The author accepted the trace. The driver advanced the exact outer-record
+  retirement dependency into the current work, with the existing one-field
+  source retained as the first authentic acceptance target. Its design must
+  consume arbitrary-index producer registrations, preserve completed plans,
+  retain exact independent failure and rewrite causes, and authenticate the
+  complete retired group and fresh source topology. The context-mode design
+  amendment is written and under independent preflight review; compiler code
+  for that amendment and R1 is not yet implemented at this milestone.
+- Context replay is now implemented in freeze `9daf9c0b` (Check digest
+  `204a9c94ff7c0e0d26e88f96c722768938b765d698234dad52c966bed318b5cc`).
+  Independent static review ACCEPTS the exact declared live-owner scope;
+  semantic gate `98033` is GREEN. Full `ImportResolution` reaches the helper,
+  with explicit produced/fresh/recovery-forbidden branches and no inferred
+  pointer freshness or self-snapshot comparison. R1 owner-phase extension
+  and runtime-positive coverage remain pending. Reports:
+  `context-mode-first-freeze.diff` and `context-mode-first-semantic.txt`.
+  A broader producer audit found no authentic current live-outer checked-base
+  path and no current producer for the dedicated
+  `checker_rewrite_record_update_base` kind: reachable checked-base statuses
+  already own preexisting, ineligible, call or aggregate retirement authority.
+  The driver approved design-first removal of that unused kind and its draft
+  machinery, retaining the exact source-retirement coordinate and reuse of
+  existing producer lifecycles. Missing future producer authority must remain
+  an invariant failure until its own declaration, implementation and positive
+  test exist; no generic retirement may stand in for it.
+- The exact-existing-retirement simplification is implemented in freeze
+  `a8980892`: Check digest
+  `61c45df812458db04ab4b181afb9d8448c2ed82026000793cf57c8a017e27c47`,
+  ModuleEnv digest
+  `4c063053d58ca91984174c31ad9a177db2d9357effca04216978d52d5d1c4de1`.
+  Independent static review ACCEPTS this removal; semantic `13107` is GREEN.
+  The source-retirement coordinate and exact existing producer selection
+  remain; the unused enum kind, draft, completion, allocation, Probe and
+  validation branches are removed. Direct diagnostic `20988` reproduces the
+  same outer-owner failure with unchanged valid base-cause/source-retirement
+  and field-chain predicates. This direct compiler loop uses the actual
+  schema-85 inputs captured from the normal build and took approximately
+  one minute; it is diagnostic evidence only, not acceptance with regenerated
+  built-ins. The normal producer-regenerated gate remains required. Reports:
+  `existing-retirement-only-freeze.diff`,
+  `existing-retirement-only-semantic.txt`, and
+  `existing-retirement-only-direct-diagnostic.txt`. R1 design is the next
+  implementation prerequisite; no new checkpoint is publishable yet.
+- The bounded checked-base outer-retirement design now has exact-text
+  ACCEPT from both the driver and independent reviewer, including its
+  Rewrite Inventory entry. Implementation is authorized. The existing
+  `checker_rewrite_expected` retirement `R_U` owns the exact arbitrary-index
+  base/field consumer set; the unchanged base plan is its sole typed trigger
+  and keeps its distinct base retirement `R_B`. No duplicate outer
+  ExpectedFailure is introduced. The new reason is retirement-row-only and
+  cannot legalize an unproduced base-plan outcome. Depth-zero completion
+  validates and reserves before invalidation, then appends/sorts only the new
+  suffix and publishes infallibly. Scalar snapshot decoding is nonrecursive
+  and separate from the complete group/cause inverse; nested pending source
+  lifecycles and both poison orders are explicit. Existing checked-boundary
+  rebuilding repacks disjoint completion-order ranges before terminal
+  admission. Fresh replay checks decoded base, field and unset topology,
+  not backing-table indices alone. The authentic one-field fixture will use
+  the `record-update owner retirement:` test prefix and require both outer
+  and base retirements. Its targeted semantic/direct/normal gate commands
+  include that prefix. This is design acceptance only; runtime, corruption,
+  both-order/interleaved-retirement, zero-field, OOM, rebuild, serde, cache
+  golden and final frozen review remain required. Established-base later
+  failures (R2/R3) and whole-bundle reachability authority remain separate
+  mandatory completion work.
+- R1's first implementation scaffold passes the short schema-85 semantic
+  diagnostic at frozen revision `21aba3f6993517f8359ba64b9c825c38adfa8fe7`
+  (session `13250`, no compiler diagnostics). It includes the owner draft and
+  Probe lifecycle, producer reservation, canonical pending-row checks,
+  depth-zero completion, pending-draft admission guards, and initial scalar
+  snapshot/group validation. The author deliberately froze before context
+  replay, retirement-only rebuild routing, and the authentic fixture oracle
+  were integrated; no runtime acceptance is claimed for this scaffold.
+  Reports: `r1-scaffold-semantic.txt` and `r1-scaffold-freeze.diff` in
+  `/private/tmp/polarity-live-owner-gates.JLEzuh/`. Review also requires
+  prepare-time lifecycle exclusivity and an infallible R1 completion branch
+  after invalidation. The driver resumed implementation after this diagnostic;
+  the published checkpoint remains `1f69432c`.
+- First coherent R1 integration at `032844440141508e4e8672f38c0d7ea3767650d6`
+  passes semantic preflight (`49697`) and the direct runtime diagnostic
+  (`98542`, 2/2 tests). The authentic one-field direct-binder fixture now
+  completes the real checker tail, preserves distinct outer/base retirements
+  and the exact two-member outer consumer set, and passes local and fresh
+  admission. Independent adversarial review gives scoped STATIC ACCEPT:
+  produced/fresh owner phases, decoded topology comparison, retirement-only
+  rebuild/remapping, and enum-domain disjointness are sound for this slice.
+  Reports: `r1-first-coherent-{freeze.diff,semantic.txt,direct-diagnostic.txt}`
+  in the same artifact directory. Normal producer-regenerated gate `67011`
+  is running; the direct diagnostic alone does not replace that acceptance
+  path. Zero-field/nested/interleaved owners, both poison orders, exhaustive
+  OOM/retry, corruption, repeated rebuild, serialization and measured cache
+  golden remain unverified. This is not complete ownership or W6b acceptance,
+  and no new checkpoint has been pushed.
+- Continued adversarial review of `03284444` found a pre-invalidation blocker
+  after that initial scoped acceptance: completion rechecks equality among
+  the draft, base-plan and field-plan causes but does not revalidate semantic
+  ownership of that cause at the current base phase. Coordinated corruption
+  of all those carriers could survive until terminal rejection after the
+  live node was erased. The author must replay exact pending/completed
+  base-cause validation before invalidation and pin coordinated corruption
+  as a no-op. The positive runtime result remains valid, but this revision
+  is not accepted for publication while that finding is open.
+- Normal producer-regenerated gate `67011` passes at `03284444`: 7/7 steps,
+  2/2 tests, including Builtin regeneration and the authentic owner-retirement
+  test (`r1-first-coherent-normal-runtime.txt`). The subsequent cause-check
+  fix at `69db20112cd7756e1089becdf3ea13d51c88c7e0` replays the existing
+  pending-aware/terminal base-cause predicate before invalidation. Independent
+  review accepts that exact fix and confirms nested pending retirement checks
+  remain nonrecursive. Semantic regression `15436` passes; its direct runtime
+  regression is running. The coordinated-cause corruption/no-op test remains
+  mandatory in the broader matrix. No new publication yet.
+- Cause-fix direct regression `3082` passes (2/2 tests); both the reviewed
+  fix and its authentic positive remain green. The driver froze source while
+  preparing the minimum verified, explicitly incomplete WIP publication
+  requested by the user. Existing canonicalization/types/checker/compile,
+  shared-helper, serialization and size regression gate `71234` is running;
+  it also measures the intentionally stale cache-84 golden against schema 85.
+  The author is read-only while planning the next real-producer zero-field,
+  nested and two-poison-order test slice. Publication scope remains subject
+  to independent review; neither a W6b-completion claim nor a new push has
+  occurred.
+- The reviewer initially allowed that narrow WIP scope, then withdrew it on
+  a concrete nested-order trace: pending inner `R_U` authentication chooses
+  its base phase from `R_B.kind`. A completed checker rewrite retains that
+  kind even after the base becomes malformed, so leaf-base-first followed by
+  outer-before-inner retirement wrongly replays a live base. This violates
+  the already-declared order-independent R1 lifecycle, rather than merely
+  lacking coverage. Publication is blocked until the producer authenticates
+  the actual phase through the exact pending/completed `R_B` lifecycle and
+  the real nested-order regression passes. The driver and author accepted
+  the finding without narrowing the design. Gate `71234` continues as useful
+  existing-regression/cache evidence; no checkpoint has been pushed.
+- Existing combined gate `71234` finishes with 36/37 tests and 39/41 steps:
+  canonicalization 8/8, types 10/10, checker 14/14, compile/serde 4/5. Native
+  and wasm serialization-size checks pass. The sole failure is the expected
+  stale version-84 cache golden. The driver replaced it with measured
+  schema-85 hash
+  `aae0cef39269365ef15dce3bfc3708977e1820d516d17fb482ca3dd73c8e685b`
+  and started only the failing golden section (`5453`), preserving the frozen
+  compiler implementation. Reports: `r1-checkpoint-existing-regression-first.txt`
+  and `r1-version85-golden-retry.txt`. The known nested-lifecycle defect still
+  blocks publication despite these passing existing tests; fixing it and
+  adding its authentic order regression is the next author task.
+- Focused schema-85 golden retry `5453` passes (2/2 tests, 25/25 steps) with
+  the measured bytes above. The driver thawed the author for the nested
+  pending-lifecycle repair and authentic order tests, plus removal of the
+  temporary local-plan diagnostic helper. Zero-field coverage must use an
+  unset-only update because canonicalization collapses the no-field/no-unset
+  spelling; arbitrary-index coverage must keep the nested supplied field
+  healthy, distinct from a nested checked base. The known defect still blocks
+  publication, and the combined gate must be rerun after its fix.
+- Nested-identity scaffold `2efca5dae1c82270a948f4ba5be5a7b61b83f187` passes
+  semantic preflight `51557`. The author split shallow pending identity from
+  the immediate-source check, authenticated actual pending/completed phases,
+  validated inactive fields and unique owner rows, and removed the temporary
+  diagnostic helper. The driver read and accepted the precise normative
+  clarification in `design.md`. Review accepts that core structure but found
+  a remaining zero-plan aggregate lifecycle condition: only its declared
+  empty-range/reason combination is legal. That is being fixed before the
+  authentic nested-order test; no nested runtime result or publication is
+  claimed yet. Reports: `r1-nested-identity-scaffold-{freeze.diff,semantic.txt}`.
+- The focused nested-order implementation and real-producer regression are
+  now green at `fc78e9a157db3fed84c39fe8e2c3d3282230dd2e`. The first fixture
+  semantic check (`52804`) caught incorrect access to the unset-span wrapper;
+  both sites were corrected and semantic retry `25217` passes. Direct runtime
+  `18062` passes 3/3 tests: the original one-field case and the nested case
+  exercising both outer/inner retirement orders after the real leaf lookup
+  sweep. The nested test pins the exact three-retirement graph, resumes the
+  unmodified checker tail, validates fresh context, and compares canonical
+  serialized bytes across orders with stable preallocated diagnostics.
+  Independent review accepts this bounded WIP scope contingent on final
+  combined gate `76513`, which is running. The known nested phase defect is
+  repaired; unverified zero/unset, preexisting-base, arbitrary interleaving,
+  OOM/corruption, active serde/rebuild, complete source eligibility, R2/R3 and
+  call-formal surfaces remain open. No push or whole-W6b acceptance yet.
+  Reports: `r1-nested-orders-span-fix-{freeze.diff,semantic.txt}`,
+  `r1-nested-orders-first-direct-diagnostic.txt`, and
+  `r1-nested-checkpoint-final-regression.txt`.
+- Final combined gate `76513` passes at the unchanged reviewed compiler
+  freeze: 38/38 tests and 41/41 steps (canonicalization 8, types 10, checker 15,
+  compile/serde 5), including regenerated Builtins, the measured schema-85
+  golden and native/wasm serialization sizes. Independent adversarial review
+  confirms final scoped ACCEPT for the bounded R1 checkpoint only. The jj
+  description is `WIP: bind record-update copies to checked-base owner
+  retirements`; the driver is preparing its branch/PR publication. The
+  compiler source hashes are Check
+  `fbbacdbc95095a6656f435fe6177b7b98270f463949e29f81ac9f32ae00ba9e0`,
+  ModuleEnv `5dc3cc45ff0abbaa579a0ea06f2c520630fd92adbdc7ecc223cc0c0791ba9be4`,
+  and cache golden file
+  `ed55216bf942ca23e27a0e003cbd557f18708cd5b326bba8a0f5a4f71094ddc1`.
+  Later documentation/description edits do not alter that tested source.
+  Complete ownership, the remaining negative/OOM/active-serde matrix, R2/R3,
+  call-formal failures, option-(e) rejection and adapters remain open.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
