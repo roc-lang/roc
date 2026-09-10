@@ -9023,6 +9023,12 @@ records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
 one.
 
+Requirement forwarding carries the method ID's owning checked name store.
+Raw method IDs are comparable only within the same store; cross-module
+lookups translate the exact method name through the evidence frame's existing
+immutable name index before comparing IDs and live receiver cells. This lookup
+does not mutate checked data or create a second name registry.
+
 When an edge uses a procedure as data, an otherwise-unpinned requirement that
 is reachable through the procedure's own callable type is not
 `unreachable`. Checker output records `from_callable(k)` at that construction

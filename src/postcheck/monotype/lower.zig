@@ -41193,7 +41193,7 @@ const BodyContext = struct {
             for (schema.params, 0..) |param, k| {
                 if (derived[k]) continue;
                 const node = subst[param.slot.?].node;
-                if (self.forwardedRequirement(node, param.method)) |forwarded| switch (forwarded) {
+                if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
                     // Callable targets are selected again from this scheme's
                     // substitution below. Terminal evidence belongs to the
                     // enclosing requirement on this exact cell: structural
@@ -41311,7 +41311,7 @@ const BodyContext = struct {
         node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
-        if (self.forwardedRequirement(node, param.method)) |forwarded| return forwarded;
+        if (self.forwardedRequirement(node, view.names, param.method)) |forwarded| return forwarded;
         const default_phase: ?checked.NumericDefaultPhase = switch (self.graph.content(node)) {
             .redirect => unreachable,
             .unresolved => |variable| variable.numeric_default_phase,
@@ -41332,17 +41332,22 @@ const BodyContext = struct {
 
     /// The enclosing frame entry that already answers `method` for the
     /// cell `node` shares with a quantified variable of an enclosing scheme:
-    /// an requirement on a still-open cell inside a body is the enclosing
-    /// specialization's requirement on that same cell.
-    fn forwardedRequirement(self: *BodyContext, node: NodeId, method: names.MethodNameId) ?SpecEvidence {
+    /// a requirement on a still-open cell inside a body is the enclosing
+    /// specialization's requirement on that same cell. Method IDs belong to
+    /// their checked name store, so translate once per frame before comparing.
+    fn forwardedRequirement(self: *BodyContext, node: NodeId, method_names: *const names.NameStore, method: names.MethodNameId) ?SpecEvidence {
         var frame: ?*const EvidenceChain = &self.evidence;
         while (frame) |current| : (frame = current.parent) {
             const schema = current.schema orelse continue;
             if (current.subst.len != schema.scheme_vars.len or current.vector.len != schema.params.len) {
                 Common.invariant("evidence frame substitution or vector length differed from its scheme");
             }
+            const frame_method = if (schema.view.names == method_names)
+                method
+            else
+                schema.view.names.lookupMethodName(method_names.methodNameText(method)) orelse continue;
             for (schema.params, 0..) |param, k| {
-                if (param.method != method) continue;
+                if (param.method != frame_method) continue;
                 const receiver_slot = param.slot orelse continue;
                 const slot = switch (current.subst[receiver_slot]) {
                     .node => |slot_node| slot_node,
@@ -56171,6 +56176,96 @@ test "graph constructor representation follows aliases and preserves nominal lay
     try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(alias));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(nominal));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(outer_alias));
+}
+
+test "issue 11265: forwarded evidence compares methods in their owning name stores" {
+    const gpa = std.testing.allocator;
+    var frame_names = names.NameStore.init(gpa);
+    defer frame_names.deinit();
+    var caller_names = names.NameStore.init(gpa);
+    defer caller_names.deinit();
+    const frame_encode = try frame_names.internMethodName("encoder_for");
+    const frame_decode = try frame_names.internMethodName("decode");
+    const caller_decode = try caller_names.internMethodName("decode");
+    const caller_encode = try caller_names.internMethodName("encoder_for");
+    const caller_hash = try caller_names.internMethodName("to_hash");
+    try std.testing.expectEqual(frame_encode, caller_decode);
+    try std.testing.expect(frame_decode != caller_decode);
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &frame_names);
+    defer graph.destroy();
+    const receiver = try graph.newNode(.{ .primitive = .str });
+    const other_receiver = try graph.newNode(.{ .primitive = .i64 });
+    const unrelated_receiver = try graph.newNode(.{ .primitive = .dec });
+    const alias = try graph.newNode(.{ .primitive = .str });
+    try graph.unify(receiver, alias);
+
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, receiver_ty, .{ .flex = .{} });
+    try checked_types.fillSyntheticTypeRoot(gpa, other_receiver_ty, .{ .flex = .{} });
+    const result_ty = try checked_types.appendSyntheticPayloadRoot(gpa, &frame_names, .empty_record);
+    const encode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, result_ty);
+    const other_decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{other_receiver_ty}, other_receiver_ty);
+    const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
+
+    var frame_view: ModuleView = undefined;
+    frame_view.names = &frame_names;
+    frame_view.types = checked_types.view();
+    const params = [_]static_dispatch.EvidenceParamRecord{
+        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true },
+    };
+    const frame: EvidenceChain = .{
+        .scope = undefined,
+        .schema = .{
+            .view = frame_view,
+            .root = null,
+            .scheme_vars = &.{ receiver_ty, other_receiver_ty },
+            .params = &params,
+        },
+        .subst = &.{ .{ .node = receiver }, .{ .node = other_receiver } },
+        .vector = &.{ .{ .structural = .{ .derivation = .encoder } }, .checked_error, .{ .structural = .{ .derivation = .parser } } },
+    };
+    var ctx: BodyContext = undefined;
+    ctx.graph = graph;
+    ctx.evidence = frame;
+
+    // Different methods with equal IDs must stay distinct, and the same
+    // method with different IDs must still find its exact receiver's evidence.
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(alias, &caller_names, caller_decode).?.structural.derivation);
+    try std.testing.expectEqual(.encoder, ctx.forwardedRequirement(receiver, &caller_names, caller_encode).?.structural.derivation);
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(receiver, &frame_names, frame_decode).?.structural.derivation);
+    try std.testing.expect(ctx.forwardedRequirement(receiver, &caller_names, caller_hash) == null);
+    try std.testing.expect(ctx.forwardedRequirement(unrelated_receiver, &caller_names, caller_decode) == null);
+
+    // A name absent from an inner frame must continue to the lexical parent,
+    // even if that inner store assigns its ID to another method.
+    var inner_names = names.NameStore.init(gpa);
+    defer inner_names.deinit();
+    const inner_method = try inner_names.internMethodName("is_eq");
+    try std.testing.expectEqual(caller_decode, inner_method);
+    var inner_view: ModuleView = undefined;
+    inner_view.names = &inner_names;
+    inner_view.types = checked_types.view();
+    ctx.evidence = .{
+        .scope = undefined,
+        .schema = .{
+            .view = inner_view,
+            .root = null,
+            .scheme_vars = &.{receiver_ty},
+            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true }},
+        },
+        .subst = &.{.{ .node = receiver }},
+        .vector = &.{.{ .structural = .{ .derivation = .equality } }},
+        .parent = &frame,
+    };
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(receiver, &caller_names, caller_decode).?.structural.derivation);
 }
 
 test "specialization evidence equality includes exact target instantiation" {
