@@ -803,8 +803,6 @@ NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:404:11:404:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:408:5:418:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:422:5:432:6
 TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
-POLYMORPHIC VALUE - associated_items_complete_all_patterns.md:51:9:51:13
-MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 # PROBLEMS
 ~~~clojure
 (reports
@@ -10085,38 +10083,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 			(annotated code "Test :: ...")
 			(reflow " (opaque nominal type)")
 			(line-break)
-			(source-region (file "associated_items_complete_all_patterns.md") (start 2 1) (end 433 2) (annotation error) (line-text "d1_forward := [A].{\n    first = second\n    second = 100\n}\nd1_1 = d1_forward.first\n\nd1_scope := [B].{\n    inner = 200\n}\nd1_2 = d1_scope.inner\n\nd2_inner_first := [C].{\n    Inner := [D].{\n        inner_val = outer_val\n    }\n\n    outer_val = 300\n}\nd2_1 = d2_inner_first.outer_val\nd2_2 = d2_inner_first.Inner.inner_val\n\nd2_outer_val_middle := [G].{\n    Inner := [H].{\n        inner_val = outer_val\n    }\n\n    outer_val = 500\n}\nd2_3 = d2_outer_val_middle.Inner.inner_val\n\nd2_outer_refs_inner := [I].{\n    outer_val = d2_outer_refs_inner.Inner.inner_val\n\n    Inner := [J].{\n        inner_val = 600\n    }\n}\nd2_4 = d2_outer_refs_inner.outer_val\n\nd2_scope_violation := [K].{\n    Inner := [L].{\n        inner_private = 700\n    }\n\n    outer_trying_inner = inner_private\n}\n\nd2_siblings := [M].{\n    InnerA := [N].{\n        valA = d2_siblings.InnerB.valB + 1\n    }\n\n    InnerB := [O].{\n        valB = 800\n    }\n}\nd2_5 = d2_siblings.InnerA.valA\n\nd3_types_then_vals := [P].{\n    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }\n\n    val1 = 10\n}\nd3_1 = d3_types_then_vals.val1\nd3_2 = d3_types_then_vals.L2.val2\nd3_3 = d3_types_then_vals.L2.L3.val3\n\nd3_vals_then_types := [S].{\n    val1 = 30\n\n    L2 := [T].{\n        val2 = val1 + 5\n\n        L3 := [U].{\n            val3 = val1 + val2\n        }\n    }\n}\nd3_4 = d3_vals_then_types.val1\nd3_5 = d3_vals_then_types.L2.val2\nd3_6 = d3_vals_then_types.L2.L3.val3\n\nd3_l1_scope_violation := [V].{\n    L2 := [W].{\n        L3 := [X].{\n            l3_private = 999\n        }\n    }\n\n    bad_l1 = l3_private\n}\n\nd3_l2_scope_violation := [Y].{\n    L2 := [Z].{\n        L3 := [AA].{\n            l3_secret = 888\n        }\n\n        bad_l2 = l3_secret\n    }\n}\n\nd3_val_after_nested := [AB].{\n    L2 := [AC].{\n        L3 := [AD].{\n            val3 = val2 * 2\n        }\n\n        val2 = val1 * 3\n    }\n\n    val1 = 5\n}\nd3_7 = d3_val_after_nested.val1\nd3_8 = d3_val_after_nested.L2.val2\nd3_9 = d3_val_after_nested.L2.L3.val3\n\nd4_all_types_then_vals := [AE].{\n    L2 := [AF].{\n        L3 := [AG].{\n            L4 := [AH].{\n                val4 = val1 + val2 + val3\n            }\n\n            val3 = 3\n        }\n\n        val2 = 2\n    }\n\n    val1 = 1\n}\nd4_1 = d4_all_types_then_vals.L2.L3.L4.val4\n\nd4_all_vals_then_types := [AI].{\n    val1 = 10\n\n    L2 := [AJ].{\n        val2 = val1 + 1\n\n        L3 := [AK].{\n            val3 = val1 + val2\n\n            L4 := [AL].{\n                val4 = val1 + val2 + val3\n            }\n        }\n    }\n}\nd4_2 = d4_all_vals_then_types.L2.L3.L4.val4\n\nd4_reverse_types := [AM].{\n    L2 := [AN].{\n        L3 := [AO].{\n            L4 := [AP].{\n                val4 = val3 + 1\n            }\n\n            val3 = val2 + 1\n        }\n\n        val2 = val1 + 1\n    }\n\n    val1 = 7\n}\nd4_3 = d4_reverse_types.L2.L3.L4.val4\n\nd4_interleaved := [AQ].{\n    val1 = 15\n\n    L2 := [AR].{\n        L3 := [AS].{\n            val3 = val1 + val2\n\n            L4 := [AT].{\n                val4 = val1 + val2 + val3\n            }\n        }\n\n        val2 = val1 + 5\n    }\n}\nd4_4 = d4_interleaved.L2.L3.L4.val4\n\nd4_l3_val_after_l4 := [BA].{\n    L2 := [BB].{\n        L3 := [BC].{\n            L4 := [BD].{\n                val4 = val3 * 3\n            }\n            val3 = 12\n        }\n    }\n}\nd4_5 = d4_l3_val_after_l4.L2.L3.L4.val4\n\nd4_l2_val_after_l3 := [BE].{\n    L2 := [BF].{\n        L3 := [BG].{\n            L4 := [BH].{\n                val4 = val2 + val3\n            }\n\n            val3 = 8\n        }\n\n        val2 = 4\n    }\n}\nd4_6 = d4_l2_val_after_l3.L2.L3.L4.val4\n\nd4_l1_val_after_l2 := [BI].{\n    L2 := [BJ].{\n        L3 := [BK].{\n            L4 := [BL].{\n                val4 = val1 + 100\n            }\n\n            val3 = val1 + 50\n        }\n\n        val2 = val1 + 10\n    }\n\n    val1 = 3\n}\nd4_7 = d4_l1_val_after_l2.L2.L3.L4.val4\n\nd4_l1_scope_violation := [BM].{\n    L2 := [BN].{\n        L3 := [BO].{\n            L4 := [BP].{\n                l4_val = 444\n            }\n        }\n    }\n\n    bad = l4_val\n}\n\nd4_l2_scope_violation := [BQ].{\n    L2 := [BR].{\n        L3 := [BS].{\n            L4 := [BT].{\n                l4_secret = 333\n            }\n        }\n\n        bad = l4_secret\n    }\n}\n\nd4_l3_scope_violation := [BU].{\n    L2 := [BV].{\n        L3 := [BW].{\n            L4 := [BX].{\n                l4_private = 555\n            }\n\n            attempt = l4_private\n        }\n    }\n}\n\nd5_all_types_then_vals := [BY].{\n    L2 := [BZ].{\n        L3 := [CA].{\n            L4 := [CB].{\n                L5 := [CC].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n\n                val4 = 4\n            }\n\n            val3 = 3\n        }\n\n        val2 = 2\n    }\n\n    val1 = 1\n}\nd5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5\n\nd5_all_vals_then_types := [CD].{\n    val1 = 100\n\n    L2 := [CE].{\n        val2 = val1 + 10\n\n        L3 := [CF].{\n            val3 = val1 + val2\n\n            L4 := [CG].{\n                val4 = val1 + val2 + val3\n\n                L5 := [CH].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n            }\n        }\n    }\n}\nd5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5\n\nd5_deep_interleave := [CI].{\n    val1 = 2\n\n    L2 := [CJ].{\n        L3 := [CK].{\n            val3 = val1 + val2\n\n            L4 := [CL].{\n                L5 := [CM].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n\n                val4 = val1 + val2 + val3\n            }\n        }\n\n        val2 = val1 + 1\n    }\n}\nd5_3 = d5_deep_interleave.L2.L3.L4.L5.val5\n\nd5_l4_val_after_l5 := [CN].{\n    L2 := [CO].{\n        L3 := [CP].{\n            L4 := [CQ].{\n                L5 := [CR].{\n                    val5 = val4 * 5\n                }\n\n                val4 = 6\n            }\n        }\n    }\n}\nd5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5\n\nd5_l3_val_after_l4 := [CS].{\n    L2 := [CT].{\n        L3 := [CU].{\n            L4 := [CV].{\n                L5 := [CW].{\n                    val5 = val3 + val4\n                }\n\n                val4 = 7\n            }\n\n            val3 = 3\n        }\n    }\n}\nd5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5\n\nd5_l1_val_last := [DC].{\n    L2 := [DD].{\n        val2 = val1 + 10\n\n        L3 := [DE].{\n            val3 = val1 + val2\n\n            L4 := [DF].{\n                val4 = val1 + val2 + val3\n\n                L5 := [DG].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n            }\n        }\n    }\n\n    val1 = 5\n}\nd5_6 = d5_l1_val_last.val1\nd5_7 = d5_l1_val_last.L2.val2\nd5_8 = d5_l1_val_last.L2.L3.val3\nd5_9 = d5_l1_val_last.L2.L3.L4.val4\nd5_10 = d5_l1_val_last.L2.L3.L4.L5.val5\n\nd5_l1_to_l5_violation := [DH].{\n    L2 := [DI].{\n        L3 := [DJ].{\n            L4 := [DK].{\n                L5 := [DL].{\n                    deep_secret = 12345\n                }\n            }\n        }\n    }\n\n    bad = deep_secret\n}\n\nd5_l3_to_l5_violation := [DM].{\n    L2 := [DN].{\n        L3 := [DO].{\n            L4 := [DP].{\n                L5 := [DQ].{\n                    l5_secret = 9999\n                }\n            }\n\n            bad = l5_secret\n        }\n    }\n}\n\nd5_l4_to_l5_violation := [DR].{\n    L2 := [DS].{\n        L3 := [DT].{\n            L4 := [DU].{\n                L5 := [DV].{\n                    l5_only = 8888\n                }\n\n                bad = l5_only\n            }\n        }\n    }\n}"))))
-	(report
-		(severity runtime_error)
-		(title "Polymorphic Value")
-		(region (start 51 9) (end 51 13))
-		(headline
-			(reflow "This top-level value still has an unresolved polymorphic type."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 51 9) (end 51 13) (annotation error) (line-text "        valA = d2_siblings.InnerB.valB + 1"))
-			(line-break)
-			(line-break)
-			(reflow "Its type is:")
-			(line-break)
-			(annotated code-block "a where [a.plus : a, Dec -> a]")
-			(line-break)
-			(reflow "Add an annotation or use this value in a way that fixes its concrete type.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 51 16) (end 51 39))
-		(headline
-			(reflow "This is trying to use the")
-			(reflow " ")
-			(annotated code "+")
-			(reflow " ")
-			(reflow "operator on a value whose type is an unresolved type variable, which has no methods."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 51 16) (end 51 39) (annotation error) (line-text "        valA = d2_siblings.InnerB.valB + 1"))
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(source-region (file "associated_items_complete_all_patterns.md") (start 2 1) (end 433 2) (annotation error) (line-text "d1_forward := [A].{\n    first = second\n    second = 100\n}\nd1_1 = d1_forward.first\n\nd1_scope := [B].{\n    inner = 200\n}\nd1_2 = d1_scope.inner\n\nd2_inner_first := [C].{\n    Inner := [D].{\n        inner_val = outer_val\n    }\n\n    outer_val = 300\n}\nd2_1 = d2_inner_first.outer_val\nd2_2 = d2_inner_first.Inner.inner_val\n\nd2_outer_val_middle := [G].{\n    Inner := [H].{\n        inner_val = outer_val\n    }\n\n    outer_val = 500\n}\nd2_3 = d2_outer_val_middle.Inner.inner_val\n\nd2_outer_refs_inner := [I].{\n    outer_val = d2_outer_refs_inner.Inner.inner_val\n\n    Inner := [J].{\n        inner_val = 600\n    }\n}\nd2_4 = d2_outer_refs_inner.outer_val\n\nd2_scope_violation := [K].{\n    Inner := [L].{\n        inner_private = 700\n    }\n\n    outer_trying_inner = inner_private\n}\n\nd2_siblings := [M].{\n    InnerA := [N].{\n        valA = d2_siblings.InnerB.valB + 1\n    }\n\n    InnerB := [O].{\n        valB = 800\n    }\n}\nd2_5 = d2_siblings.InnerA.valA\n\nd3_types_then_vals := [P].{\n    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }\n\n    val1 = 10\n}\nd3_1 = d3_types_then_vals.val1\nd3_2 = d3_types_then_vals.L2.val2\nd3_3 = d3_types_then_vals.L2.L3.val3\n\nd3_vals_then_types := [S].{\n    val1 = 30\n\n    L2 := [T].{\n        val2 = val1 + 5\n\n        L3 := [U].{\n            val3 = val1 + val2\n        }\n    }\n}\nd3_4 = d3_vals_then_types.val1\nd3_5 = d3_vals_then_types.L2.val2\nd3_6 = d3_vals_then_types.L2.L3.val3\n\nd3_l1_scope_violation := [V].{\n    L2 := [W].{\n        L3 := [X].{\n            l3_private = 999\n        }\n    }\n\n    bad_l1 = l3_private\n}\n\nd3_l2_scope_violation := [Y].{\n    L2 := [Z].{\n        L3 := [AA].{\n            l3_secret = 888\n        }\n\n        bad_l2 = l3_secret\n    }\n}\n\nd3_val_after_nested := [AB].{\n    L2 := [AC].{\n        L3 := [AD].{\n            val3 = val2 * 2\n        }\n\n        val2 = val1 * 3\n    }\n\n    val1 = 5\n}\nd3_7 = d3_val_after_nested.val1\nd3_8 = d3_val_after_nested.L2.val2\nd3_9 = d3_val_after_nested.L2.L3.val3\n\nd4_all_types_then_vals := [AE].{\n    L2 := [AF].{\n        L3 := [AG].{\n            L4 := [AH].{\n                val4 = val1 + val2 + val3\n            }\n\n            val3 = 3\n        }\n\n        val2 = 2\n    }\n\n    val1 = 1\n}\nd4_1 = d4_all_types_then_vals.L2.L3.L4.val4\n\nd4_all_vals_then_types := [AI].{\n    val1 = 10\n\n    L2 := [AJ].{\n        val2 = val1 + 1\n\n        L3 := [AK].{\n            val3 = val1 + val2\n\n            L4 := [AL].{\n                val4 = val1 + val2 + val3\n            }\n        }\n    }\n}\nd4_2 = d4_all_vals_then_types.L2.L3.L4.val4\n\nd4_reverse_types := [AM].{\n    L2 := [AN].{\n        L3 := [AO].{\n            L4 := [AP].{\n                val4 = val3 + 1\n            }\n\n            val3 = val2 + 1\n        }\n\n        val2 = val1 + 1\n    }\n\n    val1 = 7\n}\nd4_3 = d4_reverse_types.L2.L3.L4.val4\n\nd4_interleaved := [AQ].{\n    val1 = 15\n\n    L2 := [AR].{\n        L3 := [AS].{\n            val3 = val1 + val2\n\n            L4 := [AT].{\n                val4 = val1 + val2 + val3\n            }\n        }\n\n        val2 = val1 + 5\n    }\n}\nd4_4 = d4_interleaved.L2.L3.L4.val4\n\nd4_l3_val_after_l4 := [BA].{\n    L2 := [BB].{\n        L3 := [BC].{\n            L4 := [BD].{\n                val4 = val3 * 3\n            }\n            val3 = 12\n        }\n    }\n}\nd4_5 = d4_l3_val_after_l4.L2.L3.L4.val4\n\nd4_l2_val_after_l3 := [BE].{\n    L2 := [BF].{\n        L3 := [BG].{\n            L4 := [BH].{\n                val4 = val2 + val3\n            }\n\n            val3 = 8\n        }\n\n        val2 = 4\n    }\n}\nd4_6 = d4_l2_val_after_l3.L2.L3.L4.val4\n\nd4_l1_val_after_l2 := [BI].{\n    L2 := [BJ].{\n        L3 := [BK].{\n            L4 := [BL].{\n                val4 = val1 + 100\n            }\n\n            val3 = val1 + 50\n        }\n\n        val2 = val1 + 10\n    }\n\n    val1 = 3\n}\nd4_7 = d4_l1_val_after_l2.L2.L3.L4.val4\n\nd4_l1_scope_violation := [BM].{\n    L2 := [BN].{\n        L3 := [BO].{\n            L4 := [BP].{\n                l4_val = 444\n            }\n        }\n    }\n\n    bad = l4_val\n}\n\nd4_l2_scope_violation := [BQ].{\n    L2 := [BR].{\n        L3 := [BS].{\n            L4 := [BT].{\n                l4_secret = 333\n            }\n        }\n\n        bad = l4_secret\n    }\n}\n\nd4_l3_scope_violation := [BU].{\n    L2 := [BV].{\n        L3 := [BW].{\n            L4 := [BX].{\n                l4_private = 555\n            }\n\n            attempt = l4_private\n        }\n    }\n}\n\nd5_all_types_then_vals := [BY].{\n    L2 := [BZ].{\n        L3 := [CA].{\n            L4 := [CB].{\n                L5 := [CC].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n\n                val4 = 4\n            }\n\n            val3 = 3\n        }\n\n        val2 = 2\n    }\n\n    val1 = 1\n}\nd5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5\n\nd5_all_vals_then_types := [CD].{\n    val1 = 100\n\n    L2 := [CE].{\n        val2 = val1 + 10\n\n        L3 := [CF].{\n            val3 = val1 + val2\n\n            L4 := [CG].{\n                val4 = val1 + val2 + val3\n\n                L5 := [CH].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n            }\n        }\n    }\n}\nd5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5\n\nd5_deep_interleave := [CI].{\n    val1 = 2\n\n    L2 := [CJ].{\n        L3 := [CK].{\n            val3 = val1 + val2\n\n            L4 := [CL].{\n                L5 := [CM].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n\n                val4 = val1 + val2 + val3\n            }\n        }\n\n        val2 = val1 + 1\n    }\n}\nd5_3 = d5_deep_interleave.L2.L3.L4.L5.val5\n\nd5_l4_val_after_l5 := [CN].{\n    L2 := [CO].{\n        L3 := [CP].{\n            L4 := [CQ].{\n                L5 := [CR].{\n                    val5 = val4 * 5\n                }\n\n                val4 = 6\n            }\n        }\n    }\n}\nd5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5\n\nd5_l3_val_after_l4 := [CS].{\n    L2 := [CT].{\n        L3 := [CU].{\n            L4 := [CV].{\n                L5 := [CW].{\n                    val5 = val3 + val4\n                }\n\n                val4 = 7\n            }\n\n            val3 = 3\n        }\n    }\n}\nd5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5\n\nd5_l1_val_last := [DC].{\n    L2 := [DD].{\n        val2 = val1 + 10\n\n        L3 := [DE].{\n            val3 = val1 + val2\n\n            L4 := [DF].{\n                val4 = val1 + val2 + val3\n\n                L5 := [DG].{\n                    val5 = val1 + val2 + val3 + val4\n                }\n            }\n        }\n    }\n\n    val1 = 5\n}\nd5_6 = d5_l1_val_last.val1\nd5_7 = d5_l1_val_last.L2.val2\nd5_8 = d5_l1_val_last.L2.L3.val3\nd5_9 = d5_l1_val_last.L2.L3.L4.val4\nd5_10 = d5_l1_val_last.L2.L3.L4.L5.val5\n\nd5_l1_to_l5_violation := [DH].{\n    L2 := [DI].{\n        L3 := [DJ].{\n            L4 := [DK].{\n                L5 := [DL].{\n                    deep_secret = 12345\n                }\n            }\n        }\n    }\n\n    bad = deep_secret\n}\n\nd5_l3_to_l5_violation := [DM].{\n    L2 := [DN].{\n        L3 := [DO].{\n            L4 := [DP].{\n                L5 := [DQ].{\n                    l5_secret = 9999\n                }\n            }\n\n            bad = l5_secret\n        }\n    }\n}\n\nd5_l4_to_l5_violation := [DR].{\n    L2 := [DS].{\n        L3 := [DT].{\n            L4 := [DU].{\n                L5 := [DV].{\n                    l5_only = 8888\n                }\n\n                bad = l5_only\n            }\n        }\n    }\n}")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -12293,21 +12260,13 @@ L2 := [DS].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d1_1"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "first") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "inner"))
 		(e-num (value "200")))
 	(d-let
 		(p-assign (ident "d1_2"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "inner") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "Test.Inner.inner_val"))
 		(e-lookup-local
@@ -12317,65 +12276,37 @@ L2 := [DS].{
 		(e-num (value "300")))
 	(d-let
 		(p-assign (ident "d2_1"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "outer_val") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d2_2"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "inner_val") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "outer_val"))
 		(e-num (value "500")))
 	(d-let
 		(p-assign (ident "d2_3"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "inner_val") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "outer_val"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "inner_val") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d2_4"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "outer_val") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "outer_trying_inner"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 741)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args
-				(e-num (value "1")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "Test.InnerB.valB"))
 		(e-num (value "800")))
 	(d-let
 		(p-assign (ident "d2_5"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "valA") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 766)
+		(e-dispatch-call (method "plus") (constraint-fn-var 764)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -12390,49 +12321,25 @@ L2 := [DS].{
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d3_1"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "val1") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d3_2"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val2") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d3_3"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val3") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "30")))
 	(d-let
 		(p-assign (ident "d3_4"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "val1") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d3_5"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val2") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d3_6"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val3") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "bad_l1"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -12441,89 +12348,49 @@ L2 := [DS].{
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d3_7"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "val1") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d3_8"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val2") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d3_9"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val3") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "d4_1"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d4_2"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "7")))
 	(d-let
 		(p-assign (ident "d4_3"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "15")))
 	(d-let
 		(p-assign (ident "d4_4"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d4_5"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d4_6"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "d4_7"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -12532,83 +12399,43 @@ L2 := [DS].{
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "d5_1"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val5") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d5_2"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val5") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "d5_3"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val5") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_4"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val5") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_5"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val5") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d5_6"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "val1") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_7"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val2") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_8"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val3") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_9"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val4") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "d5_10"))
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))
-			(segments
-				(segment (name "val5") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -12743,63 +12570,63 @@ L2 := [DS].{
 	(defs
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "a where [a.plus : a, Dec -> a]"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Inner")
@@ -12867,62 +12694,62 @@ L2 := [DS].{
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "a where [a.plus : a, Dec -> a]"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~
