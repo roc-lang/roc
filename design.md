@@ -1712,7 +1712,7 @@ for a child relation that completed before suppression remains independently
 valid. Each field-access segment requires an established record relation before
 its field type can become the next receiver or the access result. Suppression
 retires the consuming access through its existing local error metadata, so an
-enclosing match consumes an erroneous scrutinee rather than publishing a
+enclosing match consumes an erroneous scrutinee, preventing a
 decision tree over an unrelated field type. The original diagnostic and the
 independently solved receiver remain unchanged.
 
