@@ -75,7 +75,10 @@ pub const ResourceError = Allocator.Error;
 
 /// Bound on proof rounds per proc. Each round can only fold branches that
 /// exist, so rounds converge; this bound is a backstop, not a tuning knob.
-const max_rounds: u32 = 12;
+/// A loop lowered as several joins that jump among one another (a search
+/// with a restart state, say) carries a persisted fact one join further per
+/// round, so the backstop must cover a chain of a couple of dozen joins.
+const max_rounds: u32 = 48;
 /// Bound on collected facts along one path.
 const max_facts: usize = 512;
 /// Bound on symbolic value nodes per proc round.
@@ -316,14 +319,20 @@ const merge_env_cap: usize = 64;
 const MergeState = struct {
     captures: u32,
     facts: std.ArrayList(Fact),
+    /// The all-edge meet of the facts in round-stable form, for persisting
+    /// across rounds; `facts` keeps the raw meet for in-round seeding, which
+    /// only helps when the edges share the head's region and its node ids.
+    stable: LoopFacts,
     env: std.ArrayList(EnvMeet),
     /// Facts held by every captured edge arriving from OUTSIDE the merge
-    /// head's own region. For a loop join these are its entry edges; a fact
-    /// between round-stable single-assignment values that holds on entry is
-    /// a loop invariant outright, because nothing in the loop can reassign
-    /// the values it relates.
+    /// head's own region, in round-stable form. For a loop join these are
+    /// its entry edges; a fact between round-stable single-assignment values
+    /// that holds on entry is a loop invariant outright, because nothing in
+    /// the loop can reassign the values it relates. Entry edges may arrive
+    /// from different walk regions, whose nodes for the same value differ,
+    /// so the meet is taken on what the nodes denote rather than on node ids.
     entry_captures: u32,
-    entry_facts: std.ArrayList(Fact),
+    entry_stable: LoopFacts,
 };
 
 /// One endpoint of a cross-round persisted fact, in round-stable form.
@@ -1065,7 +1074,6 @@ const Pass = struct {
         while (it.next()) |state| {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
-            state.entry_facts.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
     }
@@ -1186,28 +1194,44 @@ const Pass = struct {
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty };
+            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
         }
         const state = entry.value_ptr;
 
         // An edge arriving from outside the loop is an entry edge; its facts
         // meet separately so loop-invariant relations survive the back
         // edge's inability to derive them before its region is seeded.
+        const mine_stable = self.stabilizeFacts(self.facts.items);
+        if (state.captures == 0) {
+            state.stable = mine_stable;
+        } else {
+            var keep_stable: usize = 0;
+            for (state.stable.items[0..state.stable.len]) |fact| {
+                for (mine_stable.items[0..mine_stable.len]) |candidate| {
+                    if (std.meta.eql(fact, candidate)) {
+                        state.stable.items[keep_stable] = fact;
+                        keep_stable += 1;
+                        break;
+                    }
+                }
+            }
+            state.stable.len = keep_stable;
+        }
         if (self.edgeEntersLoop(head)) {
             if (state.entry_captures == 0) {
-                try state.entry_facts.appendSlice(self.allocator, self.facts.items);
+                state.entry_stable = mine_stable;
             } else {
                 var keep_entry: usize = 0;
-                for (state.entry_facts.items) |fact| {
-                    for (self.facts.items) |mine| {
-                        if (mine.a == fact.a and mine.b == fact.b and mine.c == fact.c) {
-                            state.entry_facts.items[keep_entry] = fact;
+                for (state.entry_stable.items[0..state.entry_stable.len]) |fact| {
+                    for (mine_stable.items[0..mine_stable.len]) |candidate| {
+                        if (std.meta.eql(fact, candidate)) {
+                            state.entry_stable.items[keep_entry] = fact;
                             keep_entry += 1;
                             break;
                         }
                     }
                 }
-                state.entry_facts.shrinkRetainingCapacity(keep_entry);
+                state.entry_stable.len = keep_entry;
             }
             state.entry_captures += 1;
         }
@@ -1365,7 +1389,11 @@ const Pass = struct {
             return;
         }
 
+        // The raw meet carries node ids, which only mean something for edges
+        // captured in the head's own region; the stable meet is what edges
+        // from other regions agree on.
         try self.facts.appendSlice(self.allocator, state.facts.items);
+        try self.seedStableFacts(&state.stable);
 
         for (state.env.items) |meet| {
             if (meet.valid) {
@@ -1477,7 +1505,7 @@ const Pass = struct {
     /// every entry edge makes it hold throughout the loop.
     fn persistLoopFacts(self: *Pass, join_id: JoinPointId, state: *const MergeState) ResourceError!void {
         if (state.entry_captures == 0) return;
-        const stable = self.stabilizeFacts(state.entry_facts.items);
+        const stable = state.entry_stable;
         if (stable.len == 0) return;
         const previous = self.loop_facts.get(join_id);
         if (previous == null or previous.?.len != stable.len) self.new_loop_bounds = true;
@@ -1488,14 +1516,7 @@ const Pass = struct {
     /// materialized against this round's nodes.
     fn seedLoopFacts(self: *Pass, join_id: JoinPointId) ResourceError!void {
         const stored = self.loop_facts.get(join_id) orelse return;
-        for (stored.items[0..stored.len]) |fact| {
-            const a = (try self.materializeTerm(fact.a)) orelse continue;
-            const b = (try self.materializeTerm(fact.b)) orelse continue;
-            // The persisted relation is between values; restated on roots:
-            // root_a <= value_a - off_lo_a and value_b <= root_b + off_hi_b.
-            const c = fact.c + self.offHiOf(b) - self.offLoOf(a);
-            try self.addFact(.{ .a = self.rootOf(a), .b = self.rootOf(b), .c = c, .origin = .meet });
-        }
+        try self.seedStableFacts(&stored);
     }
 
     /// This round's node for a stable term: the local's value, the list
@@ -1527,7 +1548,16 @@ const Pass = struct {
             const a = self.stabilizeTerm(fact.a) orelse continue;
             const b = self.stabilizeTerm(fact.b) orelse continue;
             if (a == .constant and b == .constant) continue;
-            stable.items[stable.len] = .{ .a = a, .b = b, .c = fact.c };
+            const candidate = StableFact{ .a = a, .b = b, .c = fact.c };
+            var known = false;
+            for (stable.items[0..stable.len]) |have| {
+                if (std.meta.eql(have, candidate)) {
+                    known = true;
+                    break;
+                }
+            }
+            if (known) continue;
+            stable.items[stable.len] = candidate;
             stable.len += 1;
         }
         return stable;
@@ -1536,7 +1566,7 @@ const Pass = struct {
     /// Persist a fully-captured merge's all-edge fact intersection for
     /// seeding when a later round must walk it before capture completes.
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        const stable = self.stabilizeFacts(state.facts.items);
+        const stable = state.stable;
         if (stable.len == 0) return;
         if (self.merge_facts.get(head)) |previous| {
             if (previous.len != stable.len) {
@@ -1555,6 +1585,14 @@ const Pass = struct {
     /// every edge carried last round.
     fn seedMergeFacts(self: *Pass, head: CFStmtId) ResourceError!void {
         const stored = self.merge_facts.get(head) orelse return;
+        try self.seedStableFacts(&stored);
+    }
+
+    /// Add round-stable facts to the current path, materialized against
+    /// this round's nodes. The persisted relation is between values;
+    /// restated on roots: root_a <= value_a - off_lo_a and
+    /// value_b <= root_b + off_hi_b.
+    fn seedStableFacts(self: *Pass, stored: *const LoopFacts) ResourceError!void {
         for (stored.items[0..stored.len]) |fact| {
             const a = (try self.materializeTerm(fact.a)) orelse continue;
             const b = (try self.materializeTerm(fact.b)) orelse continue;
@@ -2708,7 +2746,12 @@ const Pass = struct {
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
-            if (trackedIntMax(self.localLayout(target)) != null) {
+            // A non-negative literal is the same number whatever its type,
+            // so a signed literal binds too: as a mask it bounds a masked
+            // signed value, which the wrap rules can then carry into the
+            // unsigned world.
+            const layout_idx = self.localLayout(target);
+            if (trackedIntMax(layout_idx) != null or isSignedInt(layout_idx)) {
                 if (try self.constNode(v)) |node| {
                     try self.bind(target, .{ .node = node });
                     return;
@@ -2716,6 +2759,14 @@ const Pass = struct {
             }
         }
         try self.bindFresh(target);
+    }
+
+    fn isSignedInt(layout_idx: layout_mod.Idx) bool {
+        return switch (layout_idx) {
+            .i8, .i16, .i32, .i64, .i128 => true,
+            .u8, .u16, .u32, .u64, .u128, .bool, .str, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => false,
+            _ => false,
+        };
     }
 
     fn modelLowLevel(self: *Pass, stmt: CFStmtId, s: anytype) ResourceError!void {
@@ -2788,6 +2839,25 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            .i8_to_u8_wrap, .i8_to_u16_wrap, .i8_to_u32_wrap, .i8_to_u64_wrap, .i16_to_u8_wrap, .i16_to_u16_wrap, .i16_to_u32_wrap, .i16_to_u64_wrap, .i32_to_u8_wrap, .i32_to_u16_wrap, .i32_to_u32_wrap, .i32_to_u64_wrap, .i64_to_u8_wrap, .i64_to_u16_wrap, .i64_to_u32_wrap, .i64_to_u64_wrap => {
+                // A signed value the path proves non-negative and in range
+                // (a masked table node, say) is the same number afterwards.
+                // Signed values are otherwise untracked, so the argument's
+                // range is only ever narrower than its type when a rule here
+                // established it.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |node_id| {
+                        const node = self.nodes.items[node_id];
+                        const root = self.nodes.items[node.root];
+                        const max = trackedIntMax(self.localLayout(s.target));
+                        if (max != null and root.lo + node.off_lo >= 0 and root.hi + node.off_hi <= max.?) {
+                            try self.bind(s.target, .{ .node = node_id });
+                            return;
+                        }
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .u16_to_u8_wrap, .u32_to_u8_wrap, .u32_to_u16_wrap, .u64_to_u8_wrap, .u64_to_u16_wrap, .u64_to_u32_wrap, .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap => {
                 // A narrowing that provably cannot wrap leaves the number
                 // alone as well: a shift amount computed from literals, say,
@@ -2852,6 +2922,10 @@ const Pass = struct {
                     // index masked by a runtime table size, say).
                     if (arg_count == 2) {
                         for (0..2) |i| {
+                            // A signed operand can be negative, where the
+                            // result exceeds it; only unsigned operands bound
+                            // the result.
+                            if (trackedIntMax(self.localLayout(GuardedList.at(args, i))) == null) continue;
                             if (try self.valueOf(GuardedList.at(args, i))) |operand| {
                                 const fact = Fact{
                                     .a = node,
@@ -3131,13 +3205,9 @@ const Pass = struct {
             .u8_to_f64,
             .u8_to_dec,
             .i8_to_i128,
-            .i8_to_u8_wrap,
             .i8_to_u8_try,
-            .i8_to_u16_wrap,
             .i8_to_u16_try,
-            .i8_to_u32_wrap,
             .i8_to_u32_try,
-            .i8_to_u64_wrap,
             .i8_to_u64_try,
             .i8_to_u128_wrap,
             .i8_to_u128_try,
@@ -3157,13 +3227,9 @@ const Pass = struct {
             .i16_to_i8_wrap,
             .i16_to_i8_try,
             .i16_to_i128,
-            .i16_to_u8_wrap,
             .i16_to_u8_try,
-            .i16_to_u16_wrap,
             .i16_to_u16_try,
-            .i16_to_u32_wrap,
             .i16_to_u32_try,
-            .i16_to_u64_wrap,
             .i16_to_u64_try,
             .i16_to_u128_wrap,
             .i16_to_u128_try,
@@ -3188,13 +3254,9 @@ const Pass = struct {
             .i32_to_i16_wrap,
             .i32_to_i16_try,
             .i32_to_i128,
-            .i32_to_u8_wrap,
             .i32_to_u8_try,
-            .i32_to_u16_wrap,
             .i32_to_u16_try,
-            .i32_to_u32_wrap,
             .i32_to_u32_try,
-            .i32_to_u64_wrap,
             .i32_to_u64_try,
             .i32_to_u128_wrap,
             .i32_to_u128_try,
@@ -3224,13 +3286,9 @@ const Pass = struct {
             .i64_to_i32_wrap,
             .i64_to_i32_try,
             .i64_to_i128,
-            .i64_to_u8_wrap,
             .i64_to_u8_try,
-            .i64_to_u16_wrap,
             .i64_to_u16_try,
-            .i64_to_u32_wrap,
             .i64_to_u32_try,
-            .i64_to_u64_wrap,
             .i64_to_u64_try,
             .i64_to_u128_wrap,
             .i64_to_u128_try,
