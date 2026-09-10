@@ -11890,6 +11890,19 @@ A container qualifies for dismantling when all of the following hold:
   operand-position whole use: moved into an aggregate or a call, returned,
   or join-carried by `set_local`
 
+A tag union qualifies through a payload view. The union must be owned, bound
+exactly once by a value-producing statement, and not a join parameter, and
+every occurrence of it must be a discriminant read, a borrowed pure alias, or
+exactly one borrowed `tag_payload_struct` view that owns every refcounted byte
+of the union (the union's other variants carry none). That view is the struct
+candidate, judged by the struct rules above; its takes spend the union's unit,
+and the union is the container ARC releases residually. A discriminant read of
+the union must exist to lend the residual dispatch its scratch layout. A second
+view, a second variant, or any other occurrence of the union keeps its whole
+release. The shape this serves is a call returning `Try` of a record whose
+fields are moved out under `Ok`: without it every such field pays a retain and
+the whole result a release, on every call.
+
 A proc parameter solved borrowed qualifies conditionally: its takes are
 solved once against the shared ownership-neutral body but recorded as
 owned-only, applying exactly in emissions whose demand vector overrides that
@@ -11976,10 +11989,12 @@ the loop boundary. A pure
 same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the
-ownership place live. The certifier represents this state explicitly as a
-struct representation shell. A shell may cross a join, may be copied only by
-a same-layout pure local alias, and may be used only as the source of a
-non-refcounted field read. It cannot be consumed, released again, passed to a
+ownership place live. The certifier represents this state explicitly as an
+aggregate representation shell. A shell may cross a join, may be copied only by
+a same-layout pure local alias, and may be used as the source of a
+non-refcounted struct field read or an inline union discriminant read. A union
+keeps its tag bytes and variant witness after its payload view claims its unit;
+a residual-release dispatch reads those bytes without observing payload ownership. It cannot be consumed, released again, passed to a
 call, or used for an RC-bearing field or payload read. Thus backends still see
 ordinary field reads and explicit RC statements, while certification keeps
 representation availability distinct from ownership-unit availability. A
@@ -12213,60 +12228,48 @@ have to union or guess ownership. Neither ARC nor certification consults a
 backend, mutation name, source pattern, or runtime uniqueness check to recover
 this ownership state.
 
-Tag unions dismantle by the same rules, with the variant folded into the
-field key. A union's claimable fields are (variant, field) pairs packed into
-the same 64-bit mask—variants in declaration order, each contributing its
-refcounted payload-struct fields in stored order, a non-struct payload
-contributing itself as its single field—an encoding both the analysis and
-the certifier derive from the union layout alone, and whose overflow simply
-leaves the union whole-released. Reads reach the fields through a
-`tag_payload_struct` view: a borrowed struct-payload view is a payload
-view—the variant-carrying analogue of a transparent alias—while a
-non-struct payload read is itself the read of the variant's single field. A
-discriminant read is no use at all beyond remembering its target: the tag
-word is disjoint from every stored unit, so it needs no ordering with takes.
+Tag unions dismantle through their single payload view, so a union's
+claimable fields are the view struct's fields and share the struct encoding.
+A discriminant read is no use at all beyond lending its layout: the tag word
+is disjoint from every stored unit, so it needs no ordering with takes. A
+borrowed pure alias of the union carries the same unit and is no use of it
+either.
 
-Takes cross joins. A join body is walked from a rebuilt state that has lost
-the walk-local variant knowledge of the jump that reached it, so a walk of
-the emitted residual dispatch would arrive at arms that are infeasible at
-runtime and unprovable in the walk. Carrying exclusions through join
-summaries would answer that, and would also multiply join groups on large
-specialized procedures. The certifier instead recovers them statically: a
-prepass over the fixed LIR computes, for each join declaration, the variant
-exclusions every enclosing discriminant switch arm imposes on the containers
-in scope there—a fixpoint over the control-flow shape alone, independent of
-any walk. Those exclusions reseed each rebuilt body state, and an arm they
-make total marks the path infeasible, which abandons it. Exclusions
-therefore stay walk-local, summaries stay free of them, and join groups
-stay unsplit.
-
-Variants make the exit-agreement rule path-sensitive where structs need none
-of it: a take of one variant's field lives inside that variant's match arm,
-and the exits reached through *other* arms must owe nothing for it. The
-dataflow therefore carries an excluded-variant set, refined at each switch
-on one of the container's remembered discriminant targets: an arm whose case
-value is some read variant's discriminant excludes every other read variant,
-and the default arm excludes each read variant whose discriminant is a
-listed case. An exit owes a variant's takes only while that variant is
-unexcluded, a read of an excluded variant keeps its field residual, and
-merges intersect the exclusions. Everything else—the may/must take
-dataflow, whole uses as borrows of every field, the single-definition spine
-—is unchanged.
+Takes cross joins. A jump to a join declared before the candidate's
+definition leaves the analyzed region and ends that path like a return; the
+reads it never visits keep their fields residual. A candidate bound by a
+statement is never re-read without that statement running first, so such a
+jump owes nothing for its takes even when it is a loop back edge; a
+parameter has no defining statement, so a back edge can re-run its reads with
+their fields already taken, and its takes are rejected.
 
 The death point of a dismantled union cannot name its variant statically, so
 its residual release dispatches at runtime: emission reads the discriminant
-fresh and switches on it, one arm per taken variant releasing exactly that
-variant's residual fields (through a fresh payload view for struct
-payloads), and a default arm holding the ordinary whole release for every
-variant the takes never addressed. Where the death point sits inside a
-matched arm—the common shape—the discriminant is a known constant there
-and the backend folds the dispatch back to straight-line code. Emission
-needs a discriminant scratch layout, taken from any single-definition
-discriminant read of the container; a union candidate without one keeps its
-whole release.
+fresh and switches on it, the matched arm releasing the residual fields
+through the payload view the takes went through (a second view would compete
+with it for the union's one claim) and the default arm holding the ordinary
+whole release for every variant the takes never addressed. A path that took nothing
+still holds the intact unit, which one whole release covers exactly. Where
+the death point sits inside a matched arm—the common shape—the discriminant is
+a known constant there and the backend folds the dispatch back to
+straight-line code.
 
-Take-ness is explicit in the emitted LIR: emission bakes each resolved
-take decision onto its cloned read statement (a parameter-conditional take
+What makes the emitted dispatch certifiable is variant knowledge per path.
+Reading a variant's payload proves the container holds it (anything else is
+already undefined), and a switch arm on a discriminant read of that container
+proves the arm's variant where nothing did before. Arms a proven variant
+excludes are not walked: they cannot describe any runtime value, which is
+exactly what lets the residual switch's default arm hold a whole release on a
+path whose container is fully claimed. Joins meet the knowledge rather than
+splitting on it—paths that disagree forget the variant—which loses nothing
+the dispatch needs, because a path that took a variant's fields carries
+claims, and claims already keep such paths in a group of their own.
+Variant witnesses and discriminant-to-container relations use the same persistent
+proc-local snapshots as the rest of the certifier state, so a branch refinement
+changes only that branch while unchanged witness entries remain shared.
+
+Take-ness is explicit in the emitted LIR: emission bakes each resolved take
+decision onto its cloned read statement (a parameter-conditional take
 resolves against the emitting variant's demand vector), and the certifier
 consumes the stamp instead of re-deriving take-ness from refcount shapes.
 Only a stamped read carries a claim target, so a borrowed payload read can
@@ -12276,21 +12279,11 @@ its claim at the first quotient where the transfer is fixed and continues as
 an ordinary owned value. A claim target or view that can still be observed
 after the quotient remains only in the sparse, hash-consed lifetime
 provenance. A fully claimed container hashes as unbound in walk digests so
-the two sides of a death point re-converge instead of forking. The union
-encoding is shared: a stamped read through a payload view claims the union
-container under the view's variant, claims must stay within one variant, and
-a fully dismantled union's unit is spent when its claims cover exactly the
-claimed variant's mask—sound because control reaches that spend only when the
-container holds that variant. What makes the emitted dispatch certifiable
-is variant knowledge per path: reading a variant's payload proves the
-container holds it (anything else is already undefined), switch arms on a
-discriminant refine it (resolved through single-definition pure-alias
-chains so the discriminant read and the payload reads meet on one container
-name), and a container's own claims pin its variant at any later switch. A
-path that excludes every variant of a live container is infeasible—the
-variant refinements and claim masks cannot describe any runtime value—and its
-walk ends vacuously, which is exactly what lets the residual switch's unmatched
-arms and the whole-release default coexist with claims on the matched path.
+the two sides of a death point re-converge instead of forking. A field read
+through a payload view claims the view's struct, and the view claims the
+union's one unit; a fully claimed view therefore spends the union, which is
+sound because control reaches that spend only when the container holds that
+variant.
 
 ### Debug Borrow Certifier
 

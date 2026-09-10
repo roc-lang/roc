@@ -32,7 +32,10 @@
 //! statement dominated by every branch that contributed a fact to its proof.
 //! Loop-carried join parameters get fresh unknown values in the loop body, so
 //! only facts re-established inside the body (like a margin test re-checked
-//! every iteration) apply to them. The pass runs proof rounds to a fixpoint
+//! every iteration) apply to them. Facts every entry edge of a loop carries
+//! about values the loop never rebinds hold throughout it; an edge is an
+//! entry edge when it comes from outside the loop's body, and a jump from a
+//! join nested inside that body is a back edge like any other. The pass runs proof rounds to a fixpoint
 //! because folding a branch can leave a join body with a single remaining
 //! jump, which lets facts flow through it on the next round.
 //!
@@ -417,6 +420,13 @@ const Pass = struct {
     /// The merge head whose region is currently being walked; captures into
     /// it from within are its own back or interior edges.
     current_region: ?CFStmtId,
+    /// Innermost join whose body lexically contains each statement. A jump to
+    /// a loop head from a region inside that loop's body is a back edge even
+    /// when a nested join's region lies between; only jumps from outside the
+    /// body are entry edges.
+    enclosing_join: collections.DenseMap(CFStmtId, JoinPointId),
+    /// For each join declared inside another join's body, that outer join.
+    join_parent: collections.DenseMap(JoinPointId, JoinPointId),
     new_loop_bounds: bool,
     /// An unverified length invariant was seeded this round: every fact-based
     /// rewrite is deferred until the assumption is promoted or discarded.
@@ -467,6 +477,8 @@ const Pass = struct {
             .global_facts = .empty,
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .current_region = null,
+            .enclosing_join = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
+            .join_parent = collections.DenseMap(JoinPointId, JoinPointId).init(allocator),
             .new_loop_bounds = false,
             .live_pending = false,
             .deferred_rewrites = false,
@@ -510,6 +522,8 @@ const Pass = struct {
         self.merge_env.deinit();
         self.global_facts.deinit(self.allocator);
         self.field_values.deinit();
+        self.enclosing_join.deinit();
+        self.join_parent.deinit();
         self.scratch.deinit(self.allocator);
         self.query_best.deinit();
         self.proof_records.deinit(self.allocator);
@@ -539,6 +553,8 @@ const Pass = struct {
         self.jump_records.clearRetainingCapacity();
         self.clearMergeStates();
         self.body_joins.clearRetainingCapacity();
+        self.enclosing_join.clearRetainingCapacity();
+        self.join_parent.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
         self.value_roots.clearRetainingCapacity();
         self.max_join_id = 0;
@@ -1017,6 +1033,7 @@ const Pass = struct {
                 .ret, .crash, .runtime_error, .expect_err, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
+        try self.scanJoinNesting(proc.body.?);
     }
 
     fn edgeTo(self: *Pass, stmt: CFStmtId) ResourceError!void {
@@ -1066,6 +1083,100 @@ const Pass = struct {
         return false;
     }
 
+    /// Whether the edge being captured into `head` comes from outside the
+    /// loop `head` begins. A jump from any region inside the loop body is a
+    /// back edge, so the regions of joins nested in that body count as
+    /// inside; a merge that begins no loop treats every other region as
+    /// outside.
+    fn edgeEntersLoop(self: *const Pass, head: CFStmtId) bool {
+        const region = self.current_region orelse return true;
+        if (region == head) return false;
+        const loop_join = self.body_joins.get(head) orelse return true;
+        var enclosing = self.enclosing_join.get(region);
+        while (enclosing) |join_id| {
+            if (join_id == loop_join) return false;
+            enclosing = self.join_parent.get(join_id);
+        }
+        return true;
+    }
+
+    /// Record which join body lexically contains each reachable statement.
+    /// Join bodies are descended directly and jump targets are not followed,
+    /// so the result is the declaration nesting rather than the control-flow
+    /// reachability the walk itself uses.
+    fn scanJoinNesting(self: *Pass, body: CFStmtId) ResourceError!void {
+        const Item = struct { stmt: CFStmtId, join: ?JoinPointId };
+        var stack = std.ArrayList(Item).empty;
+        defer stack.deinit(self.allocator);
+        var seen = collections.DenseMap(CFStmtId, void).init(self.allocator);
+        defer seen.deinit();
+        var successors = std.ArrayList(CFStmtId).empty;
+        defer successors.deinit(self.allocator);
+
+        try stack.append(self.allocator, .{ .stmt = body, .join = null });
+        while (stack.pop()) |item| {
+            if (seen.contains(item.stmt)) continue;
+            try seen.put(item.stmt, {});
+            if (item.join) |join_id| try self.enclosing_join.put(item.stmt, join_id);
+            switch (self.store.getCFStmt(item.stmt)) {
+                .join => |s| {
+                    if (item.join) |outer| try self.join_parent.put(s.id, outer);
+                    try stack.append(self.allocator, .{ .stmt = s.body, .join = s.id });
+                    try stack.append(self.allocator, .{ .stmt = s.remainder, .join = item.join });
+                },
+                .jump => {},
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .boxy_tag_match,
+                .loop_continue,
+                .loop_break,
+                .ret,
+                .crash,
+                => {
+                    successors.clearRetainingCapacity();
+                    try BodyClone.appendSuccessors(self.store, &successors, item.stmt);
+                    for (successors.items) |next| try stack.append(self.allocator, .{ .stmt = next, .join = item.join });
+                },
+            }
+        }
+    }
+
     /// Capture the current path state into a merge head's meet: facts keep
     /// only what every captured edge established, and each path-bound local
     /// keeps a common root with a widened offset window.
@@ -1076,10 +1187,10 @@ const Pass = struct {
         }
         const state = entry.value_ptr;
 
-        // An edge arriving from another region is an entry edge; its facts
+        // An edge arriving from outside the loop is an entry edge; its facts
         // meet separately so loop-invariant relations survive the back
         // edge's inability to derive them before its region is seeded.
-        if (self.current_region != head) {
+        if (self.edgeEntersLoop(head)) {
             if (state.entry_captures == 0) {
                 try state.entry_facts.appendSlice(self.allocator, self.facts.items);
             } else {
