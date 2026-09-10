@@ -736,14 +736,17 @@ described in full, with trailers; W6b currently has its provisional title):
 | `qpmsttws` / `e67aaeb8` | W6b allocation-witness/cache prerequisite checkpoint | pushed and PR read-back verified; independent review accepted, combined gate 29/29 tests, 41/41 steps; cache version 83; WIP, not whole-W6b acceptance |
 | `zkmyrwqu` / `1f69432c` | W6b record-update root-request mechanics | pushed WIP and PR read-back verified; final gate green (26/26 tests, 38/38 steps); review accepts mechanics only, complete admission ownership/retirement remains REQUEST CHANGES |
 | `wpvvswsl` / `95dfea5a` | W6b checked-base record-update retirements | pushed and PR read-back verified; reviewed bounded WIP, final gate 38/38 tests, 41/41 steps; complete ownership and W6b remain unaccepted |
-| `txopxlzx` | W6b checked-base boundary coverage | reviewed bounded WIP; unset-only, healthy nested-field interleaving, reason-domain tests pass; final gate 41/41 tests, 41/41 steps; driver preparing publication |
+| `txopxlzx` / `10f613d6` | W6b checked-base boundary coverage | pushed and exact PR readback verified; reviewed bounded WIP; final gate 41/41 tests, 41/41 steps |
+| `onmovlvr` | W6b actual base-plan publication atomicity | reviewed bounded WIP; established-base OOM/retry and outer local-transaction rollback pass; final gate 43/43 tests, 41/41 steps; driver preparing publication |
 
-The local and remote `jared/polarity` bookmarks now point at `wpvvswsl` /
-`95dfea5a`, directly above `zkmyrwqu` / `1f69432c` and `qpmsttws` / `e67aaeb8`.
+The local and remote `jared/polarity` bookmarks now point at `txopxlzx` /
+`10f613d6`, directly above `wpvvswsl` / `95dfea5a`, `zkmyrwqu` / `1f69432c`
+and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`txopxlzx` owns the verified next boundary-test slice, whose publication is
-being prepared after its final 41/41-test, 41/41-step gate.
+`onmovlvr` owns the verified actual-producer allocation-test slice, whose
+publication is being prepared after final independent acceptance and its
+43/43-test, 41/41-step gate.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -3852,6 +3855,69 @@ subsets below do not override this latest checkpoint.
   claimed. Exact local artifacts are `boundary-complete-final-regression.txt`,
   `boundary-checkpoint-description.txt`, and `pr-body-boundary-checkpoint.md`
   under `/private/tmp/polarity-live-owner-gates.JLEzuh/`.
+
+- Publication of the boundary slice is complete: `txopxlzx` is Git commit
+  `10f613d6181a759ce665b9ce399fa405350dee6f`, fast-forwarded from `95dfea5a`
+  to `jared/polarity`. Draft PR #10434 has that exact head and exact updated
+  body, with draft state preserved. Readback is saved as
+  `boundary-pr-readback.json` in the artifact directory above. New child
+  `onmovlvrxsxtqptkpykqlqnvznskwsur` owns the next bounded task: extract the
+  actual base-plan/copy/registration publication transaction into a helper
+  used by `checkExprRecord`, and test exhaustive established-base allocation
+  failure, same-instance retry and outer local-transaction rollback. The outer
+  `LocalMarkerCopyTransaction` owns the Env rank suffixes and consume-once
+  inputs in addition to its nested Probe's ledgers; bare `Probe` does not own
+  Env rank-pool rewind. Preserve the existing
+  lower-level redirected-copy OOM test. Extend the logical snapshot to include
+  private registration/draft rows and the consumed flag. Root and independent
+  review confirmed those are omitted from the old test snapshot, although
+  Probe already rolls the private list lengths back. Capacity retention is not
+  logical publication; clean-vs-retry compares semantic state. Checked-base
+  publication and R_U reservation/completion OOM remain later bounded tasks.
+  No authority-positive fixture may manufacture rows or delete previously
+  produced rows to simulate an earlier producer boundary.
+
+- The actual base-publication helper extraction in `onmovlvr` is frozen at
+  `b8ba18a3`, with semantic preflight 89725 passing. Production
+  `checkExprRecord` calls `publishRecordUpdateBasePlan` immediately after the
+  real base check, carrying its returned status and exact raw occurrence. The
+  helper owns the unchanged plan/copy/registration transaction and returns
+  its committed coordinates by value. Existing direct runtime regression
+  69805 passes 5/5 tests. The author is adding the new snapshot and allocation
+  tests; independent extraction review is in progress. Check SHA-256 is
+  `a3ee5716499cb044a832bb0efd07d010256d1599d06df4a12164e343807303ce`.
+
+- The coherent full `onmovlvr` slice is frozen at `bb6874ba`, Check hash
+  `1d8e9381f77f191822042de5bd9a2379aa39d5a374b31ce14bd40e50794e8c71`.
+  Semantic preflight 10244 and direct runtime gate 2534 pass (7/7 tests).
+  Independent adversarial review is in progress. The tests call the actual extracted
+  producer, sweep allocation failures from an empty publication prefix with
+  same-instance retry, and roll back a second real base publication while
+  preserving the first under an outer local transaction. Snapshot equality
+  includes exact private registration/draft rows and consumed phase. This
+  intentionally partial base-only seam does not assert terminal full-owner
+  admission. The old lower-level copy test remains in the regression matrix.
+
+- Four additional zero-capacity assertions pin the actual base-plan and
+  registration allocation sites on calibration and every injected-failure
+  fixture. At freeze `14737117`, Check hash
+  `369af7429d9d3c07b94165e7276ba33f4fee75af505d534dffd6882cd5818641`,
+  semantic preflight 51327 and the targeted atomicity runtime 98803 pass
+  (2/2 tests). Normal combined gate 72381 passes 43/43 tests and 41/41 steps:
+  canonicalization 9, types 10, checker 19, compile/serde 5, regenerated
+  Builtins, shared-helper regressions, measured schema-85 golden, and
+  native/wasm serialization sizes. Independent adversarial review gives final
+  bounded ACCEPT. No compiler behavior changed after the earlier 7/7 direct
+  run. The driver is describing and publishing `onmovlvr` as `WIP: verify
+  atomic record-update base-plan publication`, then continuing with real
+  checked-base outer-retirement completion allocation/retry coverage. The
+  actual finished-code review, distinct from its earlier planning audit,
+  inspected the entire delta and the four capacity assertions. No checked-
+  error/R_U OOM, complete-owner/fresh-inverse/active-serde/eligibility, R2/R3,
+  call-formal or whole-W6b acceptance is claimed. Local artifacts include
+  `base-producer-final-regression.txt`,
+  `base-producer-checkpoint-description.txt`, and
+  `pr-body-base-producer-checkpoint.md` in the artifact directory above.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

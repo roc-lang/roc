@@ -6209,7 +6209,8 @@ regenerated Builtins, the measured schema-85 golden, serialization and
 native/wasm sizes. Independent review accepts this bounded WIP checkpoint,
 not complete record-update or checked-boundary admission.
 
-Child `txopxlzx` adds authentic unset-only (zero supplied fields) and healthy
+Published `txopxlzx` / `10f613d6` adds authentic unset-only (zero supplied
+fields) and healthy
 nested-field interleaving coverage, plus retirement-only reason-domain tests.
 The unset-only fixture owns exactly one base-plan consumer. The interleaving
 fixture pins actual producer ordering and excludes healthy inner plans from
@@ -6219,7 +6220,20 @@ no current legal reason values or schema layout. Semantic preflight and direct
 runtime diagnostics pass (5/5 tests). The normal combined gate passes 41/41
 tests and 41/41 steps, including regenerated Builtins, the schema-85 golden,
 serialization and native/wasm sizes. Independent adversarial review accepts
-this bounded slice; the driver is publishing it as an incomplete WIP.
+this bounded slice. Its push and exact draft-PR head/body readback are verified.
+Child `onmovlvr` extracts the existing base-plan publication transaction into
+a shared production helper and verifies authentic established-base allocation
+failure, same-instance retry and outer local-transaction rollback, including
+its nested Probe-owned ledgers and Env-owned ranks. The snapshot includes exact
+private registrations, retirement drafts and consumed phase. An empty-capacity
+fixture pins every measured allocation site; a separate two-base fixture
+preserves a genuine nonempty publication prefix through rollback. The original
+lower-level copy test remains covered. Semantic and targeted runtime checks
+pass, and the final normal gate passes 43/43 tests and 41/41 steps, including
+regenerated Builtins, the schema-85 golden, serialization and native/wasm sizes.
+Independent adversarial review accepts this bounded slice; the driver is
+publishing it as WIP. Checked-error base and outer-retirement allocation
+coverage remain open; this does not certify complete record-update admission.
 Preexisting-base cases, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
 gates remain pending, as do later established-base failure causes and complete
