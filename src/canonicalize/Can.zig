@@ -5124,24 +5124,6 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     try self.env.publishScratchDiagnostics();
 }
 
-/// Validate a module for use in execution mode (e.g. `roc main.roc` or `roc build`).
-/// Requires a valid main! function for type_module headers.
-pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
-    switch (self.env.module_kind) {
-        .type_module => {
-            const main_status = try self.checkMainFunction(true);
-            if (main_status == .not_found) {
-                try self.reportExecutionRequiresAppOrDefaultApp();
-            }
-        },
-        .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
-            // No validation needed for these module kinds in execution mode
-        },
-    }
-
-    try self.env.publishScratchDiagnostics();
-}
-
 /// Creates a definition for a standalone annotation with no Roc implementation.
 fn createAnnotationDef(
     self: *Self,
@@ -22392,18 +22374,6 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
             },
         });
     }
-}
-
-/// Report error when trying to execute a plain type module
-fn reportExecutionRequiresAppOrDefaultApp(self: *Self) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
-    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
-
-    try self.env.pushDiagnostic(.{
-        .execution_requires_app_or_default_app = .{
-            .region = file_region,
-        },
-    });
 }
 
 // We write out this giant literal because it's actually annoying to try to

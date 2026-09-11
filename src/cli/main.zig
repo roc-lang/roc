@@ -2863,7 +2863,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     // Check whether this is a default app—a headerless file with main!, or an
     // app header naming no platform—before linking the platform host shim.
-    if (try stageDefaultApp(ctx, args.path, .default_app)) |staged| {
+    if (try stageDefaultApp(ctx, args.path, .execution)) |staged| {
         var owned_staged = staged;
         // Default apps never hot reload; they just run once. The shared-memory
         // shim is the run mechanism where the default platform runtime exists (Linux native,
@@ -3651,12 +3651,13 @@ fn finishCompiledRun(
 /// Check whether a file is a default app: a headerless file with a `main!`
 /// function, or an `app` header that names no platform.
 /// On success, returns the staged app (caller owns it).
-/// Returns null if the file is not a default app.
+/// Returns null if the file needs no default-platform wiring. Execution
+/// requests report invalid roots here, before any platform or host setup.
 fn stageDefaultApp(
     ctx: *CliCtx,
     file_path: []const u8,
-    unparsable: default_app.UnparsableHeaderless,
-) std.mem.Allocator.Error!?default_app.Staged {
+    purpose: default_app.Purpose,
+) (Allocator.Error || error{CliError})!?default_app.Staged {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
     const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -3707,7 +3708,20 @@ fn stageDefaultApp(
     };
     defer ctx.gpa.free(source_dir_abs);
 
-    return default_app.stage(ctx.gpa, source_dir_abs, source, unparsable);
+    var result = try default_app.stage(ctx.gpa, source_dir_abs, source, purpose, file_path);
+    switch (result) {
+        .unmodified => return null,
+        .staged => |staged| return staged,
+        .invalid => {
+            defer result.deinit(ctx.gpa);
+            const config = ctx.reportConfig(.stderr);
+            for (result.invalid.items) |*report| {
+                reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config) catch {};
+            }
+            ctx.io.flush();
+            return error.CliError;
+        },
+    }
 }
 
 fn writeDefaultAppSyntheticRunSource(ctx: *CliCtx, app_path: []const u8, staged: *const default_app.Staged) CliMainError!void {
@@ -6262,7 +6276,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     const source_rewrite: ?HotReloadSourceRewrite = if (args.synthetic_source_path) |source_path| blk: {
         const synthetic_output_path = args.synthetic_output_path orelse return error.InvalidArguments;
         const source_dir_override = args.source_dir_override orelse return error.InvalidArguments;
-        staged_owned = (try stageDefaultApp(ctx, source_path, .not_default_app)) orelse {
+        staged_owned = (try stageDefaultApp(ctx, source_path, .checking)) orelse {
             try ctx.io.stderr().print(
                 "Error: {s} no longer runs on the default platform; stop and restart the run.\n",
                 .{source_path},
@@ -8240,7 +8254,17 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     // Default apps build through a synthetic default platform.
-    if (try stageDefaultApp(ctx, args.path, .not_default_app)) |staged| {
+    const prepared = stageDefaultApp(ctx, args.path, .execution) catch |err| {
+        // Preparation can fail before a BuildEnv exists. The watch parent
+        // must still observe edits that repair the root source.
+        if (args.watch_inputs_file) |file_path| {
+            writeWatchInputsFile(ctx, file_path, null, &.{args.path}) catch |write_err| {
+                reportBuildWatchInputsWriteError(ctx, file_path, write_err);
+            };
+        }
+        return err;
+    };
+    if (prepared) |staged| {
         var owned_staged = staged;
         return rocBuildDefaultApp(ctx, args, &owned_staged);
     }
@@ -17304,7 +17328,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         var extra_buf: [2][]const u8 = undefined;
         const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
 
-        if (try stageDefaultApp(ctx, args.path, .not_default_app)) |staged| {
+        if (try stageDefaultApp(ctx, args.path, .checking)) |staged| {
             var owned_staged = staged;
             var default_result = rocCheckDefaultAppPreserved(
                 ctx,
@@ -17363,7 +17387,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
     }
 
-    var staged_check = try stageDefaultApp(ctx, args.path, .not_default_app);
+    var staged_check = try stageDefaultApp(ctx, args.path, .checking);
     var check_result = if (staged_check != null)
         rocCheckDefaultApp(ctx, args, &staged_check.?, cache_config) catch |err| {
             reporter.fail();
