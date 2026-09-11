@@ -948,6 +948,1103 @@ fn serializeCheckedArtifactForValidatedPublicationTest(
     return buffer;
 }
 
+const FinalizedPublicationCompatibilityFixture = struct {
+    allocator: Allocator,
+    builtins: eval.BuiltinModules,
+    provider: check.TestEnv,
+    provider_artifact: CheckedArtifact.CheckedModuleArtifact,
+    consumer: check.TestEnv,
+    consumer_artifact: CheckedArtifact.CheckedModuleArtifact,
+    provider_module_idx: u32,
+
+    fn init(allocator: Allocator) !*FinalizedPublicationCompatibilityFixture {
+        const fixture = try allocator.create(FinalizedPublicationCompatibilityFixture);
+        errdefer allocator.destroy(fixture);
+
+        var builtins = try eval.BuiltinModules.init(allocator);
+        errdefer builtins.deinit();
+
+        const provider_source =
+            \\Provider :: {}.{
+            \\    Thing := [Val(U64)].{
+            \\        get : Thing -> U64
+            \\        get = |Thing.Val(value)| value
+            \\    }
+            \\
+            \\    answer : U64
+            \\    answer = 40
+            \\
+            \\    make_adder : U64 -> (U64 -> U64)
+            \\    make_adder = |offset| |value| offset + value
+            \\}
+        ;
+        var provider = try check.TestEnv.initWithAdmittedBuiltinForTesting(
+            "Provider",
+            provider_source,
+            builtins.builtin_module,
+            builtins.validated_module.capability(),
+            builtins.builtin_indices,
+        );
+        errdefer provider.deinit();
+        provider.checker.fixupTypeWriter();
+        try provider.assertNoErrors();
+
+        const builtin_view = CheckedArtifact.importedView(&builtins.checked_artifact);
+        const provider_imported_envs = [_]*const ModuleEnv{builtins.builtin_module.env};
+        const provider_imported_validations = [_]Check.ValidatedModuleEnv{
+            builtins.validated_module.capability(),
+        };
+        const provider_imported_artifacts = [_]CheckedArtifact.PublishImportArtifact{.{
+            .module_idx = 0,
+            .key = builtins.checked_artifact.key,
+            .view = builtin_view,
+        }};
+        const provider_available_artifacts = [_]CheckedArtifact.ImportedModuleView{builtin_view};
+        var provider_artifact = try publishCheckedArtifactFromCheckedModule(
+            allocator,
+            provider.module_env,
+            try provider.checker.validatedModule(),
+            &provider_imported_envs,
+            &provider_imported_validations,
+            &provider_imported_artifacts,
+            .{
+                .available_artifacts = &provider_available_artifacts,
+                .platform_requirement_solutions = provider.checker.platformRequirementSolutions(),
+                .hoisted_roots = provider.checker.selectedHoistedRoots(),
+            },
+        );
+        errdefer provider_artifact.deinitRetainingModuleEnv(allocator);
+
+        const consumer_source =
+            \\import Provider
+            \\
+            \\Consumer :: {}.{
+            \\    describe : Provider.Thing -> U64
+            \\    describe = |thing| thing.get()
+            \\
+            \\    main : U64
+            \\    main = {
+            \\        add = Provider.make_adder(Provider.answer)
+            \\        add(describe(Provider.Thing.Val(2)))
+            \\    }
+            \\}
+        ;
+        var consumer = try check.TestEnv.initWithImport(
+            "Consumer",
+            consumer_source,
+            "Provider",
+            &provider,
+        );
+        errdefer consumer.deinit();
+        consumer.checker.fixupTypeWriter();
+        try consumer.assertNoErrors();
+
+        const provider_view = CheckedArtifact.importedView(&provider_artifact);
+        const consumer_imported_envs = [_]*const ModuleEnv{
+            builtins.builtin_module.env,
+            provider.module_env,
+        };
+        const consumer_imported_validations = [_]Check.ValidatedModuleEnv{
+            builtins.validated_module.capability(),
+            try provider.checker.validatedModule(),
+        };
+        const consumer_imported_artifacts = [_]CheckedArtifact.PublishImportArtifact{
+            .{ .module_idx = 0, .key = builtins.checked_artifact.key, .view = builtin_view },
+            .{ .module_idx = 1, .key = provider_artifact.key, .view = provider_view },
+        };
+        var provider_import_idx: ?can.CIR.Import.Idx = null;
+        for (consumer.module_env.imports.imports.items.items, 0..) |name_idx, raw_import_idx| {
+            if (!std.mem.eql(u8, consumer.module_env.common.strings.get(name_idx), "Provider")) continue;
+            if (provider_import_idx != null) return error.TestUnexpectedResult;
+            provider_import_idx = @enumFromInt(raw_import_idx);
+        }
+        const provider_module_idx = consumer.module_env.imports.getResolvedModule(
+            provider_import_idx orelse return error.TestUnexpectedResult,
+        ) orelse return error.TestUnexpectedResult;
+        if (provider_module_idx >= consumer_imported_envs.len) return error.TestUnexpectedResult;
+        try std.testing.expect(consumer_imported_envs[provider_module_idx] == provider.module_env);
+        try std.testing.expect(try consumer_imported_validations[provider_module_idx].validate() == provider.module_env);
+        try std.testing.expectEqual(provider_module_idx, consumer_imported_artifacts[provider_module_idx].module_idx);
+        try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+            consumer_imported_artifacts[provider_module_idx].key,
+            provider_artifact.key,
+        ));
+        try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+            consumer_imported_artifacts[provider_module_idx].view.key,
+            provider_artifact.key,
+        ));
+        try std.testing.expect(consumer_imported_artifacts[provider_module_idx].view.module_env == provider.module_env);
+        var consumer_artifact = try publishCheckedArtifactFromCheckedModule(
+            allocator,
+            consumer.module_env,
+            try consumer.checker.validatedModule(),
+            &consumer_imported_envs,
+            &consumer_imported_validations,
+            &consumer_imported_artifacts,
+            .{
+                .platform_requirement_solutions = consumer.checker.platformRequirementSolutions(),
+                .hoisted_roots = consumer.checker.selectedHoistedRoots(),
+            },
+        );
+        errdefer consumer_artifact.deinitRetainingModuleEnv(allocator);
+
+        fixture.* = .{
+            .allocator = allocator,
+            .builtins = builtins,
+            .provider = provider,
+            .provider_artifact = provider_artifact,
+            .consumer = consumer,
+            .consumer_artifact = consumer_artifact,
+            .provider_module_idx = provider_module_idx,
+        };
+        // Both TestEnv constructors return their checker by value. Rebind the
+        // embedded TypeWriter after the final fixture move before any future
+        // diagnostic rendering.
+        fixture.provider.checker.fixupTypeWriter();
+        fixture.consumer.checker.fixupTypeWriter();
+        return fixture;
+    }
+
+    fn deinit(self: *FinalizedPublicationCompatibilityFixture) void {
+        const allocator = self.allocator;
+        self.consumer_artifact.deinitRetainingModuleEnv(allocator);
+        self.consumer.deinit();
+        self.provider_artifact.deinitRetainingModuleEnv(allocator);
+        self.provider.deinit();
+        self.builtins.deinit();
+        allocator.destroy(self);
+    }
+};
+
+fn finalizedPublicationCompatibilityKeyEql(
+    left: CheckedArtifact.CheckedModuleArtifactKey,
+    right: CheckedArtifact.CheckedModuleArtifactKey,
+) bool {
+    return std.meta.eql(left, right);
+}
+
+fn finalizedPublicationCompatibilityTemplateEql(left: anytype, right: @TypeOf(left)) bool {
+    return std.meta.eql(left.artifact.bytes, right.artifact.bytes) and
+        left.proc_base == right.proc_base and
+        left.template == right.template;
+}
+
+fn finalizedPublicationCompatibilityConstIndex(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    def: can.CIR.Def.Idx,
+) !usize {
+    var found: ?usize = null;
+    for (artifact.exported_const_templates.templates, 0..) |row, row_index| {
+        if (row.def != def) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = row_index;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+fn finalizedPublicationCompatibilityProcedureTemplateIndex(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    def: can.CIR.Def.Idx,
+) !usize {
+    var found: ?usize = null;
+    for (artifact.exported_procedure_templates.templates, 0..) |row, row_index| {
+        if (row.def != def) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = row_index;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+fn finalizedPublicationCompatibilityProcedureBindingIndex(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    def: can.CIR.Def.Idx,
+) !usize {
+    var found: ?usize = null;
+    for (artifact.exported_procedure_bindings.bindings, 0..) |row, row_index| {
+        if (row.binding.def != def) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = row_index;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+fn finalizedPublicationCompatibilityStoredU64(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    def: can.CIR.Def.Idx,
+    qualified_source_name: []const u8,
+) !u64 {
+    const top_level = artifact.top_level_values.lookupByDef(def) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(artifact.module_identity.module_idx, top_level.module_idx);
+    try std.testing.expectEqual(def, top_level.def);
+    try std.testing.expectEqualStrings(
+        qualified_source_name,
+        artifact.canonical_names.exportNameText(top_level.source_name),
+    );
+    const top_level_const = switch (top_level.value) {
+        .const_ref => |const_ref| const_ref,
+        .procedure_binding => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(top_level_const.artifact, artifact.key));
+    try std.testing.expect(std.meta.eql(top_level_const.source_scheme.bytes, top_level.source_scheme.bytes));
+    const top_level_owner = switch (top_level_const.owner) {
+        .top_level_binding => |owner| owner,
+        .hoisted_expr => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(artifact.module_identity.module_idx, top_level_owner.module_idx);
+    try std.testing.expectEqual(top_level.pattern, top_level_owner.pattern);
+
+    const row_index = try finalizedPublicationCompatibilityConstIndex(artifact, def);
+    if (row_index >= artifact.exported_const_templates.templates.len) {
+        return error.TestUnexpectedResult;
+    }
+    const row = artifact.exported_const_templates.templates[row_index];
+    try std.testing.expectEqual(top_level.module_idx, row.module_idx);
+    try std.testing.expectEqual(top_level.pattern, row.pattern);
+    try std.testing.expect(std.meta.eql(top_level.source_scheme.bytes, row.source_scheme.bytes));
+    try std.testing.expect(std.meta.eql(top_level_const, row.const_ref));
+    const exported_stored = switch (row.template.state) {
+        .stored_const => |stored| stored,
+        .reserved, .eval_template, .unimplemented => return error.TestUnexpectedResult,
+    };
+    const local_template = artifact.const_templates.get(row.const_ref);
+    const local_stored = switch (local_template.state) {
+        .stored_const => |stored| stored,
+        .reserved, .eval_template, .unimplemented => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(exported_stored.node, local_stored.node);
+    try std.testing.expectEqual(exported_stored.root_type, local_stored.root_type);
+    try std.testing.expect(@intFromEnum(exported_stored.node) < artifact.const_store.values.items.len);
+    try std.testing.expect(@intFromEnum(exported_stored.root_type) < artifact.const_store.type_store.types.items.len);
+    try std.testing.expectEqual(
+        CheckedArtifact.CheckedPrimitive.u64,
+        switch (artifact.const_store.type_store.get(exported_stored.root_type)) {
+            .primitive => |primitive| primitive,
+            else => return error.TestUnexpectedResult,
+        },
+    );
+    return switch (artifact.const_store.get(exported_stored.node)) {
+        .scalar => |scalar| switch (scalar) {
+            .u64 => |value| value,
+            else => error.TestUnexpectedResult,
+        },
+        else => error.TestUnexpectedResult,
+    };
+}
+
+fn finalizedPublicationCompatibilitySourceMethodDef(
+    env: *const ModuleEnv,
+    method_name: []const u8,
+) !can.CIR.Def.Idx {
+    var found: ?can.CIR.Def.Idx = null;
+    for (env.method_defs.entries.items) |entry| {
+        if (!std.mem.eql(u8, env.getIdent(entry.key.methodIdent()), method_name)) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = entry.value.def_idx;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+fn finalizedPublicationCompatibilitySourceDef(
+    test_env: *const check.TestEnv,
+    qualified_name: []const u8,
+) !can.CIR.Def.Idx {
+    const def_idx = test_env.can.explicitRootDefByName(qualified_name) orelse
+        return error.TestUnexpectedResult;
+    const def = test_env.module_env.store.getDef(def_idx);
+    const pattern = test_env.module_env.store.getPattern(def.pattern);
+    if (pattern != .assign or
+        !std.mem.eql(u8, test_env.module_env.getIdent(pattern.assign.ident), qualified_name))
+    {
+        return error.TestUnexpectedResult;
+    }
+    return def_idx;
+}
+
+fn finalizedPublicationCompatibilityThingSourceStatement(
+    fixture: *const FinalizedPublicationCompatibilityFixture,
+) !can.CIR.Statement.Idx {
+    const statement_idx = resolveSelectedType(fixture.provider.module_env, "Provider.Thing") orelse
+        return error.TestUnexpectedResult;
+    const statement = fixture.provider.module_env.store.getStatement(statement_idx);
+    const nominal = switch (statement) {
+        .s_nominal_decl => |nominal| nominal,
+        else => return error.TestUnexpectedResult,
+    };
+    const header = fixture.provider.module_env.store.getTypeHeader(nominal.header);
+    try std.testing.expectEqualStrings("Provider.Thing", fixture.provider.module_env.getIdent(header.name));
+    try std.testing.expectEqualStrings("Provider.Thing", fixture.provider.module_env.getIdent(header.relative_name));
+    try std.testing.expect(!nominal.is_opaque);
+    return statement_idx;
+}
+
+fn finalizedPublicationCompatibilityClosureContainsBody(
+    closure: CheckedArtifact.ImportedTemplateClosureView,
+    artifact: CheckedArtifact.CheckedModuleArtifactKey,
+    body: CheckedArtifact.CheckedBodyId,
+) bool {
+    var matches: usize = 0;
+    for (closure.checked_bodies) |ref| {
+        if (finalizedPublicationCompatibilityKeyEql(ref.artifact, artifact) and ref.body == body) {
+            matches += 1;
+        }
+    }
+    return matches == 1;
+}
+
+fn finalizedPublicationCompatibilityClosureContainsTemplate(
+    closure: CheckedArtifact.ImportedTemplateClosureView,
+    template: anytype,
+) bool {
+    var matches: usize = 0;
+    for (closure.checked_procedure_templates) |ref| {
+        if (finalizedPublicationCompatibilityTemplateEql(ref, template)) matches += 1;
+    }
+    return matches == 1;
+}
+
+fn finalizedPublicationCompatibilityClosureContainsNestedSites(
+    closure: CheckedArtifact.ImportedTemplateClosureView,
+    artifact: CheckedArtifact.CheckedModuleArtifactKey,
+    expected: CheckedArtifact.NestedProcSiteTableRef,
+) bool {
+    var matches: usize = 0;
+    for (closure.nested_proc_sites) |ref| {
+        if (finalizedPublicationCompatibilityKeyEql(ref.artifact, artifact) and
+            ref.table.start == expected.start and ref.table.len == expected.len)
+        {
+            matches += 1;
+        }
+    }
+    return matches == 1;
+}
+
+const FinalizedPublicationCompatibilityClosureCardinality = struct {
+    checked_bodies: usize,
+    checked_type_roots: usize,
+    checked_type_schemes: usize,
+    checked_callable_bodies: usize,
+    checked_const_bodies: usize,
+    checked_procedure_templates: usize,
+    callable_eval_templates: usize,
+    const_templates: usize,
+    nested_proc_sites: usize,
+    resolved_value_refs: usize,
+    static_dispatch_plans: usize,
+    method_registry_entries: usize,
+    interface_capabilities: usize,
+
+    fn fromClosure(closure: CheckedArtifact.ImportedTemplateClosureView) @This() {
+        return .{
+            .checked_bodies = closure.checked_bodies.len,
+            .checked_type_roots = closure.checked_type_roots.len,
+            .checked_type_schemes = closure.checked_type_schemes.len,
+            .checked_callable_bodies = closure.checked_callable_bodies.len,
+            .checked_const_bodies = closure.checked_const_bodies.len,
+            .checked_procedure_templates = closure.checked_procedure_templates.len,
+            .callable_eval_templates = closure.callable_eval_templates.len,
+            .const_templates = closure.const_templates.len,
+            .nested_proc_sites = closure.nested_proc_sites.len,
+            .resolved_value_refs = closure.resolved_value_refs.len,
+            .static_dispatch_plans = closure.static_dispatch_plans.len,
+            .method_registry_entries = closure.method_registry_entries.len,
+            .interface_capabilities = closure.interface_capabilities.len,
+        };
+    }
+};
+
+fn finalizedPublicationCompatibilityDigest(bytes: []const u8) [32]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return digest;
+}
+
+const FinalizedPublicationCompatibilityBuffers = struct {
+    provider: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+    consumer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+
+    fn deinit(self: *FinalizedPublicationCompatibilityBuffers, allocator: Allocator) void {
+        allocator.free(self.consumer);
+        allocator.free(self.provider);
+        self.* = undefined;
+    }
+};
+
+fn expectFinalizedPublicationCompatibilitySemantics(
+    fixture: *const FinalizedPublicationCompatibilityFixture,
+) !void {
+    var failure_stage: []const u8 = "fixture publication";
+    errdefer std.debug.print("finalized publication compatibility: failed at {s}\n", .{failure_stage});
+
+    failure_stage = "complete artifact verification";
+    try fixture.provider_artifact.verifyComplete();
+    try fixture.consumer_artifact.verifyComplete();
+
+    failure_stage = "provider Thing source and checked declaration authority";
+    const thing_source_statement = try finalizedPublicationCompatibilityThingSourceStatement(fixture);
+    const thing_source_statement_raw = @intFromEnum(thing_source_statement);
+    var thing_declaration: ?CheckedArtifact.CheckedNominalDeclaration = null;
+    for (fixture.provider_artifact.checked_types.nominal_declarations.items) |declaration| {
+        if (declaration.source_statement != thing_source_statement_raw) continue;
+        if (!std.mem.eql(
+            u8,
+            fixture.provider_artifact.canonical_names.moduleIdentityBytes(declaration.nominal.module),
+            &fixture.provider_artifact.module_identity.stable_hash,
+        ) or
+            !std.mem.eql(
+                u8,
+                fixture.provider_artifact.canonical_names.typeNameText(declaration.nominal.type_name),
+                "Provider.Thing",
+            ) or
+            declaration.nominal.source_decl == null or
+            declaration.nominal.source_decl.? != thing_source_statement_raw)
+        {
+            return error.TestUnexpectedResult;
+        }
+        if (thing_declaration != null) return error.TestUnexpectedResult;
+        thing_declaration = declaration;
+    }
+    const provider_thing_declaration = thing_declaration orelse return error.TestUnexpectedResult;
+    failure_stage = "provider Thing declaration id converse";
+    try std.testing.expect(std.meta.eql(
+        provider_thing_declaration,
+        fixture.provider_artifact.checked_types.nominalDeclarationById(provider_thing_declaration.id),
+    ));
+    failure_stage = "provider Thing declaration root payload";
+    const provider_thing_root_payload = fixture.provider_artifact.checked_types.payload(
+        provider_thing_declaration.declaration_root,
+    );
+    const provider_thing_root = switch (provider_thing_root_payload) {
+        .nominal => |nominal| nominal,
+        else => return error.TestUnexpectedResult,
+    };
+    failure_stage = "provider Thing declaration root scalar shape";
+    try std.testing.expectEqual(@as(usize, 0), provider_thing_root.args.len);
+    try std.testing.expect(provider_thing_root.builtin == null);
+    try std.testing.expect(!provider_thing_root.is_opaque);
+    failure_stage = "provider Thing declaration root source";
+    try std.testing.expectEqual(
+        thing_source_statement_raw,
+        provider_thing_root.source_decl orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expectEqualStrings(
+        "Provider.Thing",
+        fixture.provider_artifact.canonical_names.typeNameText(provider_thing_root.name),
+    );
+    failure_stage = "provider Thing declaration root origin";
+    try std.testing.expectEqualSlices(
+        u8,
+        &fixture.provider_artifact.module_identity.stable_hash,
+        fixture.provider_artifact.canonical_names.moduleIdentityBytes(provider_thing_root.origin_module),
+    );
+    failure_stage = "provider Thing declaration root owner";
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+        provider_thing_root.owner_module,
+        fixture.provider_artifact.key,
+    ));
+    failure_stage = "provider Thing declaration root representation";
+    const provider_thing_box_reference = switch (provider_thing_root.representation) {
+        .local_box_payload_capability => |reference| reference,
+        .builtin,
+        .local_declaration,
+        .imported_declaration,
+        .imported_box_payload_capability,
+        .opaque_without_backing,
+        => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(provider_thing_box_reference.opaque_atomic_proof == null);
+    const provider_thing_capability = fixture.provider_artifact.interface_capabilities.boxPayloadCapability(
+        provider_thing_box_reference.capability,
+    );
+    try std.testing.expectEqual(provider_thing_box_reference.capability, provider_thing_capability.id);
+    try std.testing.expect(std.meta.eql(provider_thing_declaration.nominal, provider_thing_capability.nominal));
+    try std.testing.expectEqual(provider_thing_declaration.declaration_root, provider_thing_capability.source_ty_payload);
+    try std.testing.expect(std.meta.eql(
+        fixture.provider_artifact.checked_types.view().rootKey(provider_thing_declaration.declaration_root).bytes,
+        provider_thing_capability.source_ty.bytes,
+    ));
+    try std.testing.expectEqual(provider_thing_declaration.backing, provider_thing_capability.backing_ty);
+    try std.testing.expect(std.meta.eql(
+        fixture.provider_artifact.checked_types.view().rootKey(provider_thing_declaration.backing).bytes,
+        provider_thing_capability.backing_ty_key.bytes,
+    ));
+    try std.testing.expectEqual(@as(u32, 0), provider_thing_capability.args_len);
+    try std.testing.expectEqual(@as(u32, 0), provider_thing_capability.padding_len);
+    try std.testing.expect(!provider_thing_capability.is_opaque);
+
+    failure_stage = "provider get method authority";
+    const get_def = try finalizedPublicationCompatibilitySourceMethodDef(fixture.provider.module_env, "get");
+    const get_source_def = fixture.provider.module_env.store.getDef(get_def);
+    const get_source_pattern = fixture.provider.module_env.store.getPattern(get_source_def.pattern);
+    if (get_source_pattern != .assign or
+        !std.mem.eql(
+            u8,
+            fixture.provider.module_env.getIdent(get_source_pattern.assign.ident),
+            "Provider.Thing.get",
+        ))
+    {
+        return error.TestUnexpectedResult;
+    }
+    const get_template = fixture.provider_artifact.checked_procedure_templates.lookupByDef(get_def) orelse
+        return error.TestUnexpectedResult;
+    var provider_get_target_index: ?usize = null;
+    for (fixture.provider_artifact.method_registry.entries, 0..) |entry, entry_index| {
+        if (!std.mem.eql(
+            u8,
+            fixture.provider_artifact.canonical_names.methodNameText(entry.key.method),
+            "get",
+        )) continue;
+        const get_owner = switch (entry.key.owner) {
+            .nominal => |owner| owner,
+            .builtin => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(std.meta.eql(provider_thing_declaration.nominal, get_owner));
+        const target = entry.target orelse return error.TestUnexpectedResult;
+        if (target.def_idx != get_def) return error.TestUnexpectedResult;
+        if (provider_get_target_index != null) return error.TestUnexpectedResult;
+        try std.testing.expectEqual(fixture.provider_artifact.module_identity.module_idx, target.module_idx);
+        const procedure = switch (target.kind) {
+            .procedure => |procedure| procedure,
+            .local_proc, .structural => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(procedure.template, get_template));
+        try std.testing.expect(std.meta.eql(procedure.proc.artifact.bytes, get_template.artifact.bytes));
+        try std.testing.expectEqual(procedure.proc.proc_base, get_template.proc_base);
+        const get_template_row = fixture.provider_artifact.checked_procedure_templates.get(get_template.template);
+        try std.testing.expectEqual(get_template.proc_base, get_template_row.proc_base);
+        provider_get_target_index = entry_index;
+    }
+    const get_target_index = provider_get_target_index orelse return error.TestUnexpectedResult;
+    const provider_get_target = fixture.provider_artifact.method_registry.entries[get_target_index].target.?;
+
+    failure_stage = "provider answer constant authority";
+    const answer_def = try finalizedPublicationCompatibilitySourceDef(&fixture.provider, "Provider.answer");
+    const answer_const_index = try finalizedPublicationCompatibilityConstIndex(
+        &fixture.provider_artifact,
+        answer_def,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 40),
+        try finalizedPublicationCompatibilityStoredU64(
+            &fixture.provider_artifact,
+            answer_def,
+            "Provider.answer",
+        ),
+    );
+    try std.testing.expect(fixture.provider_artifact.const_store.values.items.len != 0);
+    const answer_export = fixture.provider_artifact.exported_const_templates.templates[answer_const_index];
+
+    failure_stage = "provider make_adder source and capture authority";
+    const make_adder_def = try finalizedPublicationCompatibilitySourceDef(&fixture.provider, "Provider.make_adder");
+    const make_adder_template = fixture.provider_artifact.checked_procedure_templates.lookupByDef(make_adder_def) orelse
+        return error.TestUnexpectedResult;
+    const make_adder_export_index = try finalizedPublicationCompatibilityProcedureTemplateIndex(
+        &fixture.provider_artifact,
+        make_adder_def,
+    );
+    const make_adder_binding_index = try finalizedPublicationCompatibilityProcedureBindingIndex(
+        &fixture.provider_artifact,
+        make_adder_def,
+    );
+    const make_adder_export = fixture.provider_artifact.exported_procedure_templates.templates[make_adder_export_index];
+    const make_adder_binding = fixture.provider_artifact.exported_procedure_bindings.bindings[make_adder_binding_index];
+    const make_adder_top_level = fixture.provider_artifact.top_level_values.lookupByDef(make_adder_def) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(fixture.provider_artifact.module_identity.module_idx, make_adder_top_level.module_idx);
+    try std.testing.expectEqualStrings(
+        "Provider.make_adder",
+        fixture.provider_artifact.canonical_names.exportNameText(make_adder_top_level.source_name),
+    );
+    const make_adder_top_binding_ref = switch (make_adder_top_level.value) {
+        .procedure_binding => |binding| binding,
+        .const_ref => return error.TestUnexpectedResult,
+    };
+    const make_adder_top_binding = fixture.provider_artifact.top_level_procedure_bindings.get(make_adder_top_binding_ref);
+    try std.testing.expect(std.meta.eql(
+        make_adder_top_level.source_scheme.bytes,
+        make_adder_top_binding.source_scheme.bytes,
+    ));
+    const make_adder_top_direct = switch (make_adder_top_binding.body) {
+        .direct_template => |direct| direct,
+        .callable_eval_template => return error.TestUnexpectedResult,
+    };
+    const make_adder_top_template = switch (make_adder_top_direct.template) {
+        .checked => |template| template,
+        .lifted, .synthetic => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(
+        make_adder_top_template,
+        make_adder_template,
+    ));
+    try std.testing.expect(std.meta.eql(
+        make_adder_top_direct.proc_value.artifact.bytes,
+        make_adder_template.artifact.bytes,
+    ));
+    try std.testing.expectEqual(make_adder_top_direct.proc_value.proc_base, make_adder_template.proc_base);
+    try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(make_adder_export.template, make_adder_template));
+    try std.testing.expect(std.meta.eql(make_adder_export.source_scheme.bytes, make_adder_top_level.source_scheme.bytes));
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(make_adder_binding.binding.artifact, fixture.provider_artifact.key));
+    try std.testing.expectEqual(make_adder_def, make_adder_binding.binding.def);
+    try std.testing.expectEqual(make_adder_top_level.pattern, make_adder_binding.binding.pattern);
+    try std.testing.expect(std.meta.eql(make_adder_binding.source_scheme.bytes, make_adder_top_level.source_scheme.bytes));
+    const make_adder_export_direct = switch (make_adder_binding.body) {
+        .direct_template => |direct| direct,
+        .callable_eval_template => return error.TestUnexpectedResult,
+    };
+    const make_adder_export_checked_template = switch (make_adder_export_direct.template) {
+        .checked => |template| template,
+        .lifted, .synthetic => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(
+        make_adder_export_checked_template,
+        make_adder_template,
+    ));
+    try std.testing.expect(std.meta.eql(
+        make_adder_export_direct.proc_value.artifact.bytes,
+        make_adder_template.artifact.bytes,
+    ));
+    try std.testing.expectEqual(make_adder_export_direct.proc_value.proc_base, make_adder_template.proc_base);
+
+    const source_make_def = fixture.provider.module_env.store.getDef(make_adder_def);
+    const source_outer_lambda_idx: can.CIR.Expr.Idx = switch (fixture.provider.module_env.store.getExpr(source_make_def.expr)) {
+        .e_lambda => source_make_def.expr,
+        .e_closure => |closure| closure.lambda_idx,
+        else => return error.TestUnexpectedResult,
+    };
+    const source_outer_lambda = fixture.provider.module_env.store.getExpr(source_outer_lambda_idx);
+    if (source_outer_lambda != .e_lambda) return error.TestUnexpectedResult;
+    const source_outer_args = fixture.provider.module_env.store.slicePatterns(source_outer_lambda.e_lambda.args);
+    try std.testing.expectEqual(@as(usize, 1), source_outer_args.len);
+    const source_offset_pattern = fixture.provider.module_env.store.getPattern(source_outer_args[0]);
+    if (source_offset_pattern != .assign or
+        !std.mem.eql(u8, fixture.provider.module_env.getIdent(source_offset_pattern.assign.ident), "offset"))
+    {
+        return error.TestUnexpectedResult;
+    }
+    const source_inner_closure = fixture.provider.module_env.store.getExpr(source_outer_lambda.e_lambda.body);
+    if (source_inner_closure != .e_closure) return error.TestUnexpectedResult;
+    const source_inner_captures = fixture.provider.module_env.store.sliceCaptures(source_inner_closure.e_closure.captures);
+    try std.testing.expectEqual(@as(usize, 1), source_inner_captures.len);
+    const source_inner_capture = fixture.provider.module_env.store.getCapture(source_inner_captures[0]);
+    try std.testing.expectEqual(source_outer_args[0], source_inner_capture.pattern_idx);
+    try std.testing.expectEqualStrings("offset", fixture.provider.module_env.getIdent(source_inner_capture.name));
+    const source_outer_region = fixture.provider.module_env.store.getExprRegion(source_outer_lambda_idx);
+    const source_offset_region = fixture.provider.module_env.store.getPatternRegion(source_outer_args[0]);
+    const source_inner_region = fixture.provider.module_env.store.getExprRegion(source_outer_lambda.e_lambda.body);
+    try std.testing.expectEqualStrings(
+        "|offset| |value| offset + value",
+        fixture.provider.module_env.getSource(source_outer_region),
+    );
+    try std.testing.expectEqualStrings("offset", fixture.provider.module_env.getSource(source_offset_region));
+    try std.testing.expectEqualStrings(
+        "|value| offset + value",
+        fixture.provider.module_env.getSource(source_inner_region),
+    );
+
+    const make_template_row = fixture.provider_artifact.checked_procedure_templates.get(make_adder_template.template);
+    const make_body_id = switch (make_template_row.body) {
+        .checked_body => |body| body,
+        .intrinsic_wrapper, .entry_wrapper, .unimplemented => return error.TestUnexpectedResult,
+    };
+    const make_body = fixture.provider_artifact.checked_bodies.body(make_body_id);
+    try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(make_body.owner_template, make_adder_template));
+    const checked_root = fixture.provider_artifact.checked_bodies.expr(make_body.root_expr);
+    const checked_outer_lambda_id = switch (checked_root.data) {
+        .lambda => make_body.root_expr,
+        .closure => |closure| closure.lambda,
+        else => return error.TestUnexpectedResult,
+    };
+    const checked_outer_lambda = fixture.provider_artifact.checked_bodies.expr(checked_outer_lambda_id);
+    if (checked_outer_lambda.data != .lambda) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(source_outer_region, checked_outer_lambda.source_region);
+    try std.testing.expectEqual(@as(usize, 1), checked_outer_lambda.data.lambda.args.len);
+    const checked_offset_pattern_id = checked_outer_lambda.data.lambda.args[0];
+    const checked_offset_pattern = fixture.provider_artifact.checked_bodies.pattern(checked_offset_pattern_id);
+    try std.testing.expectEqual(source_offset_region, checked_offset_pattern.source_region);
+    const offset_binder = switch (checked_offset_pattern.data) {
+        .assign => |binder| binder,
+        else => return error.TestUnexpectedResult,
+    };
+    const checked_offset_binder = fixture.provider_artifact.checked_bodies.patternBinder(offset_binder);
+    try std.testing.expectEqual(checked_offset_pattern_id, checked_offset_binder.pattern);
+
+    const checked_inner_closure_id = checked_outer_lambda.data.lambda.body;
+    const checked_inner_closure = fixture.provider_artifact.checked_bodies.expr(checked_inner_closure_id);
+    if (checked_inner_closure.data != .closure) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(source_inner_region, checked_inner_closure.source_region);
+    try std.testing.expectEqual(@as(usize, 1), checked_inner_closure.data.closure.captures.len);
+    const checked_inner_capture = checked_inner_closure.data.closure.captures[0];
+    try std.testing.expectEqual(checked_offset_pattern_id, checked_inner_capture.pattern);
+    try std.testing.expectEqual(source_inner_capture.scope_depth, checked_inner_capture.scope_depth);
+    try std.testing.expectEqual(CheckedArtifact.CaptureId.fromBinder(offset_binder), checked_inner_capture.capture_id);
+
+    var nested_site_matches: usize = 0;
+    var nested_site_id: ?check.CanonicalNames.NestedProcSiteId = null;
+    for (fixture.provider_artifact.nested_proc_sites.sites) |site| {
+        if (site.checked_expr == null or site.checked_expr.? != checked_inner_closure_id) continue;
+        if (site.kind != .closure) return error.TestUnexpectedResult;
+        const owner = switch (site.owner) {
+            .template => |owner| owner,
+            .default_root => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(owner, make_adder_template));
+        nested_site_matches += 1;
+        nested_site_id = site.site;
+    }
+    try std.testing.expectEqual(@as(usize, 1), nested_site_matches);
+    const expected_nested_site = nested_site_id orelse return error.TestUnexpectedResult;
+    var template_site_matches: usize = 0;
+    const template_site_start: usize = make_template_row.nested_proc_sites.start;
+    const template_site_end = template_site_start + make_template_row.nested_proc_sites.len;
+    if (template_site_end > fixture.provider_artifact.nested_proc_sites.template_refs.len) {
+        return error.TestUnexpectedResult;
+    }
+    for (fixture.provider_artifact.nested_proc_sites.template_refs[template_site_start..template_site_end]) |site| {
+        if (site == expected_nested_site) template_site_matches += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), template_site_matches);
+
+    // This closure proves dependency reachability only. The source-to-binder
+    // capture proof above is independent of these imported dependency ranges.
+    const make_dependency_closure = fixture.provider_artifact.exported_procedure_templates.rowClosure(make_adder_export);
+    const make_binding_closure = fixture.provider_artifact.exported_procedure_bindings.rowClosure(make_adder_binding);
+    try std.testing.expect(finalizedPublicationCompatibilityClosureContainsBody(
+        make_dependency_closure,
+        fixture.provider_artifact.key,
+        make_body_id,
+    ));
+    try std.testing.expect(finalizedPublicationCompatibilityClosureContainsTemplate(
+        make_dependency_closure,
+        make_adder_template,
+    ));
+    try std.testing.expect(finalizedPublicationCompatibilityClosureContainsNestedSites(
+        make_dependency_closure,
+        fixture.provider_artifact.key,
+        make_template_row.nested_proc_sites,
+    ));
+
+    failure_stage = "consumer public owner authority";
+    const consumer_source_imports = fixture.consumer.module_env.imports.imports.items.items;
+    try std.testing.expectEqual(consumer_source_imports.len, fixture.consumer_artifact.direct_import_artifact_keys.len);
+    try std.testing.expectEqual(@as(usize, 2), consumer_source_imports.len);
+    for (consumer_source_imports, 0..) |source_name_idx, import_idx_raw| {
+        const source_name = fixture.consumer.module_env.common.strings.get(source_name_idx);
+        const resolved_module = fixture.consumer.module_env.imports.getResolvedModule(@enumFromInt(import_idx_raw)) orelse
+            return error.TestUnexpectedResult;
+        const expected_key = if (can.CIR.Import.isCompilerBuiltinImportName(source_name)) blk: {
+            try std.testing.expectEqual(@as(u32, 0), resolved_module);
+            break :blk fixture.builtins.checked_artifact.key;
+        } else if (std.mem.eql(u8, source_name, "Provider")) blk: {
+            try std.testing.expectEqual(fixture.provider_module_idx, resolved_module);
+            break :blk fixture.provider_artifact.key;
+        } else return error.TestUnexpectedResult;
+        try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+            fixture.consumer_artifact.direct_import_artifact_keys[import_idx_raw],
+            expected_key,
+        ));
+    }
+    try std.testing.expectEqual(@as(usize, 1), fixture.consumer_artifact.public_api_dependencies.type_owner_artifacts.len);
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+        fixture.consumer_artifact.public_api_dependencies.type_owner_artifacts[0],
+        fixture.provider_artifact.key,
+    ));
+    try std.testing.expect(!finalizedPublicationCompatibilityKeyEql(
+        fixture.consumer_artifact.public_api_dependencies.type_owner_artifacts[0],
+        fixture.builtins.checked_artifact.key,
+    ));
+
+    failure_stage = "consumer describe nominal and procedure authority";
+    const describe_def = try finalizedPublicationCompatibilitySourceDef(&fixture.consumer, "Consumer.describe");
+    const describe_template = fixture.consumer_artifact.checked_procedure_templates.lookupByDef(describe_def) orelse
+        return error.TestUnexpectedResult;
+    const describe_top_level = fixture.consumer_artifact.top_level_values.lookupByDef(describe_def) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(
+        "Consumer.describe",
+        fixture.consumer_artifact.canonical_names.exportNameText(describe_top_level.source_name),
+    );
+    const describe_binding_ref = switch (describe_top_level.value) {
+        .procedure_binding => |binding| binding,
+        .const_ref => return error.TestUnexpectedResult,
+    };
+    const describe_binding = fixture.consumer_artifact.top_level_procedure_bindings.get(describe_binding_ref);
+    try std.testing.expect(std.meta.eql(describe_binding.source_scheme.bytes, describe_top_level.source_scheme.bytes));
+    const describe_direct = switch (describe_binding.body) {
+        .direct_template => |direct| direct,
+        .callable_eval_template => return error.TestUnexpectedResult,
+    };
+    const describe_binding_template = switch (describe_direct.template) {
+        .checked => |template| template,
+        .lifted, .synthetic => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(
+        describe_binding_template,
+        describe_template,
+    ));
+    const describe_template_row = fixture.consumer_artifact.checked_procedure_templates.get(describe_template.template);
+    const describe_function = switch (fixture.consumer_artifact.checked_types.payload(describe_template_row.checked_fn_root)) {
+        .function => |function| function,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 1), describe_function.args.len);
+    const describe_thing = switch (fixture.consumer_artifact.checked_types.payload(describe_function.args[0])) {
+        .nominal => |nominal| nominal,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 0), describe_thing.args.len);
+    try std.testing.expectEqual(
+        thing_source_statement_raw,
+        describe_thing.source_decl orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expectEqualStrings(
+        "Provider.Thing",
+        fixture.consumer_artifact.canonical_names.typeNameText(describe_thing.name),
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &fixture.provider_artifact.module_identity.stable_hash,
+        fixture.consumer_artifact.canonical_names.moduleIdentityBytes(describe_thing.origin_module),
+    );
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+        describe_thing.owner_module,
+        fixture.provider_artifact.key,
+    ));
+    const describe_thing_declaration = switch (describe_thing.representation) {
+        .imported_declaration => |declaration| declaration,
+        .builtin,
+        .local_declaration,
+        .local_box_payload_capability,
+        .imported_box_payload_capability,
+        .opaque_without_backing,
+        => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+        describe_thing_declaration.artifact,
+        fixture.provider_artifact.key,
+    ));
+    try std.testing.expectEqual(provider_thing_declaration.id, describe_thing_declaration.declaration);
+
+    failure_stage = "consumer imported value references";
+    var imported_answer_uses: usize = 0;
+    var imported_make_adder_uses: usize = 0;
+    for (fixture.consumer_artifact.resolved_value_refs.records) |record| {
+        switch (record.ref) {
+            .imported_const => |const_use| {
+                if (!std.meta.eql(const_use.const_ref, answer_export.const_ref)) continue;
+                const expr = fixture.consumer_artifact.checked_bodies.expr(record.expr);
+                try std.testing.expectEqualStrings(
+                    "Provider.answer",
+                    fixture.consumer.module_env.getSource(expr.source_region),
+                );
+                imported_answer_uses += 1;
+            },
+            .imported_proc => |procedure_use| {
+                const imported = switch (procedure_use.binding) {
+                    .imported => |imported| imported,
+                    else => continue,
+                };
+                if (!finalizedPublicationCompatibilityKeyEql(imported.artifact, make_adder_binding.binding.artifact) or
+                    imported.def != make_adder_binding.binding.def or
+                    imported.pattern != make_adder_binding.binding.pattern)
+                {
+                    continue;
+                }
+                const expr = fixture.consumer_artifact.checked_bodies.expr(record.expr);
+                try std.testing.expectEqualStrings(
+                    "Provider.make_adder",
+                    fixture.consumer.module_env.getSource(expr.source_region),
+                );
+                imported_make_adder_uses += 1;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), imported_answer_uses);
+    try std.testing.expectEqual(@as(usize, 1), imported_make_adder_uses);
+
+    failure_stage = "consumer Provider.get dispatch";
+    const describe_plan_span = describe_template_row.static_dispatch_plans;
+    const describe_plan_end: usize = describe_plan_span.start + describe_plan_span.len;
+    if (describe_plan_end > fixture.consumer_artifact.static_dispatch_plans.template_refs.len) {
+        return error.TestUnexpectedResult;
+    }
+    const describe_plan_refs = fixture.consumer_artifact.static_dispatch_plans.template_refs[describe_plan_span.start..describe_plan_end];
+    try std.testing.expectEqual(@as(usize, 1), describe_plan_refs.len);
+    const get_plan_id = describe_plan_refs[0];
+    if (@intFromEnum(get_plan_id) >= fixture.consumer_artifact.static_dispatch_plans.plans.len) {
+        return error.TestUnexpectedResult;
+    }
+    const get_plan = fixture.consumer_artifact.static_dispatch_plans.plans[@intFromEnum(get_plan_id)];
+    try std.testing.expectEqual(describe_function.args[0], get_plan.dispatcher_ty);
+    try std.testing.expectEqualStrings(
+        "get",
+        fixture.consumer_artifact.canonical_names.methodNameText(get_plan.method),
+    );
+    const get_checked_expr = fixture.consumer_artifact.checked_bodies.expr(get_plan.expr);
+    try std.testing.expectEqualStrings("thing.get()", fixture.consumer.module_env.getSource(get_checked_expr.source_region));
+    const checked_expr_plan = switch (get_checked_expr.data) {
+        .dispatch_call => |plan| plan orelse return error.TestUnexpectedResult,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(get_plan_id, checked_expr_plan);
+    const evidence_id = switch (get_plan.resolution) {
+        .direct_closed => |direct| direct.evidence,
+        .direct_pending,
+        .direct_parametric,
+        .evidence_dependent,
+        .structural,
+        .checked_error,
+        .@"unreachable",
+        => return error.TestUnexpectedResult,
+    };
+    if (@intFromEnum(evidence_id) >= fixture.consumer_artifact.static_dispatch_plans.evidence_nodes.len) {
+        return error.TestUnexpectedResult;
+    }
+    const get_evidence = fixture.consumer_artifact.static_dispatch_plans.evidence_nodes[@intFromEnum(evidence_id)];
+    try std.testing.expectEqual(
+        get_plan.dispatcher_ty,
+        get_evidence.dispatcher_ty orelse return error.TestUnexpectedResult,
+    );
+    const target = get_evidence.target;
+    try std.testing.expectEqual(fixture.provider_module_idx, target.module_idx);
+    try std.testing.expectEqual(get_def, target.def_idx);
+    const target_procedure = switch (target.kind) {
+        .procedure => |procedure| procedure,
+        .local_proc, .structural => return error.TestUnexpectedResult,
+    };
+    const registry_procedure = switch (provider_get_target.kind) {
+        .procedure => |procedure| procedure,
+        .local_proc, .structural => unreachable,
+    };
+    try std.testing.expect(finalizedPublicationCompatibilityTemplateEql(
+        target_procedure.template,
+        registry_procedure.template,
+    ));
+    try std.testing.expectEqual(target_procedure.proc.proc_base, registry_procedure.proc.proc_base);
+    try std.testing.expect(std.meta.eql(target_procedure.proc.artifact.bytes, registry_procedure.proc.artifact.bytes));
+
+    failure_stage = "consumer main stored result";
+    const consumer_main_def = try finalizedPublicationCompatibilitySourceDef(&fixture.consumer, "Consumer.main");
+    try std.testing.expectEqual(
+        @as(u64, 42),
+        try finalizedPublicationCompatibilityStoredU64(
+            &fixture.consumer_artifact,
+            consumer_main_def,
+            "Consumer.main",
+        ),
+    );
+
+    failure_stage = "measured artifact table cardinalities";
+    try std.testing.expectEqual(@as(usize, 2), fixture.provider_artifact.method_registry.entries.len);
+    try std.testing.expectEqual(@as(usize, 2), fixture.provider_artifact.exported_procedure_templates.templates.len);
+    try std.testing.expectEqual(@as(usize, 2), fixture.provider_artifact.exported_procedure_bindings.bindings.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.provider_artifact.exported_const_templates.templates.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.provider_artifact.nested_proc_sites.sites.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.provider_artifact.const_store.values.items.len);
+    try std.testing.expectEqual(@as(usize, 1), make_dependency_closure.checked_bodies.len);
+    try std.testing.expectEqual(@as(usize, 1), make_dependency_closure.checked_procedure_templates.len);
+    try std.testing.expectEqual(@as(usize, 1), make_dependency_closure.nested_proc_sites.len);
+    try std.testing.expectEqual(@as(usize, 5), fixture.consumer_artifact.resolved_value_refs.records.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.consumer_artifact.static_dispatch_plans.plans.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.consumer_artifact.exported_const_templates.templates.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.consumer_artifact.const_store.values.items.len);
+
+    failure_stage = "exact exported closure cardinalities";
+    const expected_closure_cardinality = FinalizedPublicationCompatibilityClosureCardinality{
+        .checked_bodies = 1,
+        .checked_type_roots = 1,
+        .checked_type_schemes = 1,
+        .checked_callable_bodies = 0,
+        .checked_const_bodies = 0,
+        .checked_procedure_templates = 1,
+        .callable_eval_templates = 0,
+        .const_templates = 0,
+        .nested_proc_sites = 1,
+        .resolved_value_refs = 1,
+        .static_dispatch_plans = 1,
+        .method_registry_entries = 0,
+        .interface_capabilities = 1,
+    };
+    try std.testing.expect(std.meta.eql(
+        expected_closure_cardinality,
+        FinalizedPublicationCompatibilityClosureCardinality.fromClosure(make_dependency_closure),
+    ));
+    try std.testing.expect(std.meta.eql(
+        expected_closure_cardinality,
+        FinalizedPublicationCompatibilityClosureCardinality.fromClosure(make_binding_closure),
+    ));
+}
+
+fn runFinalizedPublicationCompatibilityFixture(
+    allocator: Allocator,
+) !FinalizedPublicationCompatibilityBuffers {
+    const fixture = try FinalizedPublicationCompatibilityFixture.init(allocator);
+    defer fixture.deinit();
+
+    try expectFinalizedPublicationCompatibilitySemantics(fixture);
+
+    const provider = try serializeCheckedArtifactForValidatedPublicationTest(
+        allocator,
+        &fixture.provider_artifact,
+    );
+    errdefer allocator.free(provider);
+    const provider_serialized: *const CheckedArtifact.CheckedModuleArtifact.Serialized =
+        @ptrCast(@alignCast(provider.ptr));
+    try provider_serialized.validate(provider.len);
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+        provider_serialized.key,
+        fixture.provider_artifact.key,
+    ));
+
+    const consumer = try serializeCheckedArtifactForValidatedPublicationTest(
+        allocator,
+        &fixture.consumer_artifact,
+    );
+    errdefer allocator.free(consumer);
+    const consumer_serialized: *const CheckedArtifact.CheckedModuleArtifact.Serialized =
+        @ptrCast(@alignCast(consumer.ptr));
+    try consumer_serialized.validate(consumer.len);
+    try std.testing.expect(finalizedPublicationCompatibilityKeyEql(
+        consumer_serialized.key,
+        fixture.consumer_artifact.key,
+    ));
+
+    return .{ .provider = provider, .consumer = consumer };
+}
+
+test "finalized publication compatibility: semantic authority and serialized bytes are deterministic" {
+    const allocator = std.testing.allocator;
+
+    var first = try runFinalizedPublicationCompatibilityFixture(allocator);
+    defer first.deinit(allocator);
+
+    // The first fixture and all of its Builtin/provider/consumer owners have
+    // been destroyed. Only these two owned serialization buffers cross into
+    // the wholly fresh second publication.
+    var second = try runFinalizedPublicationCompatibilityFixture(allocator);
+    defer second.deinit(allocator);
+
+    try std.testing.expectEqual(first.provider.len, second.provider.len);
+    const first_provider_digest = finalizedPublicationCompatibilityDigest(first.provider);
+    const second_provider_digest = finalizedPublicationCompatibilityDigest(second.provider);
+    try std.testing.expectEqualSlices(
+        u8,
+        &first_provider_digest,
+        &second_provider_digest,
+    );
+    try std.testing.expectEqualSlices(u8, first.provider, second.provider);
+
+    try std.testing.expectEqual(first.consumer.len, second.consumer.len);
+    const first_consumer_digest = finalizedPublicationCompatibilityDigest(first.consumer);
+    const second_consumer_digest = finalizedPublicationCompatibilityDigest(second.consumer);
+    try std.testing.expectEqualSlices(
+        u8,
+        &first_consumer_digest,
+        &second_consumer_digest,
+    );
+    try std.testing.expectEqualSlices(u8, first.consumer, second.consumer);
+}
+
 test "validated publication: direct rows and root authority reject corrupt bindings before publication" {
     const allocator = std.testing.allocator;
     const fixture = try ValidatedPublicationTestFixture.init(allocator);

@@ -751,7 +751,8 @@ described in full, with trailers; W6b currently has its provisional title):
 | `soqtnxus` / `e7b8716e` | W6b full-tail checked-child localization | independently accepted; semantic, isolated 2/2, broader 17/17 and normal 71/71 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
 | `rtwsumuy` / `79392598` | W6b current genuine record-update rejections | four independent normal reruns complete: each crashes at Expected-plan topology; independently accepted documentation-only checkpoint pushed and exact PR readback verified, no compiler changes |
 | `wlzlxpnu` / `8d7abd78` | W6b first-poison owner-authority calibration | independently accepted; semantic, isolated 2/2, broader 18/18 and normal 75/75 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
-| `ottkxrkt` / publication pending | W6b shared validated-publication prerequisite | corrected source independently accepted; focused normal 3/3 (25/25 steps), final normal 81/81 (41/41 steps) pass; eval capability/owner-closure migration remains separate |
+| `ottkxrkt` / `be4ddaaf` | W6b shared validated-publication prerequisite | independently accepted; focused normal 3/3 (25/25 steps), final normal 81/81 (41/41 steps) pass; push, full description and exact draft-PR readback verified |
+| `xnntrxnk` / this checkpoint | Finalized publication compatibility calibration | final source and external baseline independently accepted; two-fresh-fixture normal 2/2 and final normal 82/82 tests, 41/41 steps pass; description and publication pending; no producer refactor or prepared lifecycle implemented |
 
 The separate origin slice `suoqrzzl` is preserved at `e580bea2` and is not in
 this active migration ancestry. Its Check `0a829c3e` non-OOM producer/oracle
@@ -819,8 +820,10 @@ compile 7), including borrowed-graph, post-init imported-provider lifetime and
 terminal-admission regressions. The normal graph uses the regenerated Builtins
 from the focused run; unchanged schema-86 golden, static/mutable serde and
 native/wasm sizes pass. Formatting and all reviewed hashes match. Check,
-ModuleEnv and cache files are unchanged. Root is describing and publishing
-this independently accepted bounded checkpoint; no whole-suite or feature
+ModuleEnv and cache files are unchanged. Root described and pushed
+`ottkxrkt` as `be4ddaaf`; the full jj description and exact PR head, branch,
+complete body (including its trailing newline) and draft status were verified.
+No whole-suite or feature
 completion is claimed. Logs and review freezes are retained under
 `/private/tmp/polarity-eval-authority-gates.CG06Yv`.
 
@@ -846,7 +849,128 @@ writes with an owned assignment recipe and failure-safe assignment cleanup.
 Prepared-view borrows must end before provider finalization, which may grow
 the provider's canonical-name store.
 
-The published `jared/polarity` checkpoint is `wlzlxpnu` / `8d7abd78`, above
+Before that producer refactor, child `xnntrxnk` will calibrate compatibility
+against the current finished-dependency publication path. A real provider and
+consumer will exercise a nominal method, exported stored constant and returned
+captured closure, with semantic preconditions located by source identity.
+Two wholly fresh Builtin/provider/consumer fixtures will compare complete
+serialized bytes, lengths and SHA-256 digests for each artifact separately.
+Root will archive raw buffers and an exact input manifest before any producer
+refactor, then check a second fresh invocation. Ordinary/prebuilt parity alone would not prove
+before/after compatibility because both paths share the changed producer.
+No duplicate legacy publisher, fabricated artifact or no-op finalizer is
+allowed. Independent review accepts this test-only scope, and the author is
+implementing its measurement-ready scaffold. The returned function's lexical
+`offset` capture must join its checked capture/binder data; a nonempty imported
+dependency closure does not prove a lexical capture. Live artifact verification
+and serialized relocation/bounds validation are separate checks. Artifact
+serialization excludes ModuleEnv bytes; no cache/fresh semantic admission,
+OOM, prepared lifecycle or evaluation migration is claimed. No golden values
+or passing calibration gate have yet been recorded. Root subsequently found
+that `build.zig` hashes the Git revision and Builtin source into the compiler
+artifact identity, which is embedded throughout serialized artifact keys.
+Permanent hardcoded full-byte digests would therefore fail after an ordinary
+revision change even if publication were unchanged. That golden proposal is
+withdrawn before capture. The authentic fixture and semantic measurement
+scaffold remain authorized. Independent review accepts the revised oracle:
+the permanent test pins semantic authority and two-fixture determinism;
+the archived pre-refactor baseline is separate review evidence; a future
+parent/candidate raw-byte comparison must use an identical manifest of
+compiler artifact identity, exact Builtin source/blobs,
+fixture sources, publication/finalizer inputs, build mode/command and reviewed
+test source. A mismatch requires regenerating the old producer baseline under
+matching inputs before any compatibility verdict. Normal candidate validation
+remains mandatory. Key normalization, identity overrides, conditional golden
+skips and candidate-only determinism as a replacement baseline are forbidden.
+The first one-fixture measurement scaffold froze at compile package
+`4c25a82f` (jj snapshot `bd7355bf`). Normal `74782` compiled successfully,
+then exited 2 with 1/2 tests and 23/25 steps: the provider's deprecated
+`module [...]` header failed the no-diagnostics fixture check before artifact
+publication. No fixture bytes or digests were measured. The next correction
+uses current headerless type-module syntax and explicit qualified source
+identities, without suppressing the diagnostic. Independent scaffold review
+found no ownership/bounds blocker to measurement; final acceptance additionally
+requires exact nominal/call-site, procedure-binding, top-level ConstRef and
+source-region capture joins, observed dependency-closure counts, two sequential
+fresh fixtures, test renaming and removal of unconditional diagnostic output.
+The supported type-module correction freezes at compile package `2ab1550e`
+(jj `2f2bb4d0`). Focused normal `48330` passes 2/2 tests and 25/25 steps:
+both artifacts publish and pass live verification and serialized bounds checks;
+the provider's constant is 40, its returned closure captures `offset`, and
+the consumer's stored result is 42 with a `direct_closed` method resolution.
+The measured provider/consumer serialized lengths are 31,668/30,052 bytes;
+the relevant make-adder dependency body/template/site counts are each one.
+This is a passing one-fixture measurement, not the final two-fixture oracle
+or archived before/after compatibility certification. The stricter identity
+joins, raw baseline capture and independent final review remain open.
+The stricter final-form scaffold freezes after formatting at `701f9ed7`
+(jj `37f758e7`) and passes diagnostic semantic `65405`. Focused normal
+`20743` compiles but fails before the intentional inventory stop: the test
+incorrectly expected the nested type-module header's relative name to be
+`Thing`, while canonicalization produces `Provider.Thing`. The declared
+nested relative-parent composition confirms the qualified spelling; the
+correction is test-only. The two-fixture comparison is implemented but has
+not yet run past all semantic assertions. Final review and closure inventory
+measurement remain pending; this run supplies no compatibility baseline.
+The qualified-name and explicit top-level ConstRef-scheme corrections freeze
+at `dde0d9ae` (jj `f59d852b`). Focused normal `49027` passes those checks
+but exposes another unmeasured test assumption: the direct-import artifact
+key list has two entries, not one. The already-measured public type-owner
+closure still has one Provider entry; it is a distinct list. The correction
+must join source-import order through the sealed resolved-module mapping to
+the exact publication keys, never use an import-key array offset as a graph
+module index. Review also requires the local nominal declaration-root
+converse and the dispatch receiver-type join. No producer regression,
+closure-vector measurement or completed two-fixture gate is claimed yet.
+The exact import mapping and nominal/dispatch converse assertions freeze at
+`6d217157` (jj `d5d374f3`). Review accepts their bounded structure, but normal
+`96073` stops in the new nominal converse before inventory. Read-only tracing
+identifies an incorrect final-state expectation: `ModuleInterfaceCapabilities`
+replaces local nonbuiltin nominal representations with an explicit local box
+payload capability before finalization. The test must join that finalized
+capability's nominal, source payload/key and backing/key to the declaration,
+rather than require the earlier `local_declaration` arm. This is an oracle
+correction, not a producer change or a passing gate.
+The finalized-capability converse passes after correcting the read API to
+`checked_types.view().rootKey`. Measurement freeze `15a63c83` (jj `7d59c1e0`)
+reaches only its deliberate stop in normal `50830`: every semantic assertion
+passes. The make-adder template and binding closures both report the complete
+13-field cardinality vector `[1,1,1,0,0,1,0,0,1,1,1,0,1]` in the test's
+declared field order. The author is replacing the stop with these exact
+assertions and removing the early measurement output. Neither the second
+fresh fixture nor the external raw baseline has been certified yet.
+The permanent test freezes at `c4f11e44` (jj `e80ebd19`) and receives final
+independent source ACCEPT. Normal `37878` passes 2/2 tests and 25/25 steps:
+both wholly fresh fixtures execute all semantic assertions and compare each
+artifact's complete serialized bytes, length and SHA-256 separately.
+Root-only temporary capture then passes normal invocations `3832` and `4536`,
+each independently executing both fresh fixtures. Both full raw pairs compare
+equal: Provider is 31,668 bytes with SHA-256
+`6f161291531d21834006c6c23b2a1ea81e4adccef00b7a1b41f957e7cbe6af2e`;
+Consumer is 30,052 bytes with SHA-256
+`cf841054716c01a6d76bd8b17406e2245cae88173aee259322f0578f0fd58977`.
+Raw files, exact capture patch, logs and input manifest are archived under
+`/private/tmp/polarity-finalized-baseline.10iv6T`. Compiler and artifact keys
+match across invocations; the actual compiler invocation pins the normal
+Builtin/options inputs. The sink is removed, the exact reviewed `c4f11e44`
+source is restored, and formatting passes. Final normal `27970` passes
+82/82 tests and 41/41 steps (can 11, types 10, check 53, compile 8), including
+the unchanged schema-86 golden, static/mutable serialization, shared ownership
+regressions and native/wasm serialization sizes. All reviewed hashes match;
+the checker, artifact producer, TestEnv, ModuleEnv and cache files are unchanged.
+Independent archive review accepts the raw files, serialized headers, exact
+inputs, patch, capture logs, fixture hashes, resolved host target and source
+restoration. Its final manifest SHA-256 is
+`769f2ef6dcc049c22f1bf83aec2421a820846e368971ea1d4f958200343f3a82`.
+Final description and publication remain pending. No full-suite or `minici`
+pass, producer refactor, prepared lifecycle, evaluation migration or W6b
+completion is claimed by this checkpoint.
+These digests are revision-scoped evidence, not permanent goldens. The test
+does not establish arbitrary closure-facet semantics or a numerically
+different provider index across graphs.
+
+The published `jared/polarity` checkpoint is `ottkxrkt` / `be4ddaaf`, above
+`wlzlxpnu` / `8d7abd78`,
 `rtwsumuy` / `79392598`,
 `soqtnxus` / `e7b8716e`,
 `ounopmnm` / `6094ad09`,

@@ -6609,12 +6609,58 @@ available registry. Focused normal `87215` passes 3/3 tests and 25/25 steps,
 including regenerated Builtins. Final normal `75943` passes 81/81 tests and
 41/41 steps, including shared graph/import lifetimes, unchanged schema-86
 golden, static/mutable serde and native/wasm sizes. Formatting and reviewed
-hashes match; root is describing and publishing this accepted checkpoint.
+hashes match. The described checkpoint is published as `be4ddaaf`, with exact
+draft-PR head, branch, complete body and full jj description readback verified.
 This phase does not change
 Check, schema, evaluation lifetime/index handling, public-owner closure, or
 diagnostic-only behavior. A later opaque prepared-publication stage has only
 read-only feasibility evidence; no unfinished artifact may escape as a
 finished artifact or provide finalized constant data.
+
+The next test-only child `xnntrxnk` first calibrates the unchanged finalized
+publication path. An authentic provider/consumer fixture must pin nominal
+method, stored-constant and captured-closure participation in two wholly fresh
+Builtin/provider/consumer fixtures, then compare each artifact's complete
+serialized bytes, length and digest separately. Root archives baseline raw
+buffers and their input manifest before any preparation-view refactor and
+verifies them in a second fresh invocation. This compatibility oracle supplements, rather
+than repeats, ordinary/prebuilt parity over their shared producer. It adds no
+new publication algorithm, prepared state, typing or solver rule.
+The byte oracle cannot be a revision-independent hardcoded golden: normal
+compiler artifact identity includes the Git revision and Builtin source, and
+that identity is embedded in serialized keys. Parent/current byte comparison
+must use explicitly identical compiler/Builtin inputs and be recorded
+separately from normal-build certification. No key normalization, identity
+override or conditional golden skip is permitted. The permanent digest
+proposal was withdrawn before any values were captured. Independent scope
+review accepts a permanent semantic/same-invocation determinism test and a
+separate revision-scoped old/new byte comparison. The comparison manifest
+pins compiler artifact identity, exact Builtin source/blobs, fixture sources,
+publication/finalizer inputs, build mode/command and reviewed test source.
+Any manifest mismatch requires regenerating the old producer's baseline
+under matching inputs before a compatibility verdict; candidate-only
+determinism is not a substitute. A producer-regenerated normal gate remains
+required on the candidate.
+The initial supported type-module fixture passes focused normal `48330`
+(2/2 tests, 25/25 steps), including real finalization, the stored result 42,
+and lexical-capture checks. The complete permanent test at `c4f11e44` passes
+independent source review and normal `37878` (2/2 tests, 25/25 steps), including
+exact source/import/nominal-capability/constant/procedure/capture/dispatch
+identity joins and two wholly fresh serialized-artifact comparisons. The
+final nominal converse follows the interface-capability publication rewrite,
+not its earlier local-declaration representation. Both observed 13-facet
+closure cardinality vectors are pinned; there is no generic closure validator
+or revision-sensitive golden. Two separate normal capture invocations
+(`3832`, `4536`) archive identical raw pairs and exact input provenance under
+`/private/tmp/polarity-finalized-baseline.10iv6T`. Temporary capture code is
+removed and the exact reviewed source hash restored. Broader normal
+`27970` passes 82/82 tests and 41/41 steps, including the unchanged schema-86
+golden, static/mutable serialization and native/wasm sizes. Formatting and
+reviewed source hashes match; independent archive review accepts the exact
+raw-byte provenance and restoration. This test-only checkpoint is ready for
+description/publication. It implements no producer refactor, prepared API,
+evaluation migration, option-(e) rejection or runtime adapter, and it does
+not replace full-suite verification.
 
 This does not
 sweep dormant paths, successful in-place resize permutations, or the full
