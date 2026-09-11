@@ -9048,15 +9048,22 @@ does not mutate checked data or create a second name registry.
 
 When an edge uses a procedure as data, an otherwise-unpinned requirement that
 is reachable through the procedure's own callable type is not
-`unreachable`. Checker output records `from_callable(k)` at that construction
-site, where `k` is the requirement's template evidence-param index and its
-evidence-param record owns the exact dispatcher path. If compile-time
-evaluation stores that function inside another value before the callable is
-concrete, `ConstStore` retains the same symbolic entry in the function's
-evidence vector. Restoring the function projects the recorded path over the
-consumer's concrete callable request, selects the exact method evidence, and
-uses the resolved vector as the specialization identity. This work is linear
-only in the function's evidence vector at a specialization request; the
+`unreachable`. Checker output records a `from_callable` marker in that
+requirement's evidence-vector slot. The owning schema's parameter at that
+position supplies the exact method and dispatcher path; the marker carries no
+second parameter index. Forwarding follows the checked edge to its source
+requirement and places the marker in the destination requirement's slot, so
+different parameter orders across schemes require no rebasing pass or lookup
+table. Lexical `constraint` references retain their explicit depth and index.
+If compile-time evaluation stores that function inside another value before the
+callable is concrete, `ConstStore` retains the same symbolic entry in the
+function's evidence vector, including inside nested evidence trees. Pool offsets are not
+parameter positions. Restoring the function walks the vector alongside its
+owning schema, validates that each marker has a callable-reachable dispatcher
+path, projects that path over the consumer's concrete callable request, selects
+the exact method evidence, and uses the resolved vector as the specialization
+identity. This work is linear only in the function's evidence vector at a
+specialization request; the
 existing specialization cache prevents duplicate function bodies. Aggregate
 restoration neither scans nested values nor reconstructs where a function came
 from.
@@ -13535,9 +13542,9 @@ When a later compilation materializes a cached const, Monotype lowering turns
   alpha-renaming its parameters, and binding each captured symbol to the
   ordinary Monotype expression materialized from the corresponding captured
   `ConstNodeId`
-- stored function evidence marked `from_callable(k)` is resolved from the
-  checker-authored path of evidence param `k` over the consumer's concrete
-  function request before the checked template is specialized
+- stored function evidence marked `from_callable` is resolved from the
+  checker-authored path of its owning vector slot's parameter over the
+  consumer's concrete function request before the checked template is specialized
 - generated parser runtime functions materialize through their explicit generated
   function kind: Monotype lowering recovers the checked static-dispatch plan,
   materializes generated captures such as transformed field-name strings by their

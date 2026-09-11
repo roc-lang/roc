@@ -802,8 +802,9 @@ const SpecEvidence = union(enum) {
     structural: SpecStructuralEvidence,
     /// Callable-reachable evidence that remains symbolic while a reusable
     /// compile-time value is produced and resolves from the eventual request.
+    /// Its position in the owning vector selects the checked parameter; no
+    /// index from a forwarding frame may survive into the destination schema.
     from_callable: struct {
-        index: u32,
         independent_callable: bool,
     },
     /// Abstract local scheme parameter, supplied by the checked use edge.
@@ -4593,7 +4594,6 @@ const Builder = struct {
             } }),
             .from_callable => |use| {
                 try nodes.append(self.allocator, .{ .from_callable = .{
-                    .index = use.index,
                     .independent_callable = use.independent_callable,
                 } });
             },
@@ -40453,7 +40453,6 @@ const BodyContext = struct {
                     } };
                 },
                 .from_callable => |use| .{ .from_callable = .{
-                    .index = use.index,
                     .independent_callable = use.independent_callable,
                 } },
                 .from_scheme => |index| .{ .from_scheme = index },
@@ -40574,12 +40573,11 @@ const BodyContext = struct {
             Common.invariant("callable-derived evidence length differed from its checked template");
         }
         const resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
-        for (resolved) |*entry| switch (entry.*) {
-            .from_callable => |recipe| {
-                if (recipe.index >= params.len) {
-                    Common.invariant("callable-derived evidence referenced an unknown checked parameter");
-                }
-                const param = params[recipe.index];
+        // Both columns belong to the destination template. Forwarded symbolic
+        // evidence keeps its meaning through the checked edge, even when that
+        // template enumerates its requirements in a different order.
+        for (resolved, params) |*entry, param| switch (entry.*) {
+            .from_callable => {
                 const path = view.templates.evidenceParamPath(param);
                 if (path.len == 0) {
                     Common.invariant("callable-derived evidence named a pathless checked parameter");
@@ -40955,8 +40953,7 @@ const BodyContext = struct {
                         };
                         break :independent .{ .target = independent_target };
                     },
-                    .from_callable => |use| .{ .from_callable = .{
-                        .index = use.index,
+                    .from_callable => .{ .from_callable = .{
                         .independent_callable = true,
                     } },
                     .structural, .from_scheme, .unreachable_value, .checked_error => entry,
@@ -41136,7 +41133,6 @@ const BodyContext = struct {
                 .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
                 .from_callable => {
                     out[k] = .{ .from_callable = .{
-                        .index = @intCast(k),
                         .independent_callable = false,
                     } };
                     derived[k] = true;
@@ -41161,7 +41157,6 @@ const BodyContext = struct {
                     },
                     .from_callable => |use| {
                         out[k] = .{ .from_callable = .{
-                            .index = use.index,
                             .independent_callable = use.independent_callable or constraint.independent_callable,
                         } };
                         derived[k] = true;
