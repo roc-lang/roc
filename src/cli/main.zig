@@ -7139,7 +7139,9 @@ fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package
         config.max_package_expanded_bytes = if (mb == 0) null else @as(u64, mb) * 1024 * 1024;
     }
     if (limits.max_transitive_mb) |mb| {
-        config.max_transitive_expanded_bytes = if (mb == 0) null else @as(u64, mb) * 1024 * 1024;
+        const max_bytes = if (mb == 0) null else @as(u64, mb) * 1024 * 1024;
+        config.max_transitive_expanded_bytes = max_bytes;
+        config.max_platform_transitive_expanded_bytes = max_bytes;
     }
     return config;
 }
