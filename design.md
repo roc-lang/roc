@@ -12111,6 +12111,16 @@ When one ownership place is read repeatedly by ownership-complete struct-field
 or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read
 and rewrites those later reads as explicit local aliases before ARC solving.
+That rewrite is materialized only when the representative commits a dismantle
+plan, and a canonicalized read is classified by that same plan: under a
+committed representative it is an occurrence of the representative (a whole
+use when its target is emitted owned, a transparent alias when it stays
+borrowed), and otherwise it stays an ordinary field read of its root. Candidates are solved
+representatives first; a representative is a complete field read whose layout
+is a proper part of its root's layout, so the order is acyclic and each
+deferred read is settled exactly once.
+A root therefore never commits a take on a read that is emitted as an alias of
+a container already holding the root's unit.
 Dominance is computed once from the explicit statement-successor graph with a
 synthetic entry for all procedure roots. Immediate dominators settle in reverse
 postorder, and dominator-tree intervals answer field-read and tag-payload-read
