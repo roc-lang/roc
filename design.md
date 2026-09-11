@@ -7313,6 +7313,16 @@ and explicit call shape.
 
 ### Boxy Host ABI Adapters
 
+Host ABI planning resolves only requested public signatures and data layouts.
+It opens checked nominal declarations under their exact argument substitutions
+before committing layouts. Instantiation caches include declaration identity and
+resolved arguments; recursive applications reuse their reserved shape. The exact
+ABI shapes and private worker shapes have separate identities even when they
+share the representation table's structural vocabulary. ABI shapes are never
+reconstructed from erased worker children. Wrappers and adapters consume the
+planned pair, including its exact tag payload types and descriptor provenance.
+Equal storage layouts alone do not permit aliasing boundary result locals.
+
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
 `RootAbi.platform` or `RootAbi.hosted`, and any provided static data export,
