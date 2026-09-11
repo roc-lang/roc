@@ -9,6 +9,7 @@ const parse = @import("parse");
 const can = @import("can");
 const check = @import("check");
 const eval = @import("eval");
+const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const module_discovery = @import("module_discovery.zig");
 const messages = @import("messages.zig");
@@ -16,6 +17,7 @@ const messages = @import("messages.zig");
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
 const CheckedModules = check.TypedCIR.Modules;
+const ValidatedPublication = check.ValidatedPublication;
 const Can = can.Can;
 const ModuleEnv = can.ModuleEnv;
 const AST = parse.AST;
@@ -701,21 +703,18 @@ pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
 ) (PublishError || Check.W6bSemanticValidationError)!CheckedArtifact.CheckedModuleArtifact {
-    if (try validated_module.validate() != env) return error.CorruptArtifact;
-    try validated_module.validateImportedModules(.{
-        .envs = imported_envs,
-        .modules = imported_validations,
-    });
-    var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
-    defer typed.modules.deinit();
-    return publishFromPrebuiltModules(
+    var ctfe_options = publication.ctfe_options;
+    return ValidatedPublication.publishFromCheckedModule(
         gpa,
-        &typed,
+        env,
         validated_module,
         .{ .envs = imported_envs, .modules = imported_validations },
-        module_env_storage,
-        imported_artifacts,
-        publication,
+        checkedArtifactPublishInputs(
+            module_env_storage,
+            imported_artifacts,
+            publication,
+            &ctfe_options,
+        ),
     );
 }
 
@@ -732,32 +731,574 @@ pub fn publishFromPrebuiltModules(
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
 ) (PublishError || Check.W6bSemanticValidationError)!CheckedArtifact.CheckedModuleArtifact {
-    const root_env = module_env_storage.envConst();
-    if (try validated_module.validate() != root_env) return error.CorruptArtifact;
-    try validated_module.validateImportedModules(imported_modules);
-    if (!root_modules.validateBorrowedGraph(root_env, imported_modules.envs)) {
-        return error.CorruptArtifact;
-    }
     var ctfe_options = publication.ctfe_options;
-    return try CheckedArtifact.publishFromTypedModule(
+    return ValidatedPublication.publishFromPrebuiltModules(
         gpa,
-        &root_modules.modules,
-        root_modules.module_idx,
-        .{
-            .module_env_storage = module_env_storage,
-            .imports = imported_artifacts,
-            .available_artifacts = publication.available_artifacts,
-            .relation_artifacts = publication.relation_artifacts,
-            .platform_requirement_context = publication.platform_requirement_context,
-            .platform_app_relation = publication.platform_app_relation,
-            .platform_requirement_solutions = publication.platform_requirement_solutions,
-            .explicit_roots = publication.explicit_roots,
-            .hoisted_roots = publication.hoisted_roots,
-            .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
-            .problem_store = publication.problem_store,
-            .validation = publication.validation,
-        },
+        root_modules,
+        validated_module,
+        imported_modules,
+        checkedArtifactPublishInputs(
+            module_env_storage,
+            imported_artifacts,
+            publication,
+            &ctfe_options,
+        ),
     );
+}
+
+fn checkedArtifactPublishInputs(
+    module_env_storage: CheckedArtifact.ModuleEnvStorage,
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    publication: ArtifactPublicationInputs,
+    ctfe_options: *const eval.CompileTimeFinalization.Options,
+) CheckedArtifact.PublishInputs {
+    return .{
+        .module_env_storage = module_env_storage,
+        .imports = imported_artifacts,
+        .available_artifacts = publication.available_artifacts,
+        .relation_artifacts = publication.relation_artifacts,
+        .platform_requirement_context = publication.platform_requirement_context,
+        .platform_app_relation = publication.platform_app_relation,
+        .platform_requirement_solutions = publication.platform_requirement_solutions,
+        .explicit_roots = publication.explicit_roots,
+        .hoisted_roots = publication.hoisted_roots,
+        .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(ctfe_options),
+        .problem_store = publication.problem_store,
+        .validation = publication.validation,
+    };
+}
+
+const ValidatedPublicationTestFixture = struct {
+    allocator: Allocator,
+    builtins: eval.BuiltinModules,
+    provider: check.TestEnv,
+    provider_artifact: CheckedArtifact.CheckedModuleArtifact,
+    consumer: check.TestEnv,
+
+    fn init(allocator: Allocator) !*ValidatedPublicationTestFixture {
+        const fixture = try allocator.create(ValidatedPublicationTestFixture);
+        errdefer allocator.destroy(fixture);
+
+        var builtins = try eval.BuiltinModules.init(allocator);
+        errdefer builtins.deinit();
+
+        const provider_source =
+            \\Thing := [Val(Str)].{
+            \\  to_str : Thing -> Str
+            \\  to_str = |Thing.Val(value)| value
+            \\}
+            \\
+            \\main! : Str -> Str
+            \\main! = |value| value
+        ;
+        var provider = try check.TestEnv.initWithAdmittedBuiltinForTesting(
+            "Provider",
+            provider_source,
+            builtins.builtin_module,
+            builtins.validated_module.capability(),
+            builtins.builtin_indices,
+        );
+        errdefer provider.deinit();
+        provider.checker.fixupTypeWriter();
+        try provider.assertNoErrors();
+
+        const builtin_view = CheckedArtifact.importedView(&builtins.checked_artifact);
+        const provider_imported_envs = [_]*const ModuleEnv{builtins.builtin_module.env};
+        const provider_imported_validations = [_]Check.ValidatedModuleEnv{
+            builtins.validated_module.capability(),
+        };
+        const provider_imported_artifacts = [_]CheckedArtifact.PublishImportArtifact{.{
+            .module_idx = 0,
+            .key = builtins.checked_artifact.key,
+            .view = builtin_view,
+        }};
+        const provider_available_artifacts = [_]CheckedArtifact.ImportedModuleView{builtin_view};
+        var provider_artifact = try publishCheckedArtifactFromCheckedModule(
+            allocator,
+            provider.module_env,
+            try provider.checker.validatedModule(),
+            &provider_imported_envs,
+            &provider_imported_validations,
+            &provider_imported_artifacts,
+            .{
+                .available_artifacts = &provider_available_artifacts,
+                .platform_requirement_solutions = provider.checker.platformRequirementSolutions(),
+                .hoisted_roots = provider.checker.selectedHoistedRoots(),
+            },
+        );
+        errdefer provider_artifact.deinitRetainingModuleEnv(allocator);
+
+        const consumer_source =
+            \\import Provider
+            \\
+            \\main : Str
+            \\main = Provider.main!("hello")
+        ;
+        var consumer = try check.TestEnv.initWithImport(
+            "Consumer",
+            consumer_source,
+            "Provider",
+            &provider,
+        );
+        errdefer consumer.deinit();
+        consumer.checker.fixupTypeWriter();
+        try consumer.assertNoErrors();
+
+        fixture.* = .{
+            .allocator = allocator,
+            .builtins = builtins,
+            .provider = provider,
+            .provider_artifact = provider_artifact,
+            .consumer = consumer,
+        };
+        // Both TestEnv constructors return their checker by value. Rebind the
+        // embedded TypeWriter after the final fixture move before any future
+        // diagnostic rendering.
+        fixture.provider.checker.fixupTypeWriter();
+        fixture.consumer.checker.fixupTypeWriter();
+        return fixture;
+    }
+
+    fn deinit(self: *ValidatedPublicationTestFixture) void {
+        const allocator = self.allocator;
+        self.consumer.deinit();
+        self.provider_artifact.deinitRetainingModuleEnv(allocator);
+        self.provider.deinit();
+        self.builtins.deinit();
+        allocator.destroy(self);
+    }
+};
+
+fn expectValidatedPrebuiltPublicationRejected(
+    allocator: Allocator,
+    root_modules: *const CheckedModules.RootModules,
+    root_capability: Check.ValidatedModuleEnv,
+    imported_modules: Check.ValidatedModuleSet,
+    module_env_storage: CheckedArtifact.ModuleEnvStorage,
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+) !void {
+    var artifact = publishFromPrebuiltModules(
+        allocator,
+        root_modules,
+        root_capability,
+        imported_modules,
+        module_env_storage,
+        imported_artifacts,
+        .{ .available_artifacts = available_artifacts },
+    ) catch |err| {
+        try std.testing.expectEqual(error.CorruptArtifact, err);
+        return;
+    };
+    artifact.deinitRetainingModuleEnv(allocator);
+    return error.TestUnexpectedResult;
+}
+
+fn expectValidatedOrdinaryPublicationRejected(
+    allocator: Allocator,
+    root_env: *ModuleEnv,
+    root_capability: Check.ValidatedModuleEnv,
+    imported_modules: Check.ValidatedModuleSet,
+    module_env_storage: CheckedArtifact.ModuleEnvStorage,
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+) !void {
+    var ctfe_options = eval.CompileTimeFinalization.Options{};
+    var artifact = ValidatedPublication.publishFromCheckedModule(
+        allocator,
+        root_env,
+        root_capability,
+        imported_modules,
+        checkedArtifactPublishInputs(
+            module_env_storage,
+            imported_artifacts,
+            .{ .available_artifacts = available_artifacts },
+            &ctfe_options,
+        ),
+    ) catch |err| {
+        try std.testing.expectEqual(error.CorruptArtifact, err);
+        return;
+    };
+    artifact.deinitRetainingModuleEnv(allocator);
+    return error.TestUnexpectedResult;
+}
+
+fn serializeCheckedArtifactForValidatedPublicationTest(
+    allocator: Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+) ![]align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var writer = collections.CompactWriter.init();
+    const header = try writer.appendAlloc(
+        arena_allocator,
+        CheckedArtifact.CheckedModuleArtifact.Serialized,
+    );
+    try header.serialize(artifact, arena_allocator, &writer);
+
+    const buffer = try allocator.alignedAlloc(
+        u8,
+        collections.CompactWriter.SERIALIZATION_ALIGNMENT,
+        writer.total_bytes,
+    );
+    errdefer allocator.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    return buffer;
+}
+
+test "validated publication: direct rows and root authority reject corrupt bindings before publication" {
+    const allocator = std.testing.allocator;
+    const fixture = try ValidatedPublicationTestFixture.init(allocator);
+    defer fixture.deinit();
+
+    const builtin_view = CheckedArtifact.importedView(&fixture.builtins.checked_artifact);
+    const provider_view = CheckedArtifact.importedView(&fixture.provider_artifact);
+    const imported_envs = [_]*const ModuleEnv{
+        fixture.builtins.builtin_module.env,
+        fixture.provider.module_env,
+    };
+    const imported_validations = [_]Check.ValidatedModuleEnv{
+        fixture.builtins.validated_module.capability(),
+        try fixture.provider.checker.validatedModule(),
+    };
+    const imported_modules = Check.ValidatedModuleSet{
+        .envs = &imported_envs,
+        .modules = &imported_validations,
+    };
+    const imported_artifacts = [_]CheckedArtifact.PublishImportArtifact{
+        .{ .module_idx = 0, .key = fixture.builtins.checked_artifact.key, .view = builtin_view },
+        .{ .module_idx = 1, .key = fixture.provider_artifact.key, .view = provider_view },
+    };
+    const available_artifacts = [_]CheckedArtifact.ImportedModuleView{ builtin_view, provider_view };
+    const root_capability = try fixture.consumer.checker.validatedModule();
+
+    // The ordinary entry rejects before its only mutating step,
+    // `initForRootModule`/`prepareRuntimeEnv`, and its guard allocates nothing.
+    try std.testing.expect(!fixture.consumer.module_env.runtime_prepared);
+    const consumer_node_count = fixture.consumer.module_env.store.nodes.len();
+    const missing_artifact = [_]CheckedArtifact.PublishImportArtifact{imported_artifacts[0]};
+    var failing_allocator = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    const allocation_index = failing_allocator.alloc_index;
+    try expectValidatedOrdinaryPublicationRejected(
+        failing_allocator.allocator(),
+        fixture.consumer.module_env,
+        imported_validations[1],
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &imported_artifacts,
+        &available_artifacts,
+    );
+    try expectValidatedOrdinaryPublicationRejected(
+        failing_allocator.allocator(),
+        fixture.consumer.module_env,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.provider.module_env },
+        &imported_artifacts,
+        &available_artifacts,
+    );
+    try expectValidatedOrdinaryPublicationRejected(
+        failing_allocator.allocator(),
+        fixture.consumer.module_env,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &missing_artifact,
+        &available_artifacts,
+    );
+    try std.testing.expectEqual(allocation_index, failing_allocator.alloc_index);
+    try std.testing.expect(!fixture.consumer.module_env.runtime_prepared);
+    try std.testing.expectEqual(consumer_node_count, fixture.consumer.module_env.store.nodes.len());
+
+    var root_modules = try CheckedModules.initForRootModule(
+        allocator,
+        fixture.consumer.module_env,
+        &imported_envs,
+    );
+    defer root_modules.modules.deinit();
+    try std.testing.expect(root_modules.validateBorrowedGraph(fixture.consumer.module_env, &imported_envs));
+    try std.testing.expect(fixture.consumer.module_env.runtime_prepared);
+
+    const provider_node_count = fixture.provider.module_env.store.nodes.len();
+    const provider_runtime_prepared = fixture.provider.module_env.runtime_prepared;
+    const graph_module_idx = root_modules.module_idx;
+    const graph_module_count = root_modules.modules.moduleCount();
+
+    const extra_artifacts = [_]CheckedArtifact.PublishImportArtifact{
+        imported_artifacts[0],
+        imported_artifacts[1],
+        imported_artifacts[0],
+    };
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &extra_artifacts,
+        &available_artifacts,
+    );
+
+    var duplicate_index = imported_artifacts;
+    duplicate_index[1].module_idx = duplicate_index[0].module_idx;
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &duplicate_index,
+        &available_artifacts,
+    );
+
+    var out_of_range = imported_artifacts;
+    out_of_range[1].module_idx = @intCast(imported_envs.len);
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &out_of_range,
+        &available_artifacts,
+    );
+
+    var swapped_bindings = imported_artifacts;
+    swapped_bindings[0].module_idx = 1;
+    swapped_bindings[1].module_idx = 0;
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &swapped_bindings,
+        &available_artifacts,
+    );
+
+    // Keeping each row's own index but permuting the slice is independently
+    // invalid: publication consumes the exact sealed-prefix order.
+    const reversed_rows = [_]CheckedArtifact.PublishImportArtifact{
+        imported_artifacts[1],
+        imported_artifacts[0],
+    };
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &reversed_rows,
+        &available_artifacts,
+    );
+
+    var key_view_mismatch = imported_artifacts;
+    key_view_mismatch[0].view.key = fixture.provider_artifact.key;
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &key_view_mismatch,
+        &available_artifacts,
+    );
+
+    var view_env_mismatch = imported_artifacts;
+    view_env_mismatch[0].view.module_env = fixture.provider.module_env;
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &view_env_mismatch,
+        &available_artifacts,
+    );
+
+    var same_content_builtin = try can.BuiltinStatic.moduleView(
+        allocator,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    defer same_content_builtin.deinit();
+    var same_content_capability = try Check.admitBuiltinOwned(
+        allocator,
+        same_content_builtin.env,
+        compiled_builtins.builtinIndices(can.CIR),
+    );
+    defer same_content_capability.deinit();
+    try std.testing.expect(same_content_builtin.env != fixture.builtins.builtin_module.env);
+    try std.testing.expect(base.ModuleIdentity.eql(
+        same_content_builtin.env.contentIdentityHash().?,
+        fixture.builtins.builtin_module.env.contentIdentityHash().?,
+    ));
+    const same_content_envs = [_]*const ModuleEnv{
+        same_content_builtin.env,
+        fixture.provider.module_env,
+    };
+    const same_content_validations = [_]Check.ValidatedModuleEnv{
+        same_content_capability.capability(),
+        imported_validations[1],
+    };
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        .{ .envs = &same_content_envs, .modules = &same_content_validations },
+        .{ .checked_source = fixture.consumer.module_env },
+        &imported_artifacts,
+        &available_artifacts,
+    );
+
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.provider.module_env },
+        &imported_artifacts,
+        &available_artifacts,
+    );
+
+    const reversed_envs = [_]*const ModuleEnv{
+        fixture.provider.module_env,
+        fixture.builtins.builtin_module.env,
+    };
+    var wrong_graph = try CheckedModules.initForRootModule(
+        allocator,
+        fixture.consumer.module_env,
+        &reversed_envs,
+    );
+    defer wrong_graph.modules.deinit();
+    try std.testing.expect(!wrong_graph.validateBorrowedGraph(
+        fixture.consumer.module_env,
+        &imported_envs,
+    ));
+    try expectValidatedPrebuiltPublicationRejected(
+        allocator,
+        &wrong_graph,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &imported_artifacts,
+        &available_artifacts,
+    );
+
+    // Every rejected prebuilt call leaves the caller's graph and all borrowed
+    // providers untouched.
+    try std.testing.expectEqual(graph_module_idx, root_modules.module_idx);
+    try std.testing.expectEqual(graph_module_count, root_modules.modules.moduleCount());
+    try std.testing.expect(root_modules.validateBorrowedGraph(fixture.consumer.module_env, &imported_envs));
+    try std.testing.expectEqual(provider_runtime_prepared, fixture.provider.module_env.runtime_prepared);
+    try std.testing.expectEqual(provider_node_count, fixture.provider.module_env.store.nodes.len());
+}
+
+test "validated publication: prebuilt graph is reused and matches ordinary real publication" {
+    const allocator = std.testing.allocator;
+    const fixture = try ValidatedPublicationTestFixture.init(allocator);
+    defer fixture.deinit();
+
+    const builtin_view = CheckedArtifact.importedView(&fixture.builtins.checked_artifact);
+    const provider_view = CheckedArtifact.importedView(&fixture.provider_artifact);
+    const imported_envs = [_]*const ModuleEnv{
+        fixture.builtins.builtin_module.env,
+        fixture.provider.module_env,
+    };
+    const imported_validations = [_]Check.ValidatedModuleEnv{
+        fixture.builtins.validated_module.capability(),
+        try fixture.provider.checker.validatedModule(),
+    };
+    const imported_modules = Check.ValidatedModuleSet{
+        .envs = &imported_envs,
+        .modules = &imported_validations,
+    };
+    const imported_artifacts = [_]CheckedArtifact.PublishImportArtifact{
+        .{ .module_idx = 0, .key = fixture.builtins.checked_artifact.key, .view = builtin_view },
+        .{ .module_idx = 1, .key = fixture.provider_artifact.key, .view = provider_view },
+    };
+    const root_capability = try fixture.consumer.checker.validatedModule();
+
+    // With no available registry, both nonempty method registries enter the
+    // lookup scope solely through the ordered direct-import prefix.
+    try std.testing.expect(fixture.builtins.checked_artifact.method_registry.entries.len != 0);
+    try std.testing.expect(fixture.provider_artifact.method_registry.entries.len != 0);
+
+    var root_modules = try CheckedModules.initForRootModule(
+        allocator,
+        fixture.consumer.module_env,
+        &imported_envs,
+    );
+    defer root_modules.modules.deinit();
+    const graph_module_idx = root_modules.module_idx;
+    const graph_module_count = root_modules.modules.moduleCount();
+    const root_runtime_prepared = fixture.consumer.module_env.runtime_prepared;
+    const provider_runtime_prepared = fixture.provider.module_env.runtime_prepared;
+    const provider_node_count = fixture.provider.module_env.store.nodes.len();
+
+    var prebuilt = try publishFromPrebuiltModules(
+        allocator,
+        &root_modules,
+        root_capability,
+        imported_modules,
+        .{ .checked_source = fixture.consumer.module_env },
+        &imported_artifacts,
+        .{},
+    );
+    defer prebuilt.deinitRetainingModuleEnv(allocator);
+    try prebuilt.verifyComplete();
+    try std.testing.expectEqual(@as(usize, 2), prebuilt.method_lookup_scope.module_ids.len);
+    try std.testing.expectEqualSlices(
+        u8,
+        &fixture.builtins.checked_artifact.key.bytes,
+        &prebuilt.method_lookup_scope.module_ids[0].bytes,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &fixture.provider_artifact.key.bytes,
+        &prebuilt.method_lookup_scope.module_ids[1].bytes,
+    );
+
+    try std.testing.expectEqual(graph_module_idx, root_modules.module_idx);
+    try std.testing.expectEqual(graph_module_count, root_modules.modules.moduleCount());
+    try std.testing.expect(root_modules.validateBorrowedGraph(fixture.consumer.module_env, &imported_envs));
+    try std.testing.expectEqual(root_runtime_prepared, fixture.consumer.module_env.runtime_prepared);
+    try std.testing.expectEqual(provider_runtime_prepared, fixture.provider.module_env.runtime_prepared);
+    try std.testing.expectEqual(provider_node_count, fixture.provider.module_env.store.nodes.len());
+
+    var ordinary = try publishCheckedArtifactFromCheckedModule(
+        allocator,
+        fixture.consumer.module_env,
+        root_capability,
+        &imported_envs,
+        &imported_validations,
+        &imported_artifacts,
+        .{},
+    );
+    defer ordinary.deinitRetainingModuleEnv(allocator);
+    try ordinary.verifyComplete();
+    try std.testing.expectEqualSlices(
+        CheckedArtifact.CheckedModuleArtifactKey,
+        prebuilt.method_lookup_scope.module_ids,
+        ordinary.method_lookup_scope.module_ids,
+    );
+
+    try std.testing.expectEqual(graph_module_idx, root_modules.module_idx);
+    try std.testing.expectEqual(graph_module_count, root_modules.modules.moduleCount());
+    try std.testing.expect(root_modules.validateBorrowedGraph(fixture.consumer.module_env, &imported_envs));
+    try std.testing.expectEqual(root_runtime_prepared, fixture.consumer.module_env.runtime_prepared);
+    try std.testing.expectEqual(provider_runtime_prepared, fixture.provider.module_env.runtime_prepared);
+    try std.testing.expectEqual(provider_node_count, fixture.provider.module_env.store.nodes.len());
+
+    try std.testing.expect(std.meta.eql(prebuilt.key.bytes, ordinary.key.bytes));
+    const prebuilt_bytes = try serializeCheckedArtifactForValidatedPublicationTest(allocator, &prebuilt);
+    defer allocator.free(prebuilt_bytes);
+    const ordinary_bytes = try serializeCheckedArtifactForValidatedPublicationTest(allocator, &ordinary);
+    defer allocator.free(ordinary_bytes);
+    try std.testing.expectEqualSlices(u8, prebuilt_bytes, ordinary_bytes);
 }
 
 test "typeCheckModule rejects a corrupt public owner before identity dedup" {

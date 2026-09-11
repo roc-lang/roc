@@ -1790,6 +1790,53 @@ artifacts, and records may then be destroyed without relying on package-map
 iteration order. A `BuildEnv`-owned Builtin module outlives the coordinator and
 is released only after this complete borrower teardown.
 
+Evaluation helpers obey the same admission boundary. A pre-published Builtin
+and each available checked import carry the exact capability supplied by their
+owner; a helper that loads its own Builtin owns its admission until all local
+borrowers are destroyed. Borrowed capabilities are validated against their
+exact environment before import declaration lookup, canonicalization,
+auto-import population or any other provider dereference. A pre-published
+artifact must name that same environment pointer; equal content is not a
+substitute for exact ownership. Canonical import resolution fixes each consumer's
+direct-import prefix before checking, excludes the unchecked consumer itself
+and unused available providers, and pairs environments and capabilities in
+that exact order. Transitive public owners enter through explicit provider-
+produced dependency data, never reconstructed names or solved types.
+
+Artifact publication preserves each checked module's sealed import index
+space. Evaluation uses a per-root graph with the exact direct-import prefix
+and root, validates its root capability and paired imports, and supplies
+artifact references indexed for that consumer. It never rewrites admitted
+modules into a global index space or prepares a borrowed Builtin by casting
+away constness. For each sealed direct-prefix index, the supplied artifact
+view's environment, raw imported environment and capability-validated
+environment are exactly the same pointer. The index comes from the checker's
+sealed prefix, not a post-check name or content-identity lookup.
+Dependency artifacts are published before their consumers;
+teardown destroys consumers before providers, including failure exits.
+Neither an absent capability nor an unavailable dependency permits a raw-
+environment fallback, re-admission of shared data, or a validation-bit edit.
+
+The shared validated-publication boundary has an ordinary entry and a prebuilt
+entry. The ordinary entry validates root/storage and import authority before
+preparing its runtime graph, constructs that graph once, and delegates. The
+prebuilt entry consumes the caller's existing borrowed `RootModules` unchanged;
+it does not repeat graph construction or runtime preparation. Both validate
+the root/storage identity, exact sealed import pair, and graph ownership before
+calling low-level artifact publication with the caller's configured finalizer.
+Direct artifact rows are the exact ordered sealed direct-import prefix:
+equal lengths, each row's index equal to its slice position, equal stable artifact-identity
+digests (`row.key.bytes == row.view.key.bytes`), and view environment equal to
+the exact raw/capability environment at that index. The other key components
+are derivation/header evidence, not additional identity; this guard does not
+claim to authenticate them by comparing redundant copies.
+Canonical order is part of the publication contract: existing method-scope
+publication consumes direct rows in order. The guard rejects reordered rows;
+it does not normalize them or permit equal keys to publish different scopes.
+Available-artifact and relation registries are separate inputs, not additional
+members of this direct-import map. This guard does not change checking,
+finalizer selection, public-owner closure or diagnostic-only behavior.
+
 After admission, `prepareRuntimeEnv` is the sole sanctioned runtime-only
 mutation. It may enable runtime identifier insertion, install module-name
 identifiers, and finalize runtime lookup accelerators, but it cannot modify any
@@ -6540,9 +6587,35 @@ including exact full-bitset and post-sweep inventory/registration assertions;
 refreshed broader `81840` passes 18/18. Final normal producer-regenerated gate
 `16444` passes 75/75 tests and 41/41 steps, including three additional
 shared-helper regressions, regenerated Builtins, unchanged schema-86 golden,
-serde and native/wasm sizes. Formatting and all reviewed hashes match. Root
-is describing and publishing the independently accepted bounded checkpoint.
+serde and native/wasm sizes. Formatting and all reviewed hashes match. The
+described checkpoint is published as `8d7abd78`, with exact draft-PR readback
+verified.
 No production rule or new retirement mechanism is authorized by this calibration.
+
+The following stored-value-origin slice is preserved separately at `suoqrzzl`
+/ `e580bea2`; its non-OOM producer and full-tail pruning/fresh-admission tests
+pass focused gates, but helper OOM and final normal certification remain open.
+Its normal evaluation gate regenerated Builtins and then exposed an unmigrated
+raw-environment `Check.init` caller in `eval/inspected.zig`; the evaluation
+fixture has not run. Active sibling `ottkxrkt` first extracts the shared
+validated-publication guard declared in the admission section. Its frozen
+implementation preserves the existing real finalizer and prebuilt graph,
+enforces exact root/direct-import authority before publication, and adds
+authentic corruption and serialized-parity tests. Independent implementation
+review accepts the corrected ordered-prefix source, including a narrow TestEnv
+fix sourcing Builtin indices from the imported checker's explicit context.
+Parity pins two authentic method-bearing direct providers with an empty
+available registry. Focused normal `87215` passes 3/3 tests and 25/25 steps,
+including regenerated Builtins. Final normal `75943` passes 81/81 tests and
+41/41 steps, including shared graph/import lifetimes, unchanged schema-86
+golden, static/mutable serde and native/wasm sizes. Formatting and reviewed
+hashes match; root is describing and publishing this accepted checkpoint.
+This phase does not change
+Check, schema, evaluation lifetime/index handling, public-owner closure, or
+diagnostic-only behavior. A later opaque prepared-publication stage has only
+read-only feasibility evidence; no unfinished artifact may escape as a
+finished artifact or provide finalized constant data.
+
 This does not
 sweep dormant paths, successful in-place resize permutations, or the full
 checker tail under allocation failure. Genuine

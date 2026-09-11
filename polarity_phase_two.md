@@ -750,9 +750,104 @@ described in full, with trailers; W6b currently has its provisional title):
 | `ounopmnm` / `6094ad09` | W6b canonical malformed supplied-field syntax and child-error calibration | independently accepted; semantic, isolated 2/2, broader 16/16 and normal 70/70 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
 | `soqtnxus` / `e7b8716e` | W6b full-tail checked-child localization | independently accepted; semantic, isolated 2/2, broader 17/17 and normal 71/71 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
 | `rtwsumuy` / `79392598` | W6b current genuine record-update rejections | four independent normal reruns complete: each crashes at Expected-plan topology; independently accepted documentation-only checkpoint pushed and exact PR readback verified, no compiler changes |
-| `wlzlxpnu` | W6b first-poison owner-authority calibration | independently accepted; semantic, isolated 2/2, broader 18/18 and normal 75/75 tests (41/41 steps) pass; describing and publishing |
+| `wlzlxpnu` / `8d7abd78` | W6b first-poison owner-authority calibration | independently accepted; semantic, isolated 2/2, broader 18/18 and normal 75/75 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
+| `ottkxrkt` / publication pending | W6b shared validated-publication prerequisite | corrected source independently accepted; focused normal 3/3 (25/25 steps), final normal 81/81 (41/41 steps) pass; eval capability/owner-closure migration remains separate |
 
-The published `jared/polarity` checkpoint is `rtwsumuy` / `79392598`, above
+The separate origin slice `suoqrzzl` is preserved at `e580bea2` and is not in
+this active migration ancestry. Its Check `0a829c3e` non-OOM producer/oracle
+slice has independent review, semantic `68442`, isolated `51034` (4/4), and
+broader `84670` (21/21). It includes actual fresh admission after ordinary
+pruning/rebuild. Helper OOM, final normal certification and executed evaluation
+remain pending. The root will rebase that saved slice after the prerequisite
+migration is reviewed and published; no origin work was discarded.
+
+Normal eval `92836` on that saved slice regenerated Builtins, then failed to
+compile `eval/inspected.zig:1808`: `Check.init` requires `ValidatedModuleSet`,
+but the caller supplies raw environments. Independent scope review rejects a
+one-line wrapper. The same helper includes unchecked self/unused availability
+in the checker index space and later rewrites admitted modules' import indexes.
+`ottkxrkt` isolates the shared publication-guard prerequisite above the
+published checkpoint. The design's admission section declares the broader
+capability/lifetime/publication migration boundary. No new typing or solver
+rewrite is authorized.
+Independent review accepts the revised design contract after adding capability
+validation before every provider dereference and exact artifact/environment/
+capability pointer equality at each sealed import slot. Implementation and
+runtime gates remain unaccepted for that broader migration.
+Proposal review accepts preserving the package compiler's prebuilt graph via
+a shared prebuilt publication guard and sourcing later capabilities from the
+explicit owner after checker transfer. It blocks two owner-closure proposals:
+publishing dependency artifacts in diagnostic-only checking can execute
+compile-time roots even with empty explicit/hoisted inputs; forwarding every
+provider owner binding includes private/unused transitive authority. Neither
+is authorized. The next bounded investigation is an explicit pre-publication
+public-owner producer shared with the existing public API analysis, preserving
+diagnostic-only behavior without broadening authority or guessing from names.
+Independent review accepts a smaller first implementation phase: extract the
+shared validated prebuilt publication guard into the check layer, preserve
+the package compiler's graph reuse, and enforce the exact ordered direct-artifact
+prefix with focused positive/negative and ordinary/prebuilt parity tests.
+The ordinary wrapper must validate authority before runtime graph preparation.
+Artifact-key equality here means the existing stable identity digest, not a
+new whole-header consistency or artifact-admission check.
+This phase does not change eval helpers, diagnostic-only behavior or owner
+closure. The author froze the helper, check-module export and package-compiler
+delegation, with two authentic corruption/parity tests. Root formatting made
+no changes; Check remains `cf850d13`. The allocation-free rejection checks do
+not claim rollback of the existing graph-construction or whole-publication
+allocation paths.
+The first adversarial review found a blocking ordering defect: the proposed
+order-insignificant bijection permits different method scopes under the same
+artifact key when available providers do not mask direct-row order. The design
+now requires `row_index == module_idx`, matching the coordinator producer.
+The initial reversed-row positive test became rejection coverage; parity now
+uses canonical rows without a full available registry masking their role.
+The focused normal build `57165` closed with exit 2 (22/25 steps), before either
+new test executed: `TestEnv.initWithImportCheckRun` imports `compiled_builtins`,
+which is unavailable from the compile module's check dependency. Builtin
+regeneration itself succeeded. The author and reviewer agreed on the narrow
+harness fix using the imported checker's explicit Builtin context.
+Corrected source is now frozen and independently accepted: guard `f5cc6120`,
+TestEnv `f80bfe30`, compile package `e16c16b6`, check export `b1b351dd`.
+The helper requires the ordered prefix; TestEnv copies the provider's explicit
+Builtin indices before allocating. Reversed rows reject, and empty-available
+real-publication parity pins exactly `[Builtin, Provider]` using two authentic
+nonempty method registries. Focused normal `87215` passes 3/3 tests and 25/25
+steps, including real publication and regenerated Builtins. Final normal
+`75943` passes 81/81 tests and 41/41 steps (can 11, types 10, check 53,
+compile 7), including borrowed-graph, post-init imported-provider lifetime and
+terminal-admission regressions. The normal graph uses the regenerated Builtins
+from the focused run; unchanged schema-86 golden, static/mutable serde and
+native/wasm sizes pass. Formatting and all reviewed hashes match. Check,
+ModuleEnv and cache files are unchanged. Root is describing and publishing
+this independently accepted bounded checkpoint; no whole-suite or feature
+completion is claimed. Logs and review freezes are retained under
+`/private/tmp/polarity-eval-authority-gates.CG06Yv`.
+
+Read-only independent audit finds a later prepared-publication stage feasible:
+consumer preparation uses provider recipe/interface data, not finalized
+ConstStore or compile-time-root payloads. The existing public-owner collector
+must remain the producer. A successful opaque preparation handle must precede
+release of its exact public-owner certificate; a distinct internal preparation
+view must exclude finalized-only data and mutable exported-constant state.
+Preparation requires comprehensive pre-finalization verification, and finishing
+must validate exact finished dependencies and run the real finalizer once in
+provider-before-consumer order. Discard and finish failure retain the module
+environment. This is feasibility evidence, not an implemented or accepted
+prepared API; its design and implementation plan remain separate next work.
+Independent scope review accepts a first private preparation-view refactor:
+zero-allocation indexed projection, preserved registry ordering/duplicates,
+narrow identity/procedure/hosted access, and exported constant headers/closures
+without mutable template state. Full finished views remain only at the existing
+finalizer boundary. This first step must preserve publication behavior and
+the existing Debug invariant policy; it does not expose a prepared handle.
+The later lifecycle split must first replace exhaustiveness-site ProblemStore
+writes with an owned assignment recipe and failure-safe assignment cleanup.
+Prepared-view borrows must end before provider finalization, which may grow
+the provider's canonical-name store.
+
+The published `jared/polarity` checkpoint is `wlzlxpnu` / `8d7abd78`, above
+`rtwsumuy` / `79392598`,
 `soqtnxus` / `e7b8716e`,
 `ounopmnm` / `6094ad09`,
 `susumyrk` / `424c29e2`,

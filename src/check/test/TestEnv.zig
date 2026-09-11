@@ -76,8 +76,9 @@ fn initWithImportCheckRun(
     other_test_env: *const TestEnv,
     check_run: CheckRun,
 ) TestEnvError!TestEnv {
-    const compiled_builtins = @import("compiled_builtins");
     const gpa = std.testing.allocator;
+    const builtin_indices = other_test_env.checker.builtin_ctx.builtin_indices orelse
+        return error.CorruptEmbeddedBuiltins;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -96,7 +97,6 @@ fn initWithImportCheckRun(
 
     // Reuse the Builtin module from the imported module
     // This ensures type variables for auto-imported types (Bool, Try, Str) are shared
-    const builtin_indices = compiled_builtins.builtinIndices(CIR);
     const builtin_env = other_test_env.builtin_module.env;
 
     // Initialize the module_env so we can use its ident store
