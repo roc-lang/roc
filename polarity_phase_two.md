@@ -742,10 +742,11 @@ described in full, with trailers; W6b currently has its provisional title):
 | `mwttkmrx` / `e2380965` | W6b checked-error base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 51/51 tests, 41/41 steps pass |
 | `nrkxkkmn` / `a1757bdc` | W6b owner-retirement reservation atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 54/54 tests, 41/41 steps pass |
 | `uovwznvn` / `2df80890` | W6b preexisting-malformed-base recovery authority | pushed and exact PR readback verified; reviewed bounded WIP; final normal 57/57 tests, 41/41 steps pass |
-| `unupstyw` | W6b active record-update recovery rebuild and serialization | reviewed bounded WIP; final normal 58/58 tests, 41/41 steps pass; publication being finalized |
+| `unupstyw` / `8a1bcb17` | W6b active record-update recovery rebuild and serialization | pushed and exact PR readback verified; reviewed bounded WIP; final normal 58/58 tests, 41/41 steps pass |
+| `tonzpmlt` | W6b record-update projection relation calibration | focused 3/3, independent full-delta review and normal 60/60 tests, 41/41 steps pass; publication being finalized |
 
-The local and remote `jared/polarity` bookmarks now point at `uovwznvn` /
-`2df80890`, directly above `nrkxkkmn` / `a1757bdc`,
+The local and remote `jared/polarity` bookmarks now point at `unupstyw` /
+`8a1bcb17`, directly above `uovwznvn` / `2df80890`, `nrkxkkmn` / `a1757bdc`,
 `mwttkmrx` / `e2380965`, `mpqnvuvq` / `9c295876`,
 `onmovlvr` / `92741c58`,
 `txopxlzx` / `10f613d6`,
@@ -754,7 +755,7 @@ The local and remote `jared/polarity` bookmarks now point at `uovwznvn` /
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`unupstyw` owns active recovery rebuild/serialization coverage
+`tonzpmlt` owns the next projection-relation calibration task
 and is not part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
@@ -4416,6 +4417,126 @@ subsets below do not override this latest checkpoint.
   readback. This completes the bounded active recovery idempotence/serde task,
   not semantic clean-cache admission, first-rebuild OOM, nonidentity repack,
   full R1, R2/R3, option (e), adapters or W6b.
+
+- Publication of `unupstyw` is complete: Git commit
+  `8a1bcb178db1556ea912ccf951e7ec0ad7d03bd1` was fast-forwarded from `2df80890`
+  to `jared/polarity`. The exact PR #10434 head, full updated body and draft
+  state are verified in `recovery-serde-pr-readback.json`. New child
+  `tonzpmltuxkwlkvzmwnwuqowqxsxznml` owns the next projection-retirement task.
+  Its current phase is read-only rule planning, including later-slot status,
+  actual post-mismatch relations and later base/owner erasure. No guessed
+  base-node phase, silent operand-poisoning change, production edit or new
+  normative rule is approved. Root and independent adversarial review precede
+  declaration and implementation of the agreed bounded R2 rule.
+
+- Fresh normal isolated-test baseline 85926 now reruns all four historical
+  failures on unchanged Check `b42c46c9`: 1/5 passes, four crash, 5/7 steps.
+  Empty-record and missing-field updates fail retirement replay with only one
+  `record_update_field` plan (indices 1 and 3 respectively), omitting the
+  mandatory base/complete owner group. Field-mismatch-3 and optional wrong
+  payload instead fail `invalid record-update Expected plan topology`; these
+  supersede their earlier generic local-copy-proof panic reports. Exact output
+  is in `record-r2r3-four-normal-current-baseline.txt`. This diagnostic is
+  separate from the published 58-test checkpoint gate, and does not certify
+  any fix. R2 proposal remains read-only; the other two cases remain R3 scope.
+
+- R2 author proposal is now under independent adversarial review against
+  published Check `b42c46c9`. It proposes a tagged owner draft, unchanged
+  successful P_B, exact arbitrary-index P_B/P_F retirement membership and a
+  separate high-half retirement reason. None is approved yet. Root review
+  identified unresolved construction-provenance differences in the proposed
+  owned relation, intervening field-check refinements, partial unifier commits,
+  final-relation authority and later base/child phases. A separate bounded
+  read-only author audit checks the actual-field relation and its options;
+  source-reachable assumptions must not become invariant panics. No build or
+  production edit is currently in flight. The published 58-test checkpoint
+  remains the latest accepted gate.
+
+- Independent preliminary R2 review requests changes before normative,
+  schema or production edits. The existing owned helper is not option-preserving:
+  it substitutes the internal actual-field record for the live source
+  construction owner. Projection mismatch also does not prove a later actual
+  or final relation's result. Successful final unification is not shown to be
+  necessary retirement authority; if a downstream rule requires it, it needs
+  explicit replayable evidence. Early reservation also needs a declared
+  transition/coexistence for later mixed failures, not a stranded draft or
+  new source-reachable panic. The next bounded author task is test-only
+  calibration of authentic one-field projection/body/actual/final seams,
+  preserving exact raw base-plan and copy metadata without requiring all
+  solved representatives to remain fixed. No R2 admission rule is declared.
+
+- The author has begun additive test-only calibration for the empty-base and
+  typo-base fixtures. The explicit staged seam uses real local-statement,
+  base-check, base-plan publication, field-projection, stored-value checking,
+  actual-relation and final-relation APIs; it is not full-file or terminal
+  admission coverage. The current poison mode and prospective exact-options
+  no-report mode use independent fixtures. The nongeneralized optional-width
+  candidate remains unmeasured and is deferred from this initial task. No
+  calibration build result is available yet.
+
+- Calibration harness maintenance, amended into owning change `tonzpmlt`:
+  `TestEnv` returns its checker by value, so the staged driver calls existing
+  `fixupTypeWriter` at the fixture's final address and asserts the exact
+  borrowed import-mapping pointer before checking. A later source-layout change
+  exposed the stale pointer as integer overflow during the actual mismatch's
+  diagnostic snapshot; producer relations and expected results were unchanged.
+  The isolated four-line repair, Check SHA `a4ce7b83`, passes independent
+  sol-ultra review, diagnostic-only 3/3 and normal producer-regenerated 3/3
+  tests, 7/7 steps (`87270`, `9667`). Descendant work is preserved through jj;
+  this is not a new R2 rule or broader test-harness redesign.
+
+- Calibration author freeze adds two tests and test helpers only (1,144 lines)
+  in Check.zig; the compiler paths and schema remain unchanged. Root pre-freeze
+  review corrected raw-syntax-ID equality and separated immediate-after-actual
+  observations from post-final observations. First semantic gate 96632 rejected
+  a local `base` shadowing the import. The narrow name correction is frozen as
+  Check `6af8cebf`, jj `18b8e3ac`; semantic rerun 57882 passes. Focused runtime
+  15775 and independent actual full-delta adversarial review are running.
+  There is no runtime outcome or normal publication-gate pass yet. The actual
+  and final result assertions remain calibration hypotheses until measured.
+
+- Focused runtime 15775 fails both new cases (1/3 passes) before their outcome
+  comparison: the field snapshot incorrectly crosses real literal-plan
+  publication in `checkStoredValueExpr`. The typed integer's plan-plus-one
+  word changes 0 to 1; the string's changes 0 to 2. Root traced both words to
+  `literal_dispatch_plan_plus_one` in the actual Node payload definitions.
+  The author has a narrow test-only correction: keep owner/base snapshots
+  across body checking, pin the checked field's literal publication, and
+  start its immutable relation snapshot after body checking. No actual/final
+  outcome expectation is changed on this evidence; those comparisons were
+  not reached. Production code and schema remain unchanged.
+
+- The literal-phase correction freezes as Check `9eee4533`, jj `f845c7f9`;
+  semantic 9835 passes. Runtime 75134 reaches the actual observations in both
+  fixtures: current poisoning reports a problem, detaches the raw base from
+  its retained source, and leaves the raw base erroneous; exact-options
+  no-report returns mismatch while preserving that connection and a structured
+  base. Both final relations return unified. The uncalibrated poison-final
+  expectation was suppressed, so the run remains 1/3 passing. Root authorized
+  only three observed-oracle corrections (final unified, both poison
+  connectivity assertions false), not production edits. Diagnostic parity is
+  later in the test and still awaits a passing rerun. These observations do
+  not establish the optional-width candidate or an R2 retirement rule.
+
+- Measured calibration freeze Check `57f65d4c`, jj `09eea2a4`, passes direct
+  runtime 68344 (3/3), including both modes in both fixtures, all metadata and
+  literal-phase assertions, and exact Problem/context/operand/formatted-type-
+  snapshot parity. This is not full rendered-report parity. Independent final
+  actual full-delta adversarial review accepts this bounded additive test
+  change; there are no production, schema or prior-test edits. Normal
+  producer-regenerated combined gate 67106 is running. Source is frozen while
+  the driver prepares publication. The author has only a read-only next-task
+  planning assignment for the optional-width candidate; no next implementation
+  or R2 normative rule is authorized yet.
+
+- Final normal producer-regenerated gate 67106 passes 60/60 tests and 41/41
+  steps: canonicalization 10, types 10, checker 35 and compile/serde 5, with
+  regenerated Builtins, schema-85 golden, serialization and native/wasm sizes.
+  The driver is finalizing the jj description and WIP push, then exact draft-PR
+  head/body verification. This completes the bounded calibration task, not an
+  R2 implementation, the optional-width counterexample, whole R1/R3 admission,
+  option (e), runtime adapters or W6b. The four historical record-update
+  crashes remain unresolved; a passing calibration is not a passing fix.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

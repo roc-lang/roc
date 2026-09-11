@@ -6289,15 +6289,43 @@ steps, including schema-85 golden, serialization and native/wasm sizes.
 Formatting and exact compiler hashes match review; push and exact draft-PR
 head/body readback are verified. Clean-cache recovery rejection is unchanged. This does
 not certify complete record-update admission.
-Child `unupstyw` adds repeated successful rebuild and active
+Published `unupstyw` / `8a1bcb17` adds repeated successful rebuild and active
 readonly/mutable serialization coverage for this recovery fixture, with exact
 bytes, graph authority and mutable-copy independence. Semantic validation and
 the broad 17/17 owner-retirement runtime gate pass, and independent full-delta
 review accepts the bounded test-only change. The normal producer-regenerated
 combined gate passes 58/58 tests and 41/41 steps, including schema-85 golden,
 serialization and native/wasm sizes. Formatting and compiler hashes match
-review; description and publication are being finalized. It does not authorize
+review; push and exact draft-PR head/body readback are verified. It does not authorize
 clean-cache admission of diagnostic-bearing artifacts or production changes.
+New child `tonzpmlt` begins evidence-backed R2 projection-retirement planning.
+The normal isolated baseline reproduces both empty-record and missing-field
+projection retirement panics; the other two field-relation cases remain R3.
+Independent adversarial review requests changes to the author's R2 proposal;
+it is not a declared rule. The proposed ownership-local diagnostic relation
+must preserve construction provenance, and neither a later relation's result
+nor the base's later live phase may be assumed from the earlier projection
+alone. A successful final relation is not established as necessary destructive
+authority. Mixed later failures also need an explicit lifecycle rather than a
+stranded draft. The test-only calibration of the actual projection/body/relation
+seam rebinds the checker's TypeWriter after the by-value fixture reaches its
+final address, and asserts exact borrowed import-mapping identity before any
+diagnostic snapshot. This is test-harness initialization, not a solver change.
+The isolated final-address repair passes independent review and its normal
+producer-regenerated 3/3 test, 7/7 step gate.
+The calibration
+seam now passes its focused runtime gate (3/3) and independent actual full-delta
+review. In both empty-base and typo-base fixtures, current poisoning detaches
+the raw base from the retained source and leaves it erroneous; an exact-options
+no-report experiment preserves connectivity and a structured base. Both final
+relations return unified. Plan/copy/registration metadata remains unchanged,
+and the healthy field's literal-plan publication is captured in its correct
+post-body phase. These are staged producer observations, not terminal admission
+or an R2 rule; the optional-width late-unification candidate remains unmeasured.
+The normal producer-regenerated combined gate passes 60/60 tests and 41/41
+steps, with production and schema unchanged. The driver is finalizing the
+checkpoint description, WIP publication and exact draft-PR readback. Complete
+producer/later-erasure semantics still require review before implementation.
 Other preexisting-base shapes, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
 gates remain pending, as do later established-base failure causes and complete
