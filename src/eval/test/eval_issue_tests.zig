@@ -1667,9 +1667,13 @@ pub const tests = [_]TestCase{
         // and returns that record either updated (`{ ..model, query }`) or
         // untouched on the two branches of an `if`, while the caller builds a
         // nominal value through a method of a type declared in another module
-        // on its error path. The ARC solve must account for the captured
-        // record's field places consistently on both branches; the run
-        // produces one effect.
+        // on its error path. The captured record is the captures struct's only
+        // refcounted field, so its reads are ownership-complete and both
+        // branch reads canonicalize to the one dominating read before the
+        // comparison. Dismantle analysis must classify those branch reads by
+        // that representative's plan rather than commit a take of the
+        // captures struct on a read emitted as the representative's alias;
+        // the run produces one effect.
         .name = "issue 11275: closure returning captured record updated or unchanged solves ARC",
         .source_kind = .module,
         .imports = &.{.{

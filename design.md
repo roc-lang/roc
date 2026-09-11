@@ -12096,8 +12096,8 @@ and rewrites those later reads as explicit local aliases before ARC solving.
 That rewrite is materialized only when the representative commits a dismantle
 plan, and a canonicalized read is classified by that same plan: under a
 committed representative it is an occurrence of the representative (a whole
-use when its target binds owned, a transparent alias when borrowed), and
-otherwise it stays an ordinary field read of its root. Candidates are solved
+use when its target is emitted owned, a transparent alias when it stays
+borrowed), and otherwise it stays an ordinary field read of its root. Candidates are solved
 representatives first; a representative is a complete field read whose layout
 is a proper part of its root's layout, so the order is acyclic and each
 deferred read is settled exactly once.

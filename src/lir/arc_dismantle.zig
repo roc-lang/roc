@@ -690,8 +690,10 @@ const Analysis = struct {
 
     /// A complete read canonicalized to a dominating representative. If the
     /// representative commits a plan, the read is materialized as a pure
-    /// alias of it and is scanned as that alias now: an owned target is a
-    /// whole use of the representative, a borrowed target reads through it.
+    /// alias of it and is scanned as that alias now: a target emitted owned
+    /// is a whole use of the representative (an owned-demanded borrowed
+    /// target joins it once demand is closed), and a borrowed target reads
+    /// through it.
     /// The root defers the read until the representative's plan is known;
     /// the representative's plan never depends on the root's, so solving
     /// representatives first settles every deferred read exactly once. The
@@ -1703,6 +1705,19 @@ pub fn compute(
 
     analysis.closeOwnedDemand();
 
+    // Owned demand is closed only now. A deferred read whose borrowed target
+    // is re-emitted owned retains through its representative exactly like an
+    // owned target, so it is the same whole use of that representative.
+    var demand_it = analysis.candidates.valueIterator();
+    while (demand_it.next()) |candidate| {
+        for (candidate.equivalenced_reads.items) |deferred| {
+            const target_index = @intFromEnum(deferred.read.target);
+            if (!solution.isBorrowed(deferred.read.target) or !analysis.owned_demand[target_index]) continue;
+            const representative = analysis.candidates.getPtr(@intFromEnum(deferred.representative)) orelse continue;
+            try representative.whole_uses.append(gpa, deferred.read.stmt);
+        }
+    }
+
     // Second phase: verify the surviving candidates' read shapes and spines,
     // and build the output.
     var result = Dismantles{
@@ -2190,7 +2205,7 @@ pub fn compute(
                 try result.owned_only_takes.put(gpa, read.stmt, take);
                 const target_index = @intFromEnum(read.target);
                 const prior = result.owned_only_binding_roots[target_index];
-                if (prior != no_index and prior != @intFromEnum(local)) {
+                if (prior != no_index and prior != @intFromEnum(activation_root)) {
                     dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
                 }
                 result.owned_only_binding_roots[target_index] = @intFromEnum(activation_root);
@@ -2245,6 +2260,11 @@ pub fn compute(
         const representative_local: LIR.LocalId = @enumFromInt(representative);
         if (!result.containers.contains(representative_local) and
             !result.owned_only_containers.contains(representative_local)) continue;
+        // The deferred reads of this alias were settled against this exact
+        // plan, which only a candidate solved in dependency order can hold.
+        if (order_marks[representative] != .ordered) {
+            dismantleInvariant("ARC dismantle materialized an alias of a representative that was never solved");
+        }
         const stmt_index = projected_stmt[local_index];
         if (stmt_index == no_index) continue;
         const stmt = store.getCFStmtPtr(@enumFromInt(stmt_index));
