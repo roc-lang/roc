@@ -20240,7 +20240,7 @@ const BodyContext = struct {
         };
         return try self.graph.newNode(.{ .tag_union = .{
             .tags = tags,
-            .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
+            .ext = try self.graph.newNode(.empty_tag_union),
         } });
     }
 
@@ -22173,7 +22173,10 @@ const BodyContext = struct {
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                if (!try self.graph.typeIsResolved(expr_node)) {
+                // Only an unpinned target variable takes the checked literal
+                // default. Openness inside a custom target is not evidence
+                // that the target itself should default to a builtin.
+                if (self.graph.content(expr_node) == .unresolved) {
                     self.graph.materializeLiteralDefault(expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);

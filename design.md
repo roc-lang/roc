@@ -5869,6 +5869,9 @@ complete):
   representation per field regardless of how many optional siblings the
   record has; a per-record presence BITMASK remains a possible later
   layout optimization that would not change this check-level contract.
+  The instantiation-graph producer records this slot's closed extension as
+  `empty_tag_union` immediately, even when its payload is still generic. A
+  deferred row default would incorrectly leave known storage structure open.
   The slot is deliberately NOT the nominal `Try(τ, [MissingField])`
   monotype: record-type lowering runs on rows in modules that never
   reference `Try`, so minting the builtin nominal there would need a
@@ -5935,6 +5938,15 @@ complete):
   preserves its checked kind-variable identity and uses that same checker-defined
   presence-slot representation: one non-specialized worker can therefore
   serve both required and optional instantiations without cloning its body.
+  Nominal declared-field tables use that same complete slot representation as
+  the backing row. Their source type still identifies the payload, but their
+  representation includes presence storage; descriptor construction must never
+  substitute the payload representation for the field slot.
+  Constant restoration makes the same distinction: a checked optional field's
+  stored value is a presence tag, and only its Present child is restored at the
+  checked payload type. The planned slot variants and explicit Present
+  discriminant select that restoration; the payload's type cannot describe the
+  enclosing presence tag.
   The slot descriptor records the `#Present` discriminant explicitly. Worker
   boundaries use that metadata to wrap an inline required value in `#Present`
   or unwrap a `#Present` slot for an inline required result; optional callers
