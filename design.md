@@ -6515,8 +6515,17 @@ owner draft, retired consumer or added checker Problem; local, produced and
 distinct-fresh replay pass. Broader regression passes 17/17; final normal
 producer-regenerated gate `87209` passes 71/71 tests and 41/41 steps, including
 regenerated Builtins, unchanged schema-86 golden, serde and native/wasm sizes.
-Formatting and reviewed hashes match; root is describing and publishing the
-accepted test-only full-tail checkpoint. This does not
+Formatting and reviewed hashes match. Described full-tail checkpoint `soqtnxus`
+is pushed as `e7b8716e`, with full jj description and exact draft-PR head,
+branch and full-body readback verified. Separate documentation-only child
+`rtwsumuy` reruns four existing genuine record-update rejection cases. Empty
+record, missing field, existing-field payload mismatch and optional-field
+payload mismatch each crash at record-update Expected-plan topology after the
+local failure/retirement check passes, before marker-copy local validation.
+This establishes a failing boundary, not a shared root cause. The next proposed
+test observes only the first exact empty-record fixture around its first poison
+sweep; no production rule or new retirement mechanism is authorized by these
+diagnostics. This does not
 sweep dormant paths, successful in-place resize permutations, or the full
 checker tail under allocation failure. Genuine
 owning-failure retirement remains unapproved. Complete producer/later-erasure

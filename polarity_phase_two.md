@@ -748,9 +748,11 @@ described in full, with trailers; W6b currently has its provisional title):
 | `tznvqtyt` / `7c6857e5` | W6b benign record-update projection availability | whole bounded delta independently accepted; normal gate 68/68 tests and 41/41 steps; push and exact draft-PR readback verified |
 | `susumyrk` / `424c29e2` | W6b unavailable-projection allocation rollback | independently accepted; normal gate 69/69 tests and 41/41 steps passes; push, full description and exact draft-PR readback verified |
 | `ounopmnm` / `6094ad09` | W6b canonical malformed supplied-field syntax and child-error calibration | independently accepted; semantic, isolated 2/2, broader 16/16 and normal 70/70 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
-| `soqtnxus` | W6b full-tail checked-child localization | independently accepted Check `121b979e`; semantic, isolated 2/2, broader 17/17 and normal 71/71 tests (41/41 steps) pass; publication in progress |
+| `soqtnxus` / `e7b8716e` | W6b full-tail checked-child localization | independently accepted; semantic, isolated 2/2, broader 17/17 and normal 71/71 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
+| `rtwsumuy` | W6b current genuine record-update rejections | four independent normal reruns complete: each crashes at Expected-plan topology; documentation-only checkpoint, no compiler changes |
 
-The published `jared/polarity` checkpoint is `ounopmnm` / `6094ad09`, above
+The published `jared/polarity` checkpoint is `soqtnxus` / `e7b8716e`, above
+`ounopmnm` / `6094ad09`,
 `susumyrk` / `424c29e2`,
 `tznvqtyt` / `7c6857e5`,
 repaired `urrksrnp` / `2614bb21` and amended `tonzpmlt` / `9c027603`. Its earlier ancestry
@@ -764,8 +766,8 @@ includes `unupstyw` / `8a1bcb17`,
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. It includes
-the staged child-error relation calibration, not the new full-tail localization
-test, and does not authorize genuine-error retirement semantics.
+the staged child-error calibration and full-tail localization regression,
+but does not authorize genuine-error retirement semantics.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -5097,6 +5099,35 @@ subsets below do not override this latest checkpoint.
   existing genuine record-update rejection tests will run independently with
   their full one-diagnostic oracles; their current failure phases are not
   assumed from the historical crash report.
+
+- Described full-tail checkpoint `soqtnxus` is pushed as
+  `e7b8716ee685edd9bca56d633d11f1ee1d7c5f5a`. Push `70639` and PR edit
+  `94824` succeed; exact readback verifies full jj description, head, branch,
+  complete 11,223-character PR body including terminal newline, and draft
+  status. Root opens `rtwsumuy` for the independently reviewed four-test current
+  rejection rerun. Each existing oracle requires exactly one full rendered
+  type error. Any unavailable/anchored classification remains a static
+  expectation until an authentic phase calibration observes P_F.
+
+- Current empty-record normal rerun `99051` exits 2: root import test passes,
+  the exact rejection test crashes at `checked module produced invalid
+  record-update Expected plan topology` (**1/2 passed, one crashed**).
+  This is the current first failure, not the historical incomplete-R0 report.
+  The misspelled-field case is running independently next; source remains
+  unchanged at published Check `121b979e`. The author is analyzing the first
+  validator failure read-only before proposing a bounded phase calibration.
+
+- All four current normal reruns complete at unchanged Check `121b979e`:
+  empty record `99051`, misspelled field `68312`, field mismatch 3 `75279`,
+  and wrong optional payload `19308`. Each exits 2 with **1/2 tests passed,
+  one crashed**, at the same record-update Expected-plan-topology panic.
+  Builtin inputs come through the normal build graph. The preceding local
+  failure/retirement validator has passed; marker-copy local validation has
+  not yet run. These results establish a shared failing boundary, not a shared
+  root cause or observed P_F classification. No build remains active. The
+  next proposed calibration is restricted to the first exact empty-record
+  fixture, before and after its first poison sweep; no retirement or solver
+  rule follows automatically from this result.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
