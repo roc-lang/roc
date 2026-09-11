@@ -1004,8 +1004,8 @@ fn methodOwnerEnvForRegistryEntry(
 
     if (ownerEnvIdentityMatches(module_env, owner_hash)) return module_env;
 
-    for (available_artifacts) |artifact| {
-        const candidate = artifact.module_env;
+    for (0..available_artifacts.count()) |index| {
+        const candidate = available_artifacts.moduleEnvAt(index);
         if (ownerEnvIdentityMatches(candidate, owner_hash)) return candidate;
     }
 

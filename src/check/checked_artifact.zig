@@ -470,6 +470,26 @@ pub const CheckingContextIdentity = struct {
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
+        return fromModulePreparation(
+            allocator,
+            module,
+            PreparationDirectImportRegistry.init(publish_imports),
+            platform_requirement_context,
+            platform_app_relation,
+            explicit_roots,
+            validation,
+        );
+    }
+
+    fn fromModulePreparation(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        publish_imports: PreparationDirectImportRegistry,
+        platform_requirement_context: ?PlatformRequirementContextKey,
+        platform_app_relation: ?PlatformAppRelationKey,
+        explicit_roots: []const ExplicitRootRequestInput,
+        validation: can.Can.Validation,
+    ) Allocator.Error!CheckingContextIdentity {
         const module_env = module.moduleEnvConst();
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
@@ -512,14 +532,262 @@ pub const PublishImportArtifact = struct {
     view: ImportedModuleView,
 };
 
+const PreparationExportedConstHeader = struct {
+    module_idx: u32,
+    def: CIR.Def.Idx,
+    pattern: CheckedPatternId,
+    const_ref: ConstRef,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+};
+
+const PreparationExportedConstEntry = struct {
+    header: PreparationExportedConstHeader,
+    closure: ImportedTemplateClosureView,
+};
+
+const PreparationExportedConstTemplates = struct {
+    first_template: ?*const anyopaque,
+    len: usize,
+    closure_pool: *const anyopaque,
+
+    fn init(view: ExportedConstTemplateView) PreparationExportedConstTemplates {
+        return .{
+            .first_template = if (view.templates.len == 0) null else @ptrCast(&view.templates[0]),
+            .len = view.templates.len,
+            .closure_pool = @ptrCast(view.closure_pool),
+        };
+    }
+
+    fn count(self: PreparationExportedConstTemplates) usize {
+        return self.len;
+    }
+
+    fn entryAt(self: PreparationExportedConstTemplates, index: usize) PreparationExportedConstEntry {
+        if (index >= self.len) checkedArtifactInvariant("preparation exported-constant index was out of bounds", .{});
+        const first: [*]const ImportedConstTemplateView = @ptrCast(@alignCast(self.first_template.?));
+        const row = &first[index];
+        const pool: *const ClosurePool = @ptrCast(@alignCast(self.closure_pool));
+        return .{
+            .header = .{
+                .module_idx = row.module_idx,
+                .def = row.def,
+                .pattern = row.pattern,
+                .const_ref = row.const_ref,
+                .source_scheme = row.source_scheme,
+            },
+            .closure = pool.reconstruct(row.template_closure),
+        };
+    }
+};
+
+const PreparationTopLevelProcedureBindings = struct {
+    first_binding: ?*const anyopaque,
+    len: usize,
+
+    fn init(table: *const TopLevelProcedureBindingTable) PreparationTopLevelProcedureBindings {
+        return .{
+            .first_binding = if (table.bindings.len == 0) null else @ptrCast(&table.bindings[0]),
+            .len = table.bindings.len,
+        };
+    }
+
+    fn body(self: PreparationTopLevelProcedureBindings, ref: TopLevelProcedureBindingRef) ProcedureBindingBody {
+        const index = @intFromEnum(ref);
+        if (index >= self.len) checkedArtifactInvariant("preparation top-level procedure binding was out of bounds", .{});
+        const first: [*]const TopLevelProcedureBinding = @ptrCast(@alignCast(self.first_binding.?));
+        return first[index].body;
+    }
+};
+
+const PreparationCheckedProcedureTemplates = struct {
+    table: *const anyopaque,
+
+    fn init(table: *const CheckedProcedureTemplateTable) PreparationCheckedProcedureTemplates {
+        return .{ .table = @ptrCast(table) };
+    }
+
+    fn get(self: PreparationCheckedProcedureTemplates, id: canonical.CheckedProcedureTemplateId) CheckedProcedureTemplate {
+        const table: *const CheckedProcedureTemplateTable = @ptrCast(@alignCast(self.table));
+        return table.get(id);
+    }
+
+    fn evidenceSchema(
+        self: PreparationCheckedProcedureTemplates,
+        template: *const CheckedProcedureTemplate,
+    ) static_dispatch.ProcedureEvidenceSchema {
+        const table: *const CheckedProcedureTemplateTable = @ptrCast(@alignCast(self.table));
+        return static_dispatch.procedureEvidenceSchema(table.evidenceParams(template), table.evidence_param_paths);
+    }
+};
+
+const PreparationImportedModuleView = struct {
+    key: CheckedModuleArtifactKey,
+    module_env: *const ModuleEnv,
+    canonical_names: *const canonical.CanonicalNameStore,
+    stable_module_hash: [32]u8,
+    direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+    public_api_dependencies: PublicApiDependencies,
+    method_lookup_scope: []const CheckedModuleArtifactKey,
+    checked_types: CheckedTypeStoreView,
+    checked_procedure_templates: PreparationCheckedProcedureTemplates,
+    hosted_procs: *const HostedProcTable,
+    exported_procedure_templates: ExportedProcedureTemplateView,
+    exported_procedure_bindings: ExportedProcedureBindingView,
+    exported_const_templates: PreparationExportedConstTemplates,
+    top_level_procedure_bindings: PreparationTopLevelProcedureBindings,
+    method_registry: *const static_dispatch.MethodRegistry,
+    interface_capabilities: *const ModuleInterfaceCapabilities,
+
+    fn init(view: ImportedModuleView) PreparationImportedModuleView {
+        return .{
+            .key = view.key,
+            .module_env = view.module_env,
+            .canonical_names = view.canonical_names,
+            .stable_module_hash = view.module_identity.stable_hash,
+            .direct_import_artifact_keys = view.direct_import_artifact_keys,
+            .public_api_dependencies = view.public_api_dependencies,
+            .method_lookup_scope = view.method_lookup_scope,
+            .checked_types = view.checked_types,
+            .checked_procedure_templates = PreparationCheckedProcedureTemplates.init(view.checked_procedure_templates),
+            .hosted_procs = view.hosted_procs,
+            .exported_procedure_templates = view.exported_procedure_templates,
+            .exported_procedure_bindings = view.exported_procedure_bindings,
+            .exported_const_templates = PreparationExportedConstTemplates.init(view.exported_const_templates),
+            .top_level_procedure_bindings = PreparationTopLevelProcedureBindings.init(view.top_level_procedure_bindings),
+            .method_registry = view.method_registry,
+            .interface_capabilities = view.interface_capabilities,
+        };
+    }
+};
+
+const PreparationImportedModuleRegistry = struct {
+    first_view: ?*const anyopaque,
+    len: usize,
+
+    fn init(views: []const ImportedModuleView) PreparationImportedModuleRegistry {
+        return .{
+            .first_view = if (views.len == 0) null else @ptrCast(&views[0]),
+            .len = views.len,
+        };
+    }
+
+    fn count(self: PreparationImportedModuleRegistry) usize {
+        return self.len;
+    }
+
+    fn viewAt(self: PreparationImportedModuleRegistry, index: usize) PreparationImportedModuleView {
+        if (index >= self.len) checkedArtifactInvariant("preparation imported-module index was out of bounds", .{});
+        const first: [*]const ImportedModuleView = @ptrCast(@alignCast(self.first_view.?));
+        return PreparationImportedModuleView.init(first[index]);
+    }
+};
+
+const PreparationPublishImportArtifact = struct {
+    module_idx: u32,
+    key: CheckedModuleArtifactKey,
+    view: PreparationImportedModuleView,
+};
+
+const PreparationPublishImportIdentity = struct {
+    module_idx: u32,
+    key: CheckedModuleArtifactKey,
+};
+
+const PreparationDirectImportRegistry = struct {
+    first_import: ?*const anyopaque,
+    len: usize,
+
+    fn init(imports: []const PublishImportArtifact) PreparationDirectImportRegistry {
+        return .{
+            .first_import = if (imports.len == 0) null else @ptrCast(&imports[0]),
+            .len = imports.len,
+        };
+    }
+
+    fn count(self: PreparationDirectImportRegistry) usize {
+        return self.len;
+    }
+
+    fn identityAt(self: PreparationDirectImportRegistry, index: usize) PreparationPublishImportIdentity {
+        if (index >= self.len) checkedArtifactInvariant("preparation direct-import identity index was out of bounds", .{});
+        const first: [*]const PublishImportArtifact = @ptrCast(@alignCast(self.first_import.?));
+        const row = &first[index];
+        return .{
+            .module_idx = row.module_idx,
+            .key = row.key,
+        };
+    }
+
+    fn importAt(self: PreparationDirectImportRegistry, index: usize) PreparationPublishImportArtifact {
+        if (index >= self.len) checkedArtifactInvariant("preparation direct-import index was out of bounds", .{});
+        const first: [*]const PublishImportArtifact = @ptrCast(@alignCast(self.first_import.?));
+        const row = first[index];
+        return .{
+            .module_idx = row.module_idx,
+            .key = row.key,
+            .view = PreparationImportedModuleView.init(row.view),
+        };
+    }
+};
+
+const PreparationMethodOwnerEnvs = struct {
+    first_view: ?*const anyopaque,
+    len: usize,
+
+    fn init(views: []const ImportedModuleView) PreparationMethodOwnerEnvs {
+        return .{
+            .first_view = if (views.len == 0) null else @ptrCast(&views[0]),
+            .len = views.len,
+        };
+    }
+
+    pub fn count(self: PreparationMethodOwnerEnvs) usize {
+        return self.len;
+    }
+
+    pub fn moduleEnvAt(self: PreparationMethodOwnerEnvs, index: usize) *const ModuleEnv {
+        if (index >= self.len) checkedArtifactInvariant("preparation method-owner index was out of bounds", .{});
+        const first: [*]const ImportedModuleView = @ptrCast(@alignCast(self.first_view.?));
+        return first[index].module_env;
+    }
+};
+
 const CheckedImportViews = struct {
     current_owner: ModuleId,
-    direct: []const PublishImportArtifact,
-    available: []const ImportedModuleView = &.{},
+    direct: PreparationDirectImportRegistry,
+    available: PreparationImportedModuleRegistry = PreparationImportedModuleRegistry.init(&.{}),
     /// Platform relation modules: registry-visible for dispatch resolution
     /// even though they are neither imported nor in `available`.
-    relations: []const ImportedModuleView = &.{},
+    relations: PreparationImportedModuleRegistry = PreparationImportedModuleRegistry.init(&.{}),
+
+    fn init(
+        current_owner: ModuleId,
+        direct: []const PublishImportArtifact,
+        available: []const ImportedModuleView,
+        relations: []const ImportedModuleView,
+    ) CheckedImportViews {
+        return .{
+            .current_owner = current_owner,
+            .direct = PreparationDirectImportRegistry.init(direct),
+            .available = PreparationImportedModuleRegistry.init(available),
+            .relations = PreparationImportedModuleRegistry.init(relations),
+        };
+    }
 };
+
+/// Type and resolved-value publication see only the consumer's direct and
+/// available artifacts; platform relations enter later relation-aware passes.
+fn directAvailableImportViews(
+    current_owner: ModuleId,
+    direct: PreparationDirectImportRegistry,
+    available: PreparationImportedModuleRegistry,
+) CheckedImportViews {
+    return .{
+        .current_owner = current_owner,
+        .direct = direct,
+        .available = available,
+    };
+}
 
 /// Checked artifacts that must be available to consume this module's public API.
 /// This is semantic visibility, not lexical import visibility.
@@ -609,8 +877,8 @@ const MethodLookupScopeBuilder = struct {
         try self.module_ids.append(self.allocator, module_id);
     }
 
-    fn appendView(self: *MethodLookupScopeBuilder, view: ImportedModuleView) Allocator.Error!void {
-        const entry = try self.seen_module_hashes.getOrPut(view.module_identity.stable_hash);
+    fn appendView(self: *MethodLookupScopeBuilder, view: PreparationImportedModuleView) Allocator.Error!void {
+        const entry = try self.seen_module_hashes.getOrPut(view.stable_module_hash);
         if (entry.found_existing) return;
         entry.value_ptr.* = {};
         try self.append(view.key);
@@ -625,9 +893,9 @@ fn collectMethodLookupScope(
     allocator: Allocator,
     current: CheckedModuleArtifactKey,
     current_module_identity: ModuleIdentity,
-    available_artifacts: []const ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
-    direct_imports: []const PublishImportArtifact,
+    available_artifacts: PreparationImportedModuleRegistry,
+    relation_artifacts: PreparationImportedModuleRegistry,
+    direct_imports: PreparationDirectImportRegistry,
 ) Allocator.Error!MethodLookupScope {
     var builder = MethodLookupScopeBuilder.init(allocator, current);
     defer builder.deinit();
@@ -636,14 +904,17 @@ fn collectMethodLookupScope(
     // This is the same first-match order used by EvidencePass:
     // available views, platform-relation views, then direct-import views that
     // are not otherwise present (needed by small/snapshot-style compilations).
-    for (available_artifacts) |artifact| {
+    for (0..available_artifacts.count()) |index| {
+        const artifact = available_artifacts.viewAt(index);
         if (moduleViewIsSuperseded(artifact, relation_artifacts, direct_imports)) continue;
         if (artifact.method_registry.entries.len != 0) try builder.appendView(artifact);
     }
-    for (relation_artifacts) |artifact| {
+    for (0..relation_artifacts.count()) |index| {
+        const artifact = relation_artifacts.viewAt(index);
         if (artifact.method_registry.entries.len != 0) try builder.appendView(artifact);
     }
-    for (direct_imports) |artifact| {
+    for (0..direct_imports.count()) |index| {
+        const artifact = direct_imports.importAt(index);
         if (artifact.view.method_registry.entries.len != 0) try builder.appendView(artifact.view);
     }
 
@@ -651,16 +922,18 @@ fn collectMethodLookupScope(
 }
 
 fn moduleViewIsSuperseded(
-    view: ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
-    direct_imports: []const PublishImportArtifact,
+    view: PreparationImportedModuleView,
+    relation_artifacts: PreparationImportedModuleRegistry,
+    direct_imports: PreparationDirectImportRegistry,
 ) bool {
-    for (relation_artifacts) |relation| {
-        if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &relation.module_identity.stable_hash) and
+    for (0..relation_artifacts.count()) |index| {
+        const relation = relation_artifacts.viewAt(index);
+        if (base.ModuleIdentity.eql(&view.stable_module_hash, &relation.stable_module_hash) and
             !checkedArtifactKeyEql(view.key, relation.key)) return true;
     }
-    for (direct_imports) |direct| {
-        if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &direct.view.module_identity.stable_hash) and
+    for (0..direct_imports.count()) |index| {
+        const direct = direct_imports.importAt(index);
+        if (base.ModuleIdentity.eql(&view.stable_module_hash, &direct.view.stable_module_hash) and
             !checkedArtifactKeyEql(view.key, direct.key)) return true;
     }
     return false;
@@ -4145,16 +4418,12 @@ pub const CheckedTypeStore = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         current_owner: ModuleId,
-        imports: []const PublishImportArtifact,
-        available: []const ImportedModuleView,
+        direct_imports: PreparationDirectImportRegistry,
+        available_imports: PreparationImportedModuleRegistry,
         source_nodes: *const CheckedSourceNodes,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
     ) Allocator.Error!CheckedTypePublication {
-        const import_views = CheckedImportViews{
-            .current_owner = current_owner,
-            .direct = imports,
-            .available = available,
-        };
+        const import_views = directAvailableImportViews(current_owner, direct_imports, available_imports);
         var store = CheckedTypeStore{};
         errdefer store.deinit(allocator);
         var active = CheckedSourceTypeRoots.init(allocator);
@@ -6864,18 +7133,21 @@ fn checkedNominalRecordFieldRootKeySliceEql(
 }
 
 const OwnerNominalDecl = struct {
-    view: ImportedModuleView,
+    view: PreparationImportedModuleView,
     decl: CheckedNominalDeclaration,
 };
 
-fn importedViewForKey(imports: CheckedImportViews, key: CheckedModuleArtifactKey) ?ImportedModuleView {
-    for (imports.direct) |import| {
+fn importedViewForKey(imports: CheckedImportViews, key: CheckedModuleArtifactKey) ?PreparationImportedModuleView {
+    for (0..imports.direct.count()) |index| {
+        const import = imports.direct.importAt(index);
         if (checkedArtifactKeyEql(import.key, key)) return import.view;
     }
-    for (imports.available) |view| {
+    for (0..imports.available.count()) |index| {
+        const view = imports.available.viewAt(index);
         if (checkedArtifactKeyEql(view.key, key)) return view;
     }
-    for (imports.relations) |view| {
+    for (0..imports.relations.count()) |index| {
+        const view = imports.relations.viewAt(index);
         if (checkedArtifactKeyEql(view.key, key)) return view;
     }
     return null;
@@ -6927,7 +7199,7 @@ fn embedOneImportedNominalDecl(
     allocator: Allocator,
     store: *CheckedTypeStore,
     names: *canonical.CanonicalNameStore,
-    owner_view: ImportedModuleView,
+    owner_view: PreparationImportedModuleView,
     owner_decl: CheckedNominalDeclaration,
 ) Allocator.Error!void {
     var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, owner_view);
@@ -8448,11 +8720,13 @@ fn checkedImportedOwnerForOriginHash(
 ) ModuleId {
     var found: ?ModuleId = null;
 
-    for (imports.direct) |import| {
+    for (0..imports.direct.count()) |index| {
+        const import = imports.direct.importAt(index);
         if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
         found = checkedUniqueOwnerArtifact(found, import.key);
     }
-    for (imports.available) |view| {
+    for (0..imports.available.count()) |index| {
+        const view = imports.available.viewAt(index);
         if (!importedViewIdentityMatches(view, origin_hash)) continue;
         found = checkedUniqueOwnerArtifact(found, view.key);
     }
@@ -8616,12 +8890,13 @@ fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews
 }
 
 fn checkedBuiltinNominalForImportedSource(
-    imports: []const PublishImportArtifact,
+    imports: PreparationDirectImportRegistry,
     origin_hash: *const [32]u8,
     source_decl: u32,
 ) ?CheckedBuiltinNominal {
     var found: ?CheckedBuiltinNominal = null;
-    for (imports) |import| {
+    for (0..imports.count()) |index| {
+        const import = imports.importAt(index);
         if (checkedBuiltinNominalForView(import.view, origin_hash, source_decl)) |builtin_nominal| {
             if (found) |existing| {
                 if (existing != builtin_nominal) {
@@ -8636,12 +8911,13 @@ fn checkedBuiltinNominalForImportedSource(
 }
 
 fn checkedBuiltinNominalForAvailableSource(
-    views: []const ImportedModuleView,
+    views: PreparationImportedModuleRegistry,
     origin_hash: *const [32]u8,
     source_decl: u32,
 ) ?CheckedBuiltinNominal {
     var found: ?CheckedBuiltinNominal = null;
-    for (views) |view| {
+    for (0..views.count()) |index| {
+        const view = views.viewAt(index);
         if (checkedBuiltinNominalForView(view, origin_hash, source_decl)) |builtin_nominal| {
             if (found) |existing| {
                 if (existing != builtin_nominal) {
@@ -8655,7 +8931,7 @@ fn checkedBuiltinNominalForAvailableSource(
     return found;
 }
 
-fn checkedBuiltinNominalForView(view: ImportedModuleView, origin_hash: *const [32]u8, source_decl: u32) ?CheckedBuiltinNominal {
+fn checkedBuiltinNominalForView(view: PreparationImportedModuleView, origin_hash: *const [32]u8, source_decl: u32) ?CheckedBuiltinNominal {
     if (!importedViewIdentityMatches(view, origin_hash)) return null;
     if (sourceDeclTypeIdent(view.module_env, source_decl) == null) return null;
     if (view.module_env.module_role != .builtin) return null;
@@ -8791,7 +9067,16 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, artifact_key, &.{}, &.{}, &source_nodes, &.{});
+    var publication = try CheckedTypeStore.fromModule(
+        allocator,
+        module,
+        &names,
+        artifact_key,
+        PreparationDirectImportRegistry.init(&.{}),
+        PreparationImportedModuleRegistry.init(&.{}),
+        &source_nodes,
+        &.{},
+    );
     defer publication.deinit(allocator);
 
     const nominal_stmt = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
@@ -9058,7 +9343,7 @@ test "optional record fields publish through solver-side record copy" {
     defer store.deinit(allocator);
     var active = CheckedSourceTypeRoots.init(allocator);
     defer active.deinit();
-    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    const imports = CheckedImportViews.init(testCheckedModuleKey(1), &.{}, &.{}, &.{});
 
     const checked_record = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, record_var);
     const fields = switch (store.payload(checked_record)) {
@@ -9115,7 +9400,7 @@ test "poisoned record field presence preserves its value type and canonical key"
     defer store.deinit(allocator);
     var active = CheckedSourceTypeRoots.init(allocator);
     defer active.deinit();
-    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    const imports = CheckedImportViews.init(testCheckedModuleKey(1), &.{}, &.{}, &.{});
 
     const checked_record = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, record_var);
     const checked_value = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, value_var);
@@ -9172,7 +9457,7 @@ test "optional record fields publish through the declaration annotation path" {
     defer store.deinit(allocator);
     var active = CheckedSourceTypeRoots.init(allocator);
     defer active.deinit();
-    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    const imports = CheckedImportViews.init(testCheckedModuleKey(1), &.{}, &.{}, &.{});
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
     var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, &source_nodes);
@@ -9500,7 +9785,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .source = try types.NominalType.Source.initChecked(try types.types.SourceDecl.fromStatementChecked(bool_source_decl), false, false),
     };
 
-    try testing.expect(categorizeBuiltinNominal(module, .{ .current_owner = testCheckedModuleKey(1), .direct = &imports }, nominal) == null);
+    try testing.expect(categorizeBuiltinNominal(module, CheckedImportViews.init(testCheckedModuleKey(1), &imports, &.{}, &.{}), nominal) == null);
 }
 
 fn moduleEnvIdentityMatches(module_env: *const ModuleEnv, origin_hash: *const [32]u8) bool {
@@ -9549,7 +9834,8 @@ fn importedNominalDeclarationRefForSourceNominal(
     const type_text = names.typeNameText(type_name);
     var found: ?ImportedNominalDeclarationRef = null;
 
-    for (imports.direct) |import| {
+    for (0..imports.direct.count()) |index| {
+        const import = imports.direct.importAt(index);
         if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
         for (import.view.checked_types.nominal_declarations) |declaration| {
             if (!Ident.textEql(import.view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
@@ -9567,7 +9853,8 @@ fn importedNominalDeclarationRefForSourceNominal(
             }
         }
     }
-    for (imports.available) |view| {
+    for (0..imports.available.count()) |index| {
+        const view = imports.available.viewAt(index);
         if (!importedViewIdentityMatches(view, origin_hash)) continue;
         for (view.checked_types.nominal_declarations) |declaration| {
             if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
@@ -12329,9 +12616,7 @@ pub const CheckedBodyStore = struct {
         refs: *const ResolvedValueRefTable,
         local_module: CheckedModuleArtifactKey,
         local_procedure_bindings: *const TopLevelProcedureBindingTable,
-        imports: []const PublishImportArtifact,
-        available_modules: []const ImportedModuleView,
-        relation_modules: []const ImportedModuleView,
+        imports: CheckedImportViews,
     ) void {
         for (refs.records, 0..) |record, i| {
             const ref_id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(i)));
@@ -12375,8 +12660,6 @@ pub const CheckedBodyStore = struct {
                     local_module,
                     local_procedure_bindings,
                     imports,
-                    available_modules,
-                    relation_modules,
                 );
             }
         }
@@ -13374,9 +13657,7 @@ fn directProcedureTargetForCall(
     callee: CheckedExprId,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
+    imports: CheckedImportViews,
 ) ?ResolvedValueId {
     const ref_id = refs.lookupIdByCheckedExpr(callee) orelse return null;
     const raw = @intFromEnum(ref_id);
@@ -13388,8 +13669,6 @@ fn directProcedureTargetForCall(
         local_module,
         local_procedure_bindings,
         imports,
-        available_modules,
-        relation_modules,
     )) ref_id else null;
 }
 
@@ -13397,9 +13676,7 @@ fn resolvedValueCanBeCalledDirectly(
     ref: ResolvedValueRef,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
+    imports: CheckedImportViews,
 ) bool {
     return switch (ref) {
         .local_proc, .hosted_proc => true,
@@ -13408,24 +13685,18 @@ fn resolvedValueCanBeCalledDirectly(
             local_module,
             local_procedure_bindings,
             imports,
-            available_modules,
-            relation_modules,
         ),
         .imported_proc => |proc| procedureUseCanBeCalledDirectly(
             proc,
             local_module,
             local_procedure_bindings,
             imports,
-            available_modules,
-            relation_modules,
         ),
         .platform_required_proc => |required| procedureUseCanBeCalledDirectly(
             required.procedure,
             local_module,
             local_procedure_bindings,
             imports,
-            available_modules,
-            relation_modules,
         ),
         .local_param,
         .local_value,
@@ -13445,9 +13716,7 @@ fn procedureUseCanBeCalledDirectly(
     proc: ProcedureUseTemplate,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
+    imports: CheckedImportViews,
 ) bool {
     return switch (proc.binding) {
         .top_level => |top_level| topLevelProcedureCanBeCalledDirectly(
@@ -13455,18 +13724,14 @@ fn procedureUseCanBeCalledDirectly(
             local_module,
             local_procedure_bindings,
             imports,
-            available_modules,
-            relation_modules,
         ),
-        .imported => |imported| importedProcedureCanBeCalledDirectly(imported, imports, available_modules, relation_modules),
+        .imported => |imported| importedProcedureCanBeCalledDirectly(imported, imports),
         .hosted => true,
         .platform_required => |required| topLevelProcedureCanBeCalledDirectly(
             .{ .artifact = required.artifact, .binding = required.procedure_binding },
             local_module,
             local_procedure_bindings,
             imports,
-            available_modules,
-            relation_modules,
         ),
     };
 }
@@ -13475,27 +13740,23 @@ fn topLevelProcedureCanBeCalledDirectly(
     top_level: ArtifactTopLevelProcedureBindingRef,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
+    imports: CheckedImportViews,
 ) bool {
     const body = if (checkedArtifactKeyEql(top_level.artifact, local_module))
         local_procedure_bindings.get(top_level.binding).body
     else blk: {
-        const view = moduleViewForKey(imports, available_modules, relation_modules, top_level.artifact) orelse
+        const view = importedViewForKey(imports, top_level.artifact) orelse
             checkedArtifactInvariant("direct-call target referenced an unavailable checked module", .{});
-        break :blk view.top_level_procedure_bindings.get(top_level.binding).body;
+        break :blk view.top_level_procedure_bindings.body(top_level.binding);
     };
     return procedureBodyCanBeCalledDirectly(body);
 }
 
 fn importedProcedureCanBeCalledDirectly(
     imported: ImportedProcedureBindingRef,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
+    imports: CheckedImportViews,
 ) bool {
-    const view = moduleViewForKey(imports, available_modules, relation_modules, imported.artifact) orelse
+    const view = importedViewForKey(imports, imported.artifact) orelse
         checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
     for (view.exported_procedure_bindings.bindings) |binding| {
         if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
@@ -13503,24 +13764,6 @@ fn importedProcedureCanBeCalledDirectly(
         }
     }
     checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
-}
-
-fn moduleViewForKey(
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
-    key: CheckedModuleArtifactKey,
-) ?ImportedModuleView {
-    for (imports) |import| {
-        if (checkedArtifactKeyEql(import.key, key)) return import.view;
-    }
-    for (available_modules) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
-    }
-    for (relation_modules) |view| {
-        if (checkedArtifactKeyEql(view.key, key)) return view;
-    }
-    return null;
 }
 
 fn procedureBodyCanBeCalledDirectly(body: ProcedureBindingBody) bool {
@@ -15375,8 +15618,8 @@ pub const ResolvedValueRefTable = struct {
         modules: *const TypedCIR.Modules,
         module_idx: u32,
         artifact_key: CheckedModuleArtifactKey,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
+        direct_imports: PreparationDirectImportRegistry,
+        available_imports: PreparationImportedModuleRegistry,
         templates: *const CheckedProcedureTemplateTable,
         hosted_procs: *const HostedProcTable,
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
@@ -15389,6 +15632,7 @@ pub const ResolvedValueRefTable = struct {
         synthetic_expr_origins: []const SyntheticExprOriginRecord,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
+        const import_views = directAvailableImportViews(artifact_key, direct_imports, available_imports);
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
 
@@ -15417,8 +15661,7 @@ pub const ResolvedValueRefTable = struct {
                 module,
                 artifact_key,
                 expr_idx,
-                imports,
-                available_artifacts,
+                import_views,
                 templates,
                 hosted_procs,
                 platform_required_declarations,
@@ -15633,8 +15876,7 @@ fn categorizeValueRef(
     module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
     expr_idx: CIR.Expr.Idx,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: CheckedImportViews,
     _: *const CheckedProcedureTemplateTable,
     hosted_procs: *const HostedProcTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
@@ -15662,7 +15904,7 @@ fn categorizeValueRef(
             module,
             external.module_idx,
             external.target_node_idx,
-            imports,
+            imports.direct,
         ),
         .e_lookup_associated_resolved => |resolved| categorizeResolvedAssociatedValueRef(
             module,
@@ -15670,7 +15912,6 @@ fn categorizeValueRef(
             resolved.module_identity,
             resolved.target_def_idx,
             imports,
-            available_artifacts,
             hosted_procs,
             top_level_values,
         ),
@@ -15940,7 +16181,7 @@ fn categorizeImportedValueRef(
     module: TypedCIR.Module,
     import_idx: CIR.Import.Idx,
     target_node_idx: u32,
-    imports: []const PublishImportArtifact,
+    imports: PreparationDirectImportRegistry,
 ) ResolvedValueRef {
     const resolved_module_idx = module.resolvedImportModule(import_idx) orelse {
         if (builtin.mode == .Debug) {
@@ -15993,8 +16234,7 @@ fn categorizeResolvedAssociatedValueRef(
     artifact_key: CheckedModuleArtifactKey,
     module_identity: base.ModuleIdentity.Idx,
     target_def: CIR.Def.Idx,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: CheckedImportViews,
     hosted_procs: *const HostedProcTable,
     top_level_values: *const TopLevelValueTable,
 ) ResolvedValueRef {
@@ -16005,7 +16245,7 @@ fn categorizeResolvedAssociatedValueRef(
     }
 
     const origin_hash = module.moduleEnvConst().moduleIdentityHash(module_identity);
-    const target_view = importedViewForOriginHash(imports, available_artifacts, origin_hash) orelse
+    const target_view = importedViewForOriginHash(imports, origin_hash) orelse
         checkedArtifactInvariant("resolved associated lookup target has no available checked artifact", .{});
 
     if (importedProcedureBindingForDef(target_view, target_def)) |binding| {
@@ -16029,23 +16269,24 @@ fn categorizeResolvedAssociatedValueRef(
 }
 
 fn importedViewForOriginHash(
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: CheckedImportViews,
     origin_hash: *const base.ModuleIdentity.Hash,
-) ?ImportedModuleView {
-    var found: ?ImportedModuleView = null;
-    for (imports) |import| {
+) ?PreparationImportedModuleView {
+    var found: ?PreparationImportedModuleView = null;
+    for (0..imports.direct.count()) |index| {
+        const import = imports.direct.importAt(index);
         if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
         found = uniqueImportedView(found, import.view);
     }
-    for (available_artifacts) |view| {
+    for (0..imports.available.count()) |index| {
+        const view = imports.available.viewAt(index);
         if (!importedViewIdentityMatches(view, origin_hash)) continue;
         found = uniqueImportedView(found, view);
     }
     return found;
 }
 
-fn uniqueImportedView(existing: ?ImportedModuleView, next: ImportedModuleView) ImportedModuleView {
+fn uniqueImportedView(existing: ?PreparationImportedModuleView, next: PreparationImportedModuleView) PreparationImportedModuleView {
     if (existing) |found| {
         if (!checkedArtifactKeyEql(found.key, next.key)) {
             checkedArtifactInvariant("module identity resolved to multiple checked artifacts", .{});
@@ -16055,16 +16296,17 @@ fn uniqueImportedView(existing: ?ImportedModuleView, next: ImportedModuleView) I
     return next;
 }
 
-fn importedProcedureBindingForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
+fn importedProcedureBindingForDef(view: PreparationImportedModuleView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
     for (view.exported_procedure_bindings.bindings) |binding| {
         if (binding.binding.def == def) return binding;
     }
     return null;
 }
 
-fn importedConstTemplateForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedConstTemplateView {
-    for (view.exported_const_templates.templates) |template| {
-        if (template.def == def) return template;
+fn importedConstTemplateForDef(view: PreparationImportedModuleView, def: CIR.Def.Idx) ?PreparationExportedConstHeader {
+    for (0..view.exported_const_templates.count()) |index| {
+        const entry = view.exported_const_templates.entryAt(index);
+        if (entry.header.def == def) return entry.header;
     }
     return null;
 }
@@ -16128,8 +16370,9 @@ fn appendPublishedExportDef(
     try defs.append(allocator, def_idx);
 }
 
-fn publishImportForModule(imports: []const PublishImportArtifact, module_idx: u32) ?PublishImportArtifact {
-    for (imports) |import_artifact| {
+fn publishImportForModule(imports: PreparationDirectImportRegistry, module_idx: u32) ?PreparationPublishImportArtifact {
+    for (0..imports.count()) |index| {
+        const import_artifact = imports.importAt(index);
         if (import_artifact.module_idx == module_idx) return import_artifact;
     }
     return null;
@@ -17954,21 +18197,24 @@ const EvidencePass = struct {
         if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, &.{}, owner, method)) |target| {
             return target;
         }
-        var one_view: [1]ImportedModuleView = undefined;
-        for (self.import_views.available) |available| {
+        var one_view: [1]PreparationImportedModuleView = undefined;
+        for (0..self.import_views.available.count()) |index| {
+            const available = self.import_views.available.viewAt(index);
             if (moduleViewIsSuperseded(available, self.import_views.relations, self.import_views.direct)) continue;
             one_view[0] = available;
             if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, one_view[0..1], owner, method)) |target| {
                 return target;
             }
         }
-        for (self.import_views.relations) |relation| {
+        for (0..self.import_views.relations.count()) |index| {
+            const relation = self.import_views.relations.viewAt(index);
             one_view[0] = relation;
             if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, one_view[0..1], owner, method)) |target| {
                 return target;
             }
         }
-        for (self.import_views.direct) |import| {
+        for (0..self.import_views.direct.count()) |index| {
+            const import = self.import_views.direct.importAt(index);
             one_view[0] = import.view;
             if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, one_view[0..1], owner, method)) |target| {
                 return target;
@@ -18463,8 +18709,8 @@ const EvidencePass = struct {
     const ProcedureEvidenceSchema = static_dispatch.ProcedureEvidenceSchema;
 
     const ProcedureEvidenceView = struct {
-        table: *const CheckedProcedureTemplateTable,
         template: CheckedProcedureTemplate,
+        schema: ProcedureEvidenceSchema,
     };
 
     fn procedureEvidenceView(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceView {
@@ -18473,28 +18719,44 @@ const EvidencePass = struct {
             .local_proc, .structural => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
         };
         const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
-        const table: *const CheckedProcedureTemplateTable = imported: {
-            for (self.import_views.direct) |import| {
-                if (checkedArtifactKeyEql(import.key, target_key)) {
-                    return .{ .table = import.view.checked_procedure_templates, .template = import.view.checked_procedure_templates.get(procedure.template.template) };
-                }
+        for (0..self.import_views.direct.count()) |index| {
+            const import = self.import_views.direct.importAt(index);
+            if (checkedArtifactKeyEql(import.key, target_key)) {
+                const template = import.view.checked_procedure_templates.get(procedure.template.template);
+                return .{
+                    .template = template,
+                    .schema = import.view.checked_procedure_templates.evidenceSchema(&template),
+                };
             }
-            for (self.import_views.available) |view| {
-                if (checkedArtifactKeyEql(view.key, target_key)) {
-                    return .{ .table = view.checked_procedure_templates, .template = view.checked_procedure_templates.get(procedure.template.template) };
-                }
+        }
+        for (0..self.import_views.available.count()) |index| {
+            const view = self.import_views.available.viewAt(index);
+            if (checkedArtifactKeyEql(view.key, target_key)) {
+                const template = view.checked_procedure_templates.get(procedure.template.template);
+                return .{
+                    .template = template,
+                    .schema = view.checked_procedure_templates.evidenceSchema(&template),
+                };
             }
-            for (self.import_views.relations) |view| {
-                if (checkedArtifactKeyEql(view.key, target_key)) {
-                    return .{ .table = view.checked_procedure_templates, .template = view.checked_procedure_templates.get(procedure.template.template) };
-                }
+        }
+        for (0..self.import_views.relations.count()) |index| {
+            const view = self.import_views.relations.viewAt(index);
+            if (checkedArtifactKeyEql(view.key, target_key)) {
+                const template = view.checked_procedure_templates.get(procedure.template.template);
+                return .{
+                    .template = template,
+                    .schema = view.checked_procedure_templates.evidenceSchema(&template),
+                };
             }
-            if (target.module_idx != self.module.moduleIndex()) {
-                checkedArtifactInvariant("procedure evidence target artifact was unavailable during checked publication", .{});
-            }
-            break :imported self.templates;
+        }
+        if (target.module_idx != self.module.moduleIndex()) {
+            checkedArtifactInvariant("procedure evidence target artifact was unavailable during checked publication", .{});
+        }
+        const template = self.templates.get(procedure.template.template);
+        return .{
+            .template = template,
+            .schema = procedureEvidenceSchemaForTemplate(self.templates, &template),
         };
-        return .{ .table = table, .template = table.get(procedure.template.template) };
     }
 
     fn procedureEvidenceSchemaForTemplate(
@@ -18512,8 +18774,7 @@ const EvidencePass = struct {
     }
 
     fn procedureEvidenceSchema(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceSchema {
-        const target_view = self.procedureEvidenceView(target);
-        return procedureEvidenceSchemaForTemplate(target_view.table, &target_view.template);
+        return self.procedureEvidenceView(target).schema;
     }
 
     /// Build the evidence node for `target`. A checker-recorded dispatch-target
@@ -21200,7 +21461,7 @@ pub const HostedBindingTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
-        imports: []const PublishImportArtifact,
+        imports: PreparationDirectImportRegistry,
         own_key: CheckedModuleArtifactKey,
         own_procs: *const HostedProcTable,
     ) Allocator.Error!HostedBindingTable {
@@ -21216,9 +21477,12 @@ pub const HostedBindingTable = struct {
         var hosted_targets = std.AutoHashMap(Target, usize).init(allocator);
         defer hosted_targets.deinit();
         var hosted_target_count: usize = 0;
-        for (imports) |imported| hosted_target_count += imported.view.hosted_procs.procs.len;
+        for (0..imports.count()) |index| {
+            hosted_target_count += imports.importAt(index).view.hosted_procs.procs.len;
+        }
         try hosted_targets.ensureTotalCapacity(@intCast(hosted_target_count));
-        for (imports, 0..) |imported, import_index| {
+        for (0..imports.count()) |import_index| {
+            const imported = imports.importAt(import_index);
             for (imported.view.hosted_procs.procs) |proc| {
                 hosted_targets.putAssumeCapacityNoClobber(.{
                     .module_idx = imported.module_idx,
@@ -21237,7 +21501,7 @@ pub const HostedBindingTable = struct {
                     .module_idx = resolved_module_idx,
                     .def = target_def,
                 }) orelse continue;
-                break :blk imports[import_index].key;
+                break :blk imports.importAt(import_index).key;
             } else blk: {
                 // No import means the entry named this module's own
                 // declaration, which is a hosted procedure only if the hosted
@@ -21542,7 +21806,7 @@ const PlatformRelationTypeSubstitutions = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: *CheckedTypePublication,
         declarations: *const PlatformRequiredDeclarationTable,
-        relation_artifacts: []const ImportedModuleView,
+        relation_artifacts: PreparationImportedModuleRegistry,
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRelationTypeSubstitutions {
         const active_relation = relation orelse return .{};
@@ -21738,7 +22002,7 @@ pub const PlatformRequirementRelationTable = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: *CheckedTypePublication,
         declarations: *const PlatformRequiredDeclarationTable,
-        relation_artifacts: []const ImportedModuleView,
+        relation_artifacts: PreparationImportedModuleRegistry,
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRequirementRelationTable {
         const active_relation = relation orelse return .{};
@@ -21929,8 +22193,8 @@ fn platformRequirementSolutionTableFromInputs(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     current_owner: ModuleId,
-    imports: []const PublishImportArtifact,
-    available: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available: PreparationImportedModuleRegistry,
     checked_types: *CheckedTypeStore,
     top_level_values: *const TopLevelValueTable,
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
@@ -22575,8 +22839,8 @@ const ResolvedDispatchCallableSpecializer = struct {
     names: *canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
     artifact_key: CheckedModuleArtifactKey,
-    direct_imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    direct_imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     plans: *static_dispatch.StaticDispatchPlanTable,
     instantiated_pairs: std.AutoHashMapUnmanaged(ResolvedDispatchCallablePair, CheckedTypeId) = .empty,
     evidence_closure: []DirectEvidenceClosure,
@@ -22669,8 +22933,8 @@ fn specializeResolvedStaticDispatchPlanCallables(
     names: *canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
     artifact_key: CheckedModuleArtifactKey,
-    direct_imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    direct_imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     plans: *static_dispatch.StaticDispatchPlanTable,
     templates: *const CheckedProcedureTemplateTable,
     template_refs: *const TemplateIteratorRefs,
@@ -22924,8 +23188,8 @@ fn projectResolvedDispatchTargetCallable(
     names: *canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
     artifact_key: CheckedModuleArtifactKey,
-    direct_imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    direct_imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     target: static_dispatch.MethodTarget,
 ) Allocator.Error!CheckedTypeId {
     const target_key = switch (target.kind) {
@@ -22939,7 +23203,8 @@ fn projectResolvedDispatchTargetCallable(
     // import; total resolution makes builtin-owned direct targets ubiquitous,
     // so search both view sets.
     const imported = importedModuleViewByKey(available_artifacts, target_key) orelse direct: {
-        for (direct_imports) |import| {
+        for (0..direct_imports.count()) |index| {
+            const import = direct_imports.importAt(index);
             if (checkedArtifactKeyEql(import.key, target_key)) break :direct import.view;
         }
         checkedArtifactInvariant("resolved dispatch target artifact was not available during checked publication", .{});
@@ -23779,19 +24044,20 @@ fn appendUniqueCheckedTypeSubstitution(
 }
 
 fn importedModuleViewByKey(
-    artifacts: []const ImportedModuleView,
+    artifacts: PreparationImportedModuleRegistry,
     key: CheckedModuleArtifactKey,
-) ?ImportedModuleView {
-    for (artifacts) |artifact| {
+) ?PreparationImportedModuleView {
+    for (0..artifacts.count()) |index| {
+        const artifact = artifacts.viewAt(index);
         if (std.meta.eql(artifact.key.bytes, key.bytes)) return artifact;
     }
     return null;
 }
 
 fn relationArtifactByKey(
-    relation_artifacts: []const ImportedModuleView,
+    relation_artifacts: PreparationImportedModuleRegistry,
     key: CheckedModuleArtifactKey,
-) ?ImportedModuleView {
+) ?PreparationImportedModuleView {
     return importedModuleViewByKey(relation_artifacts, key);
 }
 
@@ -27474,6 +27740,22 @@ pub fn appendPlatformRelationDependencyArtifactKeysFromView(
     binding: PlatformRequiredBinding,
     binding_relation_closure: ImportedTemplateClosureView,
 ) Allocator.Error!void {
+    try appendPlatformRelationDependencyArtifactKeysFromPreparationView(
+        allocator,
+        keys,
+        PreparationImportedModuleView.init(relation_artifact),
+        binding,
+        binding_relation_closure,
+    );
+}
+
+fn appendPlatformRelationDependencyArtifactKeysFromPreparationView(
+    allocator: Allocator,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    relation_artifact: PreparationImportedModuleView,
+    binding: PlatformRequiredBinding,
+    binding_relation_closure: ImportedTemplateClosureView,
+) Allocator.Error!void {
     for (relation_artifact.direct_import_artifact_keys) |key| {
         try appendClosureArtifactKey(allocator, keys, key);
     }
@@ -27485,7 +27767,7 @@ pub fn appendPlatformRelationDependencyArtifactKeysFromView(
 fn appendRelationArtifactExportedValueClosureKeysFromView(
     allocator: Allocator,
     keys: *std.ArrayList(CheckedModuleArtifactKey),
-    relation_artifact: ImportedModuleView,
+    relation_artifact: PreparationImportedModuleView,
     binding: PlatformRequiredBinding,
 ) Allocator.Error!void {
     switch (binding.value_use) {
@@ -27507,11 +27789,12 @@ fn appendRelationArtifactExportedValueClosureKeysFromView(
         },
         .const_value => |const_use| {
             var found = false;
-            for (relation_artifact.exported_const_templates.templates) |template| {
-                if (template.pattern != binding.app_value.pattern) continue;
-                if (!constRefEql(template.const_ref, const_use.const_use.const_ref)) continue;
+            for (0..relation_artifact.exported_const_templates.count()) |index| {
+                const entry = relation_artifact.exported_const_templates.entryAt(index);
+                if (entry.header.pattern != binding.app_value.pattern) continue;
+                if (!constRefEql(entry.header.const_ref, const_use.const_use.const_ref)) continue;
                 found = true;
-                try appendImportedTemplateClosureArtifactKeys(allocator, keys, relation_artifact.exported_const_templates.rowClosure(template));
+                try appendImportedTemplateClosureArtifactKeys(allocator, keys, entry.closure);
             }
             if (!found) {
                 checkedArtifactInvariant("platform relation dependency collection could not find exported app const template", .{});
@@ -27554,8 +27837,8 @@ fn collectPublicApiDependencies(
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     exported_procedure_templates: *const ExportedProcedureTemplateTable,
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
     exported_const_templates: *const ExportedConstTemplateTable,
@@ -27682,8 +27965,8 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     artifact_key: CheckedModuleArtifactKey,
     checked_type_publication: *const CheckedTypePublication,
     checked_types: *const CheckedTypeStore,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     active_types: *collections.DenseMap(CheckedTypeId, void),
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
@@ -27753,8 +28036,8 @@ fn appendPlatformRequiredDeclarationPublicApiDependencies(
     checked_type_publication: *const CheckedTypePublication,
     checked_types: *const CheckedTypeStore,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     active_types: *collections.DenseMap(CheckedTypeId, void),
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
@@ -27785,8 +28068,8 @@ fn appendPublicApiTypeDependencies(
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
     active: *collections.DenseMap(CheckedTypeId, void),
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -27888,8 +28171,8 @@ fn appendPublicApiConstraintDependencies(
     checked_types: *const CheckedTypeStore,
     constraints: []const CheckedStaticDispatchConstraint,
     active: *collections.DenseMap(CheckedTypeId, void),
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -27906,8 +28189,8 @@ fn appendPublicApiTypeDependencyRange(
     checked_types: *const CheckedTypeStore,
     roots: []const CheckedTypeId,
     active: *collections.DenseMap(CheckedTypeId, void),
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -27920,8 +28203,8 @@ fn appendPublicApiOwnerDependency(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     owner_key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -27931,15 +28214,15 @@ fn appendPublicApiOwnerDependency(
     _ = try type_owner_keys.append(allocator, owner_key);
 }
 
-fn importedViewIdentityMatches(view: ImportedModuleView, origin_hash: *const [32]u8) bool {
-    return base.ModuleIdentity.eql(&view.module_identity.stable_hash, origin_hash);
+fn importedViewIdentityMatches(view: PreparationImportedModuleView, origin_hash: *const [32]u8) bool {
+    return base.ModuleIdentity.eql(&view.stable_module_hash, origin_hash);
 }
 
 fn appendPublicApiClosureDependencyKey(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     keys: *ArtifactKeyAccumulator,
     key: CheckedModuleArtifactKey,
 ) Allocator.Error!void {
@@ -27950,8 +28233,8 @@ fn appendPublicApiClosureDependencyKey(
 
 fn publicApiDependencyKeyIsKnownBuiltin(
     key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
 ) bool {
     if (publicApiDependencyViewByKey(key, imports, available_artifacts)) |view| {
         return view.module_env.module_role == .builtin;
@@ -27962,8 +28245,8 @@ fn publicApiDependencyKeyIsKnownBuiltin(
 const PublicApiClosureDependencyCollector = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     checked_templates: *const CheckedProcedureTemplateTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
     entry_wrappers: *const EntryWrapperTable,
@@ -27980,8 +28263,8 @@ const PublicApiClosureDependencyCollector = struct {
     fn init(
         allocator: Allocator,
         artifact_key: CheckedModuleArtifactKey,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
+        imports: PreparationDirectImportRegistry,
+        available_artifacts: PreparationImportedModuleRegistry,
         checked_templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *const CallableEvalTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
@@ -28264,9 +28547,9 @@ const LoweringVisibilityBuilder = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
+    relation_artifacts: PreparationImportedModuleRegistry,
     keys: ArtifactKeyAccumulator = .empty,
     active_types: std.AutoHashMap(LoweringVisibilityTypeVisit, void),
     visited_public_api: std.AutoHashMap(CheckedModuleArtifactKey, void),
@@ -28275,9 +28558,9 @@ const LoweringVisibilityBuilder = struct {
         allocator: Allocator,
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
-        relation_artifacts: []const ImportedModuleView,
+        imports: PreparationDirectImportRegistry,
+        available_artifacts: PreparationImportedModuleRegistry,
+        relation_artifacts: PreparationImportedModuleRegistry,
     ) LoweringVisibilityBuilder {
         return .{
             .allocator = allocator,
@@ -28421,7 +28704,7 @@ const LoweringVisibilityBuilder = struct {
         for (roots) |root| try self.appendTypeRoot(artifact, root);
     }
 
-    fn viewByKey(self: *LoweringVisibilityBuilder, key: CheckedModuleArtifactKey) ?ImportedModuleView {
+    fn viewByKey(self: *LoweringVisibilityBuilder, key: CheckedModuleArtifactKey) ?PreparationImportedModuleView {
         return dependencyViewByKey(key, self.imports, self.available_artifacts, self.relation_artifacts);
     }
 };
@@ -28441,9 +28724,9 @@ fn collectLoweringVisibility(
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     root_requests: *const RootRequestTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
+    relation_artifacts: PreparationImportedModuleRegistry,
     exported_procedure_templates: *const ExportedProcedureTemplateTable,
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
     exported_const_templates: *const ExportedConstTemplateTable,
@@ -28504,7 +28787,7 @@ fn collectLoweringVisibility(
         };
         var relation_keys = std.ArrayList(CheckedModuleArtifactKey).empty;
         defer relation_keys.deinit(allocator);
-        try appendPlatformRelationDependencyArtifactKeysFromView(
+        try appendPlatformRelationDependencyArtifactKeysFromPreparationView(
             allocator,
             &relation_keys,
             relation_view,
@@ -28524,25 +28807,28 @@ fn collectLoweringVisibility(
 
 fn publicApiDependencyViewByKey(
     key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-) ?ImportedModuleView {
-    return dependencyViewByKey(key, imports, available_artifacts, &.{});
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
+) ?PreparationImportedModuleView {
+    return dependencyViewByKey(key, imports, available_artifacts, PreparationImportedModuleRegistry.init(&.{}));
 }
 
 fn dependencyViewByKey(
     key: CheckedModuleArtifactKey,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
-) ?ImportedModuleView {
-    for (imports) |import_artifact| {
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
+    relation_artifacts: PreparationImportedModuleRegistry,
+) ?PreparationImportedModuleView {
+    for (0..imports.count()) |index| {
+        const import_artifact = imports.importAt(index);
         if (checkedArtifactKeyEql(import_artifact.key, key)) return import_artifact.view;
     }
-    for (available_artifacts) |view| {
+    for (0..available_artifacts.count()) |index| {
+        const view = available_artifacts.viewAt(index);
         if (checkedArtifactKeyEql(view.key, key)) return view;
     }
-    for (relation_artifacts) |view| {
+    for (0..relation_artifacts.count()) |index| {
+        const view = relation_artifacts.viewAt(index);
         if (checkedArtifactKeyEql(view.key, key)) return view;
     }
     return null;
@@ -28590,8 +28876,8 @@ pub const ExportedProcedureTemplateTable = struct {
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
+        imports: PreparationDirectImportRegistry,
+        available_artifacts: PreparationImportedModuleRegistry,
     ) Allocator.Error!ExportedProcedureTemplateTable {
         var templates = std.ArrayList(ExportedProcedureTemplate).empty;
         var closure_pool = ClosurePool.empty;
@@ -28692,8 +28978,8 @@ fn buildImportedTemplateClosure(
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     template_ref: canonical.ProcedureTemplateRef,
     template: CheckedProcedureTemplate,
 ) Allocator.Error!ImportedTemplateClosureView {
@@ -28775,8 +29061,8 @@ const ImportedTemplateClosureBuilder = struct {
     resolved_value_refs_table: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     checked_bodies: UniqueList(ArtifactCheckedBodyRef),
     checked_type_roots: UniqueList(ArtifactCheckedTypeRef),
     checked_type_schemes: UniqueList(ArtifactCheckedTypeSchemeRef),
@@ -28802,8 +29088,8 @@ const ImportedTemplateClosureBuilder = struct {
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
+        imports: PreparationDirectImportRegistry,
+        available_artifacts: PreparationImportedModuleRegistry,
     ) ImportedTemplateClosureBuilder {
         return .{
             .allocator = allocator,
@@ -29039,7 +29325,8 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         ref: ImportedProcedureBindingRef,
     ) ImportedProcedureBindingView {
-        for (self.imports) |import| {
+        for (0..self.imports.count()) |index| {
+            const import = self.imports.importAt(index);
             if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
             for (import.view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def == ref.def and
@@ -29049,7 +29336,8 @@ const ImportedTemplateClosureBuilder = struct {
                 }
             }
         }
-        for (self.available_artifacts) |view| {
+        for (0..self.available_artifacts.count()) |index| {
+            const view = self.available_artifacts.viewAt(index);
             if (!std.meta.eql(view.key.bytes, ref.artifact.bytes)) continue;
             for (view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def == ref.def and
@@ -29295,8 +29583,8 @@ fn buildImportedConstTemplateClosure(
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     const_ref: ConstRef,
 ) Allocator.Error!ImportedTemplateClosureView {
     var builder = ImportedTemplateClosureBuilder.init(
@@ -29450,8 +29738,8 @@ pub const ExportedProcedureBindingTable = struct {
         entry_wrappers: *const EntryWrapperTable,
         resolved_value_refs: *const ResolvedValueRefTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
+        imports: PreparationDirectImportRegistry,
+        available_artifacts: PreparationImportedModuleRegistry,
         artifact_key: CheckedModuleArtifactKey,
     ) Allocator.Error!ExportedProcedureBindingTable {
         var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
@@ -29554,8 +29842,8 @@ fn buildProcedureBindingClosure(
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    imports: PreparationDirectImportRegistry,
+    available_artifacts: PreparationImportedModuleRegistry,
     body: ProcedureBindingBody,
 ) Allocator.Error!ImportedTemplateClosureView {
     return switch (body) {
@@ -29903,8 +30191,8 @@ pub const ExportedConstTemplateTable = struct {
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
+        imports: PreparationDirectImportRegistry,
+        available_artifacts: PreparationImportedModuleRegistry,
     ) Allocator.Error!ExportedConstTemplateTable {
         var templates = std.ArrayList(ImportedConstTemplateView).empty;
         var closure_pool = ClosurePool.empty;
@@ -33025,7 +33313,7 @@ const CheckedTypeStoreImportProjector = struct {
     allocator: Allocator,
     target_store: *CheckedTypeStore,
     target_names: *canonical.CanonicalNameStore,
-    imported: ImportedModuleView,
+    imported: PreparationImportedModuleView,
     preserve_source_instance: bool,
     active: collections.DenseMap(CheckedTypeId, CheckedTypeId),
     projected: collections.DenseMap(CheckedTypeId, CheckedTypeId),
@@ -33034,7 +33322,7 @@ const CheckedTypeStoreImportProjector = struct {
         allocator: Allocator,
         target_store: *CheckedTypeStore,
         target_names: *canonical.CanonicalNameStore,
-        imported: ImportedModuleView,
+        imported: PreparationImportedModuleView,
     ) CheckedTypeStoreImportProjector {
         return .{
             .allocator = allocator,
@@ -33055,7 +33343,7 @@ const CheckedTypeStoreImportProjector = struct {
         allocator: Allocator,
         target_store: *CheckedTypeStore,
         target_names: *canonical.CanonicalNameStore,
-        imported: ImportedModuleView,
+        imported: PreparationImportedModuleView,
     ) CheckedTypeStoreImportProjector {
         var projector = init(allocator, target_store, target_names, imported);
         projector.preserve_source_instance = true;
@@ -33392,7 +33680,7 @@ const CheckedTypeStoreImportProjector = struct {
 fn directImportArtifactKeysFromModule(
     allocator: Allocator,
     module: TypedCIR.Module,
-    imports: []const PublishImportArtifact,
+    imports: PreparationDirectImportRegistry,
 ) Allocator.Error![]CheckedModuleArtifactKey {
     const module_env = module.moduleEnvConst();
     const imported_names = module_env.imports.imports.items.items;
@@ -33417,8 +33705,9 @@ fn directImportArtifactKeysFromModule(
     return try keys.toOwnedSlice(allocator);
 }
 
-fn publishImportKeyForModule(imports: []const PublishImportArtifact, module_idx: u32) ?CheckedModuleArtifactKey {
-    for (imports) |import_artifact| {
+fn publishImportKeyForModule(imports: PreparationDirectImportRegistry, module_idx: u32) ?CheckedModuleArtifactKey {
+    for (0..imports.count()) |index| {
+        const import_artifact = imports.identityAt(index);
         if (import_artifact.module_idx == module_idx) return import_artifact.key;
     }
     return null;
@@ -33969,6 +34258,7 @@ pub fn checkedModuleKeyFromTypedModule(
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
     const idents = module.identStoreConst();
+    const preparation_direct_imports = PreparationDirectImportRegistry.init(inputs.imports);
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
     defer canonical_names.deinit();
@@ -33984,10 +34274,10 @@ pub fn checkedModuleKeyFromTypedModule(
         .kind = module_env.module_kind,
     };
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(
+    var checking_context_identity = try CheckingContextIdentity.fromModulePreparation(
         allocator,
         module,
-        inputs.imports,
+        preparation_direct_imports,
         inputs.platform_requirement_context,
         inputs.platform_app_relation,
         inputs.explicit_roots,
@@ -33995,7 +34285,7 @@ pub fn checkedModuleKeyFromTypedModule(
     );
     defer checking_context_identity.deinit(allocator);
 
-    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, preparation_direct_imports);
     defer allocator.free(direct_import_artifact_keys);
 
     return CheckedModuleArtifactKey.computeFromSourceHash(
@@ -34016,6 +34306,10 @@ pub fn publishFromTypedModule(
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
     const idents = module.identStoreConst();
+    const preparation_direct_imports = PreparationDirectImportRegistry.init(inputs.imports);
+    const preparation_available_artifacts = PreparationImportedModuleRegistry.init(inputs.available_artifacts);
+    const preparation_relation_artifacts = PreparationImportedModuleRegistry.init(inputs.relation_artifacts);
+    const preparation_method_owner_envs = PreparationMethodOwnerEnvs.init(inputs.available_artifacts);
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
     errdefer canonical_names.deinit();
@@ -34041,10 +34335,10 @@ pub fn publishFromTypedModule(
     var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
     errdefer platform_required_declarations.deinit(allocator);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(
+    var checking_context_identity = try CheckingContextIdentity.fromModulePreparation(
         allocator,
         module,
-        inputs.imports,
+        preparation_direct_imports,
         inputs.platform_requirement_context,
         if (inputs.platform_app_relation) |relation| relation.key else null,
         inputs.explicit_roots,
@@ -34052,7 +34346,7 @@ pub fn publishFromTypedModule(
     );
     errdefer checking_context_identity.deinit(allocator);
 
-    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, preparation_direct_imports);
     errdefer allocator.free(direct_import_artifact_keys);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -34071,11 +34365,26 @@ pub fn publishFromTypedModule(
     errdefer allocator.free(requires);
 
     const owner_artifact = artifactRef(artifact_key);
+    const preparation_import_views = CheckedImportViews{
+        .current_owner = artifact_key,
+        .direct = preparation_direct_imports,
+        .available = preparation_available_artifacts,
+        .relations = preparation_relation_artifacts,
+    };
 
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, inputs.imports, inputs.available_artifacts, &source_nodes, inputs.hoisted_roots);
+    var checked_type_publication = try CheckedTypeStore.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        artifact_key,
+        preparation_direct_imports,
+        preparation_available_artifacts,
+        &source_nodes,
+        inputs.hoisted_roots,
+    );
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
@@ -34094,7 +34403,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
         &checked_type_publication,
         &platform_required_declarations,
-        inputs.relation_artifacts,
+        preparation_relation_artifacts,
         inputs.platform_app_relation,
     );
     defer relation_type_substitutions.deinit(allocator);
@@ -34106,7 +34415,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
         &checked_type_publication,
         &platform_required_declarations,
-        inputs.relation_artifacts,
+        preparation_relation_artifacts,
         inputs.platform_app_relation,
     );
     errdefer platform_requirement_relations.deinit(allocator);
@@ -34133,7 +34442,7 @@ pub fn publishFromTypedModule(
         module,
         &canonical_names,
         &template_lookup,
-        inputs.available_artifacts,
+        preparation_method_owner_envs,
         &checked_type_publication,
         checked_bodies,
     );
@@ -34164,7 +34473,7 @@ pub fn publishFromTypedModule(
     );
     errdefer hosted_procs.deinit(allocator);
 
-    var hosted_bindings = try HostedBindingTable.fromModule(allocator, module, &canonical_names, inputs.imports, artifact_key, &hosted_procs);
+    var hosted_bindings = try HostedBindingTable.fromModule(allocator, module, &canonical_names, preparation_direct_imports, artifact_key, &hosted_procs);
     errdefer hosted_bindings.deinit(allocator);
 
     var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
@@ -34258,8 +34567,8 @@ pub fn publishFromTypedModule(
         modules,
         module_idx,
         artifact_key,
-        inputs.imports,
-        inputs.available_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
         &checked_procedure_templates,
         &hosted_procs,
         &platform_required_declarations,
@@ -34276,9 +34585,7 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
         artifact_key,
         &top_level_procedure_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
-        inputs.relation_artifacts,
+        preparation_import_views,
     );
 
     var template_iterator_refs = TemplateIteratorRefs{};
@@ -34316,7 +34623,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
         checked_bodies,
         &method_registry,
-        .{ .current_owner = artifact_key, .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts },
+        preparation_import_views,
         &static_dispatch_plans,
         &checked_procedure_templates,
         &resolved_value_refs,
@@ -34338,8 +34645,8 @@ pub fn publishFromTypedModule(
         &canonical_names,
         checked_types,
         artifact_key,
-        inputs.imports,
-        inputs.available_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
         &static_dispatch_plans,
         &checked_procedure_templates,
         &template_iterator_refs,
@@ -34439,8 +34746,8 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
         &top_level_procedure_bindings,
         &platform_required_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
     );
     errdefer exported_procedure_templates.deinit(allocator);
 
@@ -34457,8 +34764,8 @@ pub fn publishFromTypedModule(
         &entry_wrappers,
         &resolved_value_refs,
         &platform_required_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
         artifact_key,
     );
     errdefer exported_procedure_bindings.deinit(allocator);
@@ -34477,8 +34784,8 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
         &top_level_procedure_bindings,
         &platform_required_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
     );
     errdefer exported_const_templates.deinit(allocator);
 
@@ -34487,8 +34794,8 @@ pub fn publishFromTypedModule(
         module,
         &canonical_names,
         artifact_key,
-        inputs.imports,
-        inputs.available_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
         checked_types,
         &top_level_values,
         &exported_procedure_bindings,
@@ -34526,8 +34833,8 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &platform_required_declarations,
         &platform_required_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
         &exported_procedure_templates,
         &exported_procedure_bindings,
         &exported_const_templates,
@@ -34538,9 +34845,9 @@ pub fn publishFromTypedModule(
         allocator,
         artifact_key,
         module_identity,
-        inputs.available_artifacts,
-        inputs.relation_artifacts,
-        inputs.imports,
+        preparation_available_artifacts,
+        preparation_relation_artifacts,
+        preparation_direct_imports,
     );
     errdefer method_lookup_scope.deinit(allocator);
 
@@ -34559,9 +34866,9 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &platform_required_bindings,
         &root_requests,
-        inputs.imports,
-        inputs.available_artifacts,
-        inputs.relation_artifacts,
+        preparation_direct_imports,
+        preparation_available_artifacts,
+        preparation_relation_artifacts,
         &exported_procedure_templates,
         &exported_procedure_bindings,
         &exported_const_templates,
@@ -34684,7 +34991,16 @@ fn expectProvidedExportKind(
     );
     var builtin_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
     defer builtin_source_nodes.deinit(allocator);
-    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, builtin_key, &.{}, &.{}, &builtin_source_nodes, &.{});
+    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(
+        allocator,
+        builtin_module,
+        &builtin_names,
+        builtin_key,
+        PreparationDirectImportRegistry.init(&.{}),
+        PreparationImportedModuleRegistry.init(&.{}),
+        &builtin_source_nodes,
+        &.{},
+    );
     defer builtin_checked_type_publication.deinit(allocator);
     const empty_checked_bodies = CheckedBodyStore{};
     const empty_checked_const_bodies = CheckedConstBodyTable{};
@@ -34742,7 +35058,7 @@ fn expectProvidedExportKind(
         builtin_module,
         &builtin_names,
         &builtin_template_lookup,
-        &.{},
+        PreparationMethodOwnerEnvs.init(&.{}),
         &builtin_checked_type_publication,
         builtin_bodies,
     );
@@ -34808,6 +35124,7 @@ fn expectProvidedExportKind(
 
     const artifact_key = CheckedModuleArtifactKey{};
     const owner_artifact = artifactRef(artifact_key);
+    const checked_import_views = CheckedImportViews.init(artifact_key, &builtin_imports, &.{}, &.{});
 
     var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
     defer platform_required_declarations.deinit(allocator);
@@ -34815,7 +35132,16 @@ fn expectProvidedExportKind(
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, &builtin_imports, &.{}, &source_nodes, &.{});
+    var checked_type_publication = try CheckedTypeStore.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        artifact_key,
+        checked_import_views.direct,
+        checked_import_views.available,
+        &source_nodes,
+        &.{},
+    );
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 
@@ -34850,7 +35176,7 @@ fn expectProvidedExportKind(
         module,
         &canonical_names,
         &template_lookup,
-        &.{},
+        PreparationMethodOwnerEnvs.init(&.{}),
         &checked_type_publication,
         checked_bodies,
     );
@@ -34888,7 +35214,7 @@ fn expectProvidedExportKind(
         &canonical_names,
         &checked_type_publication,
         &platform_required_declarations,
-        &.{},
+        PreparationImportedModuleRegistry.init(&.{}),
         null,
     );
     defer platform_requirement_relations.deinit(allocator);
@@ -34981,8 +35307,8 @@ fn expectProvidedExportKind(
         &modules,
         module.moduleIndex(),
         artifact_key,
-        &builtin_imports,
-        &.{},
+        checked_import_views.direct,
+        checked_import_views.available,
         &checked_procedure_templates,
         &hosted_procs,
         &platform_required_declarations,
@@ -34999,9 +35325,7 @@ fn expectProvidedExportKind(
         &resolved_value_refs,
         artifact_key,
         &top_level_procedure_bindings,
-        &builtin_imports,
-        &.{},
-        &.{},
+        checked_import_views,
     );
 
     var template_iterator_refs = TemplateIteratorRefs{};
@@ -35033,7 +35357,7 @@ fn expectProvidedExportKind(
         &checked_type_publication,
         checked_bodies,
         &method_registry,
-        .{ .current_owner = artifact_key, .direct = &builtin_imports, .available = &.{} },
+        CheckedImportViews.init(artifact_key, &builtin_imports, &.{}, &.{}),
         &static_dispatch_plans,
         &checked_procedure_templates,
         &resolved_value_refs,
@@ -35596,7 +35920,7 @@ test "relation projection preserves anonymous row identity and provenance" {
         allocator,
         &target_store,
         &target_names,
-        importedView(&source_artifact),
+        PreparationImportedModuleView.init(importedView(&source_artifact)),
     );
     defer projector.deinit();
 
@@ -35618,6 +35942,8 @@ test "source-instance projection does not coalesce a solved payload with an equa
     defer source_names.deinit();
     var target_names = canonical.CanonicalNameStore.init(allocator);
     defer target_names.deinit();
+    var imported_env = try ModuleEnv.init(allocator, "");
+    defer imported_env.deinit();
 
     var source = CheckedTypeStore{};
     defer source.deinit(allocator);
@@ -35631,15 +35957,14 @@ test "source-instance projection does not coalesce a solved payload with an equa
     const target_template = try target.reserveSyntheticTypeRoot(allocator, shared_key, true);
     try testFillSyntheticVariableRoot(allocator, &target, target_template, .{ .flex = .{ .row_default = .empty_tag_union } });
 
-    var imported = testVisibilityImportedView(testCheckedArtifactKey(72), undefined, .{});
-    imported.canonical_names = &source_names;
+    var imported = testVisibilityImportedView(testCheckedArtifactKey(72), &imported_env, &source_names, .{});
     imported.checked_types = source.view();
 
     var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(
         allocator,
         &target,
         &target_names,
-        imported,
+        PreparationImportedModuleView.init(imported),
     );
     defer projector.deinit();
 
@@ -35918,6 +36243,212 @@ fn testCheckedArtifactKey(byte: u8) CheckedModuleArtifactKey {
     return key;
 }
 
+test "preparation-only dependency projection: adapters preserve exact borrowed rows and exclude finalized state" {
+    const gpa = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
+    var env_a = try ModuleEnv.init(gpa, "");
+    defer env_a.deinit();
+    var env_b = try ModuleEnv.init(gpa, "");
+    defer env_b.deinit();
+    var relation_env = try ModuleEnv.init(gpa, "");
+    defer relation_env.deinit();
+
+    const view_a_key = testCheckedArtifactKey(0xA1);
+    const view_b_key = testCheckedArtifactKey(0xB2);
+    const relation_view_key = testCheckedArtifactKey(0xB3);
+    const row_a_key = testCheckedArtifactKey(0xC3);
+    const row_b_key = testCheckedArtifactKey(0xD4);
+
+    var closure_pool = ClosurePool.empty;
+    defer closure_pool.deinit(gpa);
+    const closure_bodies = try gpa.alloc(ArtifactCheckedBodyRef, 1);
+    closure_bodies[0] = .{
+        .artifact = view_a_key,
+        .body = @enumFromInt(7),
+    };
+    const closure = ImportedTemplateClosureView{
+        .checked_bodies = closure_bodies,
+    };
+    const stored_closure = try closure_pool.commit(gpa, closure);
+    const second_closure_bodies = try gpa.alloc(ArtifactCheckedBodyRef, 1);
+    second_closure_bodies[0] = .{
+        .artifact = view_b_key,
+        .body = @enumFromInt(8),
+    };
+    const second_closure = ImportedTemplateClosureView{
+        .checked_bodies = second_closure_bodies,
+    };
+    const second_stored_closure = try closure_pool.commit(gpa, second_closure);
+
+    var source_scheme = canonical.CanonicalTypeSchemeKey{};
+    source_scheme.bytes[0] = 0xE5;
+    const pattern: CheckedPatternId = @enumFromInt(3);
+    const owner = ConstOwner{ .top_level_binding = .{
+        .module_idx = 9,
+        .pattern = pattern,
+    } };
+    const const_ref = ConstRef{
+        .artifact = view_a_key,
+        .owner = owner,
+        .template = @enumFromInt(4),
+        .source_scheme = source_scheme,
+    };
+    const const_rows = [_]ImportedConstTemplateView{
+        .{
+            .module_idx = 9,
+            .def = @enumFromInt(5),
+            .pattern = pattern,
+            .const_ref = const_ref,
+            .source_scheme = source_scheme,
+            // The preparation projection must not read or copy finalized state.
+            .template = undefined,
+            .template_closure = stored_closure,
+        },
+        .{
+            .module_idx = 10,
+            .def = @enumFromInt(6),
+            .pattern = @enumFromInt(4),
+            .const_ref = .{
+                .artifact = view_b_key,
+                .owner = .{ .top_level_binding = .{
+                    .module_idx = 10,
+                    .pattern = @enumFromInt(4),
+                } },
+                .template = @enumFromInt(5),
+                .source_scheme = .{ .bytes = [_]u8{0xF6} ** 32 },
+            },
+            .source_scheme = .{ .bytes = [_]u8{0xF6} ** 32 },
+            .template = undefined,
+            .template_closure = second_stored_closure,
+        },
+    };
+
+    var binding_rows = [_]TopLevelProcedureBinding{
+        .{ .source_scheme = source_scheme, .body = .{ .callable_eval_template = @enumFromInt(11) } },
+        .{ .source_scheme = .{ .bytes = [_]u8{0xF6} ** 32 }, .body = .{ .callable_eval_template = @enumFromInt(12) } },
+    };
+    const binding_table = TopLevelProcedureBindingTable{ .bindings = &binding_rows };
+
+    var view_a = testVisibilityImportedView(view_a_key, &env_a, &names, .{});
+    view_a.exported_const_templates = .{
+        .templates = &const_rows,
+        .closure_pool = &closure_pool,
+    };
+    view_a.top_level_procedure_bindings = &binding_table;
+    const view_b = testVisibilityImportedView(view_b_key, &env_b, &names, .{});
+    const relation_view = testVisibilityImportedView(relation_view_key, &relation_env, &names, .{});
+    const views = [_]ImportedModuleView{ view_b, view_a, view_a };
+    const direct_rows = [_]PublishImportArtifact{
+        .{ .module_idx = 7, .key = row_a_key, .view = view_a },
+        .{ .module_idx = 2, .key = row_b_key, .view = view_b },
+        .{ .module_idx = 7, .key = row_a_key, .view = view_a },
+    };
+
+    const direct = PreparationDirectImportRegistry.init(&direct_rows);
+    try std.testing.expectEqual(@as(usize, 3), direct.count());
+    const middle_identity = direct.identityAt(1);
+    try std.testing.expectEqual(@as(u32, 2), middle_identity.module_idx);
+    try std.testing.expectEqualSlices(u8, &row_b_key.bytes, &middle_identity.key.bytes);
+    const resolved_middle_key = publishImportKeyForModule(direct, 2) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, &row_b_key.bytes, &resolved_middle_key.bytes);
+    const first = direct.importAt(0);
+    try std.testing.expectEqual(@as(u32, 7), first.module_idx);
+    try std.testing.expectEqualSlices(u8, &row_a_key.bytes, &first.key.bytes);
+    try std.testing.expectEqualSlices(u8, &view_a_key.bytes, &first.view.key.bytes);
+    try std.testing.expect(first.view.module_env == &env_a);
+    try std.testing.expect(first.view.canonical_names == &names);
+    try std.testing.expectEqualSlices(u8, &view_a_key.bytes, &first.view.stable_module_hash);
+    try std.testing.expect(first.view.hosted_procs == &test_visibility_empty_hosted_procs);
+    try std.testing.expect(first.view.method_registry == &test_visibility_empty_method_registry);
+    try std.testing.expect(first.view.interface_capabilities == &test_visibility_empty_interface_capabilities);
+    try std.testing.expectEqual(@as(usize, 0), first.view.checked_types.payloadCount());
+    try std.testing.expectEqual(@as(usize, 0), first.view.exported_procedure_templates.templates.len);
+    try std.testing.expectEqual(@as(usize, 0), first.view.exported_procedure_bindings.bindings.len);
+    const middle = direct.importAt(1);
+    try std.testing.expectEqual(@as(u32, 2), middle.module_idx);
+    try std.testing.expectEqualSlices(u8, &row_b_key.bytes, &middle.key.bytes);
+    try std.testing.expectEqualSlices(u8, &view_b_key.bytes, &middle.view.key.bytes);
+    try std.testing.expect(middle.view.module_env == &env_b);
+    const repeated = direct.importAt(2);
+    try std.testing.expectEqual(@as(u32, 7), repeated.module_idx);
+    try std.testing.expect(repeated.view.module_env == &env_a);
+
+    const registry = PreparationImportedModuleRegistry.init(&views);
+    try std.testing.expectEqual(@as(usize, 3), registry.count());
+    try std.testing.expect(registry.viewAt(0).module_env == &env_b);
+    try std.testing.expect(registry.viewAt(1).module_env == &env_a);
+    try std.testing.expect(registry.viewAt(2).module_env == &env_a);
+
+    const method_owners = PreparationMethodOwnerEnvs.init(&views);
+    try std.testing.expectEqual(@as(usize, 3), method_owners.count());
+    try std.testing.expect(method_owners.moduleEnvAt(0) == &env_b);
+    try std.testing.expect(method_owners.moduleEnvAt(1) == &env_a);
+    try std.testing.expect(method_owners.moduleEnvAt(2) == &env_a);
+
+    const direct_available_views = directAvailableImportViews(view_b_key, direct, registry);
+    try std.testing.expectEqual(@as(usize, 0), direct_available_views.relations.count());
+    try std.testing.expect(importedViewForKey(direct_available_views, relation_view_key) == null);
+    const direct_match = importedViewForKey(direct_available_views, row_b_key) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(direct_match.module_env == &env_b);
+    const available_match = importedViewForKey(direct_available_views, view_b_key) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(available_match.module_env == &env_b);
+
+    const relation_views = [_]ImportedModuleView{ relation_view, view_b, relation_view };
+    const import_views = CheckedImportViews.init(view_b_key, &direct_rows, &views, &relation_views);
+    try std.testing.expectEqual(@as(usize, 3), import_views.relations.count());
+    try std.testing.expect(import_views.relations.viewAt(0).module_env == &relation_env);
+    try std.testing.expect(import_views.relations.viewAt(1).module_env == &env_b);
+    try std.testing.expect(import_views.relations.viewAt(2).module_env == &relation_env);
+    const relation_match = importedViewForKey(import_views, relation_view_key) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(relation_match.module_env == &relation_env);
+
+    try std.testing.expectEqual(@as(usize, 2), first.view.exported_const_templates.count());
+    const exported_const = first.view.exported_const_templates.entryAt(0);
+    try std.testing.expectEqual(@as(u32, 9), exported_const.header.module_idx);
+    try std.testing.expectEqual(@as(u32, 5), @intFromEnum(exported_const.header.def));
+    try std.testing.expectEqual(pattern, exported_const.header.pattern);
+    try std.testing.expect(std.meta.eql(const_ref, exported_const.header.const_ref));
+    try std.testing.expectEqualSlices(u8, &source_scheme.bytes, &exported_const.header.source_scheme.bytes);
+    try std.testing.expectEqual(@as(usize, 1), exported_const.closure.checked_bodies.len);
+    try std.testing.expectEqualSlices(u8, &view_a_key.bytes, &exported_const.closure.checked_bodies[0].artifact.bytes);
+    try std.testing.expectEqual(@as(u32, 7), @intFromEnum(exported_const.closure.checked_bodies[0].body));
+    const second_exported_const = first.view.exported_const_templates.entryAt(1);
+    try std.testing.expectEqual(@as(u32, 10), second_exported_const.header.module_idx);
+    try std.testing.expectEqual(@as(u32, 6), @intFromEnum(second_exported_const.header.def));
+    try std.testing.expectEqual(@as(u32, 4), @intFromEnum(second_exported_const.header.pattern));
+    try std.testing.expectEqualSlices(u8, &view_b_key.bytes, &second_exported_const.header.const_ref.artifact.bytes);
+    try std.testing.expectEqual(@as(usize, 1), second_exported_const.closure.checked_bodies.len);
+    try std.testing.expectEqualSlices(u8, &view_b_key.bytes, &second_exported_const.closure.checked_bodies[0].artifact.bytes);
+    try std.testing.expectEqual(@as(u32, 8), @intFromEnum(second_exported_const.closure.checked_bodies[0].body));
+
+    const binding_body = first.view.top_level_procedure_bindings.body(@enumFromInt(1));
+    try std.testing.expect(binding_body == .callable_eval_template);
+    try std.testing.expectEqual(@as(u32, 12), @intFromEnum(binding_body.callable_eval_template));
+
+    try std.testing.expectEqual(@as(usize, 0), PreparationDirectImportRegistry.init(&.{}).count());
+    try std.testing.expectEqual(@as(usize, 0), PreparationImportedModuleRegistry.init(&.{}).count());
+    try std.testing.expectEqual(@as(usize, 0), PreparationMethodOwnerEnvs.init(&.{}).count());
+    try std.testing.expectEqual(@as(usize, 0), PreparationExportedConstTemplates.init(.{}).count());
+
+    try std.testing.expect(!@hasField(PreparationImportedModuleView, "checked_bodies"));
+    try std.testing.expect(!@hasField(PreparationImportedModuleView, "checked_const_bodies"));
+    try std.testing.expect(!@hasField(PreparationImportedModuleView, "compile_time_roots"));
+    try std.testing.expect(!@hasField(PreparationImportedModuleView, "callable_eval_templates"));
+    try std.testing.expect(!@hasField(PreparationImportedModuleView, "const_templates"));
+    try std.testing.expect(!@hasField(PreparationImportedModuleView, "const_store"));
+    try std.testing.expect(@FieldType(PreparationImportedModuleView, "exported_const_templates") == PreparationExportedConstTemplates);
+    try std.testing.expect(@FieldType(PreparationImportedModuleView, "top_level_procedure_bindings") == PreparationTopLevelProcedureBindings);
+    try std.testing.expect(@FieldType(PreparationImportedModuleView, "checked_procedure_templates") == PreparationCheckedProcedureTemplates);
+    try std.testing.expect(@FieldType(PreparationExportedConstTemplates, "first_template") == ?*const anyopaque);
+    try std.testing.expect(@FieldType(PreparationExportedConstTemplates, "closure_pool") == *const anyopaque);
+    try std.testing.expect(!@hasField(PreparationExportedConstHeader, "template"));
+    try std.testing.expect(!@hasField(PreparationExportedConstHeader, "template_closure"));
+    try std.testing.expect(!@hasField(PreparationExportedConstEntry, "template_closure"));
+    try std.testing.expect(!@hasDecl(PreparationCheckedProcedureTemplates, "typed"));
+}
+
 test "method lookup scope preserves first-seen checking order without duplicates" {
     const gpa = std.testing.allocator;
     const current = testCheckedArtifactKey(0xF0);
@@ -35941,15 +36472,22 @@ test "method lookup scope preserves first-seen checking order without duplicates
     try std.testing.expect(checkedArtifactKeyEql(direct_only, scope.module_ids[2]));
 }
 
+const test_visibility_empty_checked_procedure_templates = CheckedProcedureTemplateTable{};
+const test_visibility_empty_hosted_procs = HostedProcTable{};
+const test_visibility_empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+const test_visibility_empty_method_registry = static_dispatch.MethodRegistry{};
+const test_visibility_empty_interface_capabilities = ModuleInterfaceCapabilities{};
+
 fn testVisibilityImportedView(
     key: CheckedModuleArtifactKey,
     module_env: *const ModuleEnv,
+    canonical_names: *const canonical.CanonicalNameStore,
     public_api_dependencies: PublicApiDependencies,
 ) ImportedModuleView {
     return .{
         .key = key,
         .module_env = module_env,
-        .canonical_names = undefined,
+        .canonical_names = canonical_names,
         .module_identity = .{
             .stable_hash = key.bytes,
             .module_idx = 0,
@@ -35961,31 +36499,31 @@ fn testVisibilityImportedView(
         },
         .public_api_dependencies = public_api_dependencies,
         .exports = undefined,
-        .checked_types = undefined,
+        .checked_types = .{},
         .checked_bodies = undefined,
         .exhaustiveness_sites = undefined,
         .checked_const_bodies = undefined,
-        .checked_procedure_templates = undefined,
+        .checked_procedure_templates = &test_visibility_empty_checked_procedure_templates,
         .compile_time_roots = undefined,
         .entry_wrappers = undefined,
         .intrinsic_wrappers = undefined,
         .resolved_value_refs = undefined,
         .nested_proc_sites = undefined,
         .static_dispatch_plans = undefined,
-        .hosted_procs = undefined,
+        .hosted_procs = &test_visibility_empty_hosted_procs,
         .hosted_bindings = undefined,
-        .exported_procedure_templates = undefined,
-        .exported_procedure_bindings = undefined,
-        .exported_const_templates = undefined,
+        .exported_procedure_templates = .{},
+        .exported_procedure_bindings = .{},
+        .exported_const_templates = .{},
         .provided_exports = undefined,
-        .top_level_procedure_bindings = undefined,
+        .top_level_procedure_bindings = &test_visibility_empty_top_level_procedure_bindings,
         .platform_required_declarations = undefined,
         .platform_required_bindings = undefined,
         .callable_eval_templates = undefined,
         .hoisted_constants = undefined,
         .const_templates = undefined,
-        .method_registry = undefined,
-        .interface_capabilities = undefined,
+        .method_registry = &test_visibility_empty_method_registry,
+        .interface_capabilities = &test_visibility_empty_interface_capabilities,
         .const_store = undefined,
     };
 }
@@ -35994,6 +36532,8 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
     const gpa = std.testing.allocator;
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
 
     const current = testCheckedArtifactKey(0xF0);
     const empty_key = testCheckedArtifactKey(0x01);
@@ -36005,16 +36545,16 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
     const empty_registry = static_dispatch.MethodRegistry{};
     const nonempty_registry = static_dispatch.MethodRegistry{ .entries = @constCast(&dummy_entries) };
 
-    var empty_view = testVisibilityImportedView(empty_key, &env, .{});
+    var empty_view = testVisibilityImportedView(empty_key, &env, &names, .{});
     empty_view.method_registry = &empty_registry;
-    var available_view = testVisibilityImportedView(available_key, &env, .{});
+    var available_view = testVisibilityImportedView(available_key, &env, &names, .{});
     available_view.method_registry = &nonempty_registry;
-    var relation_view = testVisibilityImportedView(relation_key, &env, .{});
+    var relation_view = testVisibilityImportedView(relation_key, &env, &names, .{});
     relation_view.method_registry = &nonempty_registry;
-    var previous_publication_view = testVisibilityImportedView(previous_publication_key, &env, .{});
+    var previous_publication_view = testVisibilityImportedView(previous_publication_key, &env, &names, .{});
     previous_publication_view.module_identity.stable_hash = current.bytes;
     previous_publication_view.method_registry = &nonempty_registry;
-    var previous_relation_view = testVisibilityImportedView(previous_relation_key, &env, .{});
+    var previous_relation_view = testVisibilityImportedView(previous_relation_key, &env, &names, .{});
     previous_relation_view.module_identity.stable_hash = relation_view.module_identity.stable_hash;
     previous_relation_view.method_registry = &nonempty_registry;
 
@@ -36034,7 +36574,14 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
         .qualified_module_name = undefined,
         .kind = .package,
     };
-    var scope = try collectMethodLookupScope(gpa, current, current_identity, &available, &relations, &direct);
+    var scope = try collectMethodLookupScope(
+        gpa,
+        current,
+        current_identity,
+        PreparationImportedModuleRegistry.init(&available),
+        PreparationImportedModuleRegistry.init(&relations),
+        PreparationDirectImportRegistry.init(&direct),
+    );
     defer scope.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 2), scope.module_ids.len);
@@ -36044,6 +36591,8 @@ test "method lookup scope keeps only registry-bearing modules in checking order"
 
 test "lowering visibility follows recursive public API and type-owner dependencies deterministically" {
     const gpa = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
 
     var env_a = try ModuleEnv.init(gpa, "");
     defer env_a.deinit();
@@ -36080,12 +36629,12 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     const d_type_owners = [_]CheckedModuleArtifactKey{key_b};
 
     var views = [_]ImportedModuleView{
-        testVisibilityImportedView(key_a, &env_a, .{ .artifacts = &a_public, .type_owner_artifacts = &a_type_owners }),
-        testVisibilityImportedView(key_b, &env_b, .{}),
-        testVisibilityImportedView(key_c, &env_c, .{}),
-        testVisibilityImportedView(key_d, &env_d, .{ .type_owner_artifacts = &d_type_owners }),
-        testVisibilityImportedView(key_e, &env_e, .{}),
-        testVisibilityImportedView(key_builtin, &env_builtin, .{}),
+        testVisibilityImportedView(key_a, &env_a, &names, .{ .artifacts = &a_public, .type_owner_artifacts = &a_type_owners }),
+        testVisibilityImportedView(key_b, &env_b, &names, .{}),
+        testVisibilityImportedView(key_c, &env_c, &names, .{}),
+        testVisibilityImportedView(key_d, &env_d, &names, .{ .type_owner_artifacts = &d_type_owners }),
+        testVisibilityImportedView(key_e, &env_e, &names, .{}),
+        testVisibilityImportedView(key_builtin, &env_builtin, &names, .{}),
     };
     views[1].method_lookup_scope = &b_method_lookup_scope;
 
@@ -36130,9 +36679,9 @@ test "lowering visibility follows recursive public API and type-owner dependenci
         &top_level_bindings,
         &platform_required_bindings,
         &root_requests,
-        &.{},
-        &views,
-        &.{},
+        PreparationDirectImportRegistry.init(&.{}),
+        PreparationImportedModuleRegistry.init(&views),
+        PreparationImportedModuleRegistry.init(&.{}),
         &exported_procedure_templates,
         &exported_procedure_bindings,
         &exported_const_templates,

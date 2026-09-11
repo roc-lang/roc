@@ -752,7 +752,8 @@ described in full, with trailers; W6b currently has its provisional title):
 | `rtwsumuy` / `79392598` | W6b current genuine record-update rejections | four independent normal reruns complete: each crashes at Expected-plan topology; independently accepted documentation-only checkpoint pushed and exact PR readback verified, no compiler changes |
 | `wlzlxpnu` / `8d7abd78` | W6b first-poison owner-authority calibration | independently accepted; semantic, isolated 2/2, broader 18/18 and normal 75/75 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
 | `ottkxrkt` / `be4ddaaf` | W6b shared validated-publication prerequisite | independently accepted; focused normal 3/3 (25/25 steps), final normal 81/81 (41/41 steps) pass; push, full description and exact draft-PR readback verified |
-| `xnntrxnk` / this checkpoint | Finalized publication compatibility calibration | final source and external baseline independently accepted; two-fresh-fixture normal 2/2 and final normal 82/82 tests, 41/41 steps pass; description and publication pending; no producer refactor or prepared lifecycle implemented |
+| `xnntrxnk` / `761d1c17` | Finalized publication compatibility calibration | final source and external baseline independently accepted; two-fresh-fixture normal 2/2 and final normal 82/82 tests, 41/41 steps pass; push, full description and exact draft-PR readback verified |
+| `plxmlrzv` / this checkpoint | Private preparation-only publication dependencies | independently accepted source and matched old/new raw artifacts; final normal 95/95 tests, 41/41 steps pass; description/publication in progress; no prepared lifecycle or evaluation migration implemented |
 
 The separate origin slice `suoqrzzl` is preserved at `e580bea2` and is not in
 this active migration ancestry. Its Check `0a829c3e` non-OOM producer/oracle
@@ -962,14 +963,69 @@ Independent archive review accepts the raw files, serialized headers, exact
 inputs, patch, capture logs, fixture hashes, resolved host target and source
 restoration. Its final manifest SHA-256 is
 `769f2ef6dcc049c22f1bf83aec2421a820846e368971ea1d4f958200343f3a82`.
-Final description and publication remain pending. No full-suite or `minici`
+Root described and pushed `xnntrxnk` as `761d1c17`; exact PR head, branch,
+complete body including trailing newline, draft state and full jj description
+were verified. No full-suite or `minici`
 pass, producer refactor, prepared lifecycle, evaluation migration or W6b
 completion is claimed by this checkpoint.
 These digests are revision-scoped evidence, not permanent goldens. The test
 does not establish arbitrary closure-facet semantics or a numerically
 different provider index across graphs.
 
-The published `jared/polarity` checkpoint is `ottkxrkt` / `be4ddaaf`, above
+Child `plxmlrzv` implements the private preparation-only dependency
+projection declared in `design.md`. Dedicated zero-allocation adapters
+preserve exact direct/available/relation order, duplicate rows, graph indexes
+and row-versus-view keys. Checked-type and resolved-value producers accept
+only direct and available registries; relation-aware consumers retain their
+existing explicit scope. The method registry consumes the uniform
+environment-only indexed interface. Constant access returns only a narrow
+header and its exact paired closure, and procedure-binding access returns
+only the required body. Finalized root payloads, ConstStore and mutable
+constant-template state are structurally absent. Public post-check wrapper
+signatures and the real finalizer boundary remain unchanged.
+
+The first independent review rejected relation-only authority leaking into
+checked-type publication; the first normal checker compile also caught an
+invalid write through a const test slice. Both were corrected before source
+ACCEPT at checked artifact `aa6264c9`, registry `d1adc6ca` and integration
+`25d14682`. Tests pin distinct borrowed identities and closure rows,
+registry order/duplicates, empty adapters, excluded interfaces, procedure
+body lookup and relation-only lookup exclusion. Targeted normal checker
+`40511` passes 14/14 tests and 7/7 steps. Normal publication captures
+`49512` and `83608` each pass 2/2 tests and 25/25 steps; both raw pairs
+match the independently archived old-producer artifacts.
+
+The initial normal command comparison found 32 different debug-path bytes
+in an unused transitive wasm object. Rather than normalize inputs, root
+reran the old producer and candidate with exactly the same compiler argv,
+instrumented fixture, working directory, runtime invocation and all 52
+generated inputs. Old compile/run `25971`/`76758` and candidate
+`68444`/`22303` all exit zero; both executions pass 2/2. Aggregate
+environment digests also match. The complete Provider/Consumer buffers
+compare byte-for-byte old-to-candidate and candidate-to-original-baseline:
+31,668/30,052 bytes with the same SHA-256 values recorded above. Exact
+compiler identity and artifact keys match, with no identity override or
+key normalization. Matched evidence is retained in
+`/private/tmp/polarity-matched-projection.9lurJz`; normal gates and review
+freezes are in `/private/tmp/polarity-private-projection.1RSYJV`.
+The independent reviewer accepts the source and matched evidence chain.
+
+All temporary instrumentation is removed and the permanent fixture remains
+exactly `c4f11e44`. Normal matrix `65232` passes 95/95 tests and 41/41
+steps before matched calibration; post-restoration normal `40178` also
+passes 95/95 tests and 41/41 steps (can 11, types 10, check 66, compile 8).
+Both include the unchanged schema-86 golden, static/mutable serialization
+and native/wasm sizes. Formatting and reviewed production hashes match.
+This is a private dependency-interface refactor, not an opaque prepared
+lifecycle, evaluation migration or W6b completion. No solver, typing,
+schema, finalizer or producer-allocation policy changes are introduced.
+Next comes owned exhaustiveness assignment state and opaque preparation/
+finish ownership, followed by the evaluation capability migration and
+resumption of saved origin/OOM work. Option (e), result-row adapters and
+the full-suite/minici gates remain unfinished.
+
+The published `jared/polarity` checkpoint is `xnntrxnk` / `761d1c17`, above
+`ottkxrkt` / `be4ddaaf`,
 `wlzlxpnu` / `8d7abd78`,
 `rtwsumuy` / `79392598`,
 `soqtnxus` / `e7b8716e`,

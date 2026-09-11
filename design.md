@@ -1837,6 +1837,52 @@ Available-artifact and relation registries are separate inputs, not additional
 members of this direct-import map. This guard does not change checking,
 finalizer selection, public-owner closure or diagnostic-only behavior.
 
+Pre-finalization artifact publication consumes an explicit, private
+preparation-only dependency projection. Its indexed adapters project the
+existing finished inputs without allocation, preserving each direct,
+available and relation registry's exact order and duplicate semantics. They
+also preserve each consumer's exact registry membership: checked-type and
+resolved-value publication accept direct and available registries only;
+consumers that previously included relations retain them explicitly. A shared
+projection must not widen a consumer's dependency authority. The adapters
+do not cast slices, normalize identities or retain an adapter pointer in
+published data. Preparation consumers receive only required recipe/interface
+data: exact artifact/environment/name identity (including stable module
+identity), checked types and interface capabilities, hosted method data,
+checked/exported procedure identities and dependency closures, narrow
+top-level procedure-binding body lookup, and exported-constant headers plus
+dependency closures. The projection does not expose finalized compile-time
+root payloads, ConstStore, mutable exported-constant template state, full
+const-template/checked-const-body tables or a full `ImportedModuleView`.
+
+Private adapters may erase the pointer to an exact typed source element and
+restore that same element-pointer type internally for bounds-checked array
+indexing. This is borrowed representation encapsulation, not new artifact
+authority. Each dedicated constructor accepts only its exact source type;
+arbitrary backing construction, manual byte offsets/strides, slice
+reinterpretation, generic casting facilities and persisted adapter pointers
+are forbidden. The source rows and their closure pool remain caller-owned for
+the entire borrow. Exported-constant access returns one narrow header paired
+with that row's exact reconstructed closure, never the full row, template
+state, stored closure coordinate, pool or finished-view escape. Method-registry
+owner lookup consumes a uniform indexed environment-only interface
+(`count`/`moduleEnvAt`), not a full preparation view or shape-dependent fallback.
+
+Within pre-finalization artifact publication, full finished dependency views
+are retained solely for the existing real finalizer boundary. Existing public
+post-check helpers may still consume finished views; their pre-finalization
+callers use an internal narrow core without changing the public signatures.
+This first refactor introduces no unfinished artifact, prepared handle or new
+public API, and preserves publication order, error behavior, caller lifetime
+and the existing Debug invariant policy. Its before/after byte comparison
+uses the independently archived finalized-artifact baseline under identical
+compiler/Builtin/fixture/publication inputs; two wrappers sharing the changed
+producer are not a substitute. The normal candidate build is verified
+separately. The later opaque preparation lifecycle must independently establish
+owner-minted environment/key/state authority, replace preparation-side external
+ProblemStore mutation with an owned assignment recipe, and end all
+preparation-view borrows before provider finalization can grow canonical names.
+
 After admission, `prepareRuntimeEnv` is the sole sanctioned runtime-only
 mutation. It may enable runtime identifier insertion, install module-name
 identifiers, and finalize runtime lookup accelerators, but it cannot modify any
@@ -6657,10 +6703,34 @@ removed and the exact reviewed source hash restored. Broader normal
 `27970` passes 82/82 tests and 41/41 steps, including the unchanged schema-86
 golden, static/mutable serialization and native/wasm sizes. Formatting and
 reviewed source hashes match; independent archive review accepts the exact
-raw-byte provenance and restoration. This test-only checkpoint is ready for
-description/publication. It implements no producer refactor, prepared API,
-evaluation migration, option-(e) rejection or runtime adapter, and it does
-not replace full-suite verification.
+raw-byte provenance and restoration. This test-only checkpoint is published
+as `761d1c17`, with the complete jj description and exact draft-PR head,
+branch and full body verified.
+
+Child `plxmlrzv` implements the private preparation-only dependency projection
+declared at the admission boundary. Dedicated zero-allocation adapters preserve
+exact order, duplicates, identities and per-consumer registry membership while
+excluding finalized-only constant/root data. Checked-type and resolved-value
+publication cannot acquire relation-only authority. Independent source review
+accepts corrected artifact `aa6264c9`, registry `d1adc6ca` and integration
+`25d14682`; the permanent real-finalizer fixture remains `c4f11e44`.
+Targeted normal checker `40511` passes 14/14. Normal captures `49512` and
+`83608` each pass 2/2. A strict old/candidate comparison holds compiler argv,
+instrumented fixture, all 52 generated inputs and environment digest fixed:
+compiles `25971`/`68444` and executions `76758`/`22303` all exit zero, both
+executions pass 2/2, and complete Provider/Consumer bytes match each other and
+the original archive without normalization. The independent evidence review
+accepts this comparison. Normal `65232` and the final instrumentation-free
+rerun `40178` each pass 95/95 tests and 41/41 steps, including schema-86 and
+native/wasm sizes. All reviewed hashes and formatting match. Evidence lives
+under `/private/tmp/polarity-private-projection.1RSYJV` and
+`/private/tmp/polarity-matched-projection.9lurJz`.
+This checkpoint introduces no prepared API/lifecycle, evaluation migration,
+typing or solver rule, schema change, option-(e) rejection or runtime adapter.
+Owned exhaustiveness assignment state and opaque preparation/finish ownership
+remain prerequisites for the evaluation migration; saved origin/OOM work and
+whole-W6b verification remain open. These focused gates do not replace the
+full suite or `minici`.
 
 This does not
 sweep dormant paths, successful in-place resize permutations, or the full

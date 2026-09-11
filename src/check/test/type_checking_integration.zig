@@ -3657,6 +3657,15 @@ test "checked artifact method registry skips nominal associated values" {
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
     const checked_bodies = MethodRegistryTestCheckedBodies{};
+    const no_method_owner_envs = struct {
+        pub fn count(_: @This()) usize {
+            return 0;
+        }
+
+        pub fn moduleEnvAt(_: @This(), _: usize) *const ModuleEnv {
+            unreachable;
+        }
+    }{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -3666,7 +3675,7 @@ test "checked artifact method registry skips nominal associated values" {
         module,
         &names,
         &template_lookup,
-        &.{},
+        no_method_owner_envs,
         &checked_types,
         &checked_bodies,
     );
