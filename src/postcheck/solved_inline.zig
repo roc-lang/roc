@@ -473,23 +473,98 @@ const InlineAnalyzer = struct {
         return false;
     }
 
+    /// Whether a body is a checked wrapper: one operation, a constant, or a
+    /// single guard whose arms are each of those or a crash. Such a body does
+    /// less work than its call costs, and substituting it at every call site
+    /// exposes its guard and its constant arguments to LIR range analysis
+    /// before backend instruction selection. `List.get` and the byte reads
+    /// have this shape with a `Try` on each arm.
     fn isInlineableWrapperBody(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.getExpr(expr_id);
         if (expr.data == .call_proc or expr.data == .low_level) return true;
-        // A checked wrapper has one call-through path and one literal-crash
-        // path. Substitution preserves the guard and exposes constant arguments
-        // to LIR range analysis before backend instruction selection.
+        if (expr.data == .tag) return self.exprSpanIsWrapperOperand(expr.data.tag.payloads);
+        if (expr.data == .nominal) return self.isInlineableWrapperBody(expr.data.nominal);
         if (expr.data == .if_) {
             const branches = self.solved.lifted.ifBranchSpan(expr.data.if_.branches);
             if (branches.len != 1) return false;
             const branch = GuardedList.at(branches, 0);
-            const other = expr.data.if_.final_else;
-            return (self.isLiteralCrash(branch.body) and self.isInlineableWrapperBody(other)) or
-                (self.isLiteralCrash(other) and self.isInlineableWrapperBody(branch.body));
+            return self.isWrapperArm(branch.body) and self.isWrapperArm(expr.data.if_.final_else);
         }
         if (expr.data != .block) return false;
         return self.solved.lifted.stmtSpan(expr.data.block.statements).len == 0 and
             self.isInlineableWrapperBody(expr.data.block.final_expr);
+    }
+
+    fn isWrapperArm(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
+        return self.isLiteralCrash(expr_id) or self.isInlineableWrapperBody(expr_id);
+    }
+
+    /// A value a wrapper may build its result from: an argument, a literal,
+    /// or another wrapper body.
+    fn isWrapperOperand(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
+        const expr = self.solved.lifted.getExpr(expr_id);
+        return switch (expr.data) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            => true,
+            .call_proc,
+            .low_level,
+            .tag,
+            .nominal,
+            .if_,
+            .block,
+            => self.isInlineableWrapperBody(expr_id),
+            .@"unreachable",
+            .crash,
+            .def_ref,
+            .fn_ref,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .static_data_candidate,
+            .typed_boundary,
+            .dbg,
+            .expect,
+            .return_,
+            .expect_err,
+            .comptime_branch_taken,
+            .call_value,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .lambda,
+            .fn_def,
+            .let_,
+            .match_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .comptime_exhaustiveness_failed,
+            => false,
+        };
+    }
+
+    fn exprSpanIsWrapperOperand(self: *const InlineAnalyzer, span: Lifted.Span(Lifted.ExprId)) bool {
+        const exprs = self.solved.lifted.exprSpan(span);
+        for (0..exprs.len) |index| {
+            if (!self.isWrapperOperand(GuardedList.at(exprs, index))) return false;
+        }
+        return true;
     }
 
     fn isLiteralCrash(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {

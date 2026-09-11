@@ -704,7 +704,7 @@ test "SIMD alignment prerequisite inlines checked wrappers with either crash arm
     }
 }
 
-test "SIMD alignment prerequisite keeps two-continuation functions out of wrapper inlining" {
+test "wrapper inlining admits a guard whose arms each pass through to one operation" {
     inline for (.{
         "if n > 16 { x.shr_zf_wrap(n) } else { x.shl_wrap(n) }",
         "x.bitwise_or(if n > 16 { x.shr_zf_wrap(n) } else { x.shl_wrap(n) })",
@@ -714,6 +714,84 @@ test "SIMD alignment prerequisite keeps two-continuation functions out of wrappe
             .{ .inline_mode = .wrappers, .proc_debug_names = true },
             inspectGuardedWrapper,
         );
+        try std.testing.expect(!guarded_proc_survives);
+    }
+}
+
+test "wrapper inlining keeps a body with its own bindings out" {
+    inline for (.{
+        "{ shifted = x.shl_wrap(n)\n    shifted.bitwise_or(x) }",
+    }) |body| {
+        try harness.expectLirInspectionWithOptions(
+            guardedWrapperApp(body),
+            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            inspectGuardedWrapper,
+        );
         try std.testing.expect(guarded_proc_survives);
     }
+}
+
+const SharedGetShape = struct {
+    found: bool = false,
+    calls: usize = 0,
+    get_unsafe: usize = 0,
+    is_lt: usize = 0,
+};
+
+var shared_get_shape: SharedGetShape = .{};
+
+fn countSharedGetShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    shared_get_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "read")) continue;
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, proc_id, &writer);
+        const text = writer.buffered();
+        shared_get_shape = .{
+            .found = true,
+            .calls = std.mem.count(u8, text, "= call p"),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe"),
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== read proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+// `List.get` on bytes serves two callers here, so it is not a single-use
+// body; it still has to reach the reader as a guard and an unchecked read for
+// the length guard to discharge that guard.
+test "a shared checked List.get inlines at every site so a guard proves the read" {
+    try harness.expectLirInspectionWithOptions(
+        \\read : List(U8), U64 -> U64
+        \\read = |tab, i| {
+        \\    if List.len(tab) < 256 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    (List.get(tab, i.bitwise_and(255)) ?? 0).to_u64()
+        \\}
+        \\
+        \\other : List(U8), U64 -> U64
+        \\other = |tab, i| (List.get(tab, i) ?? 0).to_u64()
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    echo!(Str.inspect(read(bytes, args.len()) + other(bytes, 3)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true, .proc_debug_names = true },
+        countSharedGetShape,
+    );
+    try std.testing.expect(shared_get_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), shared_get_shape.calls);
+    try std.testing.expectEqual(@as(usize, 1), shared_get_shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shared_get_shape.is_lt);
 }
