@@ -73599,6 +73599,81 @@ fn expectCompletedPreexistingMalformedRecordUpdateOwner(
     };
 }
 
+fn preexistingMalformedRecordUpdateProducedContext(
+    checker: *const Self,
+) ImportResolution {
+    return ImportResolution.producedSupplied(
+        checker.cir,
+        .{
+            .envs = checker.imported_modules,
+            .modules = checker.validated_imported_modules,
+        },
+        .{
+            .envs = checker.owner_modules,
+            .modules = checker.validated_owner_modules,
+        },
+        checker.platform_dependency_index,
+    );
+}
+
+fn expectPreexistingMalformedRecordUpdateLocalAndFresh(
+    cir: *const ModuleEnv,
+    fresh_cir: *const ModuleEnv,
+    builtin_env: *const ModuleEnv,
+    topology: RecordUpdatePreexistingMalformedBaseTopology,
+    fresh_context: ImportResolution,
+) !CompletedPreexistingMalformedRecordUpdateOwner {
+    if (fresh_context.resolution_env != fresh_cir or
+        fresh_context.expected_failure_replay != .fresh_canonical)
+    {
+        return error.TestUnexpectedResult;
+    }
+    const proof = try expectCompletedPreexistingMalformedRecordUpdateOwner(
+        cir,
+        fresh_cir,
+        topology,
+    );
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+    try validateExpectedFailureContext(cir, fresh_context);
+    try validateWhereMarkerCopySourceNamespaces(cir, builtin_env, fresh_context);
+    return proof;
+}
+
+fn expectPreexistingMalformedRecordUpdateProducedReplay(
+    checker: *const Self,
+    builtin_env: *const ModuleEnv,
+) !void {
+    const context = preexistingMalformedRecordUpdateProducedContext(checker);
+    if (context.resolution_env != checker.cir or
+        context.expected_failure_replay != .produced)
+    {
+        return error.TestUnexpectedResult;
+    }
+    try validateExpectedFailureContext(checker.cir, context);
+    try validateWhereMarkerCopySourceNamespaces(checker.cir, builtin_env, context);
+    const capability = try checker.validatedModule();
+    try std.testing.expectEqual(checker.cir, try capability.validate());
+}
+
+fn expectPreexistingMalformedRecordUpdateCheckerTransientState(
+    checker: *const Self,
+) !void {
+    try expectDirectBinderTransientListsEmpty(checker);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checker.aggregate_expected_retirement_drafts.items.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        checker.record_update_expected_plan_registrations.items.len,
+    );
+    try std.testing.expect(checker.record_update_expected_plan_registrations_consumed);
+    try std.testing.expectEqual(@as(usize, 0), checker.optional_field_accesses.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.pending_record_updates.items.len);
+}
+
 fn expectHealthyRecordUpdatePlanSet(
     cir: *const ModuleEnv,
     owner_expr: CIR.Expr.Idx,
@@ -74749,6 +74824,269 @@ test "record-update owner retirement: preexisting malformed base reuses its exac
         checked.builtin_module.env,
         fresh_context,
     );
+}
+
+test "record-update owner retirement: preexisting malformed base rebuilds and serializes active recovery" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const module_name = "RecordUpdatePreexistingMalformedBaseRebuildSerde";
+    var failure_stage: []const u8 = "checked source";
+    errdefer std.debug.print(
+        "preexisting malformed record-update rebuild/serde failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var checked = try TestEnv.init(
+        module_name,
+        record_update_preexisting_malformed_base_source,
+    );
+    defer checked.deinit();
+    try checked.assertCanErrors(&.{"Chained Range"});
+    try std.testing.expectEqual(@as(usize, 0), checked.checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try checked.typeProblemCount());
+
+    failure_stage = "distinct fresh source";
+    var fresh_env = try TestEnv.initUncheckedForTesting(
+        module_name,
+        record_update_preexisting_malformed_base_source,
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{"Chained Range"});
+    const topology = try recordUpdatePreexistingMalformedBaseTopology(&fresh_env);
+    const cir = checked.module_env;
+
+    failure_stage = "terminal baseline";
+    const baseline_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        cir,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try expectPreexistingMalformedRecordUpdateCheckerTransientState(&checked.checker);
+    try expectPreexistingMalformedRecordUpdateProducedReplay(
+        &checked.checker,
+        checked.builtin_module.env,
+    );
+    const canonical_baseline = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        cir,
+    );
+    defer std.testing.allocator.free(canonical_baseline);
+
+    failure_stage = "first repeated rebuild";
+    try checked.checker.rebuildCheckedBoundaryWhereMethodState();
+    const first_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        cir,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try std.testing.expect(std.meta.eql(baseline_proof, first_proof));
+    try expectPreexistingMalformedRecordUpdateCheckerTransientState(&checked.checker);
+    try expectPreexistingMalformedRecordUpdateProducedReplay(
+        &checked.checker,
+        checked.builtin_module.env,
+    );
+    const canonical_first = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        cir,
+    );
+    defer std.testing.allocator.free(canonical_first);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, canonical_first);
+
+    failure_stage = "second repeated rebuild";
+    try checked.checker.rebuildCheckedBoundaryWhereMethodState();
+    const second_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        cir,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try std.testing.expect(std.meta.eql(baseline_proof, second_proof));
+    try expectPreexistingMalformedRecordUpdateCheckerTransientState(&checked.checker);
+    try expectPreexistingMalformedRecordUpdateProducedReplay(
+        &checked.checker,
+        checked.builtin_module.env,
+    );
+    const canonical_second = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        cir,
+    );
+    defer std.testing.allocator.free(canonical_second);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, canonical_second);
+
+    failure_stage = "aligned serialization";
+    const buffer = try serializeModuleEnvForDeserializationTest(
+        std.testing.allocator,
+        cir,
+    );
+    defer std.testing.allocator.free(buffer);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, buffer);
+    const base_addr = @intFromPtr(buffer.ptr);
+    const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized.validate(buffer.len);
+
+    failure_stage = "readonly deserialization";
+    const readonly = try serialized.deserializeInto(
+        base_addr,
+        std.testing.allocator,
+        record_update_preexisting_malformed_base_source,
+        module_name,
+    );
+    defer {
+        readonly.imports.deinitMapOnly(std.testing.allocator);
+        readonly.import_mapping.deinit();
+        std.testing.allocator.destroy(readonly);
+    }
+    try std.testing.expect(!readonly.w6b_semantically_validated);
+    const readonly_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        readonly,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try std.testing.expect(std.meta.eql(baseline_proof, readonly_proof));
+    const readonly_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        readonly,
+    );
+    defer std.testing.allocator.free(readonly_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, readonly_bytes);
+
+    failure_stage = "mutable deserialization";
+    const mutable = try serialized.deserializeWithMutableTypes(
+        base_addr,
+        std.testing.allocator,
+        record_update_preexisting_malformed_base_source,
+        module_name,
+    );
+    defer {
+        mutable.deinitCachedModule();
+        std.testing.allocator.destroy(mutable);
+    }
+    try std.testing.expect(!mutable.w6b_semantically_validated);
+    const mutable_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        mutable,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try std.testing.expect(std.meta.eql(baseline_proof, mutable_proof));
+    const mutable_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        mutable,
+    );
+    defer std.testing.allocator.free(mutable_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, mutable_bytes);
+
+    failure_stage = "mutable source-retirement isolation";
+    const mutable_plans = mutable.expected_consumption_plans.items.items;
+    {
+        const saved_base_plan = mutable_plans[mutable_proof.base_plan_index];
+        defer mutable_plans[mutable_proof.base_plan_index] = saved_base_plan;
+        mutable_plans[mutable_proof.base_plan_index].source_retirement_index_plus_one =
+            mutable_proof.owner_retirement_index + 1;
+        const changed_base_plan = mutable_plans[mutable_proof.base_plan_index];
+        try std.testing.expect(changed_base_plan.hasLegalTags());
+        try std.testing.expectEqual(
+            mutable_proof.owner_retirement_index,
+            changed_base_plan.decodedSourceRetirementIndex().?,
+        );
+        try std.testing.expect(!expectedRecordUpdateBaseSourceRetirementIsLocallyValid(
+            mutable,
+            changed_base_plan,
+        ));
+        try std.testing.expect(!validateExpectedRecordUpdatePlans(&mutable.types, mutable));
+
+        const original_during_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+            cir,
+            fresh_env.module_env,
+            checked.builtin_module.env,
+            topology,
+            recordUpdateRootAuthorityFreshContext(&fresh_env),
+        );
+        const readonly_during_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+            readonly,
+            fresh_env.module_env,
+            checked.builtin_module.env,
+            topology,
+            recordUpdateRootAuthorityFreshContext(&fresh_env),
+        );
+        try std.testing.expect(std.meta.eql(baseline_proof, original_during_proof));
+        try std.testing.expect(std.meta.eql(baseline_proof, readonly_during_proof));
+        try expectPreexistingMalformedRecordUpdateProducedReplay(
+            &checked.checker,
+            checked.builtin_module.env,
+        );
+        try serialized.validate(buffer.len);
+        try std.testing.expectEqualSlices(u8, canonical_baseline, buffer);
+        const original_during_bytes = try serializeModuleEnvForCanonicalComparison(
+            std.testing.allocator,
+            cir,
+        );
+        defer std.testing.allocator.free(original_during_bytes);
+        const readonly_during_bytes = try serializeModuleEnvForCanonicalComparison(
+            std.testing.allocator,
+            readonly,
+        );
+        defer std.testing.allocator.free(readonly_during_bytes);
+        try std.testing.expectEqualSlices(u8, canonical_baseline, original_during_bytes);
+        try std.testing.expectEqualSlices(u8, canonical_baseline, readonly_during_bytes);
+    }
+
+    failure_stage = "mutable restoration";
+    const mutable_restored_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        mutable,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    const original_restored_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        cir,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    const readonly_restored_proof = try expectPreexistingMalformedRecordUpdateLocalAndFresh(
+        readonly,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try std.testing.expect(std.meta.eql(baseline_proof, mutable_restored_proof));
+    try std.testing.expect(std.meta.eql(baseline_proof, original_restored_proof));
+    try std.testing.expect(std.meta.eql(baseline_proof, readonly_restored_proof));
+    try expectPreexistingMalformedRecordUpdateProducedReplay(
+        &checked.checker,
+        checked.builtin_module.env,
+    );
+    try serialized.validate(buffer.len);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, buffer);
+    const mutable_restored_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        mutable,
+    );
+    defer std.testing.allocator.free(mutable_restored_bytes);
+    const original_restored_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        cir,
+    );
+    defer std.testing.allocator.free(original_restored_bytes);
+    const readonly_restored_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        readonly,
+    );
+    defer std.testing.allocator.free(readonly_restored_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, mutable_restored_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, original_restored_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, readonly_restored_bytes);
 }
 
 test "record-update root authority: direct and redirected selections survive rebuild serde and fresh admission" {

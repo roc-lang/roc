@@ -741,10 +741,12 @@ described in full, with trailers; W6b currently has its provisional title):
 | `mpqnvuvq` / `9c295876` | W6b checked-base owner completion atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 45/45 tests, 41/41 steps pass |
 | `mwttkmrx` / `e2380965` | W6b checked-error base-plan publication atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 51/51 tests, 41/41 steps pass |
 | `nrkxkkmn` / `a1757bdc` | W6b owner-retirement reservation atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 54/54 tests, 41/41 steps pass |
-| `uovwznvn` | W6b preexisting-malformed-base recovery authority | reviewed bounded WIP; final normal 57/57 tests, 41/41 steps pass; publication being finalized |
+| `uovwznvn` / `2df80890` | W6b preexisting-malformed-base recovery authority | pushed and exact PR readback verified; reviewed bounded WIP; final normal 57/57 tests, 41/41 steps pass |
+| `unupstyw` | W6b active record-update recovery rebuild and serialization | reviewed bounded WIP; final normal 58/58 tests, 41/41 steps pass; publication being finalized |
 
-The local and remote `jared/polarity` bookmarks now point at `nrkxkkmn` /
-`a1757bdc`, directly above `mwttkmrx` / `e2380965`, `mpqnvuvq` / `9c295876`,
+The local and remote `jared/polarity` bookmarks now point at `uovwznvn` /
+`2df80890`, directly above `nrkxkkmn` / `a1757bdc`,
+`mwttkmrx` / `e2380965`, `mpqnvuvq` / `9c295876`,
 `onmovlvr` / `92741c58`,
 `txopxlzx` / `10f613d6`,
 `wpvvswsl` / `95dfea5a`,
@@ -752,7 +754,7 @@ The local and remote `jared/polarity` bookmarks now point at `nrkxkkmn` /
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`uovwznvn` owns the preexisting-malformed-base recovery-authority test slice
+`unupstyw` owns active recovery rebuild/serialization coverage
 and is not part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
@@ -4358,6 +4360,62 @@ subsets below do not override this latest checkpoint.
   The driver is finalizing the full jj description, WIP push and exact draft-PR
   readback. This completes the bounded one-field preexisting-malformed-base
   recovery-authority test task, not full R1, option (e), adapters or W6b.
+
+- Publication of `uovwznvn` is complete: Git commit
+  `2df8089056405e14fb7247a7f74a0c1c243c0a4c` was fast-forwarded from `a1757bdc`
+  to `jared/polarity`. PR #10434's exact head, complete updated body and draft
+  state are verified in `preexisting-base-pr-readback.json`. The driver opened
+  child `unupstywlupwvwosnovykyxrwmtmkptw` and dispatched the sol-ultra author
+  for active R1 repeated successful rebuild and real readonly/mutable serde.
+  This reuses the authentic preexisting-malformed-base fixture, exact graph
+  oracle and direct local/produced/fresh replay; it must compare full canonical
+  bytes and demonstrate mutable metadata independence. The task does not
+  authorize production changes, clean-cache recovery acceptance, first-rebuild
+  OOM or unrelated retirement-range coverage. Independent adversarial review
+  and root-run gates follow its first coherent freeze.
+
+- Active recovery rebuild/serde implementation freezes at `bff6eabb`, Check
+  SHA-256 `b42c46c9e8b3b4ddf1ec7eb8f5797851f36bb09b03d5fde3f7b4a20f7729edf7`.
+  The new authentic test compares complete terminal bytes and exact active
+  graph authority after two additional rebuilds, readonly deserialization and
+  mutable deserialization. A mutable-only P_B retarget must reject while the
+  original, readonly view, serialized buffer and original checker capability
+  remain unchanged; whole-row restoration precedes complete replay and byte
+  equality. The new test reuses the exact graph oracle; the prior corruption
+  test is unchanged.
+  Root review required keeping produced contexts/capabilities on the original
+  checker only: deserialized views use local plus direct distinct-fresh replay
+  and remain semantically unvalidated. Formatting is unchanged; semantic
+  40884 passes. Broad owner-retirement runtime and actual full-delta independent
+  adversarial review are running. No normal-gate pass or serde acceptance is
+  claimed yet; this is repeated canonical idempotence, not nonidentity repack.
+
+- Rebuild/serde broad runtime 38393 passes 17/17 tests, including all preceding
+  owner-retirement allocation/rollback and corruption controls. Independent
+  actual full-delta review accepts `b42c46c9`: additive tests only, exact
+  authority separation, correct borrowed/owned lifetimes, observable mutable
+  isolation and complete restoration. Normal producer-regenerated combined
+  gate 47577 is running; source remains frozen.
+
+- A separate current-source diagnostic 71928 reproduces the established-base
+  empty-record projection panic: retirement 0 owns only field plan 1, while
+  the mandatory base plan and complete record owner group are not retired.
+  The direct runner aborts at this first panic, so the other three requested
+  historical failures were not rerun. This is not a serde regression or a
+  publication-gate result. While the normal gate runs, the author has a
+  read-only R2 rule/implementation-planning task based on this fresh evidence;
+  no R2 code or normative declaration is approved yet. The proposal must
+  preserve producer-authored causes and complete arbitrary-index membership,
+  and receive independent adversarial review before implementation.
+
+- Rebuild/serde final normal gate 47577 passes 58/58 tests and 41/41 steps:
+  canonicalization 10, types 10, checker 33 and compile/serde 5, with regenerated
+  Builtins, schema-85 golden, serialization and native/wasm sizes. Formatting
+  and all compiler hashes match the independently reviewed `b42c46c9` source.
+  The driver is finalizing the jj description, WIP push and exact draft-PR
+  readback. This completes the bounded active recovery idempotence/serde task,
+  not semantic clean-cache admission, first-rebuild OOM, nonidentity repack,
+  full R1, R2/R3, option (e), adapters or W6b.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

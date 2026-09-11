@@ -6273,7 +6273,7 @@ including shared helpers, schema-85 golden, serialization and native/wasm sizes.
 Formatting and exact compiler hashes match review; push and exact draft-PR
 head/body readback are verified. This bounded
 slice does not certify supplied-field reservation variants or full R1 admission.
-Checkpoint `uovwznvn` adds an authentic preexisting-malformed-base positive
+Published `uovwznvn` / `2df80890` adds an authentic preexisting-malformed-base positive
 and local-source/produced-versus-fresh phase negatives. Positive full-tail
 calibration passes 2/2 focused tests and independent updated review. It pins
 exact typed-integer syntax, distinct field projection-variable identity,
@@ -6286,9 +6286,18 @@ and false rewrite history fails distinct-fresh source replay despite internally
 consistent local/produced state. Exact restoration is checked after each.
 The normal producer-regenerated combined gate passes 57/57 tests and 41/41
 steps, including schema-85 golden, serialization and native/wasm sizes.
-Formatting and exact compiler hashes match review; description and publication
-are being finalized. Clean-cache recovery rejection is unchanged. This does
+Formatting and exact compiler hashes match review; push and exact draft-PR
+head/body readback are verified. Clean-cache recovery rejection is unchanged. This does
 not certify complete record-update admission.
+Child `unupstyw` adds repeated successful rebuild and active
+readonly/mutable serialization coverage for this recovery fixture, with exact
+bytes, graph authority and mutable-copy independence. Semantic validation and
+the broad 17/17 owner-retirement runtime gate pass, and independent full-delta
+review accepts the bounded test-only change. The normal producer-regenerated
+combined gate passes 58/58 tests and 41/41 steps, including schema-85 golden,
+serialization and native/wasm sizes. Formatting and compiler hashes match
+review; description and publication are being finalized. It does not authorize
+clean-cache admission of diagnostic-bearing artifacts or production changes.
 Other preexisting-base shapes, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
 gates remain pending, as do later established-base failure causes and complete
