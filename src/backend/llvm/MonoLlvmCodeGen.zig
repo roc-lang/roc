@@ -231,6 +231,14 @@ fn llvmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     std.debug.panic("LLVM codegen invariant violated: " ++ fmt, args);
 }
 
+/// Statement budget for a proc with no loop to be inlined everywhere: a
+/// checked wrapper around one operation.
+const max_wrapper_inline_stmts: usize = 32;
+/// Statement budget for a leaf proc to be inlined everywhere: a helper the
+/// size of a compressor's match extender, whose per-call cost in its callers'
+/// loops exceeds the work it does.
+const max_leaf_inline_stmts: usize = 400;
+
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
     pub const EntrypointAbi = enum {
@@ -1635,7 +1643,16 @@ pub const MonoLlvmCodeGen = struct {
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        try attrs_wip.addFnAttr(.inlinehint, builder);
+        if (self.enable_default_platform_diagnostics) {
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+        } else {
+            const inline_everywhere = if (proc.body) |body| try self.procIsWorthInliningEverywhere(body) else false;
+            if (inline_everywhere) {
+                try attrs_wip.addFnAttr(.alwaysinline, builder);
+            } else {
+                try attrs_wip.addFnAttr(.inlinehint, builder);
+            }
+        }
         // Every parameter except the return slot is a distinct object no
         // callee can reach another way: RocOps is host-provided and never
         // stored in a Roc value, the argument pack is a fresh caller-local
@@ -1668,7 +1685,6 @@ pub const MonoLlvmCodeGen = struct {
                 } }, builder);
             }
             if (self.enable_default_platform_diagnostics) {
-                try attrs_wip.addFnAttr(.@"noinline", builder);
                 try attrs_wip.addFnAttr(.{ .string = .{
                     .kind = builder.string("disable-tail-calls") catch return error.OutOfMemory,
                     .value = builder.string("true") catch return error.OutOfMemory,
@@ -2774,6 +2790,96 @@ pub const MonoLlvmCodeGen = struct {
                 => {},
             }
         }
+    }
+
+    /// Whether a body is worth inlining at every call site. LLVM sizes a proc
+    /// only after the builtins it calls have been expanded into it, so a
+    /// checked wrapper around one operation, or a leaf helper whose bounds
+    /// checks each expand into a compare-and-branch pair, looks far larger to
+    /// it than its LIR is. Two shapes qualify: a handful of statements with no
+    /// loop, and a leaf of moderate size. A leaf calls no other proc, so
+    /// inlining it bounds code growth by its own size.
+    fn procIsWorthInliningEverywhere(self: *MonoLlvmCodeGen, body: CFStmtId) Error!bool {
+        var visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer visited.deinit();
+        var work = std.ArrayList(CFStmtId).empty;
+        defer work.deinit(self.allocator);
+        var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
+        defer joins.deinit(self.allocator);
+        var count: usize = 0;
+        var leaf = true;
+        try work.append(self.allocator, body);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (entry.found_existing) continue;
+            count += 1;
+            if (count > max_leaf_inline_stmts) return false;
+            const stmt = self.store.getCFStmt(stmt_id);
+            switch (stmt) {
+                .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
+                .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn => leaf = false,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => {},
+            }
+            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+        }
+        if (leaf) return true;
+        if (count > max_wrapper_inline_stmts) return false;
+        // A loop is a join reached again from inside its own body.
+        for (joins.items) |join| {
+            visited.clearRetainingCapacity();
+            try work.append(self.allocator, join.body);
+            while (work.pop()) |stmt_id| {
+                const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+                if (entry.found_existing) continue;
+                const stmt = self.store.getCFStmt(stmt_id);
+                if (stmt == .jump and stmt.jump.target == join.id) {
+                    work.clearRetainingCapacity();
+                    return false;
+                }
+                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+            }
+        }
+        return true;
     }
 
     fn noteStmtIncoming(self: *MonoLlvmCodeGen, stack: *std.ArrayList(CFStmtId), stmt_id: CFStmtId) Error!void {

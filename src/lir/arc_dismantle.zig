@@ -342,6 +342,15 @@ const Read = struct {
     field_idx: u32,
 };
 
+/// A complete field read of a root that dominance canonicalized to an
+/// earlier read of the same root and layout. Whether it is a field read of
+/// the root or a pure alias of that representative is decided by the
+/// representative's plan, so the root defers its classification.
+const EquivalencedRead = struct {
+    read: Read,
+    representative: LIR.LocalId,
+};
+
 const MentionEdge = struct {
     stmt: u32,
     next: u32,
@@ -364,12 +373,25 @@ const UnionRoot = struct {
 
 const ambiguous_view: u32 = no_index - 1;
 
+/// Depth-first ordering state for solving projection representatives
+/// before the roots whose deferred reads they settle.
+const OrderMark = enum(u8) {
+    unvisited,
+    visiting,
+    ordered,
+};
+
 const Candidate = struct {
     def_stmt: LIR.CFStmtId = @enumFromInt(no_index),
     def_count: u32 = 0,
     join_starts: std.ArrayList(LIR.CFStmtId) = .empty,
     disqualified: bool = false,
     reads: std.ArrayList(Read) = .empty,
+    /// Complete reads canonicalized to a dominating representative. Once the
+    /// representative commits a plan they are materialized as its aliases and
+    /// belong to its occurrence set; otherwise they rejoin `reads` before
+    /// this container's flow runs.
+    equivalenced_reads: std.ArrayList(EquivalencedRead) = .empty,
     /// Statements consuming or observing the container as one value—moved
     /// into an aggregate, passed to a call, returned, or join-carried. Takes
     /// stay valid as long as no whole use can run after a take, which the
@@ -426,6 +448,7 @@ const Analysis = struct {
         var it = self.candidates.valueIterator();
         while (it.next()) |candidate| {
             candidate.reads.deinit(self.gpa);
+            candidate.equivalenced_reads.deinit(self.gpa);
             candidate.join_starts.deinit(self.gpa);
             candidate.whole_uses.deinit(self.gpa);
         }
@@ -651,11 +674,41 @@ const Analysis = struct {
         // source's stored unit at the read itself when the target retains.
         if (self.rc_local[@intFromEnum(target)]) try self.noteMention(stmt, source);
         const root = self.resolveRoot(source);
+        const target_index = @intFromEnum(target);
+        const representative_index = self.projected_container[target_index];
+        if (representative_index != no_index and representative_index != target_index) {
+            try self.noteEquivalencedRead(stmt, root, field_idx, target, @enumFromInt(representative_index));
+            return;
+        }
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.reads.append(self.gpa, .{
             .stmt = stmt,
             .target = target,
             .field_idx = field_idx,
+        });
+    }
+
+    /// A complete read canonicalized to a dominating representative. If the
+    /// representative commits a plan, the read is materialized as a pure
+    /// alias of it and is scanned as that alias now: a target emitted owned
+    /// is a whole use of the representative (an owned-demanded borrowed
+    /// target joins it once demand is closed), and a borrowed target reads
+    /// through it.
+    /// The root defers the read until the representative's plan is known;
+    /// the representative's plan never depends on the root's, so solving
+    /// representatives first settles every deferred read exactly once. The
+    /// read's mention stays on the root: the representative's defining read
+    /// dominates this one, so the root's flow already observes the field
+    /// before it, and a mention of the representative here would poison the
+    /// root's own take when the read rejoins its field reads.
+    fn noteEquivalencedRead(self: *Analysis, stmt: LIR.CFStmtId, root: LIR.LocalId, field_idx: u32, target: LIR.LocalId, representative: LIR.LocalId) Error!void {
+        if (!self.solution.isBorrowed(target)) {
+            if (try self.entryOf(representative)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
+        }
+        const root_candidate = (try self.entryOf(root)) orelse return;
+        try root_candidate.equivalenced_reads.append(self.gpa, .{
+            .read = .{ .stmt = stmt, .target = target, .field_idx = field_idx },
+            .representative = representative,
         });
     }
 
@@ -1652,6 +1705,19 @@ pub fn compute(
 
     analysis.closeOwnedDemand();
 
+    // Owned demand is closed only now. A deferred read whose borrowed target
+    // is re-emitted owned retains through its representative exactly like an
+    // owned target, so it is the same whole use of that representative.
+    var demand_it = analysis.candidates.valueIterator();
+    while (demand_it.next()) |candidate| {
+        for (candidate.equivalenced_reads.items) |deferred| {
+            const target_index = @intFromEnum(deferred.read.target);
+            if (!solution.isBorrowed(deferred.read.target) or !analysis.owned_demand[target_index]) continue;
+            const representative = analysis.candidates.getPtr(@intFromEnum(deferred.representative)) orelse continue;
+            try representative.whole_uses.append(gpa, deferred.read.stmt);
+        }
+    }
+
     // Second phase: verify the surviving candidates' read shapes and spines,
     // and build the output.
     var result = Dismantles{
@@ -1706,11 +1772,59 @@ pub fn compute(
     var borrow_stack = std.ArrayList(u32).empty;
     defer borrow_stack.deinit(gpa);
 
-    var it = analysis.candidates.iterator();
-    candidates: while (it.next()) |entry| {
-        const local: LIR.LocalId = @enumFromInt(entry.key_ptr.*);
-        const candidate = entry.value_ptr;
+    // A root's deferred reads are settled by their representatives' plans,
+    // and a representative's layout is a proper part of its root's layout,
+    // so the dependency graph is acyclic. Solve representatives before roots.
+    var candidate_order = std.ArrayList(u32).empty;
+    defer candidate_order.deinit(gpa);
+    try candidate_order.ensureTotalCapacity(gpa, analysis.candidates.count());
+    const order_marks = try gpa.alloc(OrderMark, store.localCount());
+    defer gpa.free(order_marks);
+    @memset(order_marks, .unvisited);
+    var order_stack = std.ArrayList(u32).empty;
+    defer order_stack.deinit(gpa);
+    var order_it = analysis.candidates.keyIterator();
+    while (order_it.next()) |key| {
+        if (order_marks[key.*] != .unvisited) continue;
+        try order_stack.append(gpa, key.*);
+        while (order_stack.items.len != 0) {
+            const index = order_stack.items[order_stack.items.len - 1];
+            switch (order_marks[index]) {
+                .unvisited => {
+                    order_marks[index] = .visiting;
+                    for (analysis.candidates.getPtr(index).?.equivalenced_reads.items) |deferred| {
+                        const representative_index = @intFromEnum(deferred.representative);
+                        switch (order_marks[representative_index]) {
+                            .unvisited => if (analysis.candidates.contains(representative_index)) {
+                                try order_stack.append(gpa, representative_index);
+                            },
+                            .visiting => dismantleInvariant("ARC dismantle projection representatives formed a cycle"),
+                            .ordered => {},
+                        }
+                    }
+                },
+                .visiting => {
+                    order_marks[index] = .ordered;
+                    candidate_order.appendAssumeCapacity(index);
+                    _ = order_stack.pop();
+                },
+                .ordered => _ = order_stack.pop(),
+            }
+        }
+    }
+
+    candidates: for (candidate_order.items) |candidate_index| {
+        const local: LIR.LocalId = @enumFromInt(candidate_index);
+        const candidate = analysis.candidates.getPtr(candidate_index).?;
         if (candidate.disqualified) continue;
+        // A deferred read whose representative committed a plan is that
+        // representative's alias; every other one is an ordinary field read
+        // of this container.
+        for (candidate.equivalenced_reads.items) |deferred| {
+            if (result.containers.contains(deferred.representative) or
+                result.owned_only_containers.contains(deferred.representative)) continue;
+            try candidate.reads.append(gpa, deferred.read);
+        }
         if (candidate.reads.items.len == 0) continue;
 
         // A payload view dismantles its tag union: the view holds no unit of
@@ -2091,7 +2205,7 @@ pub fn compute(
                 try result.owned_only_takes.put(gpa, read.stmt, take);
                 const target_index = @intFromEnum(read.target);
                 const prior = result.owned_only_binding_roots[target_index];
-                if (prior != no_index and prior != @intFromEnum(local)) {
+                if (prior != no_index and prior != @intFromEnum(activation_root)) {
                     dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
                 }
                 result.owned_only_binding_roots[target_index] = @intFromEnum(activation_root);
@@ -2146,6 +2260,11 @@ pub fn compute(
         const representative_local: LIR.LocalId = @enumFromInt(representative);
         if (!result.containers.contains(representative_local) and
             !result.owned_only_containers.contains(representative_local)) continue;
+        // The deferred reads of this alias were settled against this exact
+        // plan, which only a candidate solved in dependency order can hold.
+        if (order_marks[representative] != .ordered) {
+            dismantleInvariant("ARC dismantle materialized an alias of a representative that was never solved");
+        }
         const stmt_index = projected_stmt[local_index];
         if (stmt_index == no_index) continue;
         const stmt = store.getCFStmtPtr(@enumFromInt(stmt_index));

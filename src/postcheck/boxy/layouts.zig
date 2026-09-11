@@ -140,7 +140,7 @@ pub fn build(
 }
 
 /// Commit only checked ABI roots. No worker descriptors, generated evidence
-/// layouts, or executable procedures are constructed for layout-only clients.
+/// layouts, or LIR procedures are constructed for layout-only clients.
 pub fn commitHostAbi(allocator: Allocator, program: *const Plan.ProgramPlan, store: *layout.Store) Allocator.Error![]layout.Idx {
     var builder = Builder.init(allocator, program, store);
     defer builder.deinit();

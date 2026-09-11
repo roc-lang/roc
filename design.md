@@ -6811,11 +6811,16 @@ Other solved-graph mutations:
 - `finalizeFunctionEffectsAtBoundary`—policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.
-- `closeAbsentConstructedPayloadVars` / `closePayloadVarToEmpty`—policy:
-  absent-constructor payload closing. A constructed value's unconstrained,
-  ignorable payload vars for tags the expression provably never constructs
-  close to the empty tag union, so matches on constructed values are
-  exhaustive without wildcard arms.
+- `closeAbsentConstructedPayloadVars` /
+  `closeAbsentConstructedPayloadVarsForLambda` / `closePayloadVarToEmpty`—
+  policy: absent-constructor payload closing. A constructed value's
+  unconstrained, ignorable payload vars for tags the expression provably never
+  constructs close to the empty tag union, so matches on constructed values are
+  exhaustive without wildcard arms. A lambda result is constructed by its body
+  tail *or* by any of its early returns, so the lambda form reads the tags of
+  every recorded return operand as well; `?` desugars to one of those returns,
+  and its `Err` is what keeps an inferred error row open (see Try Return-Row
+  Composition above, whose contributions are composed only after this point).
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
@@ -12121,6 +12126,16 @@ When one ownership place is read repeatedly by ownership-complete struct-field
 or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read
 and rewrites those later reads as explicit local aliases before ARC solving.
+That rewrite is materialized only when the representative commits a dismantle
+plan, and a canonicalized read is classified by that same plan: under a
+committed representative it is an occurrence of the representative (a whole
+use when its target is emitted owned, a transparent alias when it stays
+borrowed), and otherwise it stays an ordinary field read of its root. Candidates are solved
+representatives first; a representative is a complete field read whose layout
+is a proper part of its root's layout, so the order is acyclic and each
+deferred read is settled exactly once.
+A root therefore never commits a take on a read that is emitted as an alias of
+a container already holding the root's unit.
 Dominance is computed once from the explicit statement-successor graph with a
 synthetic entry for all procedure roots. Immediate dominators settle in reverse
 postorder, and dominator-tree intervals answer field-read and tag-payload-read
@@ -13640,6 +13655,25 @@ Hosted proc entries keep their exact checked hosted ABI in both strategies. A
 boxy caller adapts arguments before the hosted call and adapts the result after
 the hosted call. It must not change the hosted dispatch index, hosted symbol
 name, natural C ABI signature, ownership rule, or generated glue declaration.
+
+## Root Application Preparation
+
+The parser's header and declaration index determine an entry module's platform
+wiring: an explicit app platform, the default platform for a headerless root
+with a top-level `main!` definition or a platformless app, or no application.
+This syntactic classification does not establish entrypoint type correctness
+and never grants host effects to imported modules.
+
+CLI `run` and `build` consume this classification during their existing root
+preparation parse, before platform discovery or host linking. Parse failures
+produce source diagnostics directly; a non-app root produces the execution
+requires-app-or-default-app diagnostic. Neither case is staged as a synthetic
+app to obtain an error. Checking still accepts valid type modules, and explicit
+root requests such as `test` do not require an application entrypoint.
+
+Preparation uses only parser state and releases it before compilation. It does
+not allocate a type store, run an extra checking pass, or retain dependency ASTs.
+Checking remains responsible for validating implementations and entrypoint types.
 
 ## Build Outputs And The Targets Header
 

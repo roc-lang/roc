@@ -113,7 +113,7 @@ fn forwardLocalAliasChainImpl(
 /// payload arms, string-match arms, and join bodies. This is the reachability
 /// step shared by the proc walkers.
 pub fn appendSuccessors(
-    store: *LirStore,
+    store: *const LirStore,
     work: *std.ArrayList(CFStmtId),
     stmt_id: CFStmtId,
 ) Allocator.Error!void {

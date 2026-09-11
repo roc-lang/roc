@@ -1365,7 +1365,7 @@ pub fn analyzeProgram(
 }
 
 /// Resolve checked ABI requests without discovering workers or private types.
-/// Glue uses the same checked-source resolver as executable Boxy boundaries.
+/// Glue uses the same checked-source resolver as Boxy host ABI boundaries.
 pub fn analyzeHostAbi(allocator: Allocator, input: ProgramInput) Allocator.Error!ProgramPlan {
     var builder = Builder.init(allocator, input);
     defer builder.deinit();
@@ -4255,9 +4255,9 @@ const Builder = struct {
             .empty_record, .empty_tag_union => true,
             .nominal => |nominal| if (nominal.builtin) |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
                 .primitive, .bool_tag_union => true,
-                else => false,
+                .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
             } else false,
-            else => false,
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .tag_union => false,
         };
         if (leaf) {
             if (self.by_type.get(key.source)) |existing| {
@@ -4269,7 +4269,7 @@ const Builder = struct {
             const nominal = payload.nominal;
             const opens_backing = if (nominal.builtin) |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
                 .primitive, .bool_tag_union, .list, .box, .field, .fields, .parse_tag_union_spec => false,
-                else => true,
+                .try_nominal, .dict, .set, .iterator, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => true,
             } else nominal.representation != .opaque_without_backing;
             if (opens_backing) return try self.analyzeHostNominal(key, view, nominal);
         }
@@ -4278,7 +4278,7 @@ const Builder = struct {
         try self.plan.representations.append(self.allocator, .{ .source_type = key.source, .kind = .in_progress });
         const shape = switch (payload) {
             .flex, .rigid => |variable| hostVariableRepresentation(key.source, variable),
-            else => try self.buildRepresentation(view, key.source.ty),
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.buildRepresentation(view, key.source.ty),
         };
         self.plan.representations.items[@intFromEnum(rep)] = shape;
         return rep;
@@ -4330,7 +4330,7 @@ const Builder = struct {
                 .padding_view = view,
                 .padding_types = &.{},
             },
-            else => self.nominalDeclarationFor(view, nominal) orelse
+            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => self.nominalDeclarationFor(view, nominal) orelse
                 boxyPlanInvariant("checked ABI nominal has no declaration"),
         };
         const formals = lookup.declaration.formalArgs(lookup.view.checked_types);
@@ -4964,7 +4964,7 @@ const Builder = struct {
                 },
                 .alias => |alias| current = .{ .source = typeRef(row_view, alias.backing), .context = key.context },
                 .flex, .rigid => |variable| return variable.row_default == .empty_record,
-                else => boxyPlanInvariant("checked ABI record extension is not a record row"),
+                .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => boxyPlanInvariant("checked ABI record extension is not a record row"),
             }
         }
         return true;
@@ -4997,7 +4997,7 @@ const Builder = struct {
                     if (variable.row_default != .empty_tag_union) open_extension = current;
                     break;
                 },
-                else => boxyPlanInvariant("checked ABI tag extension is not a tag row"),
+                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked ABI tag extension is not a tag row"),
             }
         }
         if (view.canonical_names != null) std.mem.sort(PendingTag, tags.items, {}, struct {

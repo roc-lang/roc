@@ -8,6 +8,7 @@ const builtins = @import("builtins");
 const harness = @import("lower_to_lir_harness.zig");
 
 const GuardedList = lir.LirStore.GuardedList;
+const HostAbiTestError = std.mem.Allocator.Error || eval.LirInterpreter.Error || eval.RuntimeHostEnv.LeakError || error{ TestUnexpectedResult, TestExpectedEqual };
 const app_path = "test/postcheck/issue_11287_hosted_try_host_abi_layout/app.roc";
 const hosted_symbol = "roc_stdout_report";
 
@@ -94,7 +95,7 @@ fn stdoutLine(text: builtins.str.RocStr) callconv(.c) HostResult {
     };
 }
 
-fn runHostReturnRoundtrip(lowered: *const lir.CheckedPipeline.LoweredProgram) !void {
+fn runHostReturnRoundtrip(lowered: *const lir.CheckedPipeline.LoweredProgram) HostAbiTestError!void {
     comptime {
         std.debug.assert(@sizeOf(HostResult) == 32);
         std.debug.assert(@offsetOf(HostResult, "tag") == 24);
@@ -154,7 +155,7 @@ fn stdoutReport(result: HostResult) callconv(.c) void {
     result.payload.decref(test_host_ops);
 }
 
-fn runHostArgument(lowered: *const lir.CheckedPipeline.LoweredProgram) !void {
+fn runHostArgument(lowered: *const lir.CheckedPipeline.LoweredProgram) HostAbiTestError!void {
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
     defer host.deinit();
     test_host_ops = host.get_ops();
