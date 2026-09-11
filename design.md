@@ -2226,10 +2226,44 @@ For a preexisting runtime error, candidate and fresh contexts instead both use
 the retired-base phase and replay the same exact malformed publication,
 retirement, payload, and diagnostic.
 Neither arm admits an arbitrary malformed tag. Before owner retirement, the
-outer record is a live `expr_record` and its supplied fields are ordinary live
-expression children. The checked-base owner-retirement rule below preserves
-that exact pre-rewrite record topology when the outer expression must also be
-replaced.
+outer record is a live `expr_record`. Its supplied-field coordinates name
+ordinary live expression children or canonicalization-authored malformed
+expression children authenticated by the scalar rule below. The checked-base
+owner-retirement rule below preserves that exact pre-rewrite record topology
+when the outer expression must also be replaced.
+
+Record-update supplied-field syntax authentication
+(`record_update_supplied_field_syntax`) is allocation-free, nonrecursive
+producer-phase topology validation, not a solver rewrite or an owner-retirement
+rule. An ordinary `expr_` child retains its existing syntax contract. A
+`.malformed` child is admitted only when its complete `DiagSingleValue` payload
+has zero padding and reserved words and exactly one
+`MalformedExpressionPublication` names that exact child node. Count every
+same-node publication, including invalid or mismatched rows; the sole row must
+be locally valid and name the payload's exact, bounds-checked diagnostic.
+A malformed type-annotation publication is not expression authority.
+
+For that canonical malformed child, there may be no same-node retirement yet,
+or exactly one completed `preexisting_runtime_error` retirement. If present,
+that retirement must have the exact expression owner, original malformed tag,
+complete unchanged payload and diagnostic; both consumer and failure ranges
+must be canonically empty, every rejection-owner word inactive, and all reserved
+words zero. Count all same-node retirements, not only matching legal rows;
+duplicates, other kinds, or mismatches reject. This recognizes the same scalar
+syntax before first child consumption and after its existing R0 publication.
+It does not establish that consumption has occurred: deleting R0 is not
+distinguishable here from the valid pre-consumption state. The checked child's
+explicit status/cause and separate completion checks own that obligation.
+No plan group or retirement cause graph is recursively consulted by this
+scalar predicate.
+
+This rule applies only to record-update supplied-field coordinates, including
+the same coordinates decoded from an otherwise-authorized owner snapshot.
+It does not broaden `isExprNodeTag`, base-node phases, other aggregate/call
+children, or malformed-owner eligibility. A checker-rewritten malformed field
+without canonical expression publication remains rejected. In particular,
+established-base R2/R3 retirement after a child error remains unapproved; this
+syntax rule grants neither a new cause nor permission to restamp P_B or P_F.
 
 Contextual replay selects one explicit phase from the admission request; it
 does not infer freshness from pointer identity. During `produced` replay the
@@ -2325,8 +2359,10 @@ Terminal validation handles this reason through a record-update-specific
 consumer-range arm; the literal-aggregate range rules are unchanged. It safely
 decodes `R_U`'s saved `expr_record` payload and its backing rows. This scalar
 snapshot decoder proves only bounds, tags, the exact base child, supplied-field
-count and ordered field name/value sites, and ordered unset names; it does not
-consult the owner plan group or its causes. A separate nonrecursive group pass
+count and ordered field name/value sites under
+`record_update_supplied_field_syntax`, and ordered unset names; it does not
+consult the owner plan group or its causes, or prove child-check completion.
+A separate nonrecursive group pass
 requires the consumer set to be exactly the one base plan plus every supplied-
 field plan, then requires every referenced plan's unchanged base or upstream
 checked-error outcome and the exact `R_B` edge. Thus a plan-to-step topology
@@ -6450,8 +6486,24 @@ failure restores logical and cross-copy state, and retries from an independent
 pending slot against the clean proof/state. Semantic and isolated 2/2 plus
 broader 15/15 gates pass. Final normal regenerated-Builtin gate `66476` passes
 69/69 tests and 41/41 steps, including unchanged schema-86 golden, serde and
-native/wasm sizes; formatting and reviewed hashes match. Publication is in
-progress. This does not
+native/wasm sizes; formatting and reviewed hashes match. Described checkpoint
+`susumyrk` is pushed as `424c29e2`; the full jj description and exact draft-PR
+head, branch and full-body readback are verified. The next task calibrates an
+authentic checked-error supplied field before any new owning-error rule is
+declared. Its initial diagnostic exposed a scalar decoder that rejected an
+explicitly published canonical malformed field before checking its body.
+The narrow `record_update_supplied_field_syntax` prerequisite is implemented
+and independently accepted with its calibration at Check `ceff7419`; it
+authenticates syntax, not completed child consumption or a new R2/R3
+owner-retirement cause. Both relation modes measure actual suppression by the
+existing child error followed by final unification, with no added checker
+Problems. At all four seams, raw base and retained source remain shared records
+with one `hello` field, flex presence, exact Builtin-U8 payload and empty-record
+extension. Semantic, isolated 2/2 and broader 16/16 gates pass. Final normal
+producer-regenerated gate `89680` passes 70/70 tests and 41/41 steps, including
+regenerated Builtins, unchanged schema-86 golden, serde and native/wasm sizes;
+formatting and reviewed hashes match. Root is describing and publishing this
+accepted bounded checkpoint. This does not
 sweep dormant paths, successful in-place resize permutations, or the full
 checker tail under allocation failure. Genuine
 owning-failure retirement remains unapproved. Complete producer/later-erasure

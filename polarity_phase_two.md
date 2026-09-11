@@ -746,9 +746,11 @@ described in full, with trailers; W6b currently has its provisional title):
 | `tonzpmlt` / `9c027603` | W6b record-update projection relation calibration | original `16c850b6` passed 60/60; final-address harness repair amended into owner, independently accepted and normal 3/3 tests, 7/7 steps pass |
 | `urrksrnp` / `2614bb21` | W6b projection after optional-width body refinement | repaired checkpoint pushed and exact PR readback verified; refreshed normal 61/61 tests, 41/41 steps pass |
 | `tznvqtyt` / `7c6857e5` | W6b benign record-update projection availability | whole bounded delta independently accepted; normal gate 68/68 tests and 41/41 steps; push and exact draft-PR readback verified |
-| `susumyrk` | W6b unavailable-projection allocation rollback | independently accepted; normal regenerated-Builtin gate 69/69 tests and 41/41 steps passes; checkpoint publication in progress |
+| `susumyrk` / `424c29e2` | W6b unavailable-projection allocation rollback | independently accepted; normal gate 69/69 tests and 41/41 steps passes; push, full description and exact draft-PR readback verified |
+| `ounopmnm` | W6b canonical malformed supplied-field syntax and child-error calibration | bounded combined-delta review accepts Check `ceff7419`; semantic, isolated 2/2, broader 16/16 and normal 70/70 tests (41/41 steps) pass; publication in progress |
 
-The published `jared/polarity` checkpoint is `tznvqtyt` / `7c6857e5`, above
+The published `jared/polarity` checkpoint is `susumyrk` / `424c29e2`, above
+`tznvqtyt` / `7c6857e5`,
 repaired `urrksrnp` / `2614bb21` and amended `tonzpmlt` / `9c027603`. Its earlier ancestry
 includes `unupstyw` / `8a1bcb17`,
 `uovwznvn` / `2df80890`, `nrkxkkmn` / `a1757bdc`,
@@ -759,9 +761,9 @@ includes `unupstyw` / `8a1bcb17`,
 `zkmyrwqu` / `1f69432c`
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
-status intact. This published checkpoint is explicitly incomplete. New child
-`susumyrk` owns unavailable-projection allocation-failure coverage and is not
-part of that publication.
+status intact. This published checkpoint is explicitly incomplete. The new
+child-error relation calibration is not part of that publication and does not
+authorize genuine-error retirement semantics.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -772,9 +774,9 @@ authorized only if disk space runs out. The user also suggested an incremental
 watch build and compact diagnostics for a faster feedback loop. W6b is not
 ready to publish as complete.
 
-W6b checkpoint (2026-09-09):
+Historical W6b checkpoint (2026-09-09):
 
-**Latest broadly rechecked bounded checkpoint: `c8b4a737` (general subtree
+**At that point, the broadly rechecked bounded checkpoint was `c8b4a737` (general subtree
 invalidation retry, E2a/E2b, full-width CIR payloads, and the prior recovery
 matrix). Focused invalidation gate `34110` passes 7/7 steps and 6/6 tests;
 independent adversarial review accepts the bounded slice. Combined broader
@@ -4904,6 +4906,153 @@ subsets below do not override this latest checkpoint.
   Root is describing and publishing the independently accepted test-only
   checkpoint. The next bounded investigation is authentic child-error field
   calibration, not an approved genuine-error retirement implementation.
+
+- Described allocation-failure checkpoint `susumyrk` is pushed as
+  `424c29e29178c42100ba7c6de3542e2ea73c6987`. Push `84974` and PR update
+  `46346` succeed. Exact readback verifies the full jj description, PR head,
+  `jared/polarity`, complete 8,463-character body including terminal newline,
+  and draft status. Root opened a separate test-only child-error calibration
+  task: a healthy `{ hello: 1.U8 }` base with a real unresolved-variable
+  supplied field, measured at the existing live producer seams under original
+  poisoning and exact-context no-report modes. Outcomes must be observed before
+  pinning expectations; no new R2/R3 rule is declared or implemented.
+
+- A separate read-only adversarial review REQUESTS CHANGES to the future
+  owning-relation proposal. Rolling back before reporting is not the measured
+  partial-commit `write_no_report` behavior. Publishing two type snapshots,
+  a Problem, evidence and an owner draft after closing the relation probe is
+  not atomic. An outer diagnostic-aware CommitProbe with an inner local
+  transaction is mechanically plausible, but requires its own declared rule,
+  exact nesting/ledger ownership and allocation-failure proof. `CheckedStoredValue`
+  also lacks explicit direct-versus-scheme-use source authority; the synthetic
+  peer needs a durable type root. The existing checked-base-only R_U cannot be
+  generalized with sentinels or by restamping P_F. Suppression, first-cause
+  order, later field/child/unset/final continuations, and accepted deferred
+  dispatch/default behavior remain proof obligations. This is not production
+  approval and does not change the current test-only calibration task.
+
+- Initial diagnostic calibration freezes at Check `370786b3`, jj `3d6960e0`.
+  Semantic `80150` fails before execution: `std.meta.eql` cannot compare the
+  proof step's untagged `WhereMarkerCopyOrigin`. The author is fixing the test
+  comparison without omitting the origin or weakening full-row checks. Runtime
+  outcomes remain unmeasured. The diagnostic test intentionally stops only
+  after reporting measured outcomes; that stop must later be replaced by
+  pinned assertions before final review and publication.
+
+- Corrected diagnostic Check `3467d995`, jj `bc4c2a22`, passes semantic
+  `45136`. The test now compares transient scalar coordinates explicitly and
+  every complete persisted proof row by canonical bytes, including the
+  untagged origin and inactive words. Isolated diagnostic `22607` is running;
+  its planned measurement stop is not a final passing test or completion.
+
+- Isolated diagnostic `22607` exits with `TestUnexpectedResult` at the earlier
+  `base check and publication` stage, with actual/final relations both unset.
+  This is not the intended measured-outcomes stop. All builds are closed;
+  the author is narrowing the exact test assertion before changing fixture
+  expectations. Production behavior and relation outcomes remain unmodified
+  and unmeasured, respectively.
+
+- Diagnostic `38725` narrows the failure to the base-publication proof;
+  `34505` at Check `ce30b05f` / jj `48db2357` confirms the exact root-copy
+  proof passes and the base-plan inverse fails. The scalar record-update
+  syntax decoder requires every supplied child to have an `expr_` tag,
+  rejecting this authentic canonical `.malformed` child despite its recorded
+  publication. The author and independent reviewer are assessing a narrow
+  explicit-publication syntax rule. No generic malformed-tag admission,
+  solver mutation, new owner retirement, or relation expectation change is
+  authorized by this diagnosis; actual/final outcomes remain unmeasured.
+
+- Independent adversarial assessment finds the canonical-publication-only
+  scalar extension feasible, provided it counts all same-site publications
+  and retirements, checks complete canonical payload/row words, and does not
+  confuse syntax with completed checking. Root declares
+  `record_update_supplied_field_syntax` in design.md before authorizing the
+  narrow decoder and accepted/rejected tests. Zero R0 rows is valid before
+  consumption; the scalar predicate therefore cannot detect deletion of a
+  completed R0. Actual child status/cause and separate completion checks retain
+  that obligation. Checker-rewritten fields lacking canonical expression
+  publication, generic malformed-tag admission, and established-base R2/R3
+  owner retirement remain excluded. This is a scoped production prerequisite
+  discovered by the calibration, no longer a test-only proposed checkpoint.
+
+- Final independent architecture assessment confirms the declared bounded
+  canonical-preexisting decoder task is feasible, with no architecture blocker.
+  It approves the design scope, not the forthcoming implementation. The
+  trusted child-check producer and its exact returned cause remain responsible
+  for completed R0 publication; no new terminal deletion-detection oracle is
+  claimed. Actual-diff adversarial review and targeted/final normal gates
+  remain required before publication.
+
+- Decoder and diagnostic calibration freeze at Check `73480c6d`, jj
+  `09b2c45d`, full diff `78caae6f`. Semantic `93376` passes. Isolated
+  measurement `38271` and independent actual-diff review are running. The
+  test includes before/after-R0 corruption checks with restoration, and an
+  explicit positive scalar-only check for hidden/retargeted R0. The intentional
+  measured-outcomes stop remains until actual relation results are observed
+  and pinned; this is not yet a publishable passing checkpoint.
+
+- `38271` passes the scalar pre-R0 corruption matrix, P_B inverse and
+  anchored P_F proof, but stops at the pre-body shape assertion. Diagnostic
+  `12058` at Check `3d48da52` / jj `a78e91fc` measures both raw base and
+  retained source as the same one-field `hello` record with a Builtin-U8
+  payload and **flex field presence**, not the test's assumed direct-required
+  encoding. The construction owner is still live. The author is correcting
+  that test-only baseline and recording subsequent phases before pinning
+  them. Production is unchanged from `73480c6d`. Independent review also
+  requested and received the missing embedded-malformed-diagnostic bounds
+  corruption test; actual/final relation outcomes remain unmeasured.
+
+- Diagnostic `39764` at Check `bbec4b32` / jj `12a8e02a` reaches the
+  **intended** measured-outcomes stop. Both ordinary poisoning and exact-context
+  no-report modes produce actual `suppressed_by_error`, then final `unified`,
+  with zero added checker Problems. Raw base and retained source remain shared
+  structures at all four boundaries, with one `hello` field, flex presence,
+  exact Builtin-U8 payload and empty-record extension. The checked child remains
+  `err` after body, actual and final relations. Authentic P_B, anchored P_F,
+  child R0 and both scalar corruption matrices pass before this stop. The
+  author is replacing the intentional failure with these exact assertions;
+  suppression is not establishment, and final unification grants no new
+  terminal owner-retirement authority.
+
+- Independent review ACCEPTS the bounded scalar prerequisite, including the
+  requested embedded-diagnostic bounds test; it does not yet accept the final
+  calibration delta. Final pins freeze at Check `ceff7419`, jj `5802f147`,
+  full diff `06adaea2`. Semantic `67396` passes, isolated regression `69412`
+  is running, and independent combined-delta review is open. The intentional
+  stop is removed; both modes assert the measured suppressed/unified sequence,
+  unchanged raw/retained nested field observations, exact child error, and
+  explicit plan/registration/R0/publication inventory.
+
+- Final isolated regression `69412` passes **2/2** at unchanged `ceff7419`.
+  Independent adversarial review ACCEPTS the complete bounded scalar-decoder
+  and pinned calibration delta, with no code blocker. Broader regression
+  `14669` is running; final normal producer-regenerated verification and
+  publication remain pending. Review explicitly excludes R2/R3, terminal
+  owner retirement/admission and option-(e) completion.
+
+- Broader regression `14669` passes **16/16**, including the old calibration
+  controls, new checked-error fixture, unavailable-path OOM sweep, full-tail
+  optional-width positive, inverse/corruption/rebuild/serde tests and record-
+  update integrations. Final normal producer-regenerated gate `89680` is
+  running at unchanged accepted Check `ceff7419`. This gate, formatting/hash
+  checks, description and exact PR publication verification remain before push.
+
+- Read-only next-step assessment recommends a separate zero-production-change
+  full-tail test of the checked-child fixture before proposing owner retirement.
+  The measured actual suppression leaves the base healthy, and `checkExprRecord`
+  does not propagate this child's status into the outer frame; final unification
+  may therefore leave the owner live with the child's existing canonical
+  diagnostic/R0 as its sole recovery authority. This is a hypothesis, not a
+  full-tail result. The next test must measure actual terminal state and
+  produced/distinct-fresh recovery replay. A real admission failure, if any,
+  should scope the next rule; R_U must not be invented in advance.
+
+- Final normal producer-regenerated gate `89680` passes **70/70 tests and
+  41/41 steps**: canonicalization 11, types 10, checker 44, compile/serde 5.
+  Builtin regeneration, unchanged schema-86 golden, static/mutable serde and
+  native/wasm sizes pass. Formatting and exact independently reviewed hashes
+  match. Root is describing and publishing this bounded checkpoint; full-tail
+  child-error localization and whole-feature completion are not claimed.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
