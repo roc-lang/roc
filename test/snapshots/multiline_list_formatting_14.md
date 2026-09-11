@@ -37,7 +37,15 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[  # Open
+	1,  # First
+
+	# A comment in the middle
+
+	2,  # Second
+	# This comment has no blanks around it
+	3,  # Third
+]
 ~~~
 # CANONICALIZE
 ~~~clojure

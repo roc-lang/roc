@@ -43,7 +43,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+some_fn(arg1)?  # Comment 1
+	.static_dispatch_method()?  # Comment 2
+	.next_static_dispatch_method()?  # Comment 3
+	.record_field?
 ~~~
 # CANONICALIZE
 ~~~clojure

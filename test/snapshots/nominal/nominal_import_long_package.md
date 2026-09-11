@@ -51,7 +51,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+import design.Styles.Color exposing [Encoder as CE]
+
+red : CE
+red = ...  # not implemented
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -29,7 +29,7 @@ EndOfFile,
 ~~~roc
 [
 	1,
-	2, # Foo
+	2,  # Foo
 	3,
 ]
 ~~~

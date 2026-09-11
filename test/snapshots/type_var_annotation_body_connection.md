@@ -77,8 +77,8 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 
 identity : a -> a
 identity = |x| {
-	thing : a # refers to the type var introduced in function type annotation
-	thing = x # refers to the value from the function parameter
+	thing : a  # refers to the type var introduced in function type annotation
+	thing = x  # refers to the value from the function parameter
 	thing
 }
 

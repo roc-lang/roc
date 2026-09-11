@@ -92,7 +92,29 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{
+	# comment1
+	..item,
+
+	# comment2
+
+	person: { name: "Alice", age: 30 },  # comment3
+	address: {
+		# comment4
+		street: "123 Main St",
+		# comment5
+
+		city: "Springfield",
+		coordinates: { lat: 42.1234, lng: -71.5678 },
+	},
+	contact: {
+
+		# comment6
+		email: "alice@example.com",
+		phone: { home: "555-1234", work: "555-5678" },  # comment7
+	},
+	# comment8
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

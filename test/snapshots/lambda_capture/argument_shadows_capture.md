@@ -41,7 +41,7 @@ EndOfFile,
 ~~~roc
 {
 	x = 5
-	(|x| x)(10) # Should not capture outer `x` -- this should give a shadowing warning
+	(|x| x)(10)  # Should not capture outer `x` -- this should give a shadowing warning
 }
 ~~~
 # CANONICALIZE

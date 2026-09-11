@@ -31,7 +31,9 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool {  # Comment after then open
+	A  # Comment after expr
+} else B
 ~~~
 # CANONICALIZE
 ~~~clojure

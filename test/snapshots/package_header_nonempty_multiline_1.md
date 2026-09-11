@@ -62,7 +62,9 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package  # This comment is here
+	[something, SomeType]
+	{ somePkg: "../main.roc" }
 ~~~
 # CANONICALIZE
 ~~~clojure

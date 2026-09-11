@@ -105,10 +105,10 @@ y = 10
 
 # Function that shadows outer variable
 outerFunc = |_| {
-	x = 20 # Should shadow top-level x
+	x = 20  # Should shadow top-level x
 	innerResult = {
 		# Block scope
-		z = x + y # x should resolve to 20, y to 10
+		z = x + y  # x should resolve to 20, y to 10
 		z + 1
 	}
 	innerResult

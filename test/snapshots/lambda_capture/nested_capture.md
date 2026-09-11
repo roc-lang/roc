@@ -54,7 +54,7 @@ EndOfFile,
 {
 	f = (|a| |b| a + b)
 	g = f(10)
-	g(5) # Expect: 15
+	g(5)  # Expect: 15
 }
 ~~~
 # CANONICALIZE

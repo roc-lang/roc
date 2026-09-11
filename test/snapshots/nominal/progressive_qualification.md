@@ -546,11 +546,11 @@ Outer := [O].{
 fromMod = Outer.Inner.value
 
 # Verify all access patterns work
-test1_inner = Outer.Inner.fromInner # Should be 42
+test1_inner = Outer.Inner.fromInner  # Should be 42
 
-test1_outer = Outer.fromOuter # Should be 42
+test1_outer = Outer.fromOuter  # Should be 42
 
-test1_mod = fromMod # Should be 42
+test1_mod = fromMod  # Should be 42
 
 # --------------------------------------------------------------------------
 # Test 2: Three-level nesting - access from each scope level
@@ -577,13 +577,13 @@ Level1 := [L1].{
 accessFromMod = Level1.Level2.Level3.deepValue
 
 # Verify
-test2_l3 = Level1.Level2.Level3.accessFromL3 # 100
+test2_l3 = Level1.Level2.Level3.accessFromL3  # 100
 
-test2_l2 = Level1.Level2.accessFromL2 # 100
+test2_l2 = Level1.Level2.accessFromL2  # 100
 
-test2_l1 = Level1.accessFromL1 # 100
+test2_l1 = Level1.accessFromL1  # 100
 
-test2_mod = accessFromMod # 100
+test2_mod = accessFromMod  # 100
 
 # --------------------------------------------------------------------------
 # Test 3: Cross-references between siblings at different nesting levels
@@ -609,13 +609,13 @@ Parent := [P].{
 	sumChildren = Child1.c1Val + Child2.c2Val
 }
 
-test3_c1 = Parent.Child1.useParent # 999
+test3_c1 = Parent.Child1.useParent  # 999
 
-test3_c2_sib = Parent.Child2.useSibling # 10
+test3_c2_sib = Parent.Child2.useSibling  # 10
 
-test3_c2_par = Parent.Child2.useParent # 999
+test3_c2_par = Parent.Child2.useParent  # 999
 
-test3_sum = Parent.sumChildren # 30
+test3_sum = Parent.sumChildren  # 30
 
 # --------------------------------------------------------------------------
 # Test 4: Name reuse in non-overlapping scopes (no shadowing)
@@ -632,13 +632,13 @@ TypeB := [TB].{
 }
 
 # Each type has its own "helper" - no conflict
-test4_a = TypeA.useHelper # 111
+test4_a = TypeA.useHelper  # 111
 
-test4_b = TypeB.useHelper # 222
+test4_b = TypeB.useHelper  # 222
 
-test4_a_direct = TypeA.helper # 111
+test4_a_direct = TypeA.helper  # 111
 
-test4_b_direct = TypeB.helper # 222
+test4_b_direct = TypeB.helper  # 222
 
 # --------------------------------------------------------------------------
 # Test 5: Same nested type names in different parents
@@ -657,9 +657,9 @@ Parent2 := [P2].{
 }
 
 # Both Parent1.Nested and Parent2.Nested exist independently
-test5_p1 = Parent1.Nested.val # 1
+test5_p1 = Parent1.Nested.val  # 1
 
-test5_p2 = Parent2.Nested.val # 2
+test5_p2 = Parent2.Nested.val  # 2
 
 # --------------------------------------------------------------------------
 # Test 6: Inner accessing outer's values (scope chain lookup)
@@ -679,11 +679,11 @@ Container := [CONT].{
 	}
 }
 
-test6_a = Container.Nested.useOuterA # 10
+test6_a = Container.Nested.useOuterA  # 10
 
-test6_b = Container.Nested.useOuterB # 20
+test6_b = Container.Nested.useOuterB  # 20
 
-test6_combined = Container.Nested.combined # 35
+test6_combined = Container.Nested.combined  # 35
 ~~~
 # CANONICALIZE
 ~~~clojure

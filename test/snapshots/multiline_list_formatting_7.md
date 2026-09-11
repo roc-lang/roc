@@ -33,7 +33,11 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[
+	1,
+	2,  # Foo
+	3,
+]
 ~~~
 # CANONICALIZE
 ~~~clojure

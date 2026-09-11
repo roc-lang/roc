@@ -38,7 +38,12 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+"This is a string with ${
+	some_func(
+		a,  # This is a comment
+		b,
+	)
+} lines of text due to the template parts"
 ~~~
 # CANONICALIZE
 ~~~clojure

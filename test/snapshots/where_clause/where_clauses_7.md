@@ -101,12 +101,12 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Hash(a, hasher) # After header
-	: # After colon
-		a # After var
-			where [ # After where
-				a.hash : hasher -> # After arrow
-					hasher, # After first clause
+Hash(a, hasher)  # After header
+	:  # After colon
+		a  # After var
+			where [  # After where
+				a.hash : hasher ->  # After arrow
+					hasher,  # After first clause
 				hasher.Hasher,
 			]
 

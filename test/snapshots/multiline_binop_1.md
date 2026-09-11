@@ -37,7 +37,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+1  # One
+	+  # Plus
+
+	# A comment in between
+
+	2  # Two
+		*  # Times
+		3
 ~~~
 # CANONICALIZE
 ~~~clojure
