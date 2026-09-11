@@ -1635,7 +1635,12 @@ pub const MonoLlvmCodeGen = struct {
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        try attrs_wip.addFnAttr(.inlinehint, builder);
+        const tiny = if (proc.body) |body| try self.procIsTinyStraightLine(body) else false;
+        if (tiny) {
+            try attrs_wip.addFnAttr(.alwaysinline, builder);
+        } else {
+            try attrs_wip.addFnAttr(.inlinehint, builder);
+        }
         // Every parameter except the return slot is a distinct object no
         // callee can reach another way: RocOps is host-provided and never
         // stored in a Roc value, the argument pack is a fresh caller-local
@@ -2774,6 +2779,48 @@ pub const MonoLlvmCodeGen = struct {
                 => {},
             }
         }
+    }
+
+    /// Whether the body is a handful of statements with no loop: a checked
+    /// wrapper around one operation, whose call costs more than its work.
+    fn procIsTinyStraightLine(self: *MonoLlvmCodeGen, body: CFStmtId) Error!bool {
+        var visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer visited.deinit();
+        var work = std.ArrayList(CFStmtId).empty;
+        defer work.deinit(self.allocator);
+        var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
+        defer joins.deinit(self.allocator);
+        var count: usize = 0;
+        try work.append(self.allocator, body);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (entry.found_existing) continue;
+            count += 1;
+            if (count > 32) return false;
+            switch (self.store.getCFStmt(stmt_id)) {
+                .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
+                else => {},
+            }
+            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+        }
+        // A loop is a join reached again from inside its own body.
+        for (joins.items) |join| {
+            visited.clearRetainingCapacity();
+            try work.append(self.allocator, join.body);
+            while (work.pop()) |stmt_id| {
+                const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+                if (entry.found_existing) continue;
+                switch (self.store.getCFStmt(stmt_id)) {
+                    .jump => |jump| if (jump.target == join.id) {
+                        work.clearRetainingCapacity();
+                        return false;
+                    },
+                    else => {},
+                }
+                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+            }
+        }
+        return true;
     }
 
     fn noteStmtIncoming(self: *MonoLlvmCodeGen, stack: *std.ArrayList(CFStmtId), stmt_id: CFStmtId) Error!void {
