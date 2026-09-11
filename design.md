@@ -6298,7 +6298,8 @@ combined gate passes 58/58 tests and 41/41 steps, including schema-85 golden,
 serialization and native/wasm sizes. Formatting and compiler hashes match
 review; push and exact draft-PR head/body readback are verified. It does not authorize
 clean-cache admission of diagnostic-bearing artifacts or production changes.
-New child `tonzpmlt` begins evidence-backed R2 projection-retirement planning.
+Published `tonzpmlt` (originally `16c850b6`, repaired as `9c027603`) adds
+evidence-backed R2 relation calibration.
 The normal isolated baseline reproduces both empty-record and missing-field
 projection retirement panics; the other two field-relation cases remain R3.
 Independent adversarial review requests changes to the author's R2 proposal;
@@ -6323,9 +6324,32 @@ and the healthy field's literal-plan publication is captured in its correct
 post-body phase. These are staged producer observations, not terminal admission
 or an R2 rule; the optional-width late-unification candidate remains unmeasured.
 The normal producer-regenerated combined gate passes 60/60 tests and 41/41
-steps, with production and schema unchanged. The driver is finalizing the
-checkpoint description, WIP publication and exact draft-PR readback. Complete
-producer/later-erasure semantics still require review before implementation.
+steps, with production and schema unchanged. Formatting and compiler hashes
+match review; the described checkpoint is pushed and exact draft-PR head/body
+readback is verified. New child `urrksrnp` now measures the optional-width
+candidate in a distinct test-only fixture. Its named `_widened` binding retains
+the ordinary annotated lookup path without an unused-variable diagnostic.
+Focused semantic validation and the combined runtime (4/4 tests) pass: in both production
+poisoning and exact-options no-report modes the early projection rejects,
+the field body refines the shared empty base to `{ hello ?: U8 }`, and the
+actual and final relations unify with zero Problems. The original projection
+plan, incomplete retirement and frame cause remain present. These four-phase
+observations stop before frame completion or terminal admission; they do not
+fix the erroneous early rejection. Independent full-delta adversarial review
+accepts the bounded test after strengthening exact builtin-U8 identity and
+optional-presence assertions. The normal producer-regenerated gate passes
+61/61 tests and 41/41 steps on that frozen source, including schema-85 golden,
+serialization and native/wasm sizes. The final-address harness repair is
+amended into the original calibration owner and inherited by `urrksrnp`.
+Independent carry-forward review accepts Check `7c5af804`; refreshed normal
+gate `3791` again passes 61/61 tests and 41/41 steps with regenerated Builtins,
+schema-85 golden and serialization sizes. The driver is finalizing this
+repaired WIP checkpoint's publication. Separate availability work in
+`tznvqtyt` is preserved but not included; its full-tail positive passes, while
+its projection-origin inverse and corruption/rebuild/serialization coverage
+remain unfinished. Complete producer/later-erasure
+semantics must reconcile this measured accepted owning relation with the
+context-only projection rule before implementation.
 Other preexisting-base shapes, unrelated retirement ranges, broader corruption,
 new-producer allocation-failure, repeated rebuild and active serialization
 gates remain pending, as do later established-base failure causes and complete

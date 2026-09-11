@@ -743,10 +743,14 @@ described in full, with trailers; W6b currently has its provisional title):
 | `nrkxkkmn` / `a1757bdc` | W6b owner-retirement reservation atomicity | pushed and exact PR readback verified; reviewed bounded WIP; final normal 54/54 tests, 41/41 steps pass |
 | `uovwznvn` / `2df80890` | W6b preexisting-malformed-base recovery authority | pushed and exact PR readback verified; reviewed bounded WIP; final normal 57/57 tests, 41/41 steps pass |
 | `unupstyw` / `8a1bcb17` | W6b active record-update recovery rebuild and serialization | pushed and exact PR readback verified; reviewed bounded WIP; final normal 58/58 tests, 41/41 steps pass |
-| `tonzpmlt` | W6b record-update projection relation calibration | focused 3/3, independent full-delta review and normal 60/60 tests, 41/41 steps pass; publication being finalized |
+| `tonzpmlt` / `9c027603` | W6b record-update projection relation calibration | original `16c850b6` passed 60/60; final-address harness repair amended into owner, independently accepted and normal 3/3 tests, 7/7 steps pass |
+| `urrksrnp` | W6b projection after optional-width body refinement | original `51bded4a` published; inherited harness repair reviewed and refreshed normal 61/61 tests, 41/41 steps pass; repaired publication being finalized |
 
-The local and remote `jared/polarity` bookmarks now point at `unupstyw` /
-`8a1bcb17`, directly above `uovwznvn` / `2df80890`, `nrkxkkmn` / `a1757bdc`,
+The local `jared/polarity` bookmark tracks repaired `urrksrnp`, above amended
+`tonzpmlt` / `9c027603`; the last verified remote head is the original
+`urrksrnp` / `51bded4a`. Repaired publication is being finalized. Their earlier
+ancestry includes `unupstyw` / `8a1bcb17`,
+`uovwznvn` / `2df80890`, `nrkxkkmn` / `a1757bdc`,
 `mwttkmrx` / `e2380965`, `mpqnvuvq` / `9c295876`,
 `onmovlvr` / `92741c58`,
 `txopxlzx` / `10f613d6`,
@@ -755,7 +759,7 @@ The local and remote `jared/polarity` bookmarks now point at `unupstyw` /
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`tonzpmlt` owns the next projection-relation calibration task
+`tznvqtyt` preserves the unfinished benign projection-availability task
 and is not part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
@@ -4537,6 +4541,93 @@ subsets below do not override this latest checkpoint.
   R2 implementation, the optional-width counterexample, whole R1/R3 admission,
   option (e), runtime adapters or W6b. The four historical record-update
   crashes remain unresolved; a passing calibration is not a passing fix.
+
+- Calibration publication is complete: described change `tonzpmlt` is Git
+  commit `16c850b632bdc554f23532a7c1fd22d366b8ca88`, fast-forwarded from
+  `8a1bcb17` on `jared/polarity`. Full PR #10434 body, exact new head, branch
+  and draft state are verified in `r2-calibration-pr-readback.json`. Formatting
+  and all four compiler hashes match the accepted and normally tested source.
+  New child `urrksrnpukxtkkquuwnxuktkvpmwksuk` starts the distinct test-only
+  optional-width candidate: a nongeneralized `r = {}` is annotated as
+  `{ hello ?: U8 }` inside the update field's body. Its earlier projection may
+  reject while the later owning relation unifies; that is still a code-path
+  prediction, not a runtime result. The field site is a block and the literal
+  plan belongs to its inner typed-int child, so the prior literal-site tests
+  must not be weakened. Root authorized only staged observations, not a new
+  retirement/cancellation rule or production change. A fresh independent
+  adversarial reviewer follows the next implementation freeze.
+
+- Optional-width calibration freezes as Check `b610560f`, jj `54e17a26`,
+  after a one-line unused-capture correction (first semantic 79669 rejected
+  the original `2ec05bfc` source; rerun 45722 passes). Focused runtime 80640
+  passes 2/2. Both independent modes measure the early projection rejection,
+  then the shared empty base becoming exactly `{ hello ?: U8 }` while checking
+  the field body; actual and final relations both unify with zero Problems.
+  The ignored name `_widened` is an ordinary assign pattern, not a wildcard
+  discard, and canonical diagnostics remain empty. The field site is the
+  block; its inner typed integer owns the literal dispatch plan. Captures at
+  before-body, after-body, after-actual and after-final cuts pin the actual
+  connectivity/shape transitions without immutable representative assumptions.
+  The early P_F, incomplete generic retirement and frame cause remain intact;
+  this is a measured counterexample to definitive early rejection, not its
+  fix. The source stays frozen for fresh independent adversarial review;
+  the normal producer-regenerated gate has not started. The author has only
+  a read-only follow-up to reconcile the context-only projection rule with
+  the owning relation's acceptance; no production/schema rule is authorized.
+
+- Combined captured runtime 71863 passes 4/4 on the same `b610560f` source,
+  including both published relation fixtures and the new refinement case.
+  Normal producer-regenerated gate 96612 was started, then deliberately
+  stopped (exit 143) before editing for an independent review finding: the
+  test's U8 payload predicate checked a declaration index without the full
+  builtin origin/module, zero arity and generated opacity. Root authorized
+  only that exact test-oracle strengthening and confirmed the gate's process
+  tree had exited before thawing source. The earlier measured results stand
+  as diagnostic evidence, but the corrected source still needs review and
+  rerun gates; 96612 is not a passing normal gate.
+
+- Review additionally required the actual update kind to be specifically
+  optional, not merely the `field_presence` Content tag. Both oracle fixes
+  freeze as Check `e4fd00d1`, jj `b6db5ca0`: exact builtin-origin/module,
+  zero-arity opaque U8 plus exact optional presence after actual/final.
+  Semantic 60677 and combined captured runtime 4844 (4/4) pass. The fixture,
+  measured outcomes and all production/schema code are unchanged. Independent
+  final full-delta review is finishing; the stopped normal gate will be rerun
+  on this corrected source before publication.
+
+- Fresh independent sol-ultra adversarial review gives final full-delta
+  bounded ACCEPT for exact Check `e4fd00d1`. It confirms both prior controls,
+  authentic timing, exact optional/U8 oracles, no-report option parity,
+  retained producer metadata and lifetime safety. Normal producer-regenerated
+  combined gate 1138 is now running on this frozen source. Acceptance remains
+  limited to the staged test: full-tail recovery, R2/cancellation semantics,
+  terminal admission, OOM, rebuild/serde, option (e) and adapters are not
+  certified by it.
+
+- Final normal producer-regenerated gate 1138 passes 61/61 tests and 41/41
+  steps: canonicalization 10, types 10, checker 36 and compile/serde 5, with
+  regenerated Builtins, schema-85 golden, serialization and native/wasm sizes.
+  The driver is finalizing the full jj description, WIP push and exact PR
+  readback. This completes the bounded optional-width observation task, not
+  its production lifecycle fix, the historical record-update crashes, whole
+  R1/R2/R3 admission, option (e), adapters or W6b. The author's next read-only
+  proposal separates unavailable projection context from genuine owning
+  failure; it remains under adversarial review, with raw-base poison/copy
+  identity and diagnostic rollback ownership explicitly unresolved.
+
+- The final-address calibration repair is amended into original owner
+  `tonzpmlt` / `9c027603`, preserving descendant `urrksrnp` and unfinished
+  `tznvqtyt` without conflicts or leftover empty fixups. On assembled
+  availability source Check `1ce06f7e`, captured-schema-86 diagnostic `96249`
+  passes 5/5: both original controls, staged refinement and the authentic
+  full-tail positive. Temporary diagnostics are removed. This does not accept
+  the unfinished availability inverse or coverage. The repaired publication
+  checkpoint remains schema 85, with Check `7c5af804`; independent sol-ultra
+  carry-forward review accepts it, and refreshed normal producer-regenerated
+  combined gate `3791` passes 61/61 tests, 41/41 steps (can 10, types 10,
+  checker 36, compile/serde 5), including golden and native/wasm sizes.
+  Formatting and compiler hashes match review. Root is finalizing the
+  described repaired checkpoint, push and exact draft-PR head/body readback.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

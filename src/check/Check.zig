@@ -72325,9 +72325,31 @@ const record_update_projection_typo_base_source =
     \\}
 ;
 
+const record_update_projection_refinement_source =
+    \\test = {
+    \\    r = {}
+    \\    { ..r, hello: {
+    \\        _widened : { hello ?: U8 }
+    \\        _widened = r
+    \\        10.U8
+    \\    } }
+    \\}
+;
+
 const RecordUpdateProjectionRelationFixture = enum {
     empty_base,
     typo_base,
+    optional_width_refinement,
+};
+
+const RecordUpdateProjectionRefinementTopology = struct {
+    field_block: CIR.Expr.Idx,
+    widening_statement: CIR.Statement.Idx,
+    widening_pattern: CIR.Pattern.Idx,
+    annotation_idx: CIR.Annotation.Idx,
+    widening_lookup: CIR.Expr.Idx,
+    literal_expr: CIR.Expr.Idx,
+    attachment: ModuleEnv.BodyAnnotationAttachment,
 };
 
 const RecordUpdateProjectionRelationTopology = struct {
@@ -72340,6 +72362,8 @@ const RecordUpdateProjectionRelationTopology = struct {
     base_expr: CIR.Expr.Idx,
     field_expr: CIR.Expr.Idx,
     field_name: Ident.Idx,
+    literal_expr: CIR.Expr.Idx,
+    refinement: ?RecordUpdateProjectionRefinementTopology,
 };
 
 fn recordUpdateProjectionLiteralString(
@@ -72377,8 +72401,14 @@ fn recordUpdateProjectionRelationTopology(
     }
     const binding_pattern = statement.s_decl.pattern;
     const binding_value = statement.s_decl.expr;
+    const binding_pattern_node = cir.store.getPattern(binding_pattern);
+    if (binding_pattern_node != .assign or
+        !std.mem.eql(u8, cir.getIdent(binding_pattern_node.assign.ident), "r"))
+    {
+        return error.TestUnexpectedResult;
+    }
     switch (fixture) {
-        .empty_base => if (cir.store.getExpr(binding_value) != .e_empty_record) {
+        .empty_base, .optional_width_refinement => if (cir.store.getExpr(binding_value) != .e_empty_record) {
             return error.TestUnexpectedResult;
         },
         .typo_base => {
@@ -72422,14 +72452,14 @@ fn recordUpdateProjectionRelationTopology(
     if (fields.len != 1) return error.TestUnexpectedResult;
     const field = cir.store.getRecordField(fields[0]);
     const expected_field_name: []const u8 = switch (fixture) {
-        .empty_base => "hello",
+        .empty_base, .optional_width_refinement => "hello",
         .typo_base => "hllo",
     };
     if (!std.mem.eql(u8, cir.getIdent(field.name), expected_field_name)) {
         return error.TestUnexpectedResult;
     }
-    switch (fixture) {
-        .empty_base => {
+    const literal_expr, const refinement: ?RecordUpdateProjectionRefinementTopology = switch (fixture) {
+        .empty_base => empty: {
             const value = cir.store.getExpr(field.value);
             if (value != .e_typed_int or
                 !std.mem.eql(u8, cir.getIdent(value.e_typed_int.type_name), "U8") or
@@ -72437,14 +72467,112 @@ fn recordUpdateProjectionRelationTopology(
             {
                 return error.TestUnexpectedResult;
             }
+            break :empty .{ field.value, null };
         },
-        .typo_base => if (!std.mem.eql(
-            u8,
-            recordUpdateProjectionLiteralString(cir, field.value) orelse
-                return error.TestUnexpectedResult,
-            "goodbye",
-        )) return error.TestUnexpectedResult,
-    }
+        .typo_base => typo: {
+            if (!std.mem.eql(
+                u8,
+                recordUpdateProjectionLiteralString(cir, field.value) orelse
+                    return error.TestUnexpectedResult,
+                "goodbye",
+            )) return error.TestUnexpectedResult;
+            break :typo .{ field.value, null };
+        },
+        .optional_width_refinement => refinement: {
+            const field_block = cir.store.getExpr(field.value);
+            if (field_block != .e_block) return error.TestUnexpectedResult;
+            const inner_statements = cir.store.sliceStatements(field_block.e_block.stmts);
+            if (inner_statements.len != 1) return error.TestUnexpectedResult;
+            const widening_statement = inner_statements[0];
+            const widening_decl = cir.store.getStatement(widening_statement);
+            if (widening_decl != .s_decl or widening_decl.s_decl.anno == null) {
+                return error.TestUnexpectedResult;
+            }
+            const widening_pattern = widening_decl.s_decl.pattern;
+            const widening_pattern_node = cir.store.getPattern(widening_pattern);
+            if (widening_pattern_node != .assign or
+                !std.mem.eql(
+                    u8,
+                    cir.getIdent(widening_pattern_node.assign.ident),
+                    "_widened",
+                ))
+            {
+                return error.TestUnexpectedResult;
+            }
+            const widening_lookup = widening_decl.s_decl.expr;
+            const widening_lookup_node = cir.store.getExpr(widening_lookup);
+            if (widening_lookup_node != .e_lookup_local or
+                widening_lookup_node.e_lookup_local.pattern_idx != binding_pattern)
+            {
+                return error.TestUnexpectedResult;
+            }
+            const annotation_idx = widening_decl.s_decl.anno.?;
+            const annotation = cir.store.getAnnotation(annotation_idx);
+            if (annotation.where != null or annotation.name_region == null or
+                annotation.mentions_type_var or annotation.introduces_type_var or
+                annotation.contains_underscore)
+            {
+                return error.TestUnexpectedResult;
+            }
+            const annotation_type = cir.store.getTypeAnno(annotation.anno);
+            if (annotation_type != .record or annotation_type.record.ext != null) {
+                return error.TestUnexpectedResult;
+            }
+            const annotation_fields = cir.store.sliceAnnoRecordFields(
+                annotation_type.record.fields,
+            );
+            if (annotation_fields.len != 1) return error.TestUnexpectedResult;
+            const annotation_field = cir.store.getAnnoRecordField(annotation_fields[0]);
+            if (!std.mem.eql(u8, cir.getIdent(annotation_field.name), "hello") or
+                !annotation_field.is_optional or annotation_field.is_unnamed or
+                annotation_field.default_value != null)
+            {
+                return error.TestUnexpectedResult;
+            }
+            const annotation_field_type = cir.store.getTypeAnno(annotation_field.ty);
+            if (annotation_field_type != .lookup or
+                !std.mem.eql(u8, cir.getIdent(annotation_field_type.lookup.name), "U8"))
+            {
+                return error.TestUnexpectedResult;
+            }
+            switch (annotation_field_type.lookup.base) {
+                .builtin => |builtin_type| if (builtin_type != .u8) {
+                    return error.TestUnexpectedResult;
+                },
+                .local, .external, .pending => return error.TestUnexpectedResult,
+            }
+            const inner_literal_expr = field_block.e_block.final_expr;
+            const literal = cir.store.getExpr(inner_literal_expr);
+            if (literal != .e_typed_int or
+                !std.mem.eql(u8, cir.getIdent(literal.e_typed_int.type_name), "U8") or
+                literal.e_typed_int.value.toI128() != 10)
+            {
+                return error.TestUnexpectedResult;
+            }
+            if (cir.body_annotation_attachments.items.items.len != 1) {
+                return error.TestUnexpectedResult;
+            }
+            const attachment_index = cir.bodyAnnotationAttachmentIndex(
+                .local_decl,
+                @intFromEnum(widening_statement),
+                annotation_idx,
+                widening_lookup,
+            ) orelse return error.TestUnexpectedResult;
+            if (!cir.bodyAnnotationAttachmentIsLocallyValid(attachment_index)) {
+                return error.TestUnexpectedResult;
+            }
+            const attachment = cir.body_annotation_attachments.items.items[attachment_index];
+            break :refinement .{ inner_literal_expr, .{
+                .field_block = field.value,
+                .widening_statement = widening_statement,
+                .widening_pattern = widening_pattern,
+                .annotation_idx = annotation_idx,
+                .widening_lookup = widening_lookup,
+                .literal_expr = inner_literal_expr,
+                .attachment = attachment,
+            } };
+        },
+    };
 
     return .{
         .def_idx = def_idx,
@@ -72456,6 +72584,126 @@ fn recordUpdateProjectionRelationTopology(
         .base_expr = base_expr,
         .field_expr = field.value,
         .field_name = field.name,
+        .literal_expr = literal_expr,
+        .refinement = refinement,
+    };
+}
+
+const RecordUpdateProjectionRefinementBaseShape = enum {
+    empty_record,
+    optional_hello_u8,
+};
+
+fn recordUpdateProjectionRefinementBaseShape(
+    checker: *const Self,
+    var_: Var,
+    field_name: Ident.Idx,
+) ?RecordUpdateProjectionRefinementBaseShape {
+    const content = checker.types.resolveVar(var_).desc.content;
+    if (content != .structure) return null;
+    return switch (content.structure) {
+        .empty_record => .empty_record,
+        .record => |record_type| optional: {
+            const fields = checker.types.getRecordFieldsSlice(record_type.fields);
+            if (fields.len != 1 or fields.items(.name)[0] != field_name) return null;
+            const presence = switch (fields.items(.presence)[0].decode()) {
+                .required => return null,
+                .unknown => |unknown| unknown,
+            };
+            const presence_content = checker.types.resolveVar(presence.presence).desc.content;
+            if (presence_content != .field_presence or
+                presence_content.field_presence != .optional)
+            {
+                return null;
+            }
+            const value_content = checker.types.resolveVar(presence.var_).desc.content;
+            const nominal = value_content.unwrapNominalType() orelse return null;
+            if (!nominal.originIsBuiltin() or
+                nominal.origin_module != checker.builtinOriginModule() or
+                nominal.args.len() != 0 or
+                !nominal.isOpaque())
+            {
+                return null;
+            }
+            const num_kind = checker.builtinNumKindFromNominalType(nominal) orelse return null;
+            if (num_kind != .u8) return null;
+            const ext_content = checker.types.resolveVar(record_type.ext).desc.content;
+            if (ext_content != .structure or ext_content.structure != .empty_record) {
+                return null;
+            }
+            break :optional .optional_hello_u8;
+        },
+        .record_unbound,
+        .tuple,
+        .nominal_type,
+        .fn_pure,
+        .fn_effectful,
+        .fn_unbound,
+        .tag_union,
+        .empty_tag_union,
+        => null,
+    };
+}
+
+fn recordUpdateProjectionVarsShare(
+    checker: *const Self,
+    first: Var,
+    second: Var,
+) bool {
+    return checker.types.resolveVar(first).var_ == checker.types.resolveVar(second).var_;
+}
+
+fn recordUpdateProjectionOptionalPayloadShares(
+    checker: *const Self,
+    record_var: Var,
+    field_name: Ident.Idx,
+    value_var: Var,
+) bool {
+    const content = checker.types.resolveVar(record_var).desc.content;
+    if (content != .structure or content.structure != .record) return false;
+    const fields = checker.types.getRecordFieldsSlice(content.structure.record.fields);
+    if (fields.len != 1 or fields.items(.name)[0] != field_name) return false;
+    const payload_var = switch (fields.items(.presence)[0].decode()) {
+        .required => return false,
+        .unknown => |unknown| unknown.var_,
+    };
+    return recordUpdateProjectionVarsShare(checker, payload_var, value_var);
+}
+
+fn recordUpdateProjectionRefinementPhase(
+    checker: *const Self,
+    topology: RecordUpdateProjectionRelationTopology,
+    base_raw_var: Var,
+    selected_source: Var,
+    field_kind_var: Var,
+    projected_field_value: Var,
+) ?RecordUpdateProjectionRefinementPhase {
+    const refinement = topology.refinement orelse return null;
+    const field_kind_content = checker.types.resolveVar(field_kind_var).desc.content;
+    return .{
+        .base_shape = recordUpdateProjectionRefinementBaseShape(
+            checker,
+            base_raw_var,
+            topology.field_name,
+        ) orelse return null,
+        .base_shares_source = recordUpdateProjectionVarsShare(
+            checker,
+            base_raw_var,
+            selected_source,
+        ),
+        .inner_lookup_shares_source = recordUpdateProjectionVarsShare(
+            checker,
+            ModuleEnv.varFrom(refinement.widening_lookup),
+            selected_source,
+        ),
+        .field_kind = std.meta.activeTag(field_kind_content),
+        .field_presence = switch (field_kind_content) {
+            .field_presence => |presence| std.meta.activeTag(presence),
+            else => null,
+        },
+        .projected_value = std.meta.activeTag(
+            checker.types.resolveVar(projected_field_value).desc.content,
+        ),
     };
 }
 
@@ -72482,6 +72730,30 @@ fn recordUpdateProjectionRelationResult(
     };
 }
 
+const RecordUpdateProjectionRefinementPhase = struct {
+    base_shape: RecordUpdateProjectionRefinementBaseShape,
+    base_shares_source: bool,
+    inner_lookup_shares_source: bool,
+    field_kind: std.meta.Tag(types_mod.Content),
+    field_presence: ?std.meta.Tag(types_mod.FieldPresence),
+    projected_value: std.meta.Tag(types_mod.Content),
+};
+
+const RecordUpdateProjectionRefinementCalibration = struct {
+    before_body: RecordUpdateProjectionRefinementPhase,
+    after_body: RecordUpdateProjectionRefinementPhase,
+    after_actual: RecordUpdateProjectionRefinementPhase,
+    after_final: RecordUpdateProjectionRefinementPhase,
+    inner_binding_shares_source_after_body: bool,
+    field_block_shares_literal_after_body: bool,
+    optional_payload_shares_field_after_body: bool,
+    optional_payload_shares_field_after_actual: bool,
+    optional_payload_shares_field_after_final: bool,
+    actual_record_shares_source_after_actual: bool,
+    outer_shares_source_after_final: bool,
+    field_block_before_body: CheckedErrorRecordUpdateBasePlanNodeSnapshot,
+};
+
 const RecordUpdateProjectionRelationCalibration = struct {
     topology: RecordUpdateProjectionRelationTopology,
     base_publication: StagedRecordUpdateBasePlanPublicationProof,
@@ -72492,7 +72764,7 @@ const RecordUpdateProjectionRelationCalibration = struct {
     projection_cause: ModuleEnv.CauseOwner,
     actual_relation: RecordUpdateProjectionRelationResult,
     final_relation: RecordUpdateProjectionRelationResult,
-    diagnostic_index: problem.Problem.Idx,
+    diagnostic_index: ?problem.Problem.Idx,
     base_raw_var: Var,
     base_selected_root: Var,
     binding_pattern_var: Var,
@@ -72507,7 +72779,9 @@ const RecordUpdateProjectionRelationCalibration = struct {
     owner_node: CheckedErrorRecordUpdateBasePlanNodeSnapshot,
     base_node: CheckedErrorRecordUpdateBasePlanNodeSnapshot,
     field_node_after_body: CheckedErrorRecordUpdateBasePlanNodeSnapshot,
+    literal_node_after_body: CheckedErrorRecordUpdateBasePlanNodeSnapshot,
     field_literal_plan: can.NodeStore.LiteralDispatchPlan,
+    refinement: ?RecordUpdateProjectionRefinementCalibration,
 };
 
 fn expectRecordUpdateProjectionBasePublication(
@@ -72606,9 +72880,17 @@ fn calibrateRecordUpdateProjectionRelation(
     mode: RecordUpdateProjectionRelationMode,
 ) !RecordUpdateProjectionRelationCalibration {
     var failure_stage: []const u8 = "canonical topology";
+    var diagnostic_actual_relation: ?RecordUpdateProjectionRelationResult = null;
+    var diagnostic_final_relation: ?RecordUpdateProjectionRelationResult = null;
     errdefer std.debug.print(
-        "record-update projection relation {s}/{s} failed at {s}\n",
-        .{ @tagName(fixture), @tagName(mode), failure_stage },
+        "record-update projection relation {s}/{s} failed at {s}; actual={any} final={any}\n",
+        .{
+            @tagName(fixture),
+            @tagName(mode),
+            failure_stage,
+            diagnostic_actual_relation,
+            diagnostic_final_relation,
+        },
     );
     const checker = &test_env.checker;
     // `TestEnv` returns its checker by value, so refresh the TypeWriter's
@@ -72735,9 +73017,11 @@ fn calibrateRecordUpdateProjectionRelation(
     try std.testing.expectEqual(Rank.outermost, checker.currentGroupBoundaryRank());
     try std.testing.expectEqual(@as(?u32, group_index), checker.currentGroupIndex());
 
-    // Mirror the nonrecursive `checkDef` prefix. This fixture has no
-    // annotation or value-generalization boundary, but its real binding-RHS
-    // and compile-time-root Expected still own the enclosing block frame.
+    // Mirror the nonrecursive `checkDef` prefix. These fixtures have no
+    // top-level annotation or value-generalization boundary, but their real
+    // binding-RHS and compile-time-root Expected still own the enclosing block
+    // frame. The refinement fixture's block-local annotation is checked later
+    // by the ordinary stored-field body path.
     failure_stage = "top-level definition context";
     const saved_checking_executable_root = checker.checking_executable_root;
     const saved_ambiguity_candidates_def_start = checker.ambiguity_candidates_def_start;
@@ -73056,6 +73340,25 @@ fn calibrateRecordUpdateProjectionRelation(
         projection_draft.retired_reason,
     );
 
+    failure_stage = "refinement source before body";
+    const refinement_before_body: ?RecordUpdateProjectionRefinementPhase = switch (fixture) {
+        .empty_base, .typo_base => no_refinement: {
+            try std.testing.expect(topology.refinement == null);
+            break :no_refinement null;
+        },
+        .optional_width_refinement => recordUpdateProjectionRefinementPhase(
+            checker,
+            topology,
+            base_raw_var,
+            selected_base.var_,
+            field_kind_var,
+            projected_field_value,
+        ) orelse return error.TestUnexpectedResult,
+    };
+    const refinement_field_block_before_body: ?CheckedErrorRecordUpdateBasePlanNodeSnapshot = if (topology.refinement) |refinement|
+        CheckedErrorRecordUpdateBasePlanNodeSnapshot.capture(cir, refinement.field_block)
+    else
+        null;
     const owner_node = CheckedErrorRecordUpdateBasePlanNodeSnapshot.capture(
         cir,
         topology.record_expr,
@@ -73071,23 +73374,61 @@ fn calibrateRecordUpdateProjectionRelation(
         .established => {},
         .checked_error => return error.TestUnexpectedResult,
     }
+    failure_stage = "refinement source after body";
+    const refinement_after_body: ?RecordUpdateProjectionRefinementPhase = if (topology.refinement != null)
+        recordUpdateProjectionRefinementPhase(
+            checker,
+            topology,
+            base_raw_var,
+            selected_base.var_,
+            field_kind_var,
+            projected_field_value,
+        ) orelse return error.TestUnexpectedResult
+    else
+        null;
+    const refinement_inner_binding_shares_source_after_body: ?bool = if (topology.refinement) |refinement|
+        recordUpdateProjectionVarsShare(
+            checker,
+            ModuleEnv.varFrom(refinement.widening_pattern),
+            selected_base.var_,
+        )
+    else
+        null;
+    const refinement_field_block_shares_literal_after_body: ?bool = if (topology.refinement) |refinement|
+        recordUpdateProjectionVarsShare(
+            checker,
+            ModuleEnv.varFrom(refinement.field_block),
+            ModuleEnv.varFrom(refinement.literal_expr),
+        )
+    else
+        null;
+    const refinement_optional_payload_shares_field_after_body: ?bool = if (topology.refinement != null)
+        recordUpdateProjectionOptionalPayloadShares(
+            checker,
+            base_raw_var,
+            topology.field_name,
+            field_value.var_,
+        )
+    else
+        null;
     failure_stage = "field literal publication";
     const expected_literal_plan_count: usize = switch (fixture) {
         .empty_base => 1,
         .typo_base => 2,
+        .optional_width_refinement => 1,
     };
     const literal_plans = cir.store.literalDispatchPlans();
     try std.testing.expectEqual(expected_literal_plan_count, literal_plans.len);
     const field_literal_plan = cir.store.literalDispatchPlanForNode(
-        ModuleEnv.nodeIdxFrom(topology.field_expr),
+        ModuleEnv.nodeIdxFrom(topology.literal_expr),
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(
-        @intFromEnum(topology.field_expr),
+        @intFromEnum(topology.literal_expr),
         field_literal_plan.node_idx,
     );
     try std.testing.expectEqual(
         switch (fixture) {
-            .empty_base => can.NodeStore.LiteralDispatchPlan.Kind.numeral,
+            .empty_base, .optional_width_refinement => can.NodeStore.LiteralDispatchPlan.Kind.numeral,
             .typo_base => can.NodeStore.LiteralDispatchPlan.Kind.quote,
         },
         field_literal_plan.dispatchKind(),
@@ -73105,6 +73446,14 @@ fn calibrateRecordUpdateProjectionRelation(
         cir,
         topology.field_expr,
     );
+    const literal_node_after_body = CheckedErrorRecordUpdateBasePlanNodeSnapshot.capture(
+        cir,
+        topology.literal_expr,
+    );
+    if (refinement_field_block_before_body) |before_body| {
+        failure_stage = "field block after body";
+        try before_body.expectEqual(cir);
+    }
     const synthetic_actual_record = try checker.freshFromContent(.{
         .structure = .{ .record_unbound = try checker.types.appendRecordFields(&.{.{
             .name = field.name,
@@ -73144,41 +73493,88 @@ fn calibrateRecordUpdateProjectionRelation(
                     synthetic_actual_record,
                     update_context,
                 ),
-                .unified, .suppressed_by_error, .problem => return error.TestUnexpectedResult,
+                .unified, .suppressed_by_error, .problem => {},
             }
             break :no_report result;
         },
     };
-    try std.testing.expectEqual(problems_before + 1, checker.problems.problems.items.len);
-    const diagnostic_index: problem.Problem.Idx = @enumFromInt(problems_before);
-    const diagnostic = checker.problems.problems.items[problems_before];
-    if (diagnostic != .type_mismatch or !std.meta.eql(
-        diagnostic.type_mismatch.context,
-        update_context,
-    )) return error.TestUnexpectedResult;
-    switch (mode) {
-        .production_poison => switch (actual_result) {
-            .problem => |problem_index| try std.testing.expectEqual(
-                diagnostic_index,
-                problem_index,
-            ),
-            .unified, .suppressed_by_error, .mismatch => return error.TestUnexpectedResult,
+    diagnostic_actual_relation = recordUpdateProjectionRelationResult(actual_result);
+    const diagnostic_index: ?problem.Problem.Idx = switch (fixture) {
+        .empty_base, .typo_base => diagnostic: {
+            try std.testing.expectEqual(problems_before + 1, checker.problems.problems.items.len);
+            const index: problem.Problem.Idx = @enumFromInt(problems_before);
+            const diagnostic_problem = checker.problems.problems.items[problems_before];
+            if (diagnostic_problem != .type_mismatch or !std.meta.eql(
+                diagnostic_problem.type_mismatch.context,
+                update_context,
+            )) return error.TestUnexpectedResult;
+            switch (mode) {
+                .production_poison => switch (actual_result) {
+                    .problem => |problem_index| try std.testing.expectEqual(
+                        index,
+                        problem_index,
+                    ),
+                    .unified, .suppressed_by_error, .mismatch => return error.TestUnexpectedResult,
+                },
+                .isolated_write_no_report => switch (actual_result) {
+                    .mismatch => {},
+                    .unified, .suppressed_by_error, .problem => return error.TestUnexpectedResult,
+                },
+            }
+            break :diagnostic index;
         },
-        .isolated_write_no_report => switch (actual_result) {
-            .mismatch => {},
-            .unified, .suppressed_by_error, .problem => return error.TestUnexpectedResult,
+        .optional_width_refinement => no_diagnostic: {
+            try std.testing.expectEqual(problems_before, checker.problems.problems.items.len);
+            switch (actual_result) {
+                .unified => {},
+                .mismatch, .suppressed_by_error, .problem => return error.TestUnexpectedResult,
+            }
+            break :no_diagnostic null;
         },
-    }
+    };
 
     const resolved_base_after_actual = checker.types.resolveVar(base_raw_var);
     const resolved_selected_after_actual = checker.types.resolveVar(selected_base.var_);
+    failure_stage = "refinement source after actual relation";
+    const refinement_after_actual: ?RecordUpdateProjectionRefinementPhase = if (topology.refinement != null)
+        recordUpdateProjectionRefinementPhase(
+            checker,
+            topology,
+            base_raw_var,
+            selected_base.var_,
+            field_kind_var,
+            projected_field_value,
+        ) orelse return error.TestUnexpectedResult
+    else
+        null;
+    const refinement_optional_payload_shares_field_after_actual: ?bool = if (topology.refinement != null)
+        recordUpdateProjectionOptionalPayloadShares(
+            checker,
+            base_raw_var,
+            topology.field_name,
+            field_value.var_,
+        )
+    else
+        null;
+    const refinement_actual_record_shares_source_after_actual: ?bool = if (topology.refinement != null)
+        recordUpdateProjectionVarsShare(
+            checker,
+            synthetic_actual_record,
+            selected_base.var_,
+        )
+    else
+        null;
     failure_stage = "final base-to-owner relation";
     const final_result = try checker.unify(
         base_raw_var,
         record_frame.expr_var,
         &env,
     );
-    try std.testing.expectEqual(problems_before + 1, checker.problems.problems.items.len);
+    diagnostic_final_relation = recordUpdateProjectionRelationResult(final_result);
+    try std.testing.expectEqual(
+        problems_before + @as(usize, @intFromBool(fixture != .optional_width_refinement)),
+        checker.problems.problems.items.len,
+    );
     try std.testing.expect(expectedCauseOwnersEqual(
         projection_cause,
         switch (record_frame.checked_status) {
@@ -73234,10 +73630,12 @@ fn calibrateRecordUpdateProjectionRelation(
     try base_node.expectEqual(cir);
     failure_stage = "field node after relations";
     try field_node_after_body.expectEqual(cir);
+    failure_stage = "inner literal node after relations";
+    try literal_node_after_body.expectEqual(cir);
     failure_stage = "field literal plan after relations";
     try std.testing.expectEqual(expected_literal_plan_count, cir.store.literalDispatchPlans().len);
     const current_field_literal_plan = cir.store.literalDispatchPlanForNode(
-        ModuleEnv.nodeIdxFrom(topology.field_expr),
+        ModuleEnv.nodeIdxFrom(topology.literal_expr),
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualSlices(
         u8,
@@ -73246,6 +73644,50 @@ fn calibrateRecordUpdateProjectionRelation(
     );
     const resolved_base_after_final = checker.types.resolveVar(base_raw_var);
     const resolved_selected_after_final = checker.types.resolveVar(selected_base.var_);
+    failure_stage = "refinement source after final relation";
+    const refinement_after_final: ?RecordUpdateProjectionRefinementPhase = if (topology.refinement != null)
+        recordUpdateProjectionRefinementPhase(
+            checker,
+            topology,
+            base_raw_var,
+            selected_base.var_,
+            field_kind_var,
+            projected_field_value,
+        ) orelse return error.TestUnexpectedResult
+    else
+        null;
+    const refinement_calibration: ?RecordUpdateProjectionRefinementCalibration = if (topology.refinement != null)
+        .{
+            .before_body = refinement_before_body orelse return error.TestUnexpectedResult,
+            .after_body = refinement_after_body orelse return error.TestUnexpectedResult,
+            .after_actual = refinement_after_actual orelse return error.TestUnexpectedResult,
+            .after_final = refinement_after_final orelse return error.TestUnexpectedResult,
+            .inner_binding_shares_source_after_body = refinement_inner_binding_shares_source_after_body orelse
+                return error.TestUnexpectedResult,
+            .field_block_shares_literal_after_body = refinement_field_block_shares_literal_after_body orelse
+                return error.TestUnexpectedResult,
+            .optional_payload_shares_field_after_body = refinement_optional_payload_shares_field_after_body orelse
+                return error.TestUnexpectedResult,
+            .optional_payload_shares_field_after_actual = refinement_optional_payload_shares_field_after_actual orelse
+                return error.TestUnexpectedResult,
+            .optional_payload_shares_field_after_final = recordUpdateProjectionOptionalPayloadShares(
+                checker,
+                base_raw_var,
+                topology.field_name,
+                field_value.var_,
+            ),
+            .actual_record_shares_source_after_actual = refinement_actual_record_shares_source_after_actual orelse
+                return error.TestUnexpectedResult,
+            .outer_shares_source_after_final = recordUpdateProjectionVarsShare(
+                checker,
+                record_frame.expr_var,
+                selected_base.var_,
+            ),
+            .field_block_before_body = refinement_field_block_before_body orelse
+                return error.TestUnexpectedResult,
+        }
+    else
+        null;
 
     failure_stage = "captured result";
     return .{
@@ -73273,7 +73715,9 @@ fn calibrateRecordUpdateProjectionRelation(
         .owner_node = owner_node,
         .base_node = base_node,
         .field_node_after_body = field_node_after_body,
+        .literal_node_after_body = literal_node_after_body,
         .field_literal_plan = field_literal_plan,
+        .refinement = refinement_calibration,
     };
 }
 
@@ -73320,11 +73764,13 @@ fn expectRecordUpdateProjectionRelationProofsEqual(
             poison.owner_node,
             poison.base_node,
             poison.field_node_after_body,
+            poison.literal_node_after_body,
         },
         [_]CheckedErrorRecordUpdateBasePlanNodeSnapshot{
             no_report.owner_node,
             no_report.base_node,
             no_report.field_node_after_body,
+            no_report.literal_node_after_body,
         },
     ) |expected_node, actual_node| {
         try std.testing.expectEqual(expected_node.expr, actual_node.expr);
@@ -73336,6 +73782,7 @@ fn expectRecordUpdateProjectionRelationProofsEqual(
         std.mem.asBytes(&poison.field_literal_plan),
         std.mem.asBytes(&no_report.field_literal_plan),
     );
+    try std.testing.expect(std.meta.eql(poison.refinement, no_report.refinement));
 }
 
 fn expectRecordUpdateProjectionDiagnosticParity(
@@ -73346,13 +73793,16 @@ fn expectRecordUpdateProjectionDiagnosticParity(
 ) !void {
     try std.testing.expectEqual(@as(usize, 1), poison_test_env.checker.problems.problems.items.len);
     try std.testing.expectEqual(@as(usize, 1), no_report_test_env.checker.problems.problems.items.len);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(poison.diagnostic_index));
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(no_report.diagnostic_index));
+    const poison_diagnostic = poison.diagnostic_index orelse return error.TestUnexpectedResult;
+    const no_report_diagnostic = no_report.diagnostic_index orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(poison_diagnostic));
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(no_report_diagnostic));
     const poison_problem = poison_test_env.checker.problems.problems.items[
-        @intFromEnum(poison.diagnostic_index)
+        @intFromEnum(poison_diagnostic)
     ];
     const no_report_problem = no_report_test_env.checker.problems.problems.items[
-        @intFromEnum(no_report.diagnostic_index)
+        @intFromEnum(no_report_diagnostic)
     ];
     const poison_mismatch = switch (poison_problem) {
         .type_mismatch => |mismatch| mismatch,
@@ -73444,11 +73894,31 @@ fn expectRecordUpdateProjectionRelationFixture(
             no_report.base_raw_and_selected_share_after_final,
         },
     );
+    errdefer if (poison.refinement) |observations| std.debug.print(
+        "record-update refinement phases: shape={s}/{s}/{s}/{s} field={s}/{s}/{s}/{s} inner={any}/{any}/{any}/{any} payload={any}/{any}/{any}\n",
+        .{
+            @tagName(observations.before_body.base_shape),
+            @tagName(observations.after_body.base_shape),
+            @tagName(observations.after_actual.base_shape),
+            @tagName(observations.after_final.base_shape),
+            @tagName(observations.before_body.field_kind),
+            @tagName(observations.after_body.field_kind),
+            @tagName(observations.after_actual.field_kind),
+            @tagName(observations.after_final.field_kind),
+            observations.before_body.inner_lookup_shares_source,
+            observations.after_body.inner_lookup_shares_source,
+            observations.after_actual.inner_lookup_shares_source,
+            observations.after_final.inner_lookup_shares_source,
+            observations.optional_payload_shares_field_after_body,
+            observations.optional_payload_shares_field_after_actual,
+            observations.optional_payload_shares_field_after_final,
+        },
+    );
 
     failure_stage = "immutable producer proofs";
     try expectRecordUpdateProjectionRelationProofsEqual(poison, no_report);
     const expected_base_plan: u32 = switch (fixture) {
-        .empty_base => 0,
+        .empty_base, .optional_width_refinement => 0,
         .typo_base => 2,
     };
     try std.testing.expectEqual(expected_base_plan, poison.base_publication.registration.plan_index);
@@ -73475,46 +73945,250 @@ fn expectRecordUpdateProjectionRelationFixture(
     try std.testing.expect(poison.outer_raw_var != poison.synthetic_actual_record);
 
     failure_stage = "measured relation results";
-    try std.testing.expectEqual(RecordUpdateProjectionRelationResult.problem, poison.actual_relation);
-    try std.testing.expectEqual(
-        RecordUpdateProjectionRelationResult.unified,
-        poison.final_relation,
-    );
-    try std.testing.expectEqual(
-        RecordUpdateProjectionRelationResult.mismatch,
-        no_report.actual_relation,
-    );
-    try std.testing.expectEqual(RecordUpdateProjectionRelationResult.unified, no_report.final_relation);
-    // Poisoning detaches the borrowed raw base occurrence from its retained
-    // source. The later unconstrained outer flex still adopts that error.
-    try std.testing.expect(!poison.base_raw_and_selected_share_after_actual);
-    try std.testing.expect(!poison.base_raw_and_selected_share_after_final);
-    try std.testing.expect(no_report.base_raw_and_selected_share_after_actual);
-    try std.testing.expect(no_report.base_raw_and_selected_share_after_final);
-    try std.testing.expectEqual(
-        @as(std.meta.Tag(types_mod.Content), .err),
-        poison.base_content_after_actual,
-    );
-    try std.testing.expectEqual(
-        @as(std.meta.Tag(types_mod.Content), .err),
-        poison.base_content_after_final,
-    );
-    try std.testing.expectEqual(
-        @as(std.meta.Tag(types_mod.Content), .structure),
-        no_report.base_content_after_actual,
-    );
-    try std.testing.expectEqual(
-        @as(std.meta.Tag(types_mod.Content), .structure),
-        no_report.base_content_after_final,
-    );
+    switch (fixture) {
+        .empty_base, .typo_base => {
+            try std.testing.expect(poison.refinement == null);
+            try std.testing.expect(no_report.refinement == null);
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.problem,
+                poison.actual_relation,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.unified,
+                poison.final_relation,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.mismatch,
+                no_report.actual_relation,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.unified,
+                no_report.final_relation,
+            );
+            // Poisoning detaches the borrowed raw base occurrence from its retained
+            // source. The later unconstrained outer flex still adopts that error.
+            try std.testing.expect(!poison.base_raw_and_selected_share_after_actual);
+            try std.testing.expect(!poison.base_raw_and_selected_share_after_final);
+            try std.testing.expect(no_report.base_raw_and_selected_share_after_actual);
+            try std.testing.expect(no_report.base_raw_and_selected_share_after_final);
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .err),
+                poison.base_content_after_actual,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .err),
+                poison.base_content_after_final,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .structure),
+                no_report.base_content_after_actual,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .structure),
+                no_report.base_content_after_final,
+            );
 
-    failure_stage = "diagnostic parity";
-    try expectRecordUpdateProjectionDiagnosticParity(
-        &poison_test_env,
-        poison,
-        &no_report_test_env,
-        no_report,
-    );
+            failure_stage = "diagnostic parity";
+            try expectRecordUpdateProjectionDiagnosticParity(
+                &poison_test_env,
+                poison,
+                &no_report_test_env,
+                no_report,
+            );
+        },
+        .optional_width_refinement => {
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.unified,
+                poison.actual_relation,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.unified,
+                poison.final_relation,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.unified,
+                no_report.actual_relation,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRelationResult.unified,
+                no_report.final_relation,
+            );
+            try std.testing.expect(poison.base_raw_and_selected_share_after_actual);
+            try std.testing.expect(poison.base_raw_and_selected_share_after_final);
+            try std.testing.expect(no_report.base_raw_and_selected_share_after_actual);
+            try std.testing.expect(no_report.base_raw_and_selected_share_after_final);
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .structure),
+                poison.base_content_after_actual,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .structure),
+                poison.base_content_after_final,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .structure),
+                no_report.base_content_after_actual,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .structure),
+                no_report.base_content_after_final,
+            );
+            try std.testing.expect(poison.diagnostic_index == null);
+            try std.testing.expect(no_report.diagnostic_index == null);
+            try std.testing.expectEqual(
+                @as(usize, 0),
+                poison_test_env.checker.problems.problems.items.len,
+            );
+            try std.testing.expectEqual(
+                @as(usize, 0),
+                no_report_test_env.checker.problems.problems.items.len,
+            );
+
+            const observations = poison.refinement orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRefinementBaseShape.empty_record,
+                observations.before_body.base_shape,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRefinementBaseShape.optional_hello_u8,
+                observations.after_body.base_shape,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRefinementBaseShape.optional_hello_u8,
+                observations.after_actual.base_shape,
+            );
+            try std.testing.expectEqual(
+                RecordUpdateProjectionRefinementBaseShape.optional_hello_u8,
+                observations.after_final.base_shape,
+            );
+            try std.testing.expect(observations.before_body.base_shares_source);
+            try std.testing.expect(observations.after_body.base_shares_source);
+            try std.testing.expect(observations.after_actual.base_shares_source);
+            try std.testing.expect(observations.after_final.base_shares_source);
+            try std.testing.expect(!observations.before_body.inner_lookup_shares_source);
+            try std.testing.expect(observations.after_body.inner_lookup_shares_source);
+            try std.testing.expect(observations.after_actual.inner_lookup_shares_source);
+            try std.testing.expect(observations.after_final.inner_lookup_shares_source);
+            try std.testing.expect(observations.inner_binding_shares_source_after_body);
+            try std.testing.expect(observations.field_block_shares_literal_after_body);
+            try std.testing.expect(!observations.optional_payload_shares_field_after_body);
+            try std.testing.expect(observations.optional_payload_shares_field_after_actual);
+            try std.testing.expect(observations.optional_payload_shares_field_after_final);
+            try std.testing.expect(observations.actual_record_shares_source_after_actual);
+            try std.testing.expect(observations.outer_shares_source_after_final);
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .flex),
+                observations.before_body.field_kind,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .flex),
+                observations.after_body.field_kind,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .field_presence),
+                observations.after_actual.field_kind,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.Content), .field_presence),
+                observations.after_final.field_kind,
+            );
+            try std.testing.expect(observations.before_body.field_presence == null);
+            try std.testing.expect(observations.after_body.field_presence == null);
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.FieldPresence), .optional),
+                observations.after_actual.field_presence orelse return error.TestUnexpectedResult,
+            );
+            try std.testing.expectEqual(
+                @as(std.meta.Tag(types_mod.FieldPresence), .optional),
+                observations.after_final.field_presence orelse return error.TestUnexpectedResult,
+            );
+            inline for (.{
+                observations.before_body.projected_value,
+                observations.after_body.projected_value,
+                observations.after_actual.projected_value,
+                observations.after_final.projected_value,
+            }) |projected_value| {
+                try std.testing.expectEqual(
+                    @as(std.meta.Tag(types_mod.Content), .flex),
+                    projected_value,
+                );
+            }
+
+            failure_stage = "refinement producer inventory";
+            const refinement = poison.topology.refinement orelse
+                return error.TestUnexpectedResult;
+            try std.testing.expectEqual(
+                CIR.Node.Tag.expr_block,
+                poison.field_node_after_body.tag,
+            );
+            try std.testing.expectEqual(
+                CIR.Node.Tag.expr_typed_int,
+                poison.literal_node_after_body.tag,
+            );
+            try std.testing.expect(refinement.attachment.hasLegalTags());
+            try std.testing.expectEqual(
+                ModuleEnv.BodyAnnotationAttachment.AttachmentKind.local_decl,
+                refinement.attachment.decodedAttachmentKind().?,
+            );
+            try std.testing.expectEqual(
+                @intFromEnum(refinement.widening_statement),
+                refinement.attachment.attachment_node,
+            );
+            try std.testing.expectEqual(
+                @intFromEnum(refinement.annotation_idx),
+                refinement.attachment.annotation_root,
+            );
+            try std.testing.expectEqual(
+                @intFromEnum(refinement.widening_lookup),
+                refinement.attachment.body_expr,
+            );
+            try std.testing.expectEqual(
+                @as(usize, 1),
+                poison_test_env.module_env.body_annotation_attachments.items.items.len,
+            );
+            try std.testing.expect(std.meta.eql(
+                refinement.attachment,
+                poison_test_env.module_env.body_annotation_attachments.items.items[0],
+            ));
+            try std.testing.expectEqual(
+                @as(usize, 2),
+                poison_test_env.module_env.expected_consumption_plans.items.items.len,
+            );
+            try std.testing.expectEqual(
+                @as(usize, 2),
+                poison_test_env.checker.record_update_expected_plan_registrations.items.len,
+            );
+            try std.testing.expect(
+                !poison_test_env.checker.record_update_expected_plan_registrations_consumed,
+            );
+            try std.testing.expectEqual(
+                @as(usize, 1),
+                poison_test_env.module_env.expected_consumer_retirements.items.items.len,
+            );
+            try std.testing.expectEqual(
+                @as(usize, 1),
+                poison_test_env.checker.aggregate_expected_retirement_drafts.items.len,
+            );
+            try std.testing.expectEqual(
+                @as(usize, 1),
+                poison_test_env.checker.pending_record_updates.items.len,
+            );
+            const lookups = poison_test_env.checker.value_lookup_tracking.items;
+            try std.testing.expectEqual(@as(usize, 2), lookups.len);
+            try std.testing.expectEqual(poison.topology.base_expr, lookups[0].expr_idx);
+            try std.testing.expectEqual(poison.topology.binding_pattern, lookups[0].pattern_idx);
+            try std.testing.expectEqual(
+                ModuleEnv.ExpectedCallSlotToken.none,
+                lookups[0].call_root_token_index,
+            );
+            try std.testing.expectEqual(refinement.widening_lookup, lookups[1].expr_idx);
+            try std.testing.expectEqual(poison.topology.binding_pattern, lookups[1].pattern_idx);
+            try std.testing.expectEqual(
+                ModuleEnv.ExpectedCallSlotToken.none,
+                lookups[1].call_root_token_index,
+            );
+        },
+    }
     try std.testing.expectEqual(@as(usize, 0), poison_test_env.checker.record_update_owner_retirement_drafts.items.len);
     try std.testing.expectEqual(@as(usize, 0), no_report_test_env.checker.record_update_owner_retirement_drafts.items.len);
     try std.testing.expectEqual(@as(usize, 0), poison_test_env.module_env.expected_retired_consumers.items.items.len);
@@ -73534,6 +74208,14 @@ test "record-update projection relation: typo base calibrates poison and no-repo
         "RecordUpdateProjectionTypoBase",
         record_update_projection_typo_base_source,
         .typo_base,
+    );
+}
+
+test "record-update projection refinement: optional-width body makes the owning relation succeed" {
+    try expectRecordUpdateProjectionRelationFixture(
+        "RecordUpdateProjectionOptionalWidthRefinement",
+        record_update_projection_refinement_source,
+        .optional_width_refinement,
     );
 }
 
