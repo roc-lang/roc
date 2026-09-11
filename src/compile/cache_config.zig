@@ -203,7 +203,10 @@ pub const Constants = struct {
     ///     from an authenticated redirected identity-share root selection.
     /// 85: Record-update Expected plans retain their syntax-owned base-copy
     ///     outcome and exact checked-error causal edge.
-    pub const CACHE_VERSION = 85;
+    /// 86: Record-update field plans distinguish unavailable projection context
+    ///     from an owning relation failure and retain the exact syntax-site raw
+    ///     request for that finite no-cause outcome.
+    pub const CACHE_VERSION = 86;
 };
 
 /// Configuration for the Roc cache system.

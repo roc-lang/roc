@@ -3036,7 +3036,7 @@ pub const ExpectedConsumptionPlan = extern struct {
         aggregate_retired_by_parent_branch_failure,
         record_update_base_checked_error,
         record_update_field_base_checked_error,
-        record_update_projection_mismatch,
+        record_update_projection_unavailable,
         record_update_field_checked_error,
         record_update_field_relation_rejected,
         branch_no_expected_result,
@@ -3205,7 +3205,11 @@ pub const ExpectedConsumptionPlan = extern struct {
             .related => self.source_retirement_index_plus_one == 0 and
                 parent_present and !produced_any,
             .not_projected => self.source_retirement_index_plus_one == 0 and !produced_any and
-                (owner_relation != .none or !parent_present),
+                (if (reason == .record_update_projection_unavailable)
+                    role == .record_update_field and parent_present and !owner_present and
+                        self.raw_consumer_var == self.site_node
+                else
+                    owner_relation != .none or !parent_present),
             .checked_error => self.source_retirement_index_plus_one == 0 and
                 !produced_any and switch (owner_relation) {
                 .direct_source_retirement, .upstream_retirement => parent_present,
@@ -3254,6 +3258,7 @@ pub const ExpectedConsumptionPlan = extern struct {
             .parent_evidence_free => .evidence_free,
             .branch_body_already_expected => .retained,
             .aggregate_no_expected,
+            .record_update_projection_unavailable,
             .branch_no_expected_result,
             .call_shape_ready,
             .call_shape_relation_rejected,
@@ -3267,7 +3272,6 @@ pub const ExpectedConsumptionPlan = extern struct {
             .aggregate_retired_after_child_relation,
             .aggregate_retired_by_parent_branch_failure,
             .record_update_field_base_checked_error,
-            .record_update_projection_mismatch,
             .record_update_field_checked_error,
             .record_update_field_relation_rejected,
             .branch_expected_error_short_circuit,
@@ -3305,6 +3309,7 @@ pub const ExpectedConsumptionPlan = extern struct {
         return switch (reason) {
             .parent_evidence_free,
             .aggregate_no_expected,
+            .record_update_projection_unavailable,
             .branch_no_expected_result,
             .branch_body_already_expected,
             .call_shape_ready,
@@ -3331,7 +3336,6 @@ pub const ExpectedConsumptionPlan = extern struct {
             .aggregate_retired_by_parent_branch_failure,
             .branch_retired_after_failure,
             .branch_retired_after_ambiguity_verdict,
-            .record_update_projection_mismatch,
             .record_update_field_relation_rejected,
             .branch_final_relation_rejected,
             .nominal_external_unresolved,
@@ -3388,7 +3392,7 @@ pub const ExpectedConsumptionPlan = extern struct {
                 .branch_retired_after_failure,
                 .branch_retired_after_ambiguity_verdict,
                 .record_update_field_base_checked_error,
-                .record_update_projection_mismatch,
+                .record_update_projection_unavailable,
                 .record_update_field_relation_rejected,
                 .branch_no_expected_result,
                 .branch_expected_error_short_circuit,
@@ -3528,7 +3532,7 @@ pub const ExpectedConsumptionPlan = extern struct {
             .record_update_base_checked_error,
             => role == .record_update_base,
             .record_update_field_base_checked_error,
-            .record_update_projection_mismatch,
+            .record_update_projection_unavailable,
             .record_update_field_checked_error,
             .record_update_field_relation_rejected,
             => role == .record_update_field,
@@ -9045,9 +9049,9 @@ pub const Serialized = extern struct {
         );
     }
 
-    /// Deserialize with mutable type store and node store for cache modules.
-    /// Allocates fresh memory for the type store and node store arrays,
-    /// allowing them to be mutated (e.g., during type checking).
+    /// Deserialize with mutable type storage and checked metadata for cache modules.
+    /// The NodeStore's mutable regions are copied, while its canonical node
+    /// payload arrays remain read-only views into the serialized buffer.
     /// Use this for disk cache modules that may need to add new types.
     pub fn deserializeWithMutableTypes(
         self: *const Serialized,
@@ -12688,6 +12692,59 @@ test "expected consumption owner absence is canonical" {
     plan.reason = @intFromEnum(ExpectedConsumptionPlan.Reason.aggregate_expected_contains_error);
     plan.role = std.math.maxInt(u32);
     try std.testing.expect(!plan.hasLegalTags());
+}
+
+test "record-update projection availability has a closed no-cause encoding" {
+    const none = ExpectedConsumptionPlan.none;
+    const parent = ExpectedMarkerAuthority{
+        .kind = @intFromEnum(ExpectedMarkerAuthority.Kind.copy_occurrence),
+        .payload = .{ .copy_occurrence = .{
+            .copy_step = 1,
+            .occurrence_offset = 0,
+            .side = @intFromEnum(WhereMarkerCopyOccurrenceSide.destination),
+        } },
+    };
+    var plan = ExpectedConsumptionPlan{
+        .owner_node = 1,
+        .site_node = 2,
+        .role = @intFromEnum(ExpectedConsumptionPlan.Role.record_update_field),
+        .slot = 0,
+        .outcome = @intFromEnum(ExpectedConsumptionPlan.Outcome.not_projected),
+        .reason = @intFromEnum(ExpectedConsumptionPlan.Reason.record_update_projection_unavailable),
+        .raw_consumer_var = 2,
+        .parent_authority = parent,
+        .produced_copy_step = none,
+        .produced_occurrence_offset = none,
+        .produced_side = none,
+        .call_root_plan_index = none,
+        .failure_owner = CauseOwner.inactive(),
+        .failure_cause_plan_index = none,
+    };
+    try std.testing.expect(plan.hasLegalTags());
+
+    plan.raw_consumer_var = 3;
+    try std.testing.expect(!plan.hasLegalTags());
+    plan.raw_consumer_var = plan.site_node;
+    plan.parent_authority = ExpectedMarkerAuthority.inactive();
+    try std.testing.expect(!plan.hasLegalTags());
+    plan.parent_authority = parent;
+    plan.failure_owner = CauseOwner.expectedConsumerRetirement(0);
+    try std.testing.expect(!plan.hasLegalTags());
+    plan.failure_owner = CauseOwner.inactive();
+    plan.produced_copy_step = 2;
+    plan.produced_occurrence_offset = 0;
+    plan.produced_side = @intFromEnum(WhereMarkerCopyOccurrenceSide.destination);
+    try std.testing.expect(!plan.hasLegalTags());
+    plan.produced_copy_step = none;
+    plan.produced_occurrence_offset = none;
+    plan.produced_side = none;
+    plan.role = @intFromEnum(ExpectedConsumptionPlan.Role.record_field);
+    try std.testing.expect(!plan.hasLegalTags());
+    plan.role = @intFromEnum(ExpectedConsumptionPlan.Role.record_update_field);
+    plan.outcome = @intFromEnum(ExpectedConsumptionPlan.Outcome.checked_error);
+    try std.testing.expect(!plan.hasLegalTags());
+    plan.outcome = @intFromEnum(ExpectedConsumptionPlan.Outcome.not_projected);
+    try std.testing.expect(plan.hasLegalTags());
 }
 
 test "expected marker authority arms have canonical payloads" {

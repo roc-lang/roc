@@ -2025,6 +2025,73 @@ stored-value scheme-use edge, gives nested constructions their declared field
 kinds before siblings meet, and keeps the shared expected graph pristine for
 the owning relation and its error report.
 
+Record-update projection availability (`record_update_projection_availability`)
+is a context-production rule, not a second typing judgment. When the orphan
+base-copy/field-shape relation mismatches, the producer rolls back that
+speculative projection and settles the reserved field plan exactly once as
+`not_projected / record_update_projection_unavailable`. Its parent is exactly
+this owner's successful `P_B` destination-root endpoint. Its owner, field site
+and slot retain their exact source coordinates; `raw_consumer_var` is the
+field site's syntax variable (`raw_consumer_var == site_node`), not the
+discarded projected fresh variable. This outcome records that the field was
+checked without a projected Expected type; it does not claim a copy endpoint
+or a successful field relation. Produced-copy words, failure owner, causal
+predecessor and call-root word are inactive, and the source-retirement word
+is zero. The active parent on this no-cause `not_projected` outcome is legal
+only for this finite record-update-field reason; other producer combinations
+retain their existing closed rules.
+
+`settleRecordUpdateProjectionUnavailable` may replace the reservation's
+provisional raw fresh slot with that exact syntax variable only before its
+first settlement. It never restamps an anchored or otherwise settled plan.
+The plan and arbitrary-index registration publish in the existing local
+transaction, with no surviving speculative projection copy. Unavailability
+does not create an Expected failure, retirement or draft, and does not change
+the record frame's checked status. Successful projections retain their
+anchored endpoint and still supply context before body checking; a genuinely
+checked-error base retains its separate checked-base propagation rule. The
+ordinary actual-field and final relations remain the typing authorities and
+are unchanged by this rule. In particular, an annotation in the field body
+may refine a shared monomorphic empty base to `{ hello ?: U8 }`, after which
+the actual and final relations can succeed despite unavailable earlier
+projection context.
+
+Local, produced and distinct fresh replay bind the unavailable field plan to
+the owner's exact field site/ordinal, its syntax variable, and its exact
+successful base endpoint. Rebuild and serialization preserve that closed
+encoding and the existing registration lifecycle. The accepted side is the
+optional-width body-refinement program through the complete checker tail,
+with live owner/base, no Problems, no retirements and no pending drafts.
+Wrong owner/site/slot/raw variable/parent, a produced endpoint or cause on the
+unavailable outcome, and the superseded projection-as-failure encoding are
+rejected. This bounded rule does not admit retirement after a genuine actual,
+child, unset or final relation failure: those producer/retirement rules remain
+separate work. A failed contextual projection alone never authorizes erasure.
+
+Every surviving aggregate-projection copy has an exact producer-plan inverse,
+not merely an anchored plan belonging to the same expression. Its origin may
+name only an `aggregate_owner` or a `record_update_field`. An aggregate owner
+names this copy's destination-root endpoint and exact parent authority. A
+record-update field names either its authenticated field-child occurrence
+within this copy, or, only when that exact direct child is absent from the
+copy's witnesses, a later fresh-shape support copy whose parent is this copy's
+destination root. Both forms bind the current projection step itself,
+the source field site/ordinal, and the exact base authority; borrowing another
+authentic projection's plan is invalid. The support form does not require the
+field's produced endpoint or parent to equal the projection's own produced
+endpoint or parent. Direct-child replay distinguishes an authenticated child,
+valid absence, and invalid traversal. Invalid source coordinates, bounds,
+edge tags, ambiguous child/path witnesses, or cycles are never evidence of
+absence and cannot authorize support. One occurrence cannot combine an alias
+backing edge with a record extension or matching record field: those are
+mutually exclusive producer frames. A record field and record extension may
+coexist, and the matching field wins within that valid record frame.
+Each searched field, alias-backing, or extension locator has one producer
+witness; repeated locators are invalid even when they name the same child.
+Unavailable fields have neither form. Owner-to-child,
+sibling and orphan-origin retargets are rejected using those explicit producer
+coordinates, without deriving missing authority from the solved graph.
+
 An expected type that can carry attached dispatch, default, or where-clause
 evidence also carries authenticated parent authority: normally an occurrence
 endpoint from an earlier proof-producing copy, or at the finite call-formal
@@ -2410,7 +2477,7 @@ authentic direct-binder error regression is its required accepted side:
 ordinary checking poisons both the base and outer update, while the unchanged
 base plan, source-retirement join, skipped-field plans, and `R_U` consumer
 range retain the exact typed cause. A record-update owner retired after an
-already-established base because of a projection mismatch, supplied-field
+already-established base because of a genuine supplied-field relation or child
 failure, unset failure, or final record relation remains rejected until the
 separate R2/R3 producer rules declare its cause and group. Deleting the whole
 base-plan, copy-step, and field-plan bundle likewise remains outside this
@@ -6340,14 +6407,42 @@ accepts the bounded test after strengthening exact builtin-U8 identity and
 optional-presence assertions. The normal producer-regenerated gate passes
 61/61 tests and 41/41 steps on that frozen source, including schema-85 golden,
 serialization and native/wasm sizes. The final-address harness repair is
-amended into the original calibration owner and inherited by `urrksrnp`.
-Independent carry-forward review accepts Check `7c5af804`; refreshed normal
-gate `3791` again passes 61/61 tests and 41/41 steps with regenerated Builtins,
-schema-85 golden and serialization sizes. The driver is finalizing this
-repaired WIP checkpoint's publication. Separate availability work in
-`tznvqtyt` is preserved but not included; its full-tail positive passes, while
-its projection-origin inverse and corruption/rebuild/serialization coverage
-remain unfinished. Complete producer/later-erasure
+amended into original calibration owner `tonzpmlt` / `9c027603` and inherited
+by described checkpoint `urrksrnp` / `2614bb21`. Independent carry-forward
+review accepts Check `7c5af804`; refreshed normal gate `3791` passes 61/61
+tests and 41/41 steps with regenerated Builtins, schema-85 golden and
+serialization sizes. Push and exact draft-PR head/body readback are verified.
+Child `tznvqtyt` implements the separately declared benign
+`record_update_projection_availability` subset. Its finite syntax-site raw
+coordinate passed independent review, and its optional-width source passes
+the complete checker tail with local, produced and distinct-fresh replay.
+The exposed staged-control overflows were a moved-pointer harness defect,
+now repaired in their owning commit; assembled captured-schema-86 gate
+`96249` passes all 5 tests. The projection-origin inverse is independently
+accepted at Check `5e3ac194`, with focused captured-input gate `59012` passing
+3/3. It distinguishes child, valid absence and invalid traversal; rejects
+repeated locators and mixed alias/record paths; and pins authentic direct and
+support forms plus distinguishing corruptions and exact restoration. Broader
+unavailable-plan corruption now has an independently accepted 13-case matrix
+at Check `9efae665`, with focused gate `22485` passing 5/5. It pins internal
+local rejection and exact restoration through local, produced and
+distinct-fresh replay. Repeated rebuild and serialization isolation are also
+independently accepted at Check `5c7aec1f`, with isolated `71764` passing 2/2.
+Two rebuilds preserve canonical bytes; readonly and mutable-type views retain
+immutable buffer-backed nodes, while mutable plans/types are independently
+owned. Legal-tag parent corruption pins true/false/true local validation and
+original/readonly/buffer isolation. The compact transaction slice is independently
+accepted at Check `8c14bc16`; broader captured-input gate `47060` passes 14/14.
+At the authentic pre-body projection seam, an outer local transaction rolls
+back exact unavailable-plan/registration publication and restores the full
+owned snapshot; retry from an independent pending slot reproduces the proof.
+This is not allocation-failure injection. Final normal regenerated-Builtin
+gate `44701` passes 68/68 tests and 41/41 steps, including schema-86 measured
+golden, static/mutable serialization and native/wasm sizes. Compiler hashes
+and formatting match review; independent sol-ultra adversarial review ACCEPTS
+the actual whole bounded availability delta. Final checkpoint publication is
+in progress. Genuine
+owning-failure retirement remains unapproved. Complete producer/later-erasure
 semantics must reconcile this measured accepted owning relation with the
 context-only projection rule before implementation.
 Other preexisting-base shapes, unrelated retirement ranges, broader corruption,
@@ -9735,6 +9830,14 @@ inventory without inspecting solved types, records the complete ordered
 reachability closure privately, reserves all durable invalidation membership,
 then commits map entries, literal-plan retirement, and omitted-default
 compaction without another fallible operation.
+`settleRecordUpdateProjectionUnavailable` is a mechanism implementing
+`record_update_projection_availability`, not a solver mutation or a restamp:
+after speculative context unification rolls back, it first-settles one reserved
+P_F with the exact syntax-site raw variable and no failure authority. It neither
+changes a solved descriptor/redirect nor changes the ordinary owning relation's
+options. The complete-tail optional-width accepted case and the closed
+unavailable-plan corruption cases pin the rule; genuine owning-failure
+retirement remains outside this mechanism. No new `RedirectRule` is involved.
 The checked-base record-update owner retirement is a finite central-replacement
 arm of that transaction. At depth zero it consumes the exact pending `R_U`
 draft and its arbitrary-index registrations and reserves the durable suffix

@@ -9565,6 +9565,121 @@ fn whereMarkerBranchContributionCount(
     return contribution_count;
 }
 
+/// Return the exact destination-side occurrence which carried one record-
+/// update field through its own aggregate projection. The copy witness is the
+/// immutable producer edge: solved record rows are deliberately not reopened
+/// here because later field relations may have changed their shape.
+const WhereMarkerRecordUpdateProjectionChild = union(enum) {
+    child: u32,
+    absent,
+    invalid,
+};
+
+fn whereMarkerRecordUpdateProjectionChildOccurrence(
+    cir: *const ModuleEnv,
+    step: ModuleEnv.WhereMarkerCopyStep,
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+) WhereMarkerRecordUpdateProjectionChild {
+    const update = expectedRecordUpdateSyntaxAtCurrentPhase(cir, plan.owner_node) orelse
+        return .invalid;
+    if (plan.slot >= update.fields_len or
+        !rangeFits(update.fields_start, update.fields_len, cir.store.index_data.items.items.len) or
+        !rangeFits(step.occurrences_start, step.occurrences_len, cir.where_marker_copy_occurrences.items.items.len) or
+        !rangeFits(step.witnesses_start, step.witnesses_len, cir.where_marker_copy_witnesses.items.items.len) or
+        step.root_occurrence_offset >= step.occurrences_len)
+    {
+        return .invalid;
+    }
+    const field_node = cir.store.index_data.items.items[update.fields_start + plan.slot];
+    if (field_node >= cir.store.nodes.len()) return .invalid;
+    const field = cir.store.nodes.get(@enumFromInt(field_node));
+    if (field.tag != .record_field) return .invalid;
+    const field_payload = field.getPayload().record_field;
+    if (field_payload.expr != plan.site_node) return .invalid;
+
+    const witnesses = cir.where_marker_copy_witnesses.items.items[step.witnesses_start..][0..step.witnesses_len];
+    var current = step.root_occurrence_offset;
+    var remaining: usize = step.occurrences_len;
+    while (remaining > 0) : (remaining -= 1) {
+        var target: ?u32 = null;
+        var alias_backing: ?u32 = null;
+        var extension: ?u32 = null;
+        for (witnesses) |witness| {
+            if (witness.parent_occurrence_offset != current) continue;
+            if (witness.child_occurrence_offset >= step.occurrences_len) return .invalid;
+            const edge_kind = witness.decodedEdgeKind() orelse return .invalid;
+            if ((edge_kind == .record_field_type or edge_kind == .record_unbound_field_type) and
+                witness.edge_index == 0 and witness.edge_name == field_payload.name)
+            {
+                if (target != null) return .invalid;
+                target = witness.child_occurrence_offset;
+            } else if (edge_kind == .alias_backing) {
+                if (alias_backing != null) return .invalid;
+                alias_backing = witness.child_occurrence_offset;
+            } else if (edge_kind == .record_extension) {
+                if (extension != null) return .invalid;
+                extension = witness.child_occurrence_offset;
+            }
+        }
+        if (alias_backing != null and (target != null or extension != null)) return .invalid;
+        if (target) |occurrence_offset| return .{ .child = occurrence_offset };
+        current = alias_backing orelse extension orelse return .absent;
+    }
+    return .invalid;
+}
+
+/// Close the later support form used when the selected record root has no
+/// copied field child. The P_F is owned by this projection root, but its
+/// produced endpoint must be the root of the exact subsequent support step
+/// whose published range contains that same P_F.
+fn whereMarkerRecordUpdateProjectionSupportMatches(
+    cir: *const ModuleEnv,
+    projection_step_index: u32,
+    projection_root: ModuleEnv.ExpectedMarkerAuthority,
+    plan_index: u32,
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+) bool {
+    if (!expectedMarkerAuthoritiesEqual(plan.parent_authority, projection_root) or
+        plan.produced_copy_step <= projection_step_index or
+        plan.produced_copy_step >= cir.where_marker_copy_steps.items.items.len)
+    {
+        return false;
+    }
+    const support = cir.where_marker_copy_steps.items.items[plan.produced_copy_step];
+    const projection = cir.where_marker_copy_steps.items.items[projection_step_index];
+    const field_child_is_cleanly_absent = switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+        cir,
+        projection,
+        plan,
+    )) {
+        .absent => true,
+        .child, .invalid => false,
+    };
+    if (support.decodedKind() != .aggregate_fresh_shape_child or
+        !field_child_is_cleanly_absent or
+        support.root_occurrence_offset != plan.produced_occurrence_offset or
+        plan.decodedProducedSide() != .destination or
+        !rangeFits(
+            support.occurrences_start,
+            support.occurrences_len,
+            cir.where_marker_copy_occurrences.items.items.len,
+        ) or support.root_occurrence_offset >= support.occurrences_len)
+    {
+        return false;
+    }
+    const support_origin = support.origin.aggregate_fresh_shape_child;
+    if (support_origin.expected_plans_start != plan_index or
+        support_origin.expected_plans_len != 1 or
+        !expectedMarkerAuthoritiesEqual(support_origin.parent_authority, projection_root))
+    {
+        return false;
+    }
+    const support_root = cir.where_marker_copy_occurrences.items.items[
+        support.occurrences_start + support.root_occurrence_offset
+    ];
+    return support_root.raw_source_var == plan.raw_consumer_var;
+}
+
 fn whereMarkerExpectedConsumerMatches(
     types: *const types_mod.Store,
     cir: *const ModuleEnv,
@@ -9581,13 +9696,99 @@ fn whereMarkerExpectedConsumerMatches(
     }
     if (kind == .aggregate_expected_projection) {
         const tag = cir.store.nodes.get(@enumFromInt(origin.consumer_node)).tag;
-        return switch (tag) {
+        const valid_consumer = switch (tag) {
             .expr_list,
             .expr_tuple,
             .expr_record,
             .expr_tag,
             => true,
             else => false,
+        };
+        if (!valid_consumer or
+            origin.expected_plan_index >= cir.expected_consumption_plans.items.items.len)
+        {
+            return false;
+        }
+        const plan = cir.expected_consumption_plans.items.items[origin.expected_plan_index];
+        if (!plan.hasLegalTags() or plan.decodedOutcome() != .anchored or
+            plan.decodedReason() != null or plan.owner_node != origin.consumer_node)
+        {
+            return false;
+        }
+        const raw_step_index = std.math.cast(u32, step_index) orelse return false;
+        return switch (plan.decodedRole() orelse return false) {
+            .aggregate_owner => aggregate_owner: {
+                const owner = cir.store.getExpr(@enumFromInt(plan.owner_node));
+                const is_literal_aggregate = switch (owner) {
+                    .e_list, .e_tuple, .e_tag => true,
+                    .e_record => |record| record.ext == null,
+                    else => false,
+                };
+                break :aggregate_owner is_literal_aggregate and
+                    plan.site_node == origin.consumer_node and plan.slot == 0 and
+                    expectedMarkerAuthoritiesEqual(plan.parent_authority, origin.parent_authority) and
+                    plan.produced_copy_step == raw_step_index and
+                    plan.produced_occurrence_offset == step.root_occurrence_offset and
+                    plan.decodedProducedSide() == .destination;
+            },
+            .record_update_field => record_update_field: {
+                if (!expectedFreshShapePlanMatchesCir(cir, plan) or
+                    !expectedRecordUpdateFieldBeginsAtBase(
+                        cir,
+                        origin.expected_plan_index,
+                        plan,
+                        origin.parent_authority,
+                    ))
+                {
+                    break :record_update_field false;
+                }
+                if (expectedMarkerAuthoritiesEqual(
+                    plan.parent_authority,
+                    origin.parent_authority,
+                )) {
+                    const child_offset = switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+                        cir,
+                        step,
+                        plan,
+                    )) {
+                        .child => |offset| offset,
+                        .absent, .invalid => break :record_update_field false,
+                    };
+                    break :record_update_field plan.produced_copy_step == raw_step_index and
+                        plan.produced_occurrence_offset == child_offset and
+                        plan.decodedProducedSide() == .destination;
+                }
+                const projection_root: ModuleEnv.ExpectedMarkerAuthority = .{
+                    .kind = @intFromEnum(ModuleEnv.ExpectedMarkerAuthority.Kind.copy_occurrence),
+                    .payload = .{ .copy_occurrence = .{
+                        .copy_step = raw_step_index,
+                        .occurrence_offset = step.root_occurrence_offset,
+                        .side = @intFromEnum(ModuleEnv.WhereMarkerCopyOccurrenceSide.destination),
+                    } },
+                };
+                break :record_update_field whereMarkerRecordUpdateProjectionSupportMatches(
+                    cir,
+                    raw_step_index,
+                    projection_root,
+                    origin.expected_plan_index,
+                    plan,
+                );
+            },
+            .list_element,
+            .tuple_element,
+            .record_field,
+            .tag_payload,
+            .record_update_base,
+            .branch_seed,
+            .branch_contribution,
+            .branch_final,
+            .nominal_decl,
+            .nominal_backing,
+            .call_root,
+            .call_argument,
+            .default_field,
+            .lambda_return,
+            => false,
         };
     }
     if (kind != .branch_expected_copy) return false;
@@ -10852,8 +11053,25 @@ fn validateExpectedRecordUpdatePlans(
             {
                 return false;
             }
-        } else if (plan.decodedReason() == .record_update_field_base_checked_error) {
-            return false;
+        } else {
+            switch (plan.decodedOutcome() orelse return false) {
+                .anchored => if (plan.decodedReason() != null) return false,
+                .not_projected => if (plan.decodedReason() != .record_update_projection_unavailable or
+                    plan.raw_consumer_var != plan.site_node or
+                    !expectedMarkerAuthoritiesEqual(plan.parent_authority, base_authority))
+                {
+                    return false;
+                },
+                .source_root_copy,
+                .source_root_copy_checked_error,
+                .producer_root,
+                .evidence_free,
+                .retained,
+                .related,
+                .checked_error,
+                .reserved,
+                => return false,
+            }
         }
     }
 
@@ -26135,8 +26353,14 @@ const CheckedBoundaryRebuild = struct {
                     @panic("retained Expected-consumption plan lost its exact predecessor authority");
                 },
                 .not_projected => {
+                    const unavailable_record_update_field =
+                        reason == .record_update_projection_unavailable and
+                        plan.decodedRole() == .record_update_field and
+                        plan.raw_consumer_var == plan.site_node and
+                        owner_relation == .none and parent_present;
                     if (produced_present or
-                        (owner_relation == .none and parent_present))
+                        (owner_relation == .none and parent_present and
+                            !unavailable_record_update_field))
                     {
                         @panic("not-projected Expected-consumption plan carried a noncanonical endpoint");
                     }
@@ -50933,7 +51157,7 @@ const ExpectedAggregateProjectionOutcome = union(enum) {
 
 const ExpectedRecordUpdateProjectionOutcome = union(enum) {
     established: Expected.ExpectedType,
-    rejected: ModuleEnv.CauseOwner,
+    not_projected,
     suppressed: ModuleEnv.CauseOwner,
 };
 
@@ -50942,6 +51166,55 @@ const ExpectedStoredValueRelationOutcome = union(enum) {
     rejected: ModuleEnv.CauseOwner,
     suppressed: ModuleEnv.CauseOwner,
 };
+
+/// First-settle one record-update field whose speculative Expected projection
+/// was unavailable. The discarded fresh slot is not durable authority: this
+/// closed outcome instead names the exact syntax-site variable and the
+/// successful base plan endpoint which supplied its projection context.
+fn settleRecordUpdateProjectionUnavailable(
+    self: *Self,
+    consumer_expr: CIR.Expr.Idx,
+    base_plan_index: u32,
+    slot: ExpectedFreshShapeSlot,
+    provisional_raw_var: Var,
+    parent: ExpectedParentAuthority,
+) void {
+    if (slot.expected_plan >= self.cir.expected_consumption_plans.items.items.len or
+        base_plan_index >= slot.expected_plan)
+    {
+        std.debug.panic("unavailable record-update projection lost its plan ordering", .{});
+    }
+    const base_plan = self.cir.expected_consumption_plans.items.items[base_plan_index];
+    const base_authority = expectedRecordUpdateBaseAuthority(base_plan) orelse
+        std.debug.panic("unavailable record-update projection lost its base authority", .{});
+    if (base_plan.owner_node != @intFromEnum(consumer_expr) or
+        base_plan.decodedOutcome() != .source_root_copy or
+        !expectedMarkerAuthoritiesEqual(base_authority, encodeExpectedParentAuthority(parent)))
+    {
+        std.debug.panic("unavailable record-update projection named another base endpoint", .{});
+    }
+
+    const plan = &self.cir.expected_consumption_plans.items.items[slot.expected_plan];
+    if (plan.decodedOutcome() != .reserved or
+        plan.owner_node != @intFromEnum(consumer_expr) or
+        plan.site_node != @intFromEnum(slot.site) or
+        plan.decodedRole() != .record_update_field or
+        plan.slot != slot.slot or
+        plan.raw_consumer_var != @intFromEnum(provisional_raw_var) or
+        provisional_raw_var != slot.raw_fresh_var)
+    {
+        std.debug.panic("unavailable record-update projection changed its reservation", .{});
+    }
+    plan.raw_consumer_var = @intFromEnum(slot.site);
+    settleExpectedPlanWithoutProducedEndpoint(
+        plan,
+        .not_projected,
+        .record_update_projection_unavailable,
+        base_authority,
+        ModuleEnv.CauseOwner.inactive(),
+        ModuleEnv.ExpectedConsumptionPlan.none,
+    );
+}
 
 /// Project one supplied record-update field from the eagerly copied base.
 /// Record updates have their own exact per-field plan cardinality; they never
@@ -51047,23 +51320,16 @@ fn projectExpectedRecordUpdateField(
         ),
         .mismatch => {
             projection.rollback();
-            const cause = try self.reserveExpectedPlanRetirement(
+            self.settleRecordUpdateProjectionUnavailable(
                 consumer_expr,
-                slot.expected_plan,
-                1,
-                .record_update_projection_mismatch,
-            );
-            settleExpectedPlanWithoutProducedEndpoint(
-                &self.cir.expected_consumption_plans.items.items[slot.expected_plan],
-                .checked_error,
-                .record_update_projection_mismatch,
-                encodeExpectedParentAuthority(parent),
-                cause,
-                ModuleEnv.ExpectedConsumptionPlan.none,
+                base_plan_index,
+                slot.*,
+                slot.raw_fresh_var,
+                parent,
             );
             self.registerRecordUpdateExpectedPlanAssumeCapacity(registration);
             publication.commit();
-            return .{ .rejected = cause };
+            return .not_projected;
         },
     }
     projection.commit();
@@ -52700,15 +52966,7 @@ noinline fn checkExprRecord(
             const projected_field: ?Expected.ExpectedType = switch (slot_projection) {
                 .established => |projected| projected,
                 .suppressed => null,
-                .rejected => |cause| rejected: {
-                    switch (frame.checked_status) {
-                        .established => frame.checked_status = .{ .checked_error = cause },
-                        .checked_error => |existing| if (!expectedCauseOwnersEqual(existing, cause)) {
-                            std.debug.panic("record-update projection changed its rejection owner", .{});
-                        },
-                    }
-                    break :rejected null;
-                },
+                .not_projected => null,
             };
             const field_expected = if (projected_field) |expected_field|
                 child_expected.withContextualType(expected_field)
@@ -71938,6 +72196,62 @@ const record_update_root_authority_test_source =
     \\}
 ;
 
+const aggregate_expected_projection_inverse_test_source =
+    \\main : { outer : { value : U8 } }
+    \\main = { outer: { value: 1.U8 } }
+;
+
+const record_update_projection_inverse_test_source =
+    \\direct = |first_value, second_value| {
+    \\    ..{ data: first_value },
+    \\    data: second_value,
+    \\}
+    \\
+    \\first_support = |container, value| { ..container, data: value }
+    \\second_support = |container, value| { ..container, data: value }
+;
+
+fn recordUpdateProjectionInverseRecord(
+    test_env: anytype,
+    def_name: []const u8,
+    base_kind: enum { literal, lookup },
+) !CIR.Expr.Idx {
+    const cir = test_env.module_env;
+    const def_idx = test_env.can.explicitRootDefByName(def_name) orelse
+        return error.TestUnexpectedResult;
+    const def = cir.store.getDef(def_idx);
+    const lambda = cir.store.getExpr(def.expr);
+    if (lambda != .e_lambda) return error.TestUnexpectedResult;
+    const record_expr = lambda.e_lambda.body;
+    const record = cir.store.getExpr(record_expr);
+    if (record != .e_record or record.e_record.ext == null or
+        cir.store.sliceRecordFields(record.e_record.fields).len != 1 or
+        cir.store.sliceUnsetFields(record.e_record.unsets).len != 0)
+    {
+        return error.TestUnexpectedResult;
+    }
+    const base_expr = record.e_record.ext.?;
+    switch (base_kind) {
+        .literal => {
+            const base_record = cir.store.getExpr(base_expr);
+            if (base_record != .e_record or base_record.e_record.ext != null) {
+                return error.TestUnexpectedResult;
+            }
+        },
+        .lookup => {
+            const patterns = cir.store.slicePatterns(lambda.e_lambda.args);
+            if (patterns.len != 2) return error.TestUnexpectedResult;
+            const base_lookup = cir.store.getExpr(base_expr);
+            if (base_lookup != .e_lookup_local or
+                base_lookup.e_lookup_local.pattern_idx != patterns[0])
+            {
+                return error.TestUnexpectedResult;
+            }
+        },
+    }
+    return record_expr;
+}
+
 const RecordUpdateRootAuthorityTestTopology = struct {
     redirected_lambda: CIR.Expr.Idx,
     redirected_container_pattern: CIR.Pattern.Idx,
@@ -72712,6 +73026,11 @@ const RecordUpdateProjectionRelationMode = enum {
     isolated_write_no_report,
 };
 
+const RecordUpdateProjectionCalibrationBoundary = enum {
+    full_relations,
+    availability_outer_rollback,
+};
+
 const RecordUpdateProjectionRelationResult = enum {
     unified,
     suppressed_by_error,
@@ -72759,9 +73078,6 @@ const RecordUpdateProjectionRelationCalibration = struct {
     base_publication: StagedRecordUpdateBasePlanPublicationProof,
     field_plan: ModuleEnv.ExpectedConsumptionPlan,
     field_registration: RecordUpdateExpectedPlanRegistration,
-    projection_retirement: ModuleEnv.ExpectedConsumerRetirement,
-    projection_draft: AggregateExpectedRetirementDraft,
-    projection_cause: ModuleEnv.CauseOwner,
     actual_relation: RecordUpdateProjectionRelationResult,
     final_relation: RecordUpdateProjectionRelationResult,
     diagnostic_index: ?problem.Problem.Idx,
@@ -72870,15 +73186,322 @@ fn expectRecordUpdateProjectionBasePublication(
     };
 }
 
-/// Run the real block-local binding and record-update producer chronology up
-/// through its final base relation. The seam deliberately stops before either
-/// expression frame finishes: it measures the relation choice without the
-/// later checker-rewrite sweep, group publication, or terminal admission.
+const RecordUpdateProjectionAvailabilityCopyLengths = struct {
+    steps: usize,
+    pairs: usize,
+    occurrences: usize,
+    constraint_pairs: usize,
+    witnesses: usize,
+    copied_groups: usize,
+    copied_events: usize,
+    substitutions: usize,
+    selected_anchors: usize,
+    evidence_handles: usize,
+    settlement_sources: usize,
+    scheme_uses: usize,
+    scheme_use_pairs: usize,
+
+    fn capture(checker: *const Self) @This() {
+        const cir = checker.cir;
+        return .{
+            .steps = cir.where_marker_copy_steps.items.items.len,
+            .pairs = cir.where_marker_copy_pairs.items.items.len,
+            .occurrences = cir.where_marker_copy_occurrences.items.items.len,
+            .constraint_pairs = cir.where_marker_constraint_copy_pairs.items.items.len,
+            .witnesses = cir.where_marker_copy_witnesses.items.items.len,
+            .copied_groups = cir.copied_open_literal_groups.items.items.len,
+            .copied_events = cir.copied_open_literal_events.items.items.len,
+            .substitutions = cir.where_marker_platform_substitutions.items.items.len,
+            .selected_anchors = cir.selected_receiver_anchors.items.items.len,
+            .evidence_handles = checker.types.constraint_evidence_handles.items.items.len,
+            .settlement_sources = cir.dispatch_settlement_sources.items.items.len,
+            .scheme_uses = cir.scheme_uses.items.items.len,
+            .scheme_use_pairs = cir.scheme_use_pairs.items.items.len,
+        };
+    }
+
+    fn expectEqual(self: @This(), checker: *const Self) !void {
+        try std.testing.expect(std.meta.eql(self, capture(checker)));
+    }
+};
+
+const RecordUpdateProjectionAvailabilityTransactionProof = struct {
+    plan_index: u32,
+    plan: ModuleEnv.ExpectedConsumptionPlan,
+    registration: RecordUpdateExpectedPlanRegistration,
+    slot: ExpectedFreshShapeSlot,
+
+    fn expectEqual(self: @This(), other: @This()) !void {
+        try std.testing.expectEqual(self.plan_index, other.plan_index);
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&self.plan),
+            std.mem.asBytes(&other.plan),
+        );
+        try std.testing.expect(std.meta.eql(self.registration, other.registration));
+        try std.testing.expect(std.meta.eql(self.slot, other.slot));
+    }
+};
+
+fn expectStagedRecordUpdateProjectionUnavailable(
+    checker: *const Self,
+    topology: RecordUpdateProjectionRelationTopology,
+    published_base: PublishedRecordUpdateBasePlan,
+    slot: ExpectedFreshShapeSlot,
+    expected_plan_index: u32,
+    expected_registration_index: usize,
+) !RecordUpdateProjectionAvailabilityTransactionProof {
+    const cir = checker.cir;
+    try std.testing.expectEqual(expected_plan_index, slot.expected_plan);
+    try std.testing.expectEqual(topology.field_expr, slot.site);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Role.record_update_field, slot.role);
+    try std.testing.expectEqual(@as(u32, 0), slot.slot);
+    try std.testing.expect(slot.raw_fresh_var != ModuleEnv.varFrom(slot.site));
+    try std.testing.expectEqual(@as(usize, expected_plan_index + 1), cir.expected_consumption_plans.items.items.len);
+    try std.testing.expectEqual(expected_registration_index + 1, checker.record_update_expected_plan_registrations.items.len);
+    const plan = cir.expected_consumption_plans.items.items[expected_plan_index];
+    try std.testing.expect(plan.hasLegalTags());
+    try std.testing.expectEqual(@intFromEnum(topology.record_expr), plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(topology.field_expr), plan.site_node);
+    try std.testing.expectEqual(@intFromEnum(topology.field_expr), plan.raw_consumer_var);
+    try std.testing.expect(plan.raw_consumer_var != @intFromEnum(slot.raw_fresh_var));
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Role.record_update_field, plan.decodedRole().?);
+    try std.testing.expectEqual(@as(u32, 0), plan.slot);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Outcome.not_projected, plan.decodedOutcome().?);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_projection_unavailable,
+        plan.decodedReason().?,
+    );
+    const base_authority = encodeExpectedParentAuthority(.{
+        .copy_occurrence = published_base.anchor,
+    });
+    try std.testing.expect(expectedMarkerAuthoritiesEqual(base_authority, plan.parent_authority));
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, plan.produced_copy_step);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, plan.produced_occurrence_offset);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, plan.produced_side);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, plan.call_root_plan_index);
+    try std.testing.expect(plan.failure_owner.hasCanonicalTags(false));
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, plan.failure_cause_plan_index);
+    try std.testing.expect(plan.decodedSourceRetirementIndex() == null);
+    try std.testing.expect(expectedRecordUpdateFieldBeginsAtBase(
+        cir,
+        expected_plan_index,
+        plan,
+        base_authority,
+    ));
+    try std.testing.expect(expectedFreshShapePlanMatchesCir(cir, plan));
+
+    const registration = checker.record_update_expected_plan_registrations.items[
+        expected_registration_index
+    ];
+    try std.testing.expectEqual(topology.record_expr, registration.owner_expr);
+    try std.testing.expectEqual(expected_plan_index, registration.plan_index);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Role.record_update_field, registration.role);
+    try std.testing.expectEqual(@as(u32, 0), registration.slot);
+    try std.testing.expectEqual(topology.field_expr, registration.site);
+    try std.testing.expect(validateRecordUpdateExpectedPlanRegistrations(checker));
+    return .{
+        .plan_index = expected_plan_index,
+        .plan = plan,
+        .registration = registration,
+        .slot = slot,
+    };
+}
+
+fn expectRecordUpdateProjectionAvailabilityOuterRollback(
+    checker: *Self,
+    env: *Env,
+    topology: RecordUpdateProjectionRelationTopology,
+    published_base: PublishedRecordUpdateBasePlan,
+    projected_record: Var,
+    initial_slot: ExpectedFreshShapeSlot,
+    field_name: u32,
+    update_context: problem.Context,
+    frame_status: *const CheckedExprStatus,
+) !void {
+    if (initial_slot.expected_plan != ModuleEnv.ExpectedConsumptionPlan.none or
+        initial_slot.role != .record_update_field or initial_slot.slot != 0 or
+        initial_slot.site != topology.field_expr)
+    {
+        return error.TestUnexpectedResult;
+    }
+    switch (frame_status.*) {
+        .established => {},
+        .checked_error => return error.TestUnexpectedResult,
+    }
+    const cir = checker.cir;
+    const expected_plan_index: u32 = @intCast(cir.expected_consumption_plans.items.items.len);
+    const expected_registration_index = checker.record_update_expected_plan_registrations.items.len;
+    if (published_base.plan_index >= expected_plan_index or expected_registration_index == 0) {
+        return error.TestUnexpectedResult;
+    }
+    const base_plan_before = cir.expected_consumption_plans.items.items[published_base.plan_index];
+    const base_registration_before = checker.record_update_expected_plan_registrations.items[
+        expected_registration_index - 1
+    ];
+    try std.testing.expectEqual(published_base.plan_index, base_registration_before.plan_index);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Role.record_update_base, base_registration_before.role);
+    const pending_record_updates_len = checker.pending_record_updates.items.len;
+    const retirements_len = cir.expected_consumer_retirements.items.items.len;
+    const failures_len = cir.expected_failures.items.items.len;
+    const retirement_failures_len = cir.expected_retirement_failures.items.items.len;
+    const retired_consumers_len = cir.expected_retired_consumers.items.items.len;
+    const optional_field_accesses_len = checker.optional_field_accesses.items.len;
+    const aggregate_drafts_len = checker.aggregate_expected_retirement_drafts.items.len;
+    const owner_ranges_len = checker.expected_owner_plan_ranges.items.len;
+    const owner_drafts_len = checker.record_update_owner_retirement_drafts.items.len;
+    const registrations_consumed = checker.record_update_expected_plan_registrations_consumed;
+    const copy_lengths = RecordUpdateProjectionAvailabilityCopyLengths.capture(checker);
+    var before = try RecordUpdateRootTransactionSnapshot.capture(
+        std.testing.allocator,
+        checker,
+        env,
+    );
+    defer before.deinit(std.testing.allocator);
+
+    const initial_probe_depth = checker.probe_depth;
+    var outer = try checker.beginLocalMarkerCopyTransaction(env);
+    var outer_open = true;
+    defer if (outer_open) outer.rollback();
+    try std.testing.expectEqual(initial_probe_depth + 1, checker.probe_depth);
+    var rolled_slot = initial_slot;
+    const rolled_outcome = try checker.projectExpectedRecordUpdateField(
+        topology.record_expr,
+        published_base.plan_index,
+        .{
+            .var_ = published_base.copy.var_,
+            .context = update_context,
+            .marker_authority = .{ .anchored = .{ .copy_occurrence = published_base.anchor } },
+            .status = .established,
+        },
+        projected_record,
+        &rolled_slot,
+        field_name,
+        env,
+    );
+    switch (rolled_outcome) {
+        .not_projected => {},
+        .established, .suppressed => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(initial_probe_depth + 1, checker.probe_depth);
+    const rolled_proof = try expectStagedRecordUpdateProjectionUnavailable(
+        checker,
+        topology,
+        published_base,
+        rolled_slot,
+        expected_plan_index,
+        expected_registration_index,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        std.mem.asBytes(&base_plan_before),
+        std.mem.asBytes(&cir.expected_consumption_plans.items.items[published_base.plan_index]),
+    );
+    try std.testing.expect(std.meta.eql(
+        base_registration_before,
+        checker.record_update_expected_plan_registrations.items[expected_registration_index - 1],
+    ));
+    try copy_lengths.expectEqual(checker);
+    try std.testing.expectEqual(pending_record_updates_len, checker.pending_record_updates.items.len);
+    try std.testing.expectEqual(retirements_len, cir.expected_consumer_retirements.items.items.len);
+    try std.testing.expectEqual(failures_len, cir.expected_failures.items.items.len);
+    try std.testing.expectEqual(retirement_failures_len, cir.expected_retirement_failures.items.items.len);
+    try std.testing.expectEqual(retired_consumers_len, cir.expected_retired_consumers.items.items.len);
+    try std.testing.expectEqual(optional_field_accesses_len, checker.optional_field_accesses.items.len);
+    try std.testing.expectEqual(aggregate_drafts_len, checker.aggregate_expected_retirement_drafts.items.len);
+    try std.testing.expectEqual(owner_ranges_len, checker.expected_owner_plan_ranges.items.len);
+    try std.testing.expectEqual(owner_drafts_len, checker.record_update_owner_retirement_drafts.items.len);
+    try std.testing.expectEqual(registrations_consumed, checker.record_update_expected_plan_registrations_consumed);
+    switch (frame_status.*) {
+        .established => {},
+        .checked_error => return error.TestUnexpectedResult,
+    }
+
+    outer.rollback();
+    outer_open = false;
+    try std.testing.expectEqual(initial_probe_depth, checker.probe_depth);
+    try before.expectEqual(std.testing.allocator, checker, env);
+    try before.cross_copy.expectEqual(checker);
+    try copy_lengths.expectEqual(checker);
+    try std.testing.expectEqual(expected_plan_index, cir.expected_consumption_plans.items.items.len);
+    try std.testing.expectEqual(expected_registration_index, checker.record_update_expected_plan_registrations.items.len);
+    try std.testing.expectEqual(pending_record_updates_len, checker.pending_record_updates.items.len);
+    try std.testing.expectEqual(optional_field_accesses_len, checker.optional_field_accesses.items.len);
+    try std.testing.expectEqual(aggregate_drafts_len, checker.aggregate_expected_retirement_drafts.items.len);
+    try std.testing.expectEqual(owner_ranges_len, checker.expected_owner_plan_ranges.items.len);
+    try std.testing.expectEqual(owner_drafts_len, checker.record_update_owner_retirement_drafts.items.len);
+    try std.testing.expectEqual(registrations_consumed, checker.record_update_expected_plan_registrations_consumed);
+    switch (frame_status.*) {
+        .established => {},
+        .checked_error => return error.TestUnexpectedResult,
+    }
+
+    var retry_slot = initial_slot;
+    const retry_outcome = try checker.projectExpectedRecordUpdateField(
+        topology.record_expr,
+        published_base.plan_index,
+        .{
+            .var_ = published_base.copy.var_,
+            .context = update_context,
+            .marker_authority = .{ .anchored = .{ .copy_occurrence = published_base.anchor } },
+            .status = .established,
+        },
+        projected_record,
+        &retry_slot,
+        field_name,
+        env,
+    );
+    switch (retry_outcome) {
+        .not_projected => {},
+        .established, .suppressed => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(initial_probe_depth, checker.probe_depth);
+    const retry_proof = try expectStagedRecordUpdateProjectionUnavailable(
+        checker,
+        topology,
+        published_base,
+        retry_slot,
+        expected_plan_index,
+        expected_registration_index,
+    );
+    try rolled_proof.expectEqual(retry_proof);
+    try std.testing.expectEqualSlices(
+        u8,
+        std.mem.asBytes(&base_plan_before),
+        std.mem.asBytes(&cir.expected_consumption_plans.items.items[published_base.plan_index]),
+    );
+    try std.testing.expect(std.meta.eql(
+        base_registration_before,
+        checker.record_update_expected_plan_registrations.items[expected_registration_index - 1],
+    ));
+    try copy_lengths.expectEqual(checker);
+    try std.testing.expectEqual(pending_record_updates_len, checker.pending_record_updates.items.len);
+    try std.testing.expectEqual(retirements_len, cir.expected_consumer_retirements.items.items.len);
+    try std.testing.expectEqual(failures_len, cir.expected_failures.items.items.len);
+    try std.testing.expectEqual(retirement_failures_len, cir.expected_retirement_failures.items.items.len);
+    try std.testing.expectEqual(retired_consumers_len, cir.expected_retired_consumers.items.items.len);
+    try std.testing.expectEqual(optional_field_accesses_len, checker.optional_field_accesses.items.len);
+    try std.testing.expectEqual(aggregate_drafts_len, checker.aggregate_expected_retirement_drafts.items.len);
+    try std.testing.expectEqual(owner_ranges_len, checker.expected_owner_plan_ranges.items.len);
+    try std.testing.expectEqual(owner_drafts_len, checker.record_update_owner_retirement_drafts.items.len);
+    try std.testing.expectEqual(registrations_consumed, checker.record_update_expected_plan_registrations_consumed);
+    switch (frame_status.*) {
+        .established => {},
+        .checked_error => return error.TestUnexpectedResult,
+    }
+}
+
+/// Run the real block-local binding and record-update producer chronology.
+/// The relation boundary reaches the final base relation; the transaction
+/// boundary stops immediately after retrying the field projection. Both stop
+/// before either expression frame finishes, without the later checker-rewrite
+/// sweep, group publication, or terminal admission.
 fn calibrateRecordUpdateProjectionRelation(
     test_env: anytype,
     fixture: RecordUpdateProjectionRelationFixture,
     mode: RecordUpdateProjectionRelationMode,
-) !RecordUpdateProjectionRelationCalibration {
+    boundary: RecordUpdateProjectionCalibrationBoundary,
+) !?RecordUpdateProjectionRelationCalibration {
     var failure_stage: []const u8 = "canonical topology";
     var diagnostic_actual_relation: ?RecordUpdateProjectionRelationResult = null;
     var diagnostic_final_relation: ?RecordUpdateProjectionRelationResult = null;
@@ -73202,6 +73825,22 @@ fn calibrateRecordUpdateProjectionRelation(
         .record_region_idx = @enumFromInt(@intFromEnum(base_raw_var)),
         .record_name = checker.getExprPatternIdent(topology.base_expr),
     } };
+    if (boundary == .availability_outer_rollback) {
+        if (fixture != .optional_width_refinement) return error.TestUnexpectedResult;
+        failure_stage = "availability outer transaction rollback";
+        try expectRecordUpdateProjectionAvailabilityOuterRollback(
+            checker,
+            &env,
+            topology,
+            published_base,
+            projected_record,
+            slot,
+            @bitCast(field.name),
+            update_context,
+            &record_frame.checked_status,
+        );
+        return null;
+    }
     failure_stage = "field projection";
     const projection = try checker.projectExpectedRecordUpdateField(
         topology.record_expr,
@@ -73217,12 +73856,14 @@ fn calibrateRecordUpdateProjectionRelation(
         @bitCast(field.name),
         &env,
     );
-    const projection_cause = switch (projection) {
-        .rejected => |cause| cause,
+    switch (projection) {
+        .not_projected => {},
         .established, .suppressed => return error.TestUnexpectedResult,
-    };
-    try std.testing.expect(projection_cause.hasCanonicalTags(true));
-    record_frame.checked_status = .{ .checked_error = projection_cause };
+    }
+    switch (record_frame.checked_status) {
+        .established => {},
+        .checked_error => return error.TestUnexpectedResult,
+    }
     const field_plan = cir.expected_consumption_plans.items.items[slot.expected_plan];
     try std.testing.expect(field_plan.hasLegalTags());
     try std.testing.expectEqual(@intFromEnum(topology.record_expr), field_plan.owner_node);
@@ -73233,14 +73874,15 @@ fn calibrateRecordUpdateProjectionRelation(
     );
     try std.testing.expectEqual(@as(u32, 0), field_plan.slot);
     try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error,
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.not_projected,
         field_plan.decodedOutcome().?,
     );
     try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_projection_mismatch,
+        ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_projection_unavailable,
         field_plan.decodedReason().?,
     );
-    try std.testing.expectEqual(@intFromEnum(projected_field_value), field_plan.raw_consumer_var);
+    try std.testing.expectEqual(@intFromEnum(field.value), field_plan.raw_consumer_var);
+    try std.testing.expect(field_plan.raw_consumer_var != @intFromEnum(projected_field_value));
     try std.testing.expect(expectedMarkerAuthoritiesEqual(
         field_plan.parent_authority,
         encodeExpectedParentAuthority(.{ .copy_occurrence = published_base.anchor }),
@@ -73252,7 +73894,8 @@ fn calibrateRecordUpdateProjectionRelation(
     );
     try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, field_plan.produced_side);
     try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, field_plan.call_root_plan_index);
-    try std.testing.expect(expectedCauseOwnersEqual(projection_cause, field_plan.failure_owner));
+    try std.testing.expectEqual(ModuleEnv.CauseOwner.none, field_plan.failure_owner.kind);
+    try std.testing.expect(field_plan.failure_owner.hasCanonicalTags(false));
     try std.testing.expectEqual(
         ModuleEnv.ExpectedConsumptionPlan.none,
         field_plan.failure_cause_plan_index,
@@ -73265,6 +73908,21 @@ fn calibrateRecordUpdateProjectionRelation(
         field_plan,
         encodeExpectedParentAuthority(.{ .copy_occurrence = published_base.anchor }),
     ));
+    for (cir.where_marker_copy_steps.items.items) |step| {
+        switch (step.decodedKind() orelse return error.TestUnexpectedResult) {
+            .aggregate_expected_projection => try std.testing.expect(
+                step.origin.aggregate_expected_projection.expected_plan_index != slot.expected_plan,
+            ),
+            .aggregate_fresh_shape_child => {
+                const origin = step.origin.aggregate_fresh_shape_child;
+                try std.testing.expect(
+                    slot.expected_plan < origin.expected_plans_start or
+                        slot.expected_plan >= origin.expected_plans_start + origin.expected_plans_len,
+                );
+            },
+            else => {},
+        }
+    }
 
     const field_registration = checker.record_update_expected_plan_registrations.items[
         base_stage.registrations_start + 1
@@ -73280,65 +73938,11 @@ fn calibrateRecordUpdateProjectionRelation(
     try std.testing.expectEqual(field.value, field_registration.site);
     try std.testing.expect(validateRecordUpdateExpectedPlanRegistrations(checker));
 
-    const cause_retirement = projection_cause.decodedExpectedConsumerRetirement() orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(
-        @as(usize, @intCast(cause_retirement.index + 1)),
-        cir.expected_consumer_retirements.items.items.len,
-    );
-    const projection_retirement = cir.expected_consumer_retirements.items.items[
-        cause_retirement.index
-    ];
-    try std.testing.expect(!projection_retirement.hasLegalTags());
-    try std.testing.expectEqual(@intFromEnum(topology.record_expr), projection_retirement.retired_node);
-    try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumerRetirement.OwnerKind.expression,
-        projection_retirement.decodedOwnerKind().?,
-    );
-    const original_owner_node = cir.store.nodes.get(ModuleEnv.nodeIdxFrom(topology.record_expr));
-    const original_owner_payload: [4]u32 = @bitCast(original_owner_node.getPayload());
-    try std.testing.expectEqual(@intFromEnum(original_owner_node.tag), projection_retirement.original_node_tag);
-    try std.testing.expectEqualSlices(
-        u32,
-        &original_owner_payload,
-        &projection_retirement.original_payload,
-    );
-    try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumerRetirement.Kind.checker_rewrite_expected,
-        projection_retirement.decodedKind().?,
-    );
-    try std.testing.expectEqual(@as(u32, 0), projection_retirement.retired_consumers_start);
-    try std.testing.expectEqual(@as(u32, 0), projection_retirement.retired_consumers_len);
-    try std.testing.expectEqual(ModuleEnv.ExpectedConsumerRetirement.none, projection_retirement.diagnostic_index);
-    try std.testing.expectEqual(@as(u32, 0), projection_retirement.expected_failures_start);
-    try std.testing.expectEqual(@as(u32, 0), projection_retirement.expected_failures_len);
-    try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumerRetirement.none,
-        projection_retirement.rejection_owner_kind,
-    );
-    try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumerRetirement.none,
-        projection_retirement.rejection_owner_index,
-    );
-    try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumerRetirement.none,
-        projection_retirement.rejection_subject_var,
-    );
-    try std.testing.expectEqual(@as(u32, 0), projection_retirement.reserved_0);
-    try std.testing.expectEqual(@as(u32, 0), projection_retirement.reserved_1);
-    try std.testing.expectEqual(@as(usize, 1), checker.aggregate_expected_retirement_drafts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_consumer_retirements.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.aggregate_expected_retirement_drafts.items.len);
     try std.testing.expectEqual(@as(usize, 0), cir.expected_failures.items.items.len);
     try std.testing.expectEqual(@as(usize, 0), cir.expected_retirement_failures.items.items.len);
     try std.testing.expectEqual(@as(usize, 0), cir.expected_retired_consumers.items.items.len);
-    const projection_draft = checker.aggregate_expected_retirement_drafts.items[0];
-    try std.testing.expectEqual(topology.record_expr, projection_draft.owner_expr);
-    try std.testing.expectEqual(cause_retirement.index, projection_draft.retirement_index);
-    try std.testing.expectEqual(slot.expected_plan, projection_draft.plans_start);
-    try std.testing.expectEqual(@as(u32, 1), projection_draft.plans_len);
-    try std.testing.expectEqual(
-        ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_projection_mismatch,
-        projection_draft.retired_reason,
-    );
 
     failure_stage = "refinement source before body";
     const refinement_before_body: ?RecordUpdateProjectionRefinementPhase = switch (fixture) {
@@ -73575,13 +74179,10 @@ fn calibrateRecordUpdateProjectionRelation(
         problems_before + @as(usize, @intFromBool(fixture != .optional_width_refinement)),
         checker.problems.problems.items.len,
     );
-    try std.testing.expect(expectedCauseOwnersEqual(
-        projection_cause,
-        switch (record_frame.checked_status) {
-            .established => return error.TestUnexpectedResult,
-            .checked_error => |cause| cause,
-        },
-    ));
+    switch (record_frame.checked_status) {
+        .established => {},
+        .checked_error => return error.TestUnexpectedResult,
+    }
     const current_root_publication = StagedRecordUpdateRootPublicationProof{
         .result_var = base_publication.root.result_var,
         .step = cir.where_marker_copy_steps.items.items[base_stage.root.copy_steps_start],
@@ -73615,15 +74216,8 @@ fn calibrateRecordUpdateProjectionRelation(
         base_stage.registrations_start + 1
     ];
     try std.testing.expect(std.meta.eql(field_registration, current_field_registration));
-    try std.testing.expectEqualSlices(
-        u8,
-        std.mem.asBytes(&projection_retirement),
-        std.mem.asBytes(&cir.expected_consumer_retirements.items.items[cause_retirement.index]),
-    );
-    try std.testing.expect(std.meta.eql(
-        projection_draft,
-        checker.aggregate_expected_retirement_drafts.items[0],
-    ));
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_consumer_retirements.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.aggregate_expected_retirement_drafts.items.len);
     failure_stage = "owner node after relations";
     try owner_node.expectEqual(cir);
     failure_stage = "base node after relations";
@@ -73695,9 +74289,6 @@ fn calibrateRecordUpdateProjectionRelation(
         .base_publication = base_publication,
         .field_plan = field_plan,
         .field_registration = field_registration,
-        .projection_retirement = projection_retirement,
-        .projection_draft = projection_draft,
-        .projection_cause = projection_cause,
         .actual_relation = recordUpdateProjectionRelationResult(actual_result),
         .final_relation = recordUpdateProjectionRelationResult(final_result),
         .diagnostic_index = diagnostic_index,
@@ -73735,19 +74326,6 @@ fn expectRecordUpdateProjectionRelationProofsEqual(
     try std.testing.expect(std.meta.eql(
         poison.field_registration,
         no_report.field_registration,
-    ));
-    try std.testing.expectEqualSlices(
-        u8,
-        std.mem.asBytes(&poison.projection_retirement),
-        std.mem.asBytes(&no_report.projection_retirement),
-    );
-    try std.testing.expect(std.meta.eql(
-        poison.projection_draft,
-        no_report.projection_draft,
-    ));
-    try std.testing.expect(expectedCauseOwnersEqual(
-        poison.projection_cause,
-        no_report.projection_cause,
     ));
     try std.testing.expectEqual(poison.base_raw_var, no_report.base_raw_var);
     try std.testing.expectEqual(poison.base_selected_root, no_report.base_selected_root);
@@ -73869,13 +74447,15 @@ fn expectRecordUpdateProjectionRelationFixture(
         &poison_test_env,
         fixture,
         .production_poison,
-    );
+        .full_relations,
+    ) orelse return error.TestUnexpectedResult;
     failure_stage = "option-preserving no-report relation";
     const no_report = try calibrateRecordUpdateProjectionRelation(
         &no_report_test_env,
         fixture,
         .isolated_write_no_report,
-    );
+        .full_relations,
+    ) orelse return error.TestUnexpectedResult;
     errdefer std.debug.print(
         "record-update projection observed {s}: poison={s}/{s}/{s}/{s}/share={any},{any}, no-report={s}/{s}/{s}/{s}/share={any},{any}\n",
         .{
@@ -73923,17 +74503,13 @@ fn expectRecordUpdateProjectionRelationFixture(
     };
     try std.testing.expectEqual(expected_base_plan, poison.base_publication.registration.plan_index);
     try std.testing.expectEqual(expected_base_plan + 1, poison.field_registration.plan_index);
-    try std.testing.expectEqual(@as(u32, 0), poison.projection_draft.retirement_index);
-    try std.testing.expectEqual(
-        expected_base_plan + 1,
-        poison.projection_draft.plans_start,
-    );
     try std.testing.expectEqual(
         @intFromEnum(poison.topology.base_expr),
         poison.base_publication.plan.raw_consumer_var,
     );
-    try std.testing.expect(
-        poison.field_plan.raw_consumer_var != @intFromEnum(poison.topology.field_expr),
+    try std.testing.expectEqual(
+        @intFromEnum(poison.topology.field_expr),
+        poison.field_plan.raw_consumer_var,
     );
     try std.testing.expectEqual(
         poison.base_selected_root,
@@ -74162,11 +74738,11 @@ fn expectRecordUpdateProjectionRelationFixture(
                 !poison_test_env.checker.record_update_expected_plan_registrations_consumed,
             );
             try std.testing.expectEqual(
-                @as(usize, 1),
+                @as(usize, 0),
                 poison_test_env.module_env.expected_consumer_retirements.items.items.len,
             );
             try std.testing.expectEqual(
-                @as(usize, 1),
+                @as(usize, 0),
                 poison_test_env.checker.aggregate_expected_retirement_drafts.items.len,
             );
             try std.testing.expectEqual(
@@ -74217,6 +74793,746 @@ test "record-update projection refinement: optional-width body makes the owning 
         record_update_projection_refinement_source,
         .optional_width_refinement,
     );
+}
+
+test "record-update projection availability: outer local transaction restores unavailable settlement" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initUncheckedForTesting(
+        "RecordUpdateProjectionAvailabilityOuterRollback",
+        record_update_projection_refinement_source,
+    );
+    defer test_env.deinit();
+    try test_env.assertCanErrors(&.{});
+    const result = try calibrateRecordUpdateProjectionRelation(
+        &test_env,
+        .optional_width_refinement,
+        .production_poison,
+        .availability_outer_rollback,
+    );
+    try std.testing.expect(result == null);
+}
+
+const RecordUpdateProjectionAvailabilityProof = struct {
+    base_plan_index: u32,
+    field_plan_index: u32,
+    base_plan: ModuleEnv.ExpectedConsumptionPlan,
+    field_plan: ModuleEnv.ExpectedConsumptionPlan,
+
+    fn expectEqual(self: @This(), other: @This()) !void {
+        try std.testing.expectEqual(self.base_plan_index, other.base_plan_index);
+        try std.testing.expectEqual(self.field_plan_index, other.field_plan_index);
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&self.base_plan),
+            std.mem.asBytes(&other.base_plan),
+        );
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&self.field_plan),
+            std.mem.asBytes(&other.field_plan),
+        );
+    }
+};
+
+fn expectRecordUpdateProjectionAvailabilityLocal(
+    cir: *const ModuleEnv,
+    topology: RecordUpdateProjectionRelationTopology,
+) !RecordUpdateProjectionAvailabilityProof {
+    if (topology.refinement == null) return error.TestUnexpectedResult;
+    const plans = try uniqueRecordUpdateOwnerPlanSet(cir, topology.record_expr, 1);
+    try std.testing.expectEqual(@as(usize, 2), cir.expected_consumption_plans.items.items.len);
+    try std.testing.expectEqual(@as(u32, 0), plans.base);
+    try std.testing.expectEqual(@as(u32, 1), plans.fields[0]);
+
+    const base_plan = cir.expected_consumption_plans.items.items[plans.base];
+    try std.testing.expect(base_plan.hasLegalTags());
+    try std.testing.expectEqual(@intFromEnum(topology.record_expr), base_plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(topology.base_expr), base_plan.site_node);
+    try std.testing.expectEqual(@intFromEnum(topology.base_expr), base_plan.raw_consumer_var);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.source_root_copy,
+        base_plan.decodedOutcome().?,
+    );
+    try std.testing.expect(base_plan.decodedReason() == null);
+    try std.testing.expect(expectedCauseOwnersEqual(
+        base_plan.failure_owner,
+        ModuleEnv.CauseOwner.inactive(),
+    ));
+    try std.testing.expect(expectedRecordUpdateBasePlanMatchesStep(cir, base_plan));
+    const base_authority = expectedRecordUpdateBaseAuthority(base_plan) orelse
+        return error.TestUnexpectedResult;
+
+    const field_plan = cir.expected_consumption_plans.items.items[plans.fields[0]];
+    try std.testing.expect(field_plan.hasLegalTags());
+    try std.testing.expectEqual(@intFromEnum(topology.record_expr), field_plan.owner_node);
+    try std.testing.expectEqual(@intFromEnum(topology.field_expr), field_plan.site_node);
+    try std.testing.expectEqual(@intFromEnum(topology.field_expr), field_plan.raw_consumer_var);
+    try std.testing.expectEqual(@as(u32, 0), field_plan.slot);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Role.record_update_field,
+        field_plan.decodedRole().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Outcome.not_projected,
+        field_plan.decodedOutcome().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_projection_unavailable,
+        field_plan.decodedReason().?,
+    );
+    try std.testing.expect(expectedMarkerAuthoritiesEqual(
+        base_authority,
+        field_plan.parent_authority,
+    ));
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, field_plan.produced_copy_step);
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        field_plan.produced_occurrence_offset,
+    );
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, field_plan.produced_side);
+    try std.testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.none, field_plan.call_root_plan_index);
+    try std.testing.expect(expectedCauseOwnersEqual(
+        field_plan.failure_owner,
+        ModuleEnv.CauseOwner.inactive(),
+    ));
+    try std.testing.expectEqual(
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        field_plan.failure_cause_plan_index,
+    );
+    try std.testing.expect(field_plan.decodedSourceRetirementIndex() == null);
+    try std.testing.expect(expectedFreshShapePlanMatchesCir(cir, field_plan));
+    try std.testing.expect(expectedRecordUpdateFieldBeginsAtBase(
+        cir,
+        plans.fields[0],
+        field_plan,
+        base_authority,
+    ));
+
+    for (cir.where_marker_copy_steps.items.items) |step| {
+        switch (step.decodedKind() orelse return error.TestUnexpectedResult) {
+            .aggregate_expected_projection => try std.testing.expect(
+                step.origin.aggregate_expected_projection.expected_plan_index != plans.fields[0],
+            ),
+            .aggregate_fresh_shape_child => {
+                const origin = step.origin.aggregate_fresh_shape_child;
+                try std.testing.expect(
+                    plans.fields[0] < origin.expected_plans_start or
+                        plans.fields[0] >= origin.expected_plans_start + origin.expected_plans_len,
+                );
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(cir.store.getExpr(topology.record_expr) == .e_record);
+    try std.testing.expect(cir.store.getExpr(topology.base_expr) == .e_lookup_local);
+    try std.testing.expect(cir.store.getExpr(topology.field_expr) == .e_block);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_failures.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_consumer_retirements.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_retirement_failures.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_retired_consumers.items.items.len);
+    try std.testing.expect(validateExpectedFailureRetirementLocal(&cir.types, cir));
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&cir.types, cir));
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&cir.types, cir));
+
+    return .{
+        .base_plan_index = plans.base,
+        .field_plan_index = plans.fields[0],
+        .base_plan = base_plan,
+        .field_plan = field_plan,
+    };
+}
+
+fn expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+    cir: *const ModuleEnv,
+    fresh_cir: *const ModuleEnv,
+    builtin_env: *const ModuleEnv,
+    topology: RecordUpdateProjectionRelationTopology,
+    fresh_context: ImportResolution,
+) !RecordUpdateProjectionAvailabilityProof {
+    if (fresh_context.resolution_env != fresh_cir or
+        fresh_context.expected_failure_replay != .fresh_canonical)
+    {
+        return error.TestUnexpectedResult;
+    }
+    const proof = try expectRecordUpdateProjectionAvailabilityLocal(cir, topology);
+    try std.testing.expect(expectedFreshShapePlanMatchesCir(fresh_cir, proof.field_plan));
+    try validateExpectedFailureContext(cir, fresh_context);
+    try validateWhereMarkerCopySourceNamespaces(cir, builtin_env, fresh_context);
+    return proof;
+}
+
+fn expectRecordUpdateProjectionAvailabilityProducedReplay(
+    checker: *const Self,
+    builtin_env: *const ModuleEnv,
+) !void {
+    const context = ImportResolution.producedSupplied(
+        checker.cir,
+        .{
+            .envs = checker.imported_modules,
+            .modules = checker.validated_imported_modules,
+        },
+        .{
+            .envs = checker.owner_modules,
+            .modules = checker.validated_owner_modules,
+        },
+        checker.platform_dependency_index,
+    );
+    if (context.resolution_env != checker.cir or
+        context.expected_failure_replay != .produced)
+    {
+        return error.TestUnexpectedResult;
+    }
+    try validateExpectedFailureContext(checker.cir, context);
+    try validateWhereMarkerCopySourceNamespaces(checker.cir, builtin_env, context);
+    const capability = try checker.validatedModule();
+    try std.testing.expectEqual(checker.cir, try capability.validate());
+}
+
+fn expectRecordUpdateProjectionAvailabilityTransientState(checker: *const Self) !void {
+    try std.testing.expectEqual(@as(usize, 0), checker.record_update_expected_plan_registrations.items.len);
+    try std.testing.expect(checker.record_update_expected_plan_registrations_consumed);
+    try std.testing.expectEqual(@as(usize, 0), checker.record_update_owner_retirement_drafts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.aggregate_expected_retirement_drafts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.annotation_expected_failure_drafts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.pending_record_updates.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.erroneous_value_exprs.count());
+    try std.testing.expectEqual(@as(usize, 0), checker.erroneous_value_patterns.count());
+}
+
+fn expectRecordUpdateProjectionAvailabilityCheckedContexts(
+    checked: anytype,
+    fresh_env: anytype,
+    topology: RecordUpdateProjectionRelationTopology,
+) !RecordUpdateProjectionAvailabilityProof {
+    try std.testing.expect(checked.module_env != fresh_env.module_env);
+    const proof = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+        checked.module_env,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(fresh_env),
+    );
+    try expectRecordUpdateProjectionAvailabilityTransientState(&checked.checker);
+    try expectRecordUpdateProjectionAvailabilityProducedReplay(
+        &checked.checker,
+        checked.builtin_module.env,
+    );
+    return proof;
+}
+
+test "record-update projection availability: optional-width refinement survives the full checker tail" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const module_name = "RecordUpdateProjectionAvailability";
+    var failure_stage: []const u8 = "checked source";
+    errdefer std.debug.print(
+        "record-update projection availability full-tail test failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var checked = try TestEnv.init(module_name, record_update_projection_refinement_source);
+    defer checked.deinit();
+    try checked.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), checked.checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try checked.typeProblemCount());
+
+    failure_stage = "distinct fresh source";
+    var fresh_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+        module_name,
+        record_update_projection_refinement_source,
+        checked.builtin_module,
+        checked.builtin_validation,
+        compiled_builtins.builtinIndices(CIR),
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{});
+    const topology = try recordUpdateProjectionRelationTopology(
+        &fresh_env,
+        .optional_width_refinement,
+    );
+    try std.testing.expect(std.meta.eql(
+        topology,
+        try recordUpdateProjectionRelationTopology(&checked, .optional_width_refinement),
+    ));
+
+    failure_stage = "local and fresh replay";
+    _ = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+        checked.module_env,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try expectRecordUpdateProjectionAvailabilityTransientState(&checked.checker);
+
+    failure_stage = "produced replay";
+    try expectRecordUpdateProjectionAvailabilityProducedReplay(
+        &checked.checker,
+        checked.builtin_module.env,
+    );
+}
+
+test "record-update projection availability: unavailable field plan has closed coordinates" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const module_name = "RecordUpdateProjectionAvailabilityCoordinates";
+    var failure_stage: []const u8 = "checked source";
+    errdefer std.debug.print(
+        "record-update projection availability coordinate test failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var checked = try TestEnv.init(module_name, record_update_projection_refinement_source);
+    defer checked.deinit();
+    try checked.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), checked.checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try checked.typeProblemCount());
+
+    failure_stage = "distinct fresh source";
+    var fresh_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+        module_name,
+        record_update_projection_refinement_source,
+        checked.builtin_module,
+        checked.builtin_validation,
+        compiled_builtins.builtinIndices(CIR),
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{});
+    const topology = try recordUpdateProjectionRelationTopology(
+        &fresh_env,
+        .optional_width_refinement,
+    );
+    try std.testing.expect(std.meta.eql(
+        topology,
+        try recordUpdateProjectionRelationTopology(&checked, .optional_width_refinement),
+    ));
+
+    failure_stage = "baseline contexts";
+    const baseline = try expectRecordUpdateProjectionAvailabilityCheckedContexts(
+        &checked,
+        &fresh_env,
+        topology,
+    );
+    const plans = checked.module_env.expected_consumption_plans.items.items;
+    const saved_field_plan = plans[baseline.field_plan_index];
+    const base_plan = plans[baseline.base_plan_index];
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyOccurrenceSide.destination,
+        base_plan.decodedProducedSide().?,
+    );
+    const Corruption = enum {
+        raw,
+        site_and_raw,
+        slot,
+        owner,
+        role,
+        parent,
+        cause,
+        predecessor,
+        produced,
+        call,
+        source_retirement,
+        retirement_backed_relation_failure,
+        superseded_projection_failure_tuple,
+    };
+    inline for (std.enums.values(Corruption)) |corruption| {
+        failure_stage = @tagName(corruption);
+        const field_plan = &plans[baseline.field_plan_index];
+        field_plan.* = saved_field_plan;
+        defer field_plan.* = saved_field_plan;
+        const tags_remain_legal = switch (corruption) {
+            .raw => blk: {
+                field_plan.raw_consumer_var = @intFromEnum(topology.literal_expr);
+                break :blk false;
+            },
+            .site_and_raw => blk: {
+                field_plan.site_node = @intFromEnum(topology.literal_expr);
+                field_plan.raw_consumer_var = @intFromEnum(topology.literal_expr);
+                break :blk true;
+            },
+            .slot => blk: {
+                field_plan.slot = 1;
+                break :blk true;
+            },
+            .owner => blk: {
+                field_plan.owner_node = @intFromEnum(topology.base_expr);
+                break :blk true;
+            },
+            .role => blk: {
+                field_plan.role = @intFromEnum(ModuleEnv.ExpectedConsumptionPlan.Role.record_field);
+                break :blk false;
+            },
+            .parent => blk: {
+                field_plan.parent_authority.payload.copy_occurrence.side = @intFromEnum(
+                    ModuleEnv.WhereMarkerCopyOccurrenceSide.source,
+                );
+                break :blk true;
+            },
+            .cause => blk: {
+                field_plan.failure_owner = ModuleEnv.CauseOwner.expectedFailure(0);
+                break :blk false;
+            },
+            .predecessor => blk: {
+                field_plan.failure_cause_plan_index = baseline.base_plan_index;
+                break :blk false;
+            },
+            .produced => blk: {
+                field_plan.produced_copy_step = base_plan.produced_copy_step;
+                field_plan.produced_occurrence_offset = base_plan.produced_occurrence_offset;
+                field_plan.produced_side = base_plan.produced_side;
+                break :blk false;
+            },
+            .call => blk: {
+                field_plan.call_root_plan_index = baseline.base_plan_index;
+                break :blk false;
+            },
+            .source_retirement => blk: {
+                field_plan.source_retirement_index_plus_one = 1;
+                break :blk false;
+            },
+            .retirement_backed_relation_failure => blk: {
+                field_plan.outcome = @intFromEnum(
+                    ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error,
+                );
+                field_plan.reason = @intFromEnum(
+                    ModuleEnv.ExpectedConsumptionPlan.Reason.record_update_field_relation_rejected,
+                );
+                field_plan.failure_owner = ModuleEnv.CauseOwner.expectedConsumerRetirement(0);
+                break :blk true;
+            },
+            .superseded_projection_failure_tuple => blk: {
+                field_plan.outcome = @intFromEnum(
+                    ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error,
+                );
+                field_plan.failure_owner = ModuleEnv.CauseOwner.expectedConsumerRetirement(0);
+                break :blk false;
+            },
+        };
+        try std.testing.expectEqual(tags_remain_legal, field_plan.hasLegalTags());
+        try std.testing.expect(!validateExpectedRecordUpdatePlans(
+            &checked.module_env.types,
+            checked.module_env,
+        ));
+
+        field_plan.* = saved_field_plan;
+        const restored = try expectRecordUpdateProjectionAvailabilityCheckedContexts(
+            &checked,
+            &fresh_env,
+            topology,
+        );
+        try baseline.expectEqual(restored);
+    }
+}
+
+test "record-update projection availability: rebuild and serialization preserve unavailable fields" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const module_name = "RecordUpdateProjectionAvailabilityRebuildSerde";
+    var failure_stage: []const u8 = "checked source";
+    errdefer std.debug.print(
+        "record-update projection availability rebuild/serde test failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var checked = try TestEnv.init(module_name, record_update_projection_refinement_source);
+    defer checked.deinit();
+    try checked.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), checked.checker.problems.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try checked.typeProblemCount());
+
+    failure_stage = "distinct fresh source";
+    var fresh_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+        module_name,
+        record_update_projection_refinement_source,
+        checked.builtin_module,
+        checked.builtin_validation,
+        compiled_builtins.builtinIndices(CIR),
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{});
+    const fresh_topology = try recordUpdateProjectionRelationTopology(
+        &fresh_env,
+        .optional_width_refinement,
+    );
+    try std.testing.expect(checked.module_env != fresh_env.module_env);
+    try std.testing.expect(std.meta.eql(
+        fresh_topology,
+        try recordUpdateProjectionRelationTopology(&checked, .optional_width_refinement),
+    ));
+
+    failure_stage = "terminal baseline";
+    const baseline_proof = try expectRecordUpdateProjectionAvailabilityCheckedContexts(
+        &checked,
+        &fresh_env,
+        fresh_topology,
+    );
+    try std.testing.expect(validateExpectedRecordUpdatePlans(
+        &checked.module_env.types,
+        checked.module_env,
+    ));
+    try std.testing.expect(validateLocalW6bProof(
+        &checked.module_env.types,
+        checked.module_env,
+    ));
+    const canonical_baseline = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        checked.module_env,
+    );
+    defer std.testing.allocator.free(canonical_baseline);
+
+    failure_stage = "first repeated rebuild";
+    try checked.checker.rebuildCheckedBoundaryWhereMethodState();
+    const first_topology = try recordUpdateProjectionRelationTopology(
+        &checked,
+        .optional_width_refinement,
+    );
+    try std.testing.expect(std.meta.eql(fresh_topology, first_topology));
+    const first_proof = try expectRecordUpdateProjectionAvailabilityCheckedContexts(
+        &checked,
+        &fresh_env,
+        first_topology,
+    );
+    try baseline_proof.expectEqual(first_proof);
+    const canonical_first = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        checked.module_env,
+    );
+    defer std.testing.allocator.free(canonical_first);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, canonical_first);
+
+    failure_stage = "second repeated rebuild";
+    try checked.checker.rebuildCheckedBoundaryWhereMethodState();
+    const second_topology = try recordUpdateProjectionRelationTopology(
+        &checked,
+        .optional_width_refinement,
+    );
+    try std.testing.expect(std.meta.eql(fresh_topology, second_topology));
+    const second_proof = try expectRecordUpdateProjectionAvailabilityCheckedContexts(
+        &checked,
+        &fresh_env,
+        second_topology,
+    );
+    try baseline_proof.expectEqual(second_proof);
+    const canonical_second = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        checked.module_env,
+    );
+    defer std.testing.allocator.free(canonical_second);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, canonical_second);
+
+    failure_stage = "aligned serialization";
+    const buffer = try serializeModuleEnvForDeserializationTest(
+        std.testing.allocator,
+        checked.module_env,
+    );
+    defer std.testing.allocator.free(buffer);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, buffer);
+    const buffer_start = @intFromPtr(buffer.ptr);
+    const buffer_end = std.math.add(usize, buffer_start, buffer.len) catch
+        return error.TestUnexpectedResult;
+    const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized.validate(buffer.len);
+
+    failure_stage = "readonly deserialization";
+    const readonly = try serialized.deserializeInto(
+        buffer_start,
+        std.testing.allocator,
+        record_update_projection_refinement_source,
+        module_name,
+    );
+    defer {
+        readonly.imports.deinitMapOnly(std.testing.allocator);
+        readonly.import_mapping.deinit();
+        std.testing.allocator.destroy(readonly);
+    }
+    try std.testing.expect(!readonly.w6b_semantically_validated);
+    try std.testing.expect(readonly != checked.module_env);
+    try std.testing.expect(readonly != fresh_env.module_env);
+    const readonly_plan_address = @intFromPtr(
+        readonly.expected_consumption_plans.items.items.ptr,
+    );
+    const readonly_node_address = @intFromPtr(readonly.store.nodes.items.bytes);
+    const readonly_type_address = @intFromPtr(
+        readonly.types.slots.backing.items.items.ptr,
+    );
+    try std.testing.expect(readonly_plan_address >= buffer_start and
+        readonly_plan_address < buffer_end);
+    try std.testing.expect(readonly_node_address >= buffer_start and
+        readonly_node_address < buffer_end);
+    try std.testing.expect(readonly_type_address >= buffer_start and
+        readonly_type_address < buffer_end);
+    const readonly_proof = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+        readonly,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        fresh_topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try baseline_proof.expectEqual(readonly_proof);
+    const readonly_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        readonly,
+    );
+    defer std.testing.allocator.free(readonly_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, readonly_bytes);
+
+    failure_stage = "mutable deserialization";
+    const mutable = try serialized.deserializeWithMutableTypes(
+        buffer_start,
+        std.testing.allocator,
+        record_update_projection_refinement_source,
+        module_name,
+    );
+    defer {
+        mutable.deinitCachedModule();
+        std.testing.allocator.destroy(mutable);
+    }
+    try std.testing.expect(!mutable.w6b_semantically_validated);
+    try std.testing.expect(mutable != checked.module_env);
+    try std.testing.expect(mutable != fresh_env.module_env);
+    try std.testing.expect(mutable != readonly);
+    const mutable_plan_address = @intFromPtr(
+        mutable.expected_consumption_plans.items.items.ptr,
+    );
+    const mutable_node_address = @intFromPtr(mutable.store.nodes.items.bytes);
+    const mutable_type_address = @intFromPtr(
+        mutable.types.slots.backing.items.items.ptr,
+    );
+    try std.testing.expect(mutable_plan_address < buffer_start or
+        mutable_plan_address >= buffer_end);
+    try std.testing.expectEqual(readonly_node_address, mutable_node_address);
+    try std.testing.expect(mutable_node_address >= buffer_start and
+        mutable_node_address < buffer_end);
+    try std.testing.expect(mutable_type_address < buffer_start or
+        mutable_type_address >= buffer_end);
+    const mutable_proof = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+        mutable,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        fresh_topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try baseline_proof.expectEqual(mutable_proof);
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&mutable.types, mutable));
+    try std.testing.expect(validateLocalW6bProof(&mutable.types, mutable));
+    const mutable_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        mutable,
+    );
+    defer std.testing.allocator.free(mutable_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, mutable_bytes);
+
+    failure_stage = "mutable parent-authority isolation";
+    const mutable_plans = mutable.expected_consumption_plans.items.items;
+    {
+        const saved_field_plan = mutable_plans[mutable_proof.field_plan_index];
+        defer mutable_plans[mutable_proof.field_plan_index] = saved_field_plan;
+        mutable_plans[mutable_proof.field_plan_index]
+            .parent_authority.payload.copy_occurrence.side = @intFromEnum(
+            ModuleEnv.WhereMarkerCopyOccurrenceSide.source,
+        );
+        const changed_field_plan = mutable_plans[mutable_proof.field_plan_index];
+        try std.testing.expect(changed_field_plan.hasLegalTags());
+        try std.testing.expect(!validateExpectedRecordUpdatePlans(&mutable.types, mutable));
+        try std.testing.expect(!validateLocalW6bProof(&mutable.types, mutable));
+
+        const original_during = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+            checked.module_env,
+            fresh_env.module_env,
+            checked.builtin_module.env,
+            fresh_topology,
+            recordUpdateRootAuthorityFreshContext(&fresh_env),
+        );
+        const readonly_during = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+            readonly,
+            fresh_env.module_env,
+            checked.builtin_module.env,
+            fresh_topology,
+            recordUpdateRootAuthorityFreshContext(&fresh_env),
+        );
+        try baseline_proof.expectEqual(original_during);
+        try baseline_proof.expectEqual(readonly_during);
+        try expectRecordUpdateProjectionAvailabilityTransientState(&checked.checker);
+        try expectRecordUpdateProjectionAvailabilityProducedReplay(
+            &checked.checker,
+            checked.builtin_module.env,
+        );
+        try serialized.validate(buffer.len);
+        try std.testing.expectEqualSlices(u8, canonical_baseline, buffer);
+
+        const original_during_bytes = try serializeModuleEnvForCanonicalComparison(
+            std.testing.allocator,
+            checked.module_env,
+        );
+        defer std.testing.allocator.free(original_during_bytes);
+        const readonly_during_bytes = try serializeModuleEnvForCanonicalComparison(
+            std.testing.allocator,
+            readonly,
+        );
+        defer std.testing.allocator.free(readonly_during_bytes);
+        const mutable_corrupt_bytes = try serializeModuleEnvForCanonicalComparison(
+            std.testing.allocator,
+            mutable,
+        );
+        defer std.testing.allocator.free(mutable_corrupt_bytes);
+        try std.testing.expectEqualSlices(u8, canonical_baseline, original_during_bytes);
+        try std.testing.expectEqualSlices(u8, canonical_baseline, readonly_during_bytes);
+        try std.testing.expect(!std.mem.eql(u8, canonical_baseline, mutable_corrupt_bytes));
+    }
+
+    failure_stage = "mutable restoration";
+    try std.testing.expect(validateExpectedRecordUpdatePlans(&mutable.types, mutable));
+    try std.testing.expect(validateLocalW6bProof(&mutable.types, mutable));
+    const mutable_restored = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+        mutable,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        fresh_topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    const original_restored = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+        checked.module_env,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        fresh_topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    const readonly_restored = try expectRecordUpdateProjectionAvailabilityLocalAndFresh(
+        readonly,
+        fresh_env.module_env,
+        checked.builtin_module.env,
+        fresh_topology,
+        recordUpdateRootAuthorityFreshContext(&fresh_env),
+    );
+    try baseline_proof.expectEqual(mutable_restored);
+    try baseline_proof.expectEqual(original_restored);
+    try baseline_proof.expectEqual(readonly_restored);
+    try expectRecordUpdateProjectionAvailabilityTransientState(&checked.checker);
+    try expectRecordUpdateProjectionAvailabilityProducedReplay(
+        &checked.checker,
+        checked.builtin_module.env,
+    );
+    try serialized.validate(buffer.len);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, buffer);
+    const mutable_restored_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        mutable,
+    );
+    defer std.testing.allocator.free(mutable_restored_bytes);
+    const original_restored_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        checked.module_env,
+    );
+    defer std.testing.allocator.free(original_restored_bytes);
+    const readonly_restored_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        readonly,
+    );
+    defer std.testing.allocator.free(readonly_restored_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, mutable_restored_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, original_restored_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_baseline, readonly_restored_bytes);
 }
 
 const RecordUpdatePreexistingMalformedBaseTopology = struct {
@@ -77512,6 +78828,593 @@ test "record-update root authority: direct and redirected selections survive reb
     );
     defer admitted.deinit();
     try std.testing.expectEqual(mutable, try admitted.capability().validate());
+}
+
+fn expectRecordUpdateProjectionOriginContexts(
+    checked: anytype,
+    fresh_env: anytype,
+) !void {
+    try std.testing.expect(checked.module_env != fresh_env.module_env);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(
+        &checked.module_env.types,
+        checked.module_env,
+    ));
+    const fresh_context = recordUpdateRootAuthorityFreshContext(fresh_env);
+    try std.testing.expectEqual(fresh_env.module_env, fresh_context.resolution_env);
+    try std.testing.expectEqual(
+        ImportResolution.ExpectedFailureReplay.fresh_canonical,
+        fresh_context.expected_failure_replay,
+    );
+    try validateExpectedFailureContext(checked.module_env, fresh_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        checked.module_env,
+        checked.builtin_module.env,
+        fresh_context,
+    );
+
+    const produced_context = ImportResolution.producedSupplied(
+        checked.module_env,
+        .{
+            .envs = checked.checker.imported_modules,
+            .modules = checked.checker.validated_imported_modules,
+        },
+        .{
+            .envs = checked.checker.owner_modules,
+            .modules = checked.checker.validated_owner_modules,
+        },
+        checked.checker.platform_dependency_index,
+    );
+    try validateExpectedFailureContext(checked.module_env, produced_context);
+    try validateWhereMarkerCopySourceNamespaces(
+        checked.module_env,
+        checked.builtin_module.env,
+        produced_context,
+    );
+    const capability = try checked.checker.validatedModule();
+    try std.testing.expectEqual(checked.module_env, try capability.validate());
+}
+
+test "record-update projection availability: aggregate projection origin names its exact owner plan" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const module_name = "AggregateExpectedProjectionOriginInverse";
+    var failure_stage: []const u8 = "checked aggregate fixture";
+    errdefer std.debug.print(
+        "aggregate Expected projection inverse failed at {s}\n",
+        .{failure_stage},
+    );
+
+    var checked = try TestEnv.init(module_name, aggregate_expected_projection_inverse_test_source);
+    defer checked.deinit();
+    try checked.assertNoErrors();
+    var fresh_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+        module_name,
+        aggregate_expected_projection_inverse_test_source,
+        checked.builtin_module,
+        checked.builtin_validation,
+        compiled_builtins.builtinIndices(CIR),
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{});
+
+    failure_stage = "literal owner and anchored child selection";
+    const selection = selection: {
+        const plans = checked.module_env.expected_consumption_plans.items.items;
+        for (checked.module_env.where_marker_copy_steps.items.items, 0..) |step, step_index| {
+            if (step.decodedKind() != .aggregate_expected_projection) continue;
+            const origin = step.origin.aggregate_expected_projection;
+            if (origin.expected_plan_index >= plans.len) continue;
+            const owner_plan = plans[origin.expected_plan_index];
+            if (owner_plan.decodedRole() != .aggregate_owner or
+                owner_plan.decodedOutcome() != .anchored or
+                owner_plan.owner_node != origin.consumer_node)
+            {
+                continue;
+            }
+            const owner = checked.module_env.store.getExpr(@enumFromInt(owner_plan.owner_node));
+            if (owner != .e_record or owner.e_record.ext != null) continue;
+            for (plans, 0..) |child_plan, child_plan_index| {
+                if (child_plan.owner_node != owner_plan.owner_node or
+                    child_plan.decodedRole() != .record_field or
+                    child_plan.decodedOutcome() != .anchored)
+                {
+                    continue;
+                }
+                break :selection .{
+                    .step_index = @as(u32, @intCast(step_index)),
+                    .owner_plan_index = origin.expected_plan_index,
+                    .child_plan_index = @as(u32, @intCast(child_plan_index)),
+                };
+            }
+        }
+        return error.TestUnexpectedResult;
+    };
+    const owner_plan = checked.module_env.expected_consumption_plans.items.items[
+        selection.owner_plan_index
+    ];
+    const child_plan = checked.module_env.expected_consumption_plans.items.items[
+        selection.child_plan_index
+    ];
+    try std.testing.expect(owner_plan.hasLegalTags());
+    try std.testing.expect(child_plan.hasLegalTags());
+    try std.testing.expectEqual(owner_plan.owner_node, child_plan.owner_node);
+    try std.testing.expect(owner_plan.site_node != child_plan.site_node);
+    try expectRecordUpdateProjectionOriginContexts(&checked, &fresh_env);
+
+    failure_stage = "same-owner anchored child retarget";
+    const projection = &checked.module_env.where_marker_copy_steps.items.items[
+        selection.step_index
+    ];
+    const saved_origin = projection.origin.aggregate_expected_projection;
+    defer projection.origin.aggregate_expected_projection = saved_origin;
+    projection.origin.aggregate_expected_projection.expected_plan_index =
+        selection.child_plan_index;
+    try std.testing.expect(!validateWhereMarkerCopyProofLocal(
+        &checked.module_env.types,
+        checked.module_env,
+    ));
+    projection.origin.aggregate_expected_projection = saved_origin;
+
+    failure_stage = "restored aggregate contexts";
+    try expectRecordUpdateProjectionOriginContexts(&checked, &fresh_env);
+}
+
+test "record-update projection availability: direct and support origins bind their exact endpoints" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const module_name = "RecordUpdateProjectionOriginInverse";
+    var failure_stage: []const u8 = "checked record-update fixture";
+    var diagnostic_form_count: usize = 0;
+    var diagnostic_support: [3]bool = .{ false, false, false };
+    var diagnostic_plan: [3]u32 = .{
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        ModuleEnv.ExpectedConsumptionPlan.none,
+    };
+    var diagnostic_parent_step: [3]u32 = .{
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        ModuleEnv.ExpectedConsumptionPlan.none,
+    };
+    var diagnostic_produced_step: [3]u32 = .{
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        ModuleEnv.ExpectedConsumptionPlan.none,
+        ModuleEnv.ExpectedConsumptionPlan.none,
+    };
+    errdefer {
+        std.debug.print("record-update field projection inverse failed at {s}\n", .{failure_stage});
+        for (0..diagnostic_form_count) |index| {
+            std.debug.print(
+                "  plan={d} form={s} parent_step={d} produced_step={d}\n",
+                .{
+                    diagnostic_plan[index],
+                    if (diagnostic_support[index]) "support" else "direct",
+                    diagnostic_parent_step[index],
+                    diagnostic_produced_step[index],
+                },
+            );
+        }
+    }
+
+    var checked = try TestEnv.init(module_name, record_update_projection_inverse_test_source);
+    defer checked.deinit();
+    try checked.assertNoErrors();
+    var fresh_env = try TestEnv.initUncheckedWithAdmittedBuiltinForTesting(
+        module_name,
+        record_update_projection_inverse_test_source,
+        checked.builtin_module,
+        checked.builtin_validation,
+        compiled_builtins.builtinIndices(CIR),
+    );
+    defer fresh_env.deinit();
+    try fresh_env.assertCanErrors(&.{});
+    const direct_record = try recordUpdateProjectionInverseRecord(
+        &checked,
+        "direct",
+        .literal,
+    );
+    const first_support_record = try recordUpdateProjectionInverseRecord(
+        &checked,
+        "first_support",
+        .lookup,
+    );
+    const second_support_record = try recordUpdateProjectionInverseRecord(
+        &checked,
+        "second_support",
+        .lookup,
+    );
+    const proofs = [_]RecordUpdateRootAuthorityTestProof{
+        try expectRecordUpdateRootAuthorityTestProof(
+            checked.module_env,
+            first_support_record,
+            .redirected_identity_share,
+        ),
+        try expectRecordUpdateRootAuthorityTestProof(
+            checked.module_env,
+            second_support_record,
+            .redirected_identity_share,
+        ),
+        try expectRecordUpdateRootAuthorityTestProof(
+            checked.module_env,
+            direct_record,
+            .direct_request,
+        ),
+    };
+
+    failure_stage = "one direct and two support forms";
+    var direct_proofs: [3]RecordUpdateRootAuthorityTestProof = undefined;
+    var direct_count: usize = 0;
+    var support_proofs: [3]RecordUpdateRootAuthorityTestProof = undefined;
+    var support_count: usize = 0;
+    for (proofs) |proof| {
+        const base_step = checked.module_env.where_marker_copy_steps.items.items[proof.step_index];
+        const base_authority: ModuleEnv.ExpectedMarkerAuthority = .{
+            .kind = @intFromEnum(ModuleEnv.ExpectedMarkerAuthority.Kind.copy_occurrence),
+            .payload = .{ .copy_occurrence = .{
+                .copy_step = proof.step_index,
+                .occurrence_offset = base_step.root_occurrence_offset,
+                .side = @intFromEnum(ModuleEnv.WhereMarkerCopyOccurrenceSide.destination),
+            } },
+        };
+        const plan = checked.module_env.expected_consumption_plans.items.items[
+            proof.field_plan_index
+        ];
+        const is_direct = expectedMarkerAuthoritiesEqual(plan.parent_authority, base_authority);
+        if (diagnostic_form_count >= diagnostic_support.len or
+            plan.parent_authority.decodedKind() != .copy_occurrence)
+        {
+            return error.TestUnexpectedResult;
+        }
+        diagnostic_support[diagnostic_form_count] = !is_direct;
+        diagnostic_plan[diagnostic_form_count] = proof.field_plan_index;
+        diagnostic_parent_step[diagnostic_form_count] =
+            plan.parent_authority.payload.copy_occurrence.copy_step;
+        diagnostic_produced_step[diagnostic_form_count] = plan.produced_copy_step;
+        diagnostic_form_count += 1;
+        if (is_direct) {
+            const projection = checked.module_env.where_marker_copy_steps.items.items[
+                plan.produced_copy_step
+            ];
+            switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+                checked.module_env,
+                projection,
+                plan,
+            )) {
+                .child => {},
+                .absent, .invalid => return error.TestUnexpectedResult,
+            }
+            if (direct_count >= direct_proofs.len) return error.TestUnexpectedResult;
+            direct_proofs[direct_count] = proof;
+            direct_count += 1;
+        } else {
+            const projection_step_index =
+                plan.parent_authority.payload.copy_occurrence.copy_step;
+            if (projection_step_index >= checked.module_env.where_marker_copy_steps.items.items.len) {
+                return error.TestUnexpectedResult;
+            }
+            const projection = checked.module_env.where_marker_copy_steps.items.items[
+                projection_step_index
+            ];
+            switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+                checked.module_env,
+                projection,
+                plan,
+            )) {
+                .absent => {},
+                .child, .invalid => return error.TestUnexpectedResult,
+            }
+            if (support_count >= support_proofs.len) return error.TestUnexpectedResult;
+            support_proofs[support_count] = proof;
+            support_count += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), direct_count);
+    try std.testing.expectEqual(@as(usize, 2), support_count);
+    const direct = direct_proofs[0];
+    try expectRecordUpdateProjectionOriginContexts(&checked, &fresh_env);
+
+    failure_stage = "direct plan retargeted to root occurrence";
+    const direct_plan = &checked.module_env.expected_consumption_plans.items.items[
+        direct.field_plan_index
+    ];
+    const saved_direct_plan = direct_plan.*;
+    defer direct_plan.* = saved_direct_plan;
+    const direct_projection = checked.module_env.where_marker_copy_steps.items.items[
+        direct_plan.produced_copy_step
+    ];
+    try std.testing.expect(
+        direct_plan.produced_occurrence_offset != direct_projection.root_occurrence_offset,
+    );
+
+    failure_stage = "direct child cannot masquerade as later support";
+    const direct_projection_root: ModuleEnv.ExpectedMarkerAuthority = .{
+        .kind = @intFromEnum(ModuleEnv.ExpectedMarkerAuthority.Kind.copy_occurrence),
+        .payload = .{ .copy_occurrence = .{
+            .copy_step = direct_plan.produced_copy_step,
+            .occurrence_offset = direct_projection.root_occurrence_offset,
+            .side = @intFromEnum(ModuleEnv.WhereMarkerCopyOccurrenceSide.destination),
+        } },
+    };
+    const direct_child_offset = switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+        checked.module_env,
+        direct_projection,
+        direct_plan.*,
+    )) {
+        .child => |offset| offset,
+        .absent, .invalid => return error.TestUnexpectedResult,
+    };
+    const authentic_support_plan = checked.module_env.expected_consumption_plans.items.items[
+        support_proofs[0].field_plan_index
+    ];
+    try std.testing.expect(
+        authentic_support_plan.produced_copy_step > direct_plan.produced_copy_step,
+    );
+    const support_step = &checked.module_env.where_marker_copy_steps.items.items[
+        authentic_support_plan.produced_copy_step
+    ];
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyStep.Kind.aggregate_fresh_shape_child,
+        support_step.decodedKind().?,
+    );
+    try std.testing.expect(rangeFits(
+        support_step.occurrences_start,
+        support_step.occurrences_len,
+        checked.module_env.where_marker_copy_occurrences.items.items.len,
+    ));
+    const support_root = checked.module_env.where_marker_copy_occurrences.items.items[
+        support_step.occurrences_start + support_step.root_occurrence_offset
+    ];
+    const saved_support_origin = support_step.origin.aggregate_fresh_shape_child;
+    defer support_step.origin.aggregate_fresh_shape_child = saved_support_origin;
+    support_step.origin.aggregate_fresh_shape_child = .{
+        .expected_plans_start = direct.field_plan_index,
+        .expected_plans_len = 1,
+        .parent_authority = direct_projection_root,
+    };
+    var direct_as_support = saved_direct_plan;
+    direct_as_support.parent_authority = direct_projection_root;
+    direct_as_support.raw_consumer_var = support_root.raw_source_var;
+    direct_as_support.produced_copy_step = authentic_support_plan.produced_copy_step;
+    direct_as_support.produced_occurrence_offset = support_step.root_occurrence_offset;
+    direct_as_support.produced_side = @intFromEnum(
+        ModuleEnv.WhereMarkerCopyOccurrenceSide.destination,
+    );
+    try std.testing.expect(direct_as_support.hasLegalTags());
+    try std.testing.expect(expectedFreshShapePlanMatchesCir(
+        checked.module_env,
+        direct_as_support,
+    ));
+    try std.testing.expect(!whereMarkerRecordUpdateProjectionSupportMatches(
+        checked.module_env,
+        direct_plan.produced_copy_step,
+        direct_projection_root,
+        direct.field_plan_index,
+        direct_as_support,
+    ));
+
+    failure_stage = "malformed direct traversal cannot become clean support absence";
+    var direct_field_witness_index: ?u32 = null;
+    const direct_witnesses = checked.module_env.where_marker_copy_witnesses.items.items[direct_projection.witnesses_start..][0..direct_projection.witnesses_len];
+    for (direct_witnesses, 0..) |witness, witness_offset| {
+        const edge_kind = witness.decodedEdgeKind() orelse return error.TestUnexpectedResult;
+        if (witness.child_occurrence_offset != direct_child_offset or
+            (edge_kind != .record_field_type and edge_kind != .record_unbound_field_type))
+        {
+            continue;
+        }
+        if (direct_field_witness_index != null) return error.TestUnexpectedResult;
+        direct_field_witness_index = direct_projection.witnesses_start +
+            @as(u32, @intCast(witness_offset));
+    }
+    const field_witness_index = direct_field_witness_index orelse
+        return error.TestUnexpectedResult;
+    const field_witness = &checked.module_env.where_marker_copy_witnesses.items.items[
+        field_witness_index
+    ];
+    const saved_field_witness = field_witness.*;
+    defer field_witness.* = saved_field_witness;
+    field_witness.edge_kind = std.math.maxInt(u32);
+    switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+        checked.module_env,
+        direct_projection,
+        direct_as_support,
+    )) {
+        .invalid => {},
+        .child, .absent => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(!whereMarkerRecordUpdateProjectionSupportMatches(
+        checked.module_env,
+        direct_plan.produced_copy_step,
+        direct_projection_root,
+        direct.field_plan_index,
+        direct_as_support,
+    ));
+    field_witness.* = saved_field_witness;
+
+    failure_stage = "ambiguous direct child cannot become clean support absence";
+    const direct_witness_backup = try std.testing.allocator.dupe(
+        ModuleEnv.WhereMarkerCopyWitness,
+        direct_witnesses,
+    );
+    defer std.testing.allocator.free(direct_witness_backup);
+    defer @memcpy(direct_witnesses, direct_witness_backup);
+    const relative_field_witness: usize = @intCast(
+        field_witness_index - direct_projection.witnesses_start,
+    );
+    var spare_witness_index: ?usize = null;
+    for (direct_witness_backup, 0..) |witness, witness_index| {
+        if (witness_index == relative_field_witness or
+            witness.child_occurrence_offset == direct_child_offset or
+            witness.child_occurrence_offset == saved_field_witness.parent_occurrence_offset or
+            witness.decodedAction() != .traverse or
+            witness.decodedAuxiliaryOriginKind() != .none)
+        {
+            continue;
+        }
+        spare_witness_index = witness_index;
+        break;
+    }
+    const spare_index = spare_witness_index orelse return error.TestUnexpectedResult;
+    direct_witnesses[spare_index].parent_occurrence_offset =
+        saved_field_witness.parent_occurrence_offset;
+    direct_witnesses[spare_index].edge_kind = saved_field_witness.edge_kind;
+    direct_witnesses[spare_index].edge_index = saved_field_witness.edge_index;
+    direct_witnesses[spare_index].edge_name = saved_field_witness.edge_name;
+    direct_witnesses[spare_index].edge_origin_module = saved_field_witness.edge_origin_module;
+    direct_witnesses[spare_index].edge_source_decl = saved_field_witness.edge_source_decl;
+    try std.testing.expectEqual(
+        direct_witness_backup[spare_index].child_occurrence_offset,
+        direct_witnesses[spare_index].child_occurrence_offset,
+    );
+    try std.testing.expectEqual(
+        direct_witness_backup[spare_index].raw_source_var,
+        direct_witnesses[spare_index].raw_source_var,
+    );
+    try std.testing.expectEqual(
+        direct_witness_backup[spare_index].raw_destination_var,
+        direct_witnesses[spare_index].raw_destination_var,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.Action.traverse,
+        direct_witnesses[spare_index].decodedAction().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind.none,
+        direct_witnesses[spare_index].decodedAuxiliaryOriginKind().?,
+    );
+    try std.testing.expect(
+        direct_witnesses[spare_index].child_occurrence_offset <
+            direct_projection.occurrences_len,
+    );
+    try std.testing.expect(
+        direct_witnesses[spare_index].child_occurrence_offset != direct_child_offset,
+    );
+    try std.testing.expect(direct_witnesses[spare_index].decodedEdgeKind() != null);
+    std.mem.sortUnstable(
+        ModuleEnv.WhereMarkerCopyWitness,
+        direct_witnesses,
+        {},
+        whereMarkerCopyWitnessLessThan,
+    );
+    for (direct_witnesses[1..], direct_witnesses[0 .. direct_witnesses.len - 1]) |current, previous| {
+        try std.testing.expect(ModuleEnv.WhereMarkerCopyWitness.canonicalLessThan(
+            previous,
+            current,
+        ));
+    }
+    switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+        checked.module_env,
+        direct_projection,
+        direct_as_support,
+    )) {
+        .invalid => {},
+        .child, .absent => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(!whereMarkerRecordUpdateProjectionSupportMatches(
+        checked.module_env,
+        direct_plan.produced_copy_step,
+        direct_projection_root,
+        direct.field_plan_index,
+        direct_as_support,
+    ));
+    @memcpy(direct_witnesses, direct_witness_backup);
+
+    failure_stage = "mixed alias and field path cannot become clean support absence";
+    direct_witnesses[spare_index].parent_occurrence_offset =
+        saved_field_witness.parent_occurrence_offset;
+    direct_witnesses[spare_index].edge_kind = @intFromEnum(
+        ModuleEnv.WhereMarkerCopyWitness.EdgeKind.alias_backing,
+    );
+    direct_witnesses[spare_index].edge_index = 0;
+    direct_witnesses[spare_index].edge_name = 0;
+    direct_witnesses[spare_index].edge_origin_module = 0;
+    direct_witnesses[spare_index].edge_source_decl = 0;
+    try std.testing.expectEqual(
+        direct_witness_backup[spare_index].child_occurrence_offset,
+        direct_witnesses[spare_index].child_occurrence_offset,
+    );
+    try std.testing.expectEqual(
+        direct_witness_backup[spare_index].raw_source_var,
+        direct_witnesses[spare_index].raw_source_var,
+    );
+    try std.testing.expectEqual(
+        direct_witness_backup[spare_index].raw_destination_var,
+        direct_witnesses[spare_index].raw_destination_var,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.Action.traverse,
+        direct_witnesses[spare_index].decodedAction().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind.none,
+        direct_witnesses[spare_index].decodedAuxiliaryOriginKind().?,
+    );
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyWitness.EdgeKind.alias_backing,
+        direct_witnesses[spare_index].decodedEdgeKind().?,
+    );
+    std.mem.sortUnstable(
+        ModuleEnv.WhereMarkerCopyWitness,
+        direct_witnesses,
+        {},
+        whereMarkerCopyWitnessLessThan,
+    );
+    for (direct_witnesses[1..], direct_witnesses[0 .. direct_witnesses.len - 1]) |current, previous| {
+        try std.testing.expect(ModuleEnv.WhereMarkerCopyWitness.canonicalLessThan(
+            previous,
+            current,
+        ));
+    }
+    switch (whereMarkerRecordUpdateProjectionChildOccurrence(
+        checked.module_env,
+        direct_projection,
+        direct_as_support,
+    )) {
+        .invalid => {},
+        .child, .absent => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(!whereMarkerRecordUpdateProjectionSupportMatches(
+        checked.module_env,
+        direct_plan.produced_copy_step,
+        direct_projection_root,
+        direct.field_plan_index,
+        direct_as_support,
+    ));
+    @memcpy(direct_witnesses, direct_witness_backup);
+    support_step.origin.aggregate_fresh_shape_child = saved_support_origin;
+
+    failure_stage = "direct plan retargeted to root occurrence";
+    direct_plan.produced_occurrence_offset = direct_projection.root_occurrence_offset;
+    try std.testing.expect(direct_plan.hasLegalTags());
+    try std.testing.expect(!validateWhereMarkerCopyProofLocal(
+        &checked.module_env.types,
+        checked.module_env,
+    ));
+    direct_plan.* = saved_direct_plan;
+
+    failure_stage = "support plan retargeted to another support step";
+    const first_support_plan = &checked.module_env.expected_consumption_plans.items.items[
+        support_proofs[0].field_plan_index
+    ];
+    const second_support_plan = checked.module_env.expected_consumption_plans.items.items[
+        support_proofs[1].field_plan_index
+    ];
+    const saved_support_plan = first_support_plan.*;
+    defer first_support_plan.* = saved_support_plan;
+    try std.testing.expect(
+        first_support_plan.produced_copy_step != second_support_plan.produced_copy_step,
+    );
+    first_support_plan.produced_copy_step = second_support_plan.produced_copy_step;
+    first_support_plan.produced_occurrence_offset = second_support_plan.produced_occurrence_offset;
+    try std.testing.expect(first_support_plan.hasLegalTags());
+    try std.testing.expect(!validateWhereMarkerCopyProofLocal(
+        &checked.module_env.types,
+        checked.module_env,
+    ));
+    first_support_plan.* = saved_support_plan;
+
+    failure_stage = "restored record-update contexts";
+    try expectRecordUpdateProjectionOriginContexts(&checked, &fresh_env);
 }
 
 fn expectRecordUpdateTestSemanticSlicesEqual(expected: anytype, actual: anytype) !void {

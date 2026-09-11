@@ -711,7 +711,7 @@ and `run-check-snapshots` run after W3, after W6b, and after W2b.
 6. (Closed 2026-09-03.) The 10121 harness tests pass on the stack; the CLI
    controls become fixtures under W4 so the two paths cannot drift.
 
-## 8. Handoff for the next agent (updated 2026-09-10; W6b in progress)
+## 8. Handoff for the next agent (updated 2026-09-11; W6b in progress)
 
 This section is self-contained: the session's scratchpad (research reports,
 probe programs, logs) does not survive, so everything a successor needs is
@@ -744,12 +744,12 @@ described in full, with trailers; W6b currently has its provisional title):
 | `uovwznvn` / `2df80890` | W6b preexisting-malformed-base recovery authority | pushed and exact PR readback verified; reviewed bounded WIP; final normal 57/57 tests, 41/41 steps pass |
 | `unupstyw` / `8a1bcb17` | W6b active record-update recovery rebuild and serialization | pushed and exact PR readback verified; reviewed bounded WIP; final normal 58/58 tests, 41/41 steps pass |
 | `tonzpmlt` / `9c027603` | W6b record-update projection relation calibration | original `16c850b6` passed 60/60; final-address harness repair amended into owner, independently accepted and normal 3/3 tests, 7/7 steps pass |
-| `urrksrnp` | W6b projection after optional-width body refinement | original `51bded4a` published; inherited harness repair reviewed and refreshed normal 61/61 tests, 41/41 steps pass; repaired publication being finalized |
+| `urrksrnp` / `2614bb21` | W6b projection after optional-width body refinement | repaired checkpoint pushed and exact PR readback verified; refreshed normal 61/61 tests, 41/41 steps pass |
+| `tznvqtyt` | W6b benign record-update projection availability | reviewed slices accepted; normal regenerated-Builtin gate passes 68/68 tests and 41/41 steps; final publication in progress |
 
-The local `jared/polarity` bookmark tracks repaired `urrksrnp`, above amended
-`tonzpmlt` / `9c027603`; the last verified remote head is the original
-`urrksrnp` / `51bded4a`. Repaired publication is being finalized. Their earlier
-ancestry includes `unupstyw` / `8a1bcb17`,
+The local and remote `jared/polarity` bookmarks point at repaired `urrksrnp` /
+`2614bb21`, above amended `tonzpmlt` / `9c027603`. Their earlier ancestry
+includes `unupstyw` / `8a1bcb17`,
 `uovwznvn` / `2df80890`, `nrkxkkmn` / `a1757bdc`,
 `mwttkmrx` / `e2380965`, `mpqnvuvq` / `9c295876`,
 `onmovlvr` / `92741c58`,
@@ -759,7 +759,7 @@ ancestry includes `unupstyw` / `8a1bcb17`,
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`tznvqtyt` preserves the unfinished benign projection-availability task
+`tznvqtyt` owns the bounded benign projection-availability task
 and is not part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
@@ -4615,19 +4615,245 @@ subsets below do not override this latest checkpoint.
   failure; it remains under adversarial review, with raw-base poison/copy
   identity and diagnostic rollback ownership explicitly unresolved.
 
+- Optional-width calibration publication is complete: described change
+  `urrksrnpukxtkkquuwnxuktkvpmwksuk` is Git commit
+  `51bded4a79cbeed48f718cba73d85c528f226228`, fast-forwarded from `16c850b6`
+  on `jared/polarity`. Exact PR #10434 head, complete 6,426-character body,
+  branch and draft state are verified in `refinement-pr-readback.json`.
+  Formatting and all four compiler hashes match the accepted `e4fd00d1`
+  source. New child `tznvqtytznuwkuntvlzmnqmukxoomklm` begins read-only review
+  of the next proposal: publish unavailable projection as a benign no-cause
+  P_F and separately attribute actual owning failures. The author proposes
+  new failure/retirement evidence, but retaining poisoning detaches raw base
+  V from retained source R and may invalidate existing raw-copy authority;
+  a source occurrence is not automatically authority for V. Existing Probe
+  also does not snapshot Problems or type snapshots, so wrapping a diagnostic
+  relation does not yet prove allocation-failure rollback. Mixed child,
+  suppressed, unset/final cases and interleaved failure ownership require
+  explicit closure. Independent adversarial proposal review is running;
+  no normative/schema/production edit is authorized yet.
+
+- Independent next-proposal review requests changes to combined R2 failure
+  handling: poisoning is explicitly forbidden inside Store savepoints;
+  ordinary Probe lacks diagnostic rollback; source occurrence R is not raw
+  request V; synthetic actual-row peer authority and fresh replay are missing;
+  failure indices may interleave; and later mixed continuations need a closed
+  lifecycle. A committed-mismatch use of existing diagnostic-aware CommitProbe
+  is a possible replacement, but needs its own declaration and complete
+  authority. The reviewer separately accepts the benign projection subset as
+  the smallest coherent next production direction: unavailable context is a
+  no-cause P_F, never an early retirement/frame error, with the optional-width
+  source healthy through full-tail/fresh/rebuild/serialization. Existing
+  invalid empty/typo updates remain unaccepted known failures. Root is
+  resolving that new outcome's exact raw coordinate before design-first
+  implementation authorization; the author is preparing surfaces read-only.
+
+- Root declared `record_update_projection_availability` and inventoried
+  `settleRecordUpdateProjectionUnavailable` before code changes. Independent
+  review accepts the finite unavailable P_F raw coordinate: exact field-value
+  syntax variable (`raw_consumer_var == site_node`), never the discarded fresh
+  projection variable or a claimed Expected endpoint. It requires exact
+  successful P_B parent equality, all failure/produced words inactive, no
+  surviving projection/support origin, and reserved-only first settlement.
+  Root authorized the sol-ultra author to implement this bounded benign
+  subset, update the deliberately superseded staged projection metadata,
+  bump cache vocabulary to 86, and add real full-tail optional-width,
+  corruption, repeated rebuild and readonly/mutable serialization coverage.
+  Actual/final relation options and genuine-error retirement remain unchanged;
+  no CommitProbe/F_R/R_U2 or solver mutation is authorized. Root retains
+  formatting, builds, measured golden, progress docs and jj/publication.
+  A fresh independent sol-ultra reviewer will inspect the actual delta at
+  freeze. No new-source build has started and no implementation result is
+  claimed yet.
+
+- Benign availability reached an early coherent freeze `b713a5c6`, with
+  Check SHA `c75858ab`, ModuleEnv `1180a1ae`, and cache vocabulary 86.
+  Semantic compile `40723` passes. Normal producer-regenerated gate `53640`
+  passes canonicalization 2/2 and checker 3/5: the new optional-width source
+  passes the complete checker tail with local, produced and distinct-fresh
+  replay; staged optional-width refinement also passes. The two existing
+  staged empty/typo controls crash with integer overflow, so this is not an
+  accepted or publishable checkpoint. Independent sol-ultra review confirms
+  the positive test is authentic but requests an exact finite inverse for
+  aggregate projection origins: a same-owner anchored child must not replace
+  an aggregate owner plan, and record-update direct-child and later support
+  forms must both retain their exact current-step join. Actual/final relation
+  options remain unchanged. Corruption, repeated rebuild, serialization
+  isolation and compact transaction assessment are still pending.
+  Schema-86 golden measurement `50048` reports
+  `26c3a53cff8fe33140fbb713a9cc7a0ec836146bbdce8e20eb92a42c66cbf10b`;
+  root applied those measured bytes. Diagnostic-only Check freeze `528f56fc`
+  adds compact test seam prints without changing expectations or production.
+  Targeted failing-control rerun `49754` and golden rerun `4223` are active.
+  Artifacts are in `/private/tmp/polarity-availability-gates.5OH4n3/`.
+
 - The final-address calibration repair is amended into original owner
-  `tonzpmlt` / `9c027603`, preserving descendant `urrksrnp` and unfinished
-  `tznvqtyt` without conflicts or leftover empty fixups. On assembled
-  availability source Check `1ce06f7e`, captured-schema-86 diagnostic `96249`
-  passes 5/5: both original controls, staged refinement and the authentic
-  full-tail positive. Temporary diagnostics are removed. This does not accept
-  the unfinished availability inverse or coverage. The repaired publication
-  checkpoint remains schema 85, with Check `7c5af804`; independent sol-ultra
-  carry-forward review accepts it, and refreshed normal producer-regenerated
-  combined gate `3791` passes 61/61 tests, 41/41 steps (can 10, types 10,
-  checker 36, compile/serde 5), including golden and native/wasm sizes.
-  Formatting and compiler hashes match review. Root is finalizing the
-  described repaired checkpoint, push and exact draft-PR head/body readback.
+  `tonzpmlt` / `9c027603`, preserving the code in both descendants without
+  conflicts or leftover empty fixups. On assembled availability source Check
+  `1ce06f7e`, captured-schema-86 diagnostic `96249` passes 5/5: both original
+  controls, staged refinement and the authentic full-tail positive. All
+  temporary diagnostics are removed. This does not accept the unfinished
+  availability inverse or coverage. The repaired publication checkpoint
+  remains schema 85, with Check `7c5af804`; independent sol-ultra carry-forward
+  review accepts it, and refreshed normal producer-regenerated combined gate
+  `3791` passes 61/61 tests, 41/41 steps (can 10, types 10, checker 36,
+  compile/serde 5), including golden and native/wasm sizes. Formatting and
+  compiler hashes match review. Described checkpoint `urrksrnp` /
+  `2614bb210613f0dd8ee50b9cd2ccba90a4e45093` is pushed; exact PR #10434 head,
+  full 7,800-character body, branch and draft state are verified in
+  `calibration-repair-pr-readback.json`. Documentation-only rebase conflicts
+  in `tznvqtyt` are manually merged, retaining its declared rule and complete
+  progress history while updating the verified publication identity.
+  The sol-ultra author next repairs the finite projection-origin inverse and
+  completes corruption, repeated rebuild and readonly/mutable serde coverage.
+
+- Projection-origin inverse core is frozen at Check `5940f8d7`, jj
+  `05553015`. Aggregate-owner origins bind their exact current destination
+  root and exclude update-record owners. Record-update origins bind either
+  the exact field-child occurrence in this projection, or the exact later
+  singleton fresh-shape support step with this projection-root parent.
+  Explicit witness traversal preserves the producer's alias/extension path;
+  no raw-shape/copy-destination equality is invented. Semantic `72220` passes.
+  Captured-schema-86 diagnostic `13111` passes 9/9: both original controls,
+  staged refinement, full-tail availability, existing direct/redirected root
+  rebuild/serde/fresh authority, and three healthy record-update integration
+  cases. Independent exact-delta core review is running. Explicit generic,
+  direct and support corruption regressions and the availability fixture's
+  repeated rebuild/readonly-mutable serialization isolation are still pending;
+  this early core gate is not final acceptance or publication certification.
+  The independent review requests one further condition: a later support
+  copy is legal only when the current projection has no exact direct-child
+  witness, matching the producer's `orelse` branch. Root declared that
+  condition in the design before authorizing the fix. The author is now
+  implementing the condition and a specifically distinguishing negative
+  regression, followed by the remaining corruption, rebuild and serialization
+  coverage. The reviewed core otherwise preserves exact producer coordinates
+  and contains no solved-graph reconstruction or solver mutation.
+
+- The support-absence repair and two inverse regressions freeze at Check
+  `a52b737f`, jj `764ac59a`. Semantic `5739` passes; captured-schema-86
+  runtime `13492` passes 10/11. The generic owner-to-child retarget regression
+  passes, but the direct/support regression fails before its corruption
+  assertions because the source does not establish its assumed one-direct,
+  two-support field-projection topology. A direct versus redirected base
+  binding is not evidence of the field projection's form. Independent review
+  accepts the production condition but requests a corrected, producer-backed
+  fixture. The author is thawed only to measure/correct that fixture before
+  expanding the remaining availability coverage. No source regression or
+  complete availability acceptance is claimed by this intermediate result.
+
+- Diagnostic `50374` measures two direct field projections and one support
+  in the shared-container fixture: the first update refines the container
+  used by the second. Replacing those shared-base updates with separately
+  parameterized functions establishes the intended one-direct/two-support
+  topology without weakening the corruption assertions. Corrected Check
+  `8698d963`, jj `47b912ca`, passes focused `95177` (3/3).
+  Independent review accepts the authentic fixture but finds that the child
+  lookup's nullable return conflates valid absence with invalid or ambiguous
+  traversal. Root declares a finite `child / absent / invalid` distinction
+  in the design before authorizing the repair: support accepts only valid
+  absence. The author is implementing that closure and a distinguishing
+  malformed-witness negative; broader availability coverage remains pending.
+
+- Tri-state Check `f4389639`, jj `570a1313`, passes semantic `1735` and
+  focused `44126` (3/3), including invalid-tag and canonically ordered,
+  conflicting-child regressions with restoration. Independent review confirms
+  those repairs but requests rejection of alias-backing and record-path
+  evidence from the same occurrence. Actual alias and record producer frames
+  are mutually exclusive; prioritizing one contradictory path is not valid
+  absence evidence. Root clarified that finite exclusion in the design,
+  preserving legitimate record-field-plus-extension evidence, before thawing
+  the author for the guard and a mixed-path regression. Broader availability
+  coverage and checkpoint publication remain pending.
+
+- The mixed-path/locator-uniqueness production closure passes semantic
+  `89440`. Initial test-oracle gate `18035` passes 2/3: its new negative
+  wrongly assumes the authentic field witness has a traverse action, while
+  production records fresh-flex copy. The repaired negative retains a
+  distinct child's authentic action, auxiliary, constraint and raw endpoint
+  words, changing only the parent/locator coordinates needed for the
+  corruption. Check `5e3ac194`, jj `fba53705`, passes focused `59012` (3/3).
+  Independent exact-delta review ACCEPTS the bounded projection-origin
+  inverse: direct requires a child, support requires valid absence, invalid
+  or ambiguous paths authorize neither, and canonical witness ordering and
+  complete restoration are pinned. The author is thawed for unavailable-plan
+  corruption, repeated rebuild, readonly/mutable serialization isolation and
+  compact transaction coverage. This is not whole-availability acceptance or
+  a new publication; the latest pushed head remains `2614bb21`.
+
+- The unavailable-plan matrix at Check `9efae665`, jj `d9a5c4e0`, passes
+  semantic `24369` and focused `22485` (5/5). Independent sol-ultra
+  adversarial review ACCEPTS the test-only slice. Its 13 cases pin closed
+  words and semantic coordinates, including legal-tag coordinated site/raw,
+  slot, owner and source-side base-parent mutations, a retirement-backed
+  relation-failure tuple, and the exact superseded projection-failure tuple.
+  Each corruption is rejected by the internal local plan validator; each
+  restored row is byte-compared and revalidated through local, produced and
+  distinct-fresh contexts with clean transient state. It does not claim every
+  corrupted case was exercised separately through every public admission
+  route. The author is now implementing twice-rebuild and readonly/mutable
+  serialization isolation. A separate read-only assessment found a compact
+  transaction-only hook at the existing calibration seam feasible, with
+  independent caller-local slot copies required across rollback/retry.
+  That smoke and unavailable-path allocation-failure injection are not yet
+  implemented; no new publication is claimed.
+
+- The first rebuild/serialization slice at Check `52a951dd`, jj `9782f354`,
+  passes semantic `64916`; focused `28096` passes 5/6. The new test reaches
+  mutable deserialization and fails an incorrect ownership assertion:
+  `NodeStore.deserializeWithCopy` deliberately retains buffer-backed immutable
+  nodes and copies regions, while the mutable ModuleEnv separately owns its
+  type/plan arrays. Independent review requests correcting that assertion and
+  its misleading API comment, plus explicitly pinning the affected record-plan
+  predicate true before corruption, false during it and true after restoration.
+  The author is thawed for those test/comment fixes; production copying is not
+  being changed. Rebuild/serde acceptance and transaction coverage remain open.
+
+- Corrected rebuild/serde Check `5c7aec1f`, ModuleEnv `e0321273`, jj
+  `d072d8a9`, passes isolated `71764` (2/2). Independent sol-ultra
+  adversarial review ACCEPTS this bounded slice. Two rebuilds preserve exact
+  bytes and reacquired topology/proof; readonly nodes/types remain
+  buffer-backed, mutable nodes share the immutable buffer view, and mutable
+  plans/types use independent storage. The exact plan validator and full local
+  proof are explicitly true/false/true across the legal-tag parent-side
+  corruption and restoration. Original/readonly/buffer isolation, fresh replay
+  and original-only produced replay pass. The ModuleEnv API edit only corrects
+  its ownership comment. The author is implementing a separate authentic
+  transaction-only rollback/retry smoke at the existing calibration seam.
+  That test will not claim exhaustive allocation-failure injection; the final
+  whole-availability review and producer-regenerated gate still remain.
+
+- The compact transaction smoke is frozen at Check `8c14bc16`, jj
+  `be1ae15c`; semantic `84270` passes. It reuses the authentic optional-width
+  calibration seam, commits unavailable field publication inside an outer
+  local transaction, compares exact plan/registration and unchanged base,
+  copy-ledger and lifecycle state, rolls back against the full transaction
+  snapshot and cross-copy ownership, then retries from an independent saved
+  pending slot. It stops before body checking and the actual/final relations.
+  The broader 14-case captured-input diagnostic and independent adversarial
+  review are running. These checks are not final checkpoint certification;
+  the normal regenerated-Builtin gate and publication remain pending.
+
+- The broader frozen diagnostic `47060` passes 14/14, including both original
+  calibrations, staged refinement, all availability tests, root-authority
+  rebuild/serde and three existing record-update integration cases. Independent
+  sol-ultra adversarial review ACCEPTS the transaction slice at Check
+  `8c14bc16`: caller-local slots are independent, rows are saved by value,
+  rollback restores the full owned snapshot, and retry publishes the same
+  exact proof without repairing caller state. Normal producer-regenerated
+  checkpoint gate `44701` and whole-delta review are running. Availability-path
+  allocation-failure injection remains a separate unimplemented test slice.
+
+- Final normal producer-regenerated gate `44701` passes **68/68 tests and
+  41/41 steps**: canonicalization 11, types 10, checker 42, compile/serde 5.
+  Builtin compilation/regeneration, schema-86 measured golden, static/mutable
+  serialization, and native/wasm serialization sizes pass. Formatting passes
+  and frozen compiler hashes remain Check `8c14bc16`, ModuleEnv `e0321273`,
+  cache config `c8bb004a`, golden test `f3ccf703`. Whole-delta adversarial code
+  review ACCEPTS the actual whole bounded availability delta. Root is
+  finalizing the description and checkpoint publication. This bounded gate
+  does not certify unavailable-path allocation failures, genuine owning-error
+  retirement, option (e), runtime adapters, or the full checker/minici suite.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
