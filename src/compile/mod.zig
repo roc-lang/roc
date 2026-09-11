@@ -178,8 +178,10 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11249_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11263_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11286_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11287_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11300_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11301_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11310_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
