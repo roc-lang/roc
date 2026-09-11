@@ -161,11 +161,26 @@ pub const FieldPlace = struct {
     layout_idx: layout_mod.Idx,
 };
 
+/// The payload view a tag-union container dismantles through: its fields are
+/// the view struct's, and its residual release reads the discriminant fresh
+/// and releases the variant's residual fields through that same view. One
+/// view means one claim chain: a second view of the union would compete with
+/// the first for the union's single ownership-complete claim.
+pub const PayloadView = struct {
+    view: LIR.LocalId,
+    tag_discriminant: u16,
+    /// Scratch layout for the residual dispatch, borrowed from the
+    /// container's single-definition discriminant read.
+    discriminant_layout: layout_mod.Idx,
+};
+
 /// Committed field-place domain for one dismantlable container. Residual
 /// ownership is path state in ARC, not a global property of this descriptor.
 pub const Container = struct {
     fields: []const FieldPlace,
     full_mask: u64,
+    /// Set for a tag-union container, whose fields belong to this view.
+    payload_view: ?PayloadView = null,
 };
 
 /// Exact resource-place transfer performed by one field read.
@@ -202,7 +217,9 @@ pub const Dismantles = struct {
     /// owned (mode-specialized variants). The value is the parameter local,
     /// so emission can check the override for the current variant.
     owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
-    /// Containers behind `owned_only_takes`, keyed by the parameter local.
+    /// Containers behind `owned_only_takes`, keyed by the container local:
+    /// the parameter itself, or a projection binding whose takes that
+    /// parameter's owned override activates.
     owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
@@ -325,9 +342,43 @@ const Read = struct {
     field_idx: u32,
 };
 
+/// A complete field read of a root that dominance canonicalized to an
+/// earlier read of the same root and layout. Whether it is a field read of
+/// the root or a pure alias of that representative is decided by the
+/// representative's plan, so the root defers its classification.
+const EquivalencedRead = struct {
+    read: Read,
+    representative: LIR.LocalId,
+};
+
 const MentionEdge = struct {
     stmt: u32,
     next: u32,
+};
+
+/// A tag union whose stored units may be taken through one payload view. Any
+/// occurrence of the root other than its definition, a discriminant read, a
+/// borrowed pure alias, or the view itself disqualifies it.
+const UnionRoot = struct {
+    def_stmt: LIR.CFStmtId = @enumFromInt(no_index),
+    def_count: u32 = 0,
+    disqualified: bool = false,
+    /// The single payload view, `no_index` before one is seen and
+    /// `ambiguous_view` once a second view or variant appears.
+    view: u32 = no_index,
+    variant_index: u16 = 0,
+    tag_discriminant: u16 = 0,
+    discriminant_layout: ?layout_mod.Idx = null,
+};
+
+const ambiguous_view: u32 = no_index - 1;
+
+/// Depth-first ordering state for solving projection representatives
+/// before the roots whose deferred reads they settle.
+const OrderMark = enum(u8) {
+    unvisited,
+    visiting,
+    ordered,
 };
 
 const Candidate = struct {
@@ -336,6 +387,11 @@ const Candidate = struct {
     join_starts: std.ArrayList(LIR.CFStmtId) = .empty,
     disqualified: bool = false,
     reads: std.ArrayList(Read) = .empty,
+    /// Complete reads canonicalized to a dominating representative. Once the
+    /// representative commits a plan they are materialized as its aliases and
+    /// belong to its occurrence set; otherwise they rejoin `reads` before
+    /// this container's flow runs.
+    equivalenced_reads: std.ArrayList(EquivalencedRead) = .empty,
     /// Statements consuming or observing the container as one value—moved
     /// into an aggregate, passed to a call, returned, or join-carried. Takes
     /// stay valid as long as no whole use can run after a take, which the
@@ -354,6 +410,13 @@ const Analysis = struct {
     state: []State,
     /// Root container local per transparent alias, `no_index` otherwise.
     alias_root: []u32,
+    /// Tag-union root per ownership-complete borrowed payload view,
+    /// `no_index` otherwise. Such a view is the struct candidate through
+    /// which the union dismantles; its unit is the root's.
+    view_root: []u32,
+    /// Tag-union locals that may dismantle through a payload view, keyed by
+    /// the root local.
+    union_roots: std.AutoHashMapUnmanaged(u32, UnionRoot),
     candidates: std.AutoHashMapUnmanaged(u32, Candidate),
     /// Proc parameters. A parameter solved borrowed may still qualify as an
     /// owned-only candidate: mode-specialized variants re-emit it owned.
@@ -385,10 +448,13 @@ const Analysis = struct {
         var it = self.candidates.valueIterator();
         while (it.next()) |candidate| {
             candidate.reads.deinit(self.gpa);
+            candidate.equivalenced_reads.deinit(self.gpa);
             candidate.join_starts.deinit(self.gpa);
             candidate.whole_uses.deinit(self.gpa);
         }
         self.candidates.deinit(self.gpa);
+        self.union_roots.deinit(self.gpa);
+        self.gpa.free(self.view_root);
         self.gpa.free(self.alias_root);
         self.gpa.free(self.mention_heads);
         self.mention_edges.deinit(self.gpa);
@@ -428,7 +494,7 @@ const Analysis = struct {
         if (!self.rc_local[local_index]) return false;
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_) return false;
-        if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index) return false;
+        if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index and self.view_root[local_index] == no_index) return false;
         if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
@@ -498,6 +564,7 @@ const Analysis = struct {
     /// it aliases) cannot dismantle.
     fn useWhole(self: *Analysis, stmt: LIR.CFStmtId, local: LIR.LocalId) Error!void {
         try self.noteMention(stmt, local);
+        try self.touchUnion(local);
         self.disqualify(local);
     }
 
@@ -506,9 +573,64 @@ const Analysis = struct {
     /// eligible; the dataflow rejects takes that could run before it.
     fn useWholeAt(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         try self.noteMention(stmt, local);
+        try self.touchUnion(local);
         const root = self.resolveRoot(local);
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.whole_uses.append(self.gpa, stmt);
+    }
+
+    /// The tag-union root a local's ownership unit belongs to, when that root
+    /// could dismantle through a payload view: refcounted, owned outright, and
+    /// neither a join parameter nor conditionally initialized.
+    fn unionRootOf(self: *Analysis, local: LIR.LocalId) ?u32 {
+        const unit = self.solution.unitLocalOf(local);
+        const unit_index = @intFromEnum(unit);
+        if (unit_index >= self.rc_local.len or !self.rc_local[unit_index]) return null;
+        if (self.layouts.getLayout(self.store.getLocal(unit).layout_idx).tag != .tag_union) return null;
+        if (self.solution.isBorrowed(unit) or self.solution.isJoinParam(unit)) return null;
+        if (self.solution.maybeUninitializedCondition(unit) != null) return null;
+        return unit_index;
+    }
+
+    fn unionEntryOf(self: *Analysis, root_index: u32) Error!*UnionRoot {
+        const slot = try self.union_roots.getOrPut(self.gpa, root_index);
+        if (!slot.found_existing) slot.value_ptr.* = .{};
+        return slot.value_ptr;
+    }
+
+    /// A whole use of a tag union (or of an alias sharing its unit) ends its
+    /// chance to dismantle.
+    fn touchUnion(self: *Analysis, local: LIR.LocalId) Error!void {
+        const root_index = self.unionRootOf(local) orelse return;
+        const entry = try self.unionEntryOf(root_index);
+        entry.disqualified = true;
+    }
+
+    fn noteDiscriminantRead(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
+        const root_index = self.unionRootOf(source) orelse return;
+        const entry = try self.unionEntryOf(root_index);
+        if (entry.discriminant_layout == null) entry.discriminant_layout = self.store.getLocal(target).layout_idx;
+    }
+
+    /// A borrowed payload view of a union root that owns every refcounted
+    /// byte of the union's active variant. The view is the struct candidate
+    /// the union dismantles through; a second view or variant leaves the
+    /// union whole-released.
+    fn notePayloadView(self: *Analysis, target: LIR.LocalId, op: anytype) Error!bool {
+        if (!self.solution.isBorrowed(target)) return false;
+        const root_index = self.unionRootOf(op.source) orelse return false;
+        const projection = encodeProjection(.{ .tag_payload_struct = op }).?;
+        if (!projectionOwnsAllRc(self.store, self.layouts, op.source, target, projection)) return false;
+        const entry = try self.unionEntryOf(root_index);
+        if (entry.view == no_index) {
+            entry.view = @intFromEnum(target);
+            entry.variant_index = op.variant_index;
+            entry.tag_discriminant = op.tag_discriminant;
+        } else {
+            entry.view = ambiguous_view;
+        }
+        self.view_root[@intFromEnum(target)] = root_index;
+        return true;
     }
 
     /// A definition of `local` by `stmt`: one value-producing assignment,
@@ -522,6 +644,13 @@ const Analysis = struct {
             self.disqualify(local);
             self.state[index] = .ineligible;
             return;
+        }
+        if (self.unionRootOf(local)) |root_index| {
+            if (root_index == index) {
+                const entry = try self.unionEntryOf(root_index);
+                entry.def_count += 1;
+                entry.def_stmt = stmt;
+            }
         }
         const candidate = (try self.entryOf(local)) orelse return;
         if (self.solution.isJoinParam(local)) {
@@ -545,11 +674,41 @@ const Analysis = struct {
         // source's stored unit at the read itself when the target retains.
         if (self.rc_local[@intFromEnum(target)]) try self.noteMention(stmt, source);
         const root = self.resolveRoot(source);
+        const target_index = @intFromEnum(target);
+        const representative_index = self.projected_container[target_index];
+        if (representative_index != no_index and representative_index != target_index) {
+            try self.noteEquivalencedRead(stmt, root, field_idx, target, @enumFromInt(representative_index));
+            return;
+        }
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.reads.append(self.gpa, .{
             .stmt = stmt,
             .target = target,
             .field_idx = field_idx,
+        });
+    }
+
+    /// A complete read canonicalized to a dominating representative. If the
+    /// representative commits a plan, the read is materialized as a pure
+    /// alias of it and is scanned as that alias now: a target emitted owned
+    /// is a whole use of the representative (an owned-demanded borrowed
+    /// target joins it once demand is closed), and a borrowed target reads
+    /// through it.
+    /// The root defers the read until the representative's plan is known;
+    /// the representative's plan never depends on the root's, so solving
+    /// representatives first settles every deferred read exactly once. The
+    /// read's mention stays on the root: the representative's defining read
+    /// dominates this one, so the root's flow already observes the field
+    /// before it, and a mention of the representative here would poison the
+    /// root's own take when the read rejoins its field reads.
+    fn noteEquivalencedRead(self: *Analysis, stmt: LIR.CFStmtId, root: LIR.LocalId, field_idx: u32, target: LIR.LocalId, representative: LIR.LocalId) Error!void {
+        if (!self.solution.isBorrowed(target)) {
+            if (try self.entryOf(representative)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
+        }
+        const root_candidate = (try self.entryOf(root)) orelse return;
+        try root_candidate.equivalenced_reads.append(self.gpa, .{
+            .read = .{ .stmt = stmt, .target = target, .field_idx = field_idx },
+            .representative = representative,
         });
     }
 
@@ -564,9 +723,13 @@ const Analysis = struct {
             return;
         }
         const root = self.resolveRoot(source);
+        // A borrowed pure alias shares its source's unit. Its liveness leader
+        // is the container for an owned struct but the union root for a
+        // payload view, so the unit chain is the same-value test that covers
+        // both.
         const explicit_projected_alias = self.projected_container[target_index] == @intFromEnum(root);
         const transparent = self.solution.isBorrowed(target) and
-            (explicit_projected_alias or self.solution.leaderOf(target) == root) and
+            (explicit_projected_alias or self.solution.leaderOf(target) == root or self.solution.unitLocalOf(target) == root) and
             ((try self.entryOf(root)) != null);
         if (transparent) {
             // The alias target itself can never be a container.
@@ -578,8 +741,14 @@ const Analysis = struct {
         } else {
             // An owned same-value binding is a path-local whole use. It can
             // move an intact container on this edge, while takes on mutually
-            // exclusive edges keep their exact residual states.
-            try self.useWholeAt(source, stmt);
+            // exclusive edges keep their exact residual states. A borrowed
+            // alias sharing a tag union's unit carries its variant knowledge
+            // and is no use of the union.
+            const union_alias = self.solution.isBorrowed(target) and
+                self.unionRootOf(source) != null and
+                self.unionRootOf(source) == self.unionRootOf(target);
+            if (!union_alias) try self.touchUnion(source);
+            if (try self.entryOf(root)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
             self.disqualify(target);
         }
     }
@@ -1200,6 +1369,8 @@ pub fn compute(
         .rc_local = rc_local,
         .state = try gpa.alloc(State, store.localCount()),
         .alias_root = try gpa.alloc(u32, store.localCount()),
+        .view_root = try gpa.alloc(u32, store.localCount()),
+        .union_roots = .empty,
         .candidates = .empty,
         .is_param = is_param,
         .projected_root = projected_root,
@@ -1211,6 +1382,7 @@ pub fn compute(
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
+    @memset(analysis.view_root, no_index);
     @memset(analysis.owned_demand, false);
     @memset(analysis.mention_heads, no_index);
 
@@ -1252,7 +1424,11 @@ pub fn compute(
                         }
                     },
                     .discriminant => |op| {
-                        try analysis.useWhole(current, op.source);
+                        // The tag word is disjoint from every stored unit, so
+                        // reading it is no use of a tag union beyond lending
+                        // its layout to the residual dispatch.
+                        try analysis.noteDiscriminantRead(op.source, stmt.target);
+                        analysis.disqualify(op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload => |op| {
@@ -1260,7 +1436,7 @@ pub fn compute(
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload_struct => |op| {
-                        try analysis.useWhole(current, op.source);
+                        if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
                     .list_reinterpret => |op| {
@@ -1529,6 +1705,19 @@ pub fn compute(
 
     analysis.closeOwnedDemand();
 
+    // Owned demand is closed only now. A deferred read whose borrowed target
+    // is re-emitted owned retains through its representative exactly like an
+    // owned target, so it is the same whole use of that representative.
+    var demand_it = analysis.candidates.valueIterator();
+    while (demand_it.next()) |candidate| {
+        for (candidate.equivalenced_reads.items) |deferred| {
+            const target_index = @intFromEnum(deferred.read.target);
+            if (!solution.isBorrowed(deferred.read.target) or !analysis.owned_demand[target_index]) continue;
+            const representative = analysis.candidates.getPtr(@intFromEnum(deferred.representative)) orelse continue;
+            try representative.whole_uses.append(gpa, deferred.read.stmt);
+        }
+    }
+
     // Second phase: verify the surviving candidates' read shapes and spines,
     // and build the output.
     var result = Dismantles{
@@ -1583,12 +1772,71 @@ pub fn compute(
     var borrow_stack = std.ArrayList(u32).empty;
     defer borrow_stack.deinit(gpa);
 
-    var it = analysis.candidates.iterator();
-    candidates: while (it.next()) |entry| {
-        const local: LIR.LocalId = @enumFromInt(entry.key_ptr.*);
-        const candidate = entry.value_ptr;
+    // A root's deferred reads are settled by their representatives' plans,
+    // and a representative's layout is a proper part of its root's layout,
+    // so the dependency graph is acyclic. Solve representatives before roots.
+    var candidate_order = std.ArrayList(u32).empty;
+    defer candidate_order.deinit(gpa);
+    try candidate_order.ensureTotalCapacity(gpa, analysis.candidates.count());
+    const order_marks = try gpa.alloc(OrderMark, store.localCount());
+    defer gpa.free(order_marks);
+    @memset(order_marks, .unvisited);
+    var order_stack = std.ArrayList(u32).empty;
+    defer order_stack.deinit(gpa);
+    var order_it = analysis.candidates.keyIterator();
+    while (order_it.next()) |key| {
+        if (order_marks[key.*] != .unvisited) continue;
+        try order_stack.append(gpa, key.*);
+        while (order_stack.items.len != 0) {
+            const index = order_stack.items[order_stack.items.len - 1];
+            switch (order_marks[index]) {
+                .unvisited => {
+                    order_marks[index] = .visiting;
+                    for (analysis.candidates.getPtr(index).?.equivalenced_reads.items) |deferred| {
+                        const representative_index = @intFromEnum(deferred.representative);
+                        switch (order_marks[representative_index]) {
+                            .unvisited => if (analysis.candidates.contains(representative_index)) {
+                                try order_stack.append(gpa, representative_index);
+                            },
+                            .visiting => dismantleInvariant("ARC dismantle projection representatives formed a cycle"),
+                            .ordered => {},
+                        }
+                    }
+                },
+                .visiting => {
+                    order_marks[index] = .ordered;
+                    candidate_order.appendAssumeCapacity(index);
+                    _ = order_stack.pop();
+                },
+                .ordered => _ = order_stack.pop(),
+            }
+        }
+    }
+
+    candidates: for (candidate_order.items) |candidate_index| {
+        const local: LIR.LocalId = @enumFromInt(candidate_index);
+        const candidate = analysis.candidates.getPtr(candidate_index).?;
         if (candidate.disqualified) continue;
+        // A deferred read whose representative committed a plan is that
+        // representative's alias; every other one is an ordinary field read
+        // of this container.
+        for (candidate.equivalenced_reads.items) |deferred| {
+            if (result.containers.contains(deferred.representative) or
+                result.owned_only_containers.contains(deferred.representative)) continue;
+            try candidate.reads.append(gpa, deferred.read);
+        }
         if (candidate.reads.items.len == 0) continue;
+
+        // A payload view dismantles its tag union: the view holds no unit of
+        // its own, but an ownership-complete view of a root that dies whole,
+        // is defined once, and is otherwise only aliased or discriminated
+        // spends the root's unit through its fields.
+        const union_root: ?*UnionRoot = if (analysis.view_root[@intFromEnum(local)] != no_index) blk: {
+            const root_entry = analysis.union_roots.getPtr(analysis.view_root[@intFromEnum(local)]) orelse continue :candidates;
+            if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @intFromEnum(local)) continue :candidates;
+            if (root_entry.discriminant_layout == null) continue :candidates;
+            break :blk root_entry;
+        } else null;
 
         // An ownership-complete projected struct can receive its root's exact
         // unit in an owned emission. Other reference-defined containers remain
@@ -1598,7 +1846,7 @@ pub fn compute(
         else if (candidate.def_count == 1)
             switch (store.getCFStmt(candidate.def_stmt)) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
-                .assign_ref => |stmt| if (analysis.projected_root[@intFromEnum(local)] != no_index) stmt.next else continue :candidates,
+                .assign_ref => |stmt| if (union_root != null or analysis.projected_root[@intFromEnum(local)] != no_index) stmt.next else continue :candidates,
                 .set_local => continue :candidates,
                 .init_uninitialized,
                 .assign_boxy_desc_ref,
@@ -1930,9 +2178,9 @@ pub fn compute(
         // demand vector overrides it to owned; everything else applies to
         // every emission of its proc.
         const projection_root_index = analysis.projected_root[@intFromEnum(local)];
-        const projected = projection_root_index != no_index;
+        const projected = projection_root_index != no_index and union_root == null;
         const activation_root: LIR.LocalId = if (projected) @enumFromInt(projection_root_index) else local;
-        const owned_only = solution.isBorrowed(activation_root);
+        const owned_only = solution.isBorrowed(activation_root) and union_root == null;
         const stored_fields = try result.arena.allocator().dupe(FieldPlace, fields.items);
         if (projected) {
             // The projection read itself moves the outer unit into this
@@ -1957,7 +2205,7 @@ pub fn compute(
                 try result.owned_only_takes.put(gpa, read.stmt, take);
                 const target_index = @intFromEnum(read.target);
                 const prior = result.owned_only_binding_roots[target_index];
-                if (prior != no_index and prior != @intFromEnum(local)) {
+                if (prior != no_index and prior != @intFromEnum(activation_root)) {
                     dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
                 }
                 result.owned_only_binding_roots[target_index] = @intFromEnum(activation_root);
@@ -1986,7 +2234,18 @@ pub fn compute(
                 };
             }
         }
-        if (owned_only) {
+        if (union_root) |view_root_entry| {
+            const root_local: LIR.LocalId = @enumFromInt(analysis.view_root[@intFromEnum(local)]);
+            try result.containers.put(gpa, root_local, .{
+                .fields = stored_fields,
+                .full_mask = rc_mask,
+                .payload_view = .{
+                    .view = local,
+                    .tag_discriminant = view_root_entry.tag_discriminant,
+                    .discriminant_layout = view_root_entry.discriminant_layout.?,
+                },
+            });
+        } else if (owned_only) {
             try result.owned_only_containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
         } else {
             try result.containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
@@ -2001,6 +2260,11 @@ pub fn compute(
         const representative_local: LIR.LocalId = @enumFromInt(representative);
         if (!result.containers.contains(representative_local) and
             !result.owned_only_containers.contains(representative_local)) continue;
+        // The deferred reads of this alias were settled against this exact
+        // plan, which only a candidate solved in dependency order can hold.
+        if (order_marks[representative] != .ordered) {
+            dismantleInvariant("ARC dismantle materialized an alias of a representative that was never solved");
+        }
         const stmt_index = projected_stmt[local_index];
         if (stmt_index == no_index) continue;
         const stmt = store.getCFStmtPtr(@enumFromInt(stmt_index));

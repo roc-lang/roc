@@ -277,8 +277,10 @@ const DiagnosticNodeTag = enum {
 gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
+write_occurrences: collections.SafeList(WriteOccurrence),
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan), // Checked literal dispatch metadata owned by literal nodes
+literal_pattern_contexts: collections.SafeList(LiteralPatternContext),
 interpolation_data: collections.SafeList(InterpolationData), // Canonical and checked data owned by interpolation expressions
 span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span pairs
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
@@ -297,6 +299,29 @@ pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationSte
 where_clause_owners: collections.SafeList(WhereClauseOwnerData), // Canonical receiver ownership for each where-clause scope
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
+
+/// A source name that writes an existing mutable binding. Binding patterns keep
+/// their declaration regions; each write retains its own exact token region.
+/// This table contains only writes, not reads or fresh declarations.
+pub const WriteOccurrence = extern struct {
+    pattern_idx: CIR.Pattern.Idx,
+    start: u32,
+    end: u32,
+
+    pub fn region(self: WriteOccurrence) Region {
+        return Region.from_raw_offsets(self.start, self.end);
+    }
+};
+
+/// Record a write when canonicalization resolves its target binding.
+pub fn recordWriteOccurrence(store: *NodeStore, pattern_idx: CIR.Pattern.Idx, region: Region) Allocator.Error!void {
+    std.debug.assert(store.getPattern(pattern_idx) == .var_assign);
+    _ = try store.write_occurrences.append(store.gpa, .{
+        .pattern_idx = pattern_idx,
+        .start = region.start.offset,
+        .end = region.end.offset,
+    });
+}
 
 /// A pair of u32 values representing a span (start index and length).
 /// Used for storing argument lists, field lists, branch lists, etc.
@@ -321,7 +346,7 @@ pub const LiteralDispatchPlan = extern struct {
     target_var: u32,
     fn_var: u32,
     kind_and_resolution: u32,
-    pattern_failure_owner: u32,
+    pattern_context_plus_one: u32,
 
     pub const Kind = enum(u32) {
         numeral,
@@ -350,13 +375,25 @@ pub const LiteralDispatchPlan = extern struct {
         return @enumFromInt(self.kind_and_resolution >> resolution_shift);
     }
 
-    pub fn patternFailureOwner(self: LiteralDispatchPlan) ?u32 {
-        return if (self.pattern_failure_owner == std.math.maxInt(u32)) null else self.pattern_failure_owner;
+    pub fn patternContext(self: LiteralDispatchPlan, store: *const NodeStore) ?*const LiteralPatternContext {
+        if (self.pattern_context_plus_one == 0) return null;
+        return store.literal_pattern_contexts.get(@enumFromInt(self.pattern_context_plus_one - 1));
+    }
+
+    pub fn patternFailureOwner(self: LiteralDispatchPlan, store: *const NodeStore) ?u32 {
+        return if (self.patternContext(store)) |context| context.failure_owner else null;
     }
 
     fn setResolution(self: *LiteralDispatchPlan, resolution: Resolution) void {
         self.kind_and_resolution = packKindAndResolution(self.dispatchKind(), resolution);
     }
+};
+
+/// Pattern-only checked relations. Expression literals allocate no context.
+/// The literal plan owns this row; retired plans retain it for error recovery.
+pub const LiteralPatternContext = extern struct {
+    failure_owner: u32,
+    equality_fn_var_plus_one: u32 = 0,
 };
 
 comptime {
@@ -615,6 +652,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     errdefer regions.deinit(gpa);
     var int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8);
     errdefer int128_values.deinit(gpa);
+    const literal_pattern_contexts = collections.SafeList(LiteralPatternContext){};
     var literal_dispatch_plans = try collections.SafeList(LiteralDispatchPlan).initCapacity(gpa, capacity / 8);
     errdefer literal_dispatch_plans.deinit(gpa);
     var interpolation_data = try collections.SafeList(InterpolationData).initCapacity(gpa, capacity / 16);
@@ -658,8 +696,10 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .gpa = gpa,
         .nodes = nodes,
         .regions = regions,
+        .write_occurrences = .{},
         .int128_values = int128_values,
         .literal_dispatch_plans = literal_dispatch_plans,
+        .literal_pattern_contexts = literal_pattern_contexts,
         .interpolation_data = interpolation_data,
         .span2_data = span2_data,
         .span_with_node_data = span_with_node_data,
@@ -687,8 +727,10 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .gpa = gpa,
         .nodes = try self.nodes.clone(gpa),
         .regions = try self.regions.clone(gpa),
+        .write_occurrences = try self.write_occurrences.clone(gpa),
         .int128_values = try self.int128_values.clone(gpa),
         .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
+        .literal_pattern_contexts = try self.literal_pattern_contexts.clone(gpa),
         .interpolation_data = try self.interpolation_data.clone(gpa),
         .span2_data = try self.span2_data.clone(gpa),
         .span_with_node_data = try self.span_with_node_data.clone(gpa),
@@ -716,8 +758,10 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
+    store.write_occurrences.deinit(store.gpa);
     store.int128_values.deinit(store.gpa);
     store.literal_dispatch_plans.deinit(store.gpa);
+    store.literal_pattern_contexts.deinit(store.gpa);
     store.interpolation_data.deinit(store.gpa);
     store.span2_data.deinit(store.gpa);
     store.span_with_node_data.deinit(store.gpa);
@@ -745,8 +789,10 @@ pub fn deinit(store: *NodeStore) void {
 pub fn relocate(store: *NodeStore, offset: isize) void {
     store.nodes.relocate(offset);
     store.regions.relocate(offset);
+    store.write_occurrences.relocate(offset);
     store.int128_values.relocate(offset);
     store.literal_dispatch_plans.relocate(offset);
+    store.literal_pattern_contexts.relocate(offset);
     store.interpolation_data.relocate(offset);
     store.span2_data.relocate(offset);
     store.span_with_node_data.relocate(offset);
@@ -968,14 +1014,24 @@ pub fn recordLiteralDispatchPlan(
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
     std.debug.assert(narrowNodeTag(PatternNodeTag, node.tag) == null or pattern_failure_owner != null);
 
+    const plan_plus_one = literalDispatchPlanPlusOne(node);
+    const context_plus_one = if (plan_plus_one != 0)
+        store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).pattern_context_plus_one
+    else if (pattern_failure_owner) |owner|
+        @intFromEnum(try store.literal_pattern_contexts.append(store.gpa, .{ .failure_owner = owner })) + 1
+    else
+        0;
+    if (pattern_failure_owner) |owner| {
+        std.debug.assert(context_plus_one != 0);
+        store.literal_pattern_contexts.get(@enumFromInt(context_plus_one - 1)).failure_owner = owner;
+    } else std.debug.assert(context_plus_one == 0);
     var plan = LiteralDispatchPlan{
         .node_idx = @intFromEnum(node_idx),
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
         .kind_and_resolution = LiteralDispatchPlan.packKindAndResolution(kind, .unresolved),
-        .pattern_failure_owner = pattern_failure_owner orelse std.math.maxInt(u32),
+        .pattern_context_plus_one = context_plus_one,
     };
-    const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one != 0) {
         plan.setResolution(store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).dispatchResolution());
         store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
@@ -984,6 +1040,14 @@ pub fn recordLiteralDispatchPlan(
 
     const plan_idx = try store.literal_dispatch_plans.append(store.gpa, plan);
     setLiteralDispatchPlanPlusOne(store, node_idx, @intFromEnum(plan_idx) + 1);
+}
+
+/// Retain the exact equality constraint created for this literal pattern.
+pub fn recordLiteralPatternEquality(store: *NodeStore, node_idx: Node.Idx, fn_var: types.Var) void {
+    const plan = store.literalDispatchPlanForNode(node_idx) orelse unreachable;
+    std.debug.assert(plan.pattern_context_plus_one != 0);
+    const context = store.literal_pattern_contexts.get(@enumFromInt(plan.pattern_context_plus_one - 1));
+    context.equality_fn_var_plus_one = @intFromEnum(fn_var) + 1;
 }
 
 /// Finalize the checker-owned resolution for a live literal plan. An
@@ -6251,9 +6315,11 @@ pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers (16 bytes total)
     int128_values: collections.SafeList(i128).Serialized, // Must be first data field for 16-byte alignment
     literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan).Serialized,
+    literal_pattern_contexts: collections.SafeList(LiteralPatternContext).Serialized,
     interpolation_data: collections.SafeList(InterpolationData).Serialized,
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
+    write_occurrences: collections.SafeList(WriteOccurrence).Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     method_call_data: collections.SafeList(MethodCallData).Serialized,
@@ -6282,11 +6348,13 @@ pub const Serialized = extern struct {
         // Serialize int128_values FIRST to ensure 16-byte alignment (i128 requires it)
         try self.int128_values.serialize(&store.int128_values, allocator, writer);
         try self.literal_dispatch_plans.serialize(&store.literal_dispatch_plans, allocator, writer);
+        try self.literal_pattern_contexts.serialize(&store.literal_pattern_contexts, allocator, writer);
         try self.interpolation_data.serialize(&store.interpolation_data, allocator, writer);
         // Serialize nodes
         try self.nodes.serialize(&store.nodes, allocator, writer);
         // Serialize regions
         try self.regions.serialize(&store.regions, allocator, writer);
+        try self.write_occurrences.serialize(&store.write_occurrences, allocator, writer);
         // Serialize span2_data
         try self.span2_data.serialize(&store.span2_data, allocator, writer);
         // Serialize span_with_node_data
@@ -6330,8 +6398,10 @@ pub const Serialized = extern struct {
             .gpa = gpa,
             .nodes = self.nodes.deserializeInto(base_addr),
             .regions = self.regions.deserializeInto(base_addr),
+            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
+            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
             .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
@@ -6361,8 +6431,10 @@ pub const Serialized = extern struct {
             .nodes = self.nodes.deserializeInto(base_addr),
             // Regions needs to be mutable (grown during type checking)
             .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
+            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
+            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
             .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
@@ -6449,6 +6521,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     });
     const node1_idx = try original.nodes.append(gpa, node1);
     try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9), 11);
+    original.recordLiteralPatternEquality(node1_idx, @enumFromInt(13));
     original.finalizeLiteralDispatchResolution(node1_idx, .builtin_direct);
 
     // Add a region
@@ -6500,7 +6573,8 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
     try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
     try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
-    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureOwner());
+    try testing.expectEqual(@as(?u32, 11), literal_plan.patternFailureOwner(&deserialized));
+    try testing.expectEqual(@as(u32, 14), literal_plan.patternContext(&deserialized).?.equality_fn_var_plus_one);
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
@@ -6551,7 +6625,7 @@ test "literal dispatch plans are retired with their owning nodes" {
 
     const numeral_plan = store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(numeral_expr))).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, numeral_plan.dispatchKind());
-    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureOwner());
+    try testing.expectEqual(@as(?u32, 17), numeral_plan.patternFailureOwner(&store));
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
     try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
 

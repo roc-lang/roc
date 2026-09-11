@@ -166,7 +166,7 @@ const AppendRewriter = struct {
         return try self.concatInto(cloner, target, self.accumulator, try cloner.mapLocal(value), ret_stmt);
     }
 
-    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
         if (stmt == .assign_low_level) {
             const s = stmt.assign_low_level;
             if (s.op == .str_concat and cloner.directReturnOf(s.next, s.target)) {

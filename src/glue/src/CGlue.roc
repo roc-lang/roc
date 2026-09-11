@@ -86,7 +86,9 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 				record_struct_name(duplicate_record_names, type_id, rec)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, type_id, tu)
-		RocFunction(_) => "void*"
+		# A function stored inside a value is one erased-callable allocation,
+		# exactly like `Box(fn)`.
+		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "void*"
 	}
 }

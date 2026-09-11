@@ -260,7 +260,7 @@ pub const GraphDiagnostics = struct {
     unify_requests: u64 = 0,
     class_unions: u64 = 0,
     active_type_requests: u64 = 0,
-    active_type_imported_hits: u64 = 0,
+    imported_type_view_hits: u64 = 0,
     active_snapshot_cache_hits: u64 = 0,
     active_snapshot_cache_misses: u64 = 0,
     active_snapshot_nodes_materialized: u64 = 0,
@@ -5623,12 +5623,7 @@ pub const InstGraph = struct {
     /// for provisional relation-replay memos and finalization probes; the
     /// returned graph-owned scratch TypeId must not be emitted as output.
     pub fn provisionalTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        self.requireRelationProduction();
-        if (self.types.hasSpeculativeConstruction()) {
-            Common.compilerBug("provisional Monotype snapshot requested inside a type transaction");
-        }
-        if (self.imported_monos.get(node)) |imported| return imported;
-        if (self.hasCurrentSnapshot(node) or try self.typeIsResolved(node)) return try self.monoFor(node);
+        if (try self.settledTypeViewForNode(node)) |settled| return settled;
         var snapshot = GraphTypeFinals.initProvisionalSnapshot(self);
         defer snapshot.deinit();
         return try snapshot.sealNode(self.find(node));
@@ -5639,11 +5634,7 @@ pub const InstGraph = struct {
     /// take their relation-freeze default (`required`) in this view, while the
     /// live field-kind cells remain open for subsequent graph relations.
     pub fn specializationTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        self.requireRelationProduction();
-        if (self.types.hasSpeculativeConstruction()) {
-            Common.compilerBug("specialization Monotype snapshot requested inside a type transaction");
-        }
-        if (self.hasCurrentSnapshot(node) or try self.typeIsResolved(node)) return try self.monoFor(node);
+        if (try self.settledTypeViewForNode(node)) |settled| return settled;
         if (!try self.typeIsSpecializationDefaultable(node)) {
             Common.invariant("specialization type view requested for a graph type with non-field-kind unresolved evidence");
         }
@@ -5658,19 +5649,27 @@ pub const InstGraph = struct {
     /// closes them. The returned TypeId is graph-owned scratch state and must
     /// not be written to completed Monotype output.
     pub fn activeTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        self.countDiagnostic("active_type_requests");
+        return (try self.settledTypeViewForNode(node)) orelse
+            Common.invariant("active Monotype TypeId requested for an unresolved instantiation graph node");
+    }
+
+    /// The type a node with nothing left to default reads as: the durable
+    /// Monotype it was imported from, or the snapshot of its resolved class.
+    /// Every read-only view of a node starts here, so the active,
+    /// provisional, and specialization views agree on every settled node
+    /// and differ only in which defaults they apply to an open one.
+    fn settledTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!?Type.TypeId {
         self.requireRelationProduction();
         if (self.types.hasSpeculativeConstruction()) {
-            Common.compilerBug("active Monotype snapshot requested inside a type transaction");
+            Common.compilerBug("Monotype type view requested inside a type transaction");
         }
-        self.countDiagnostic("active_type_requests");
         if (self.imported_monos.get(node)) |imported| {
-            self.countDiagnostic("active_type_imported_hits");
+            self.countDiagnostic("imported_type_view_hits");
             return imported;
         }
-        if (!self.hasCurrentSnapshot(node) and !try self.typeIsResolved(node)) {
-            Common.invariant("active Monotype TypeId requested for an unresolved instantiation graph node");
-        }
-        return try self.monoFor(node);
+        if (self.hasCurrentSnapshot(node) or try self.typeIsResolved(node)) return try self.monoFor(node);
+        return null;
     }
 
     fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {

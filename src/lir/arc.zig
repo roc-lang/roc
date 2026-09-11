@@ -224,17 +224,48 @@ const ProcArcDomain = struct {
         return self.resource_locals[bit_index];
     }
 
+    /// Commit the field domains of the containers every emission of this
+    /// procedure dismantles. Owned-only containers are committed separately
+    /// once the emission's owned bindings are known, since their takes exist
+    /// only in emissions that bind the parameter owned.
     fn installResidualDomains(self: *ProcArcDomain, solution: *const arc_solve.Solution, dismantles: *const arc_dismantle.Dismantles) void {
         var normal = dismantles.containers.iterator();
         while (normal.next()) |entry| self.installResidualDomain(solution, entry.key_ptr.*, entry.value_ptr.full_mask);
+    }
+
+    /// Commit the field domains of the owned-only containers this emission
+    /// actually dismantles. A container whose activating parameter this
+    /// emission binds borrowed keeps no residual field domain: its takes are
+    /// skipped, so the whole value is released together and no
+    /// field-by-field release may name it. Membership in
+    /// `owned_binding_override` is defined only for this frame's locals, so
+    /// the frame check must come first.
+    fn installOwnedOnlyResidualDomains(
+        self: *ProcArcDomain,
+        solution: *const arc_solve.Solution,
+        dismantles: *const arc_dismantle.Dismantles,
+        owned_binding_override: *const OwnedSet,
+    ) void {
         var owned_only = dismantles.owned_only_containers.iterator();
-        while (owned_only.next()) |entry| self.installResidualDomain(solution, entry.key_ptr.*, entry.value_ptr.full_mask);
+        while (owned_only.next()) |entry| {
+            const local = entry.key_ptr.*;
+            if (!self.frameContainsLocal(local)) continue;
+            if (!owned_binding_override.contains(local)) continue;
+            self.installResidualDomain(solution, local, entry.value_ptr.full_mask);
+        }
+    }
+
+    /// Whether `local` belongs to the frame this domain describes. The
+    /// dismantle tables span every procedure, so each frame installs only
+    /// its own containers.
+    fn frameContainsLocal(self: *const ProcArcDomain, local: LIR.LocalId) bool {
+        const local_index = @intFromEnum(local);
+        if (local_index >= self.global_local_index.len) return false;
+        return self.global_local_index[local_index] != no_proc_local_index;
     }
 
     fn installResidualDomain(self: *ProcArcDomain, solution: *const arc_solve.Solution, local: LIR.LocalId, full_mask: u64) void {
-        const local_index = @intFromEnum(local);
-        if (local_index >= self.global_local_index.len) return;
-        if (self.global_local_index[local_index] == no_proc_local_index) return;
+        if (!self.frameContainsLocal(local)) return;
         const unit = solution.unitLocalOf(local);
         const bit = self.resourceBitOf(unit) orelse arcInvariant("ARC residual aggregate has no ownership resource");
         const prior = self.resource_full_masks[bit];
@@ -565,6 +596,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 }
             }
         }
+        domain.installOwnedOnlyResidualDomains(&solution, &dismantles, &owned_binding_override);
 
         const join_bodies = solution.joinBodiesOf(source_proc);
         inserter.join_bodies = join_bodies;
@@ -1349,11 +1381,15 @@ const Inserter = struct {
     dismantle_temps: *std.ArrayList(LIR.LocalId) = undefined,
     /// Mode-specialized variant table (shared across the emission worklist).
     variants: *VariantTable = undefined,
-    /// Parameter locals whose borrowed solved binding is overridden to owned
-    /// for the variant currently being emitted.
+    /// Locals whose borrowed solved binding is overridden to owned for the
+    /// variant currently being emitted. A membership set: it is populated
+    /// before the owned-only residual field domains are committed, so the
+    /// residual masks its entries carry are meaningless and only `contains`
+    /// is ever consulted.
     owned_binding_override: *OwnedSet = undefined,
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
+    /// A membership set in the same sense as `owned_binding_override`.
     unique_param_override: *OwnedSet = undefined,
     /// Exact resource and liveness bit domain of the proc currently emitted.
     /// It is built directly from that proc's explicit `frame_locals` span.
@@ -4056,8 +4092,15 @@ const Inserter = struct {
     // case that follows its completed decision.
 
     /// The single alias-to-unit resolution used by every transfer site.
+    /// The local whose ownership resource an occurrence of `local` moves. A
+    /// borrowed complete projection keys its root's unit; a take binding
+    /// through that same projection owns the stored unit it took and keys
+    /// itself, so the root's residual shell and the taken field never share
+    /// a resource.
     fn unitOf(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
-        if (self.dismantles.projectionUnitOf(local)) |root| return root;
+        if (self.dismantles.projectionUnitOf(local)) |root| {
+            if (self.isBindingBorrowed(local)) return root;
+        }
         return self.solution.unitLocalOf(local);
     }
 
@@ -5914,6 +5957,7 @@ const Inserter = struct {
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
     fn noteLivenessUseLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) ResourceError!void {
+        if (self.solution.isRepresentationAlias(local)) return;
         if (self.rawLivenessBitOf(local)) |bit| try reads.set(bit);
         if (self.groupBitOf(local)) |bit| try reads.set(bit);
         if (self.valueUseBitOf(local)) |bit| try reads.set(bit);
@@ -6084,7 +6128,9 @@ const Inserter = struct {
 
             switch (self.store.getCFStmt(stmt)) {
                 .assign_ref => |assign| {
-                    try self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
+                    if (!self.solution.isRepresentationAlias(assign.target)) {
+                        try self.noteLivenessUseRefOp(&graph.nodes.items[node_index].reads, assign.op);
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -6198,7 +6244,12 @@ const Inserter = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_low_level => |assign| {
-                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    const args = self.store.getLocalSpan(assign.args);
+                    const representation_args = assign.op.representationArgs();
+                    for (0..GuardedList.borrowLen(args)) |index| {
+                        if (index < 64 and (representation_args & argMaskBit(index)) != 0) continue;
+                        try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, GuardedList.at(args, index));
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -7051,6 +7102,68 @@ const Inserter = struct {
     /// the whole-struct helper would have.
     fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, residual_mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if ((residual_mask & ~container.full_mask) != 0) arcInvariant("ARC residual release exceeded its committed aggregate field domain");
+        if (container.payload_view) |view| return try self.dismantleUnion(local, container, view, residual_mask, next);
+        return try self.releaseResidualFields(local, local, container, residual_mask, next);
+    }
+
+    /// Release a dismantled tag union. The death point cannot name the
+    /// variant statically, so the residual release dispatches at runtime:
+    /// the discriminant is read fresh, the taken variant's arm releases its
+    /// residual fields through the payload view the takes went through, and
+    /// the default arm holds the ordinary whole release for every variant the
+    /// takes never addressed. The view is assigned on every path with a
+    /// residual to release, since only its takes leave one. Where the death
+    /// point sits inside the matched arm, the discriminant is a known
+    /// constant there and the dispatch folds away. A path that took nothing
+    /// still holds the intact unit, which one whole release covers exactly.
+    fn dismantleUnion(
+        self: *Inserter,
+        local: LIR.LocalId,
+        container: arc_dismantle.Container,
+        view: arc_dismantle.PayloadView,
+        residual_mask: u64,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
+        const whole = try self.store.addCFStmt(.{ .decref = .{
+            .value = local,
+            .rc = self.rcHelperForLocal(.decref, local),
+            .atomicity = self.rcAtomicity(local),
+            .next = next,
+        } });
+        if (residual_mask == container.full_mask) return whole;
+
+        const arm = try self.releaseResidualFields(local, view.view, container, residual_mask, next);
+        const discriminant = try self.store.addLocal(.{ .layout_idx = view.discriminant_layout });
+        try self.dismantle_temps.append(self.emission_allocator, discriminant);
+        const branches = try self.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
+            .{ .value = view.tag_discriminant, .body = arm },
+        });
+        const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = branches,
+            .default_branch = whole,
+            .default_is_cold = false,
+            .continuation = next,
+        } });
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = local } },
+            .next = dispatch,
+        } });
+    }
+
+    /// Read each residual refcounted field of `fields_source` into a
+    /// temporary and release it. `local` names the container whose
+    /// atomicity covers the stored payloads; for a tag union it differs from
+    /// the payload view the fields are read through.
+    fn releaseResidualFields(
+        self: *Inserter,
+        local: LIR.LocalId,
+        fields_source: LIR.LocalId,
+        container: arc_dismantle.Container,
+        residual_mask: u64,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         const atomicity = self.rcAtomicity(local);
         var tail = next;
         var index = container.fields.len;
@@ -7074,7 +7187,7 @@ const Inserter = struct {
             tail = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = temp,
                 .op = .{ .field = .{
-                    .source = local,
+                    .source = fields_source,
                     .field_idx = @intCast(field.field_idx),
                 } },
                 .take_kind = .take,
@@ -7436,6 +7549,106 @@ test "exact ARC sets preserve operations across persistent forks" {
 
 test "arc insertion boundary exists" {
     std.testing.refAllDecls(@This());
+}
+
+test "RC list metadata through aliases does not preserve a consumed buffer" {
+    try testListObservationAfterReserve(.list_len);
+    try testListObservationAfterReserve(.list_capacity);
+}
+
+test "RC list payload through aliases preserves a consumed buffer" {
+    try testListObservationAfterReserve(.list_get_unsafe);
+}
+
+fn testListObservationAfterReserve(op: LIR.LowLevel) (Allocator.Error || error{TestExpectedEqual})!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const old = try f.local(f.list_i64);
+    const reserved = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const reinterpreted = try f.local(f.list_i64);
+    const size = try f.local(.u64);
+    const observed = try f.local(.u64);
+    const ret = try f.ret(reserved);
+    const read = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = observed,
+        .op = op,
+        .rc_effect = op.rcEffect(),
+        .args = try f.span(if (op == .list_get_unsafe) &.{ reinterpreted, size } else &.{reinterpreted}),
+        .next = ret,
+    } });
+    const aliases = try f.assignRefLocal(alias, old, try f.assignRefReinterpret(reinterpreted, alias, read));
+    const reserve = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = reserved,
+        .op = .list_reserve,
+        .rc_effect = LIR.LowLevel.list_reserve.rcEffect(),
+        .args = try f.span(&.{ old, size }),
+        .next = aliases,
+    } });
+    const initial = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = old,
+        .op = .list_with_capacity,
+        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .args = try f.span(&.{size}),
+        .next = reserve,
+    } });
+    _ = try f.addProc(&.{size}, initial, f.list_i64);
+    try f.run();
+    try testing.expectEqual(@as(usize, if (op == .list_get_unsafe) 1 else 0), f.countRc(old, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(alias, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(reinterpreted, .incref));
+}
+
+test "RC list metadata alias survives source replacement without a unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const old = try f.local(f.list_i64);
+    const replacement = try f.local(f.list_i64);
+    const snapshot = try f.local(f.list_i64);
+    const length = try f.local(.u64);
+    const ret = try f.ret(length);
+    const read = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = length,
+        .op = .list_len,
+        .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+        .args = try f.span(&.{snapshot}),
+        .next = ret,
+    } });
+    const replace = try f.setLocal(old, replacement, .replace_existing, read);
+    const copy = try f.assignRefLocal(snapshot, old, replace);
+    const proc = try f.addProc(&.{ old, replacement }, copy, .u64);
+    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    try testing.expectEqual(@as(usize, 0), f.countRc(snapshot, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(old, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(replacement, .incref));
+}
+
+test "RC list metadata does not erase ownership of a redefined alias" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const value = try f.local(f.list_i64);
+    const size = try f.local(.u64);
+    const length = try f.local(.u64);
+    const ret = try f.ret(length);
+    const read = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = length,
+        .op = .list_len,
+        .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+        .args = try f.span(&.{value}),
+        .next = ret,
+    } });
+    const rebind = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = value,
+        .op = .list_with_capacity,
+        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .args = try f.span(&.{size}),
+        .next = read,
+    } });
+    const copy = try f.assignRefLocal(value, source, rebind);
+    const proc = try f.addProc(&.{ source, size }, copy, .u64);
+    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    try testing.expectEqual(@as(usize, 2), f.countRc(value, .decref));
 }
 
 test "RC elision removes adjacent retain release pairs" {
@@ -10661,6 +10874,105 @@ test "RC divergent field takes normalize exact residual places on each switch ed
     try f.expectRc(second_read, 0, 0, 0);
     try f.expectRc(pair, 0, 0, 0);
     try testing.expectEqual(@as(usize, 2), f.countAllRc());
+}
+
+test "RC tag union dismantles through its payload view when the payload dies field by field" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const tag_value = try f.local(tag_pair);
+    const disc = try f.local(.u8);
+    const view = try f.local(f.pair_str);
+    const first_read = try f.local(.str);
+    const second_read = try f.local(.str);
+    const first_sink = try f.local(.i64);
+    const second_sink = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    // match tag_value { Pair(view) => { call(view.0); call(view.1) }, _ => {} }
+    const ret = try f.ret(result);
+    const second_call = try f.assignCall(second_sink, &.{second_read}, ret);
+    const first_call = try f.assignCall(first_sink, &.{first_read}, second_call);
+    const read_second = try f.assignRefField(second_read, view, 1, first_call);
+    const read_first = try f.assignRefField(first_read, view, 0, read_second);
+    const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read_first,
+    } });
+    const default_body = try f.assignI64(result, 0, ret);
+    const switch_stmt = try f.switchStmt(disc, view_read, default_body, ret);
+    const disc_read = try f.assignDiscriminant(disc, tag_value, switch_stmt);
+    const tag_assign = try f.assignTag(tag_value, 1, pair, disc_read);
+    const assign_pair = try f.assignStruct(pair, &.{ first, second }, tag_assign);
+    const assign_second = try f.assignStr(second, "second", assign_pair);
+    const assign_result = try f.assignI64(result, 7, assign_second);
+    const body = try f.assignStr(first, "first", assign_result);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // Both strings move out of the payload view into their calls without a
+    // retain: the view is the struct through which the union dismantles.
+    // The union is never released whole on that path; its death dispatches
+    // on a fresh discriminant read whose matched arm has nothing left to
+    // release, while the default arm and the no-payload path keep the whole
+    // release.
+    try f.expectRc(first_read, 0, 0, 0);
+    try f.expectRc(second_read, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 0), f.countRc(tag_value, .incref));
+    try testing.expectEqual(@as(usize, 2), f.countRc(tag_value, .decref));
+    try testing.expectEqual(@as(usize, 2), f.countAllRc());
+}
+
+test "RC tag union dismantles through its payload view when one field remains for residual release" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const tag_value = try f.local(tag_pair);
+    const disc = try f.local(.u8);
+    const view = try f.local(f.pair_str);
+    const first_read = try f.local(.str);
+    const first_sink = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    // Leave the second field in the view for the residual release.
+    const ret = try f.ret(result);
+    const first_call = try f.assignCall(first_sink, &.{first_read}, ret);
+    const read_first = try f.assignRefField(first_read, view, 0, first_call);
+    const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read_first,
+    } });
+    const default_body = try f.assignI64(result, 0, ret);
+    const switch_stmt = try f.switchStmt(disc, view_read, default_body, ret);
+    const disc_read = try f.assignDiscriminant(disc, tag_value, switch_stmt);
+    const tag_assign = try f.assignTag(tag_value, 1, pair, disc_read);
+    const assign_pair = try f.assignStruct(pair, &.{ first, second }, tag_assign);
+    const assign_second = try f.assignStr(second, "second", assign_pair);
+    const assign_result = try f.assignI64(result, 7, assign_second);
+    const body = try f.assignStr(first, "first", assign_result);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // The fresh tag read needs only the union representation, while the
+    // remaining field release still requires the live payload view.
+    try f.expectRc(first_read, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 0), f.countRc(tag_value, .incref));
+    try testing.expectEqual(@as(usize, 2), f.countRc(tag_value, .decref));
+    try testing.expectEqual(@as(usize, 3), f.countAllRc());
 }
 
 fn chainedJoinSolveWork(join_count: usize) Allocator.Error!u64 {

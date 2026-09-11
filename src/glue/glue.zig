@@ -45,8 +45,6 @@ const RocTarget = roc_target.RocTarget;
 const CheckedArtifact = check.CheckedArtifact;
 const CanonicalNameStore = check.CanonicalNames.CanonicalNameStore;
 const CIR = can.CIR;
-const checked_artifact_layout_resolver = @import("checked_artifact_layout_resolver.zig");
-const CheckedArtifactLayoutResolver = checked_artifact_layout_resolver.Resolver;
 
 const builtins = @import("builtins");
 const RocStr = builtins.str.RocStr;
@@ -202,15 +200,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         try artifacts_by_key.put(artifact.key, artifact);
     }
 
-    var glue_layouts = layout.Store.init(gpa, .u64) catch {
-        return error.OutOfMemory;
-    };
-    defer glue_layouts.deinit();
-
-    var layout_resolver = CheckedArtifactLayoutResolver.init(&glue_layouts, &artifacts_by_key);
-    defer layout_resolver.deinit();
-
-    var type_table = TypeTable.init(gpa, &artifacts_by_key, &glue_layouts, &layout_resolver);
+    var type_table = TypeTable.init(gpa, &artifacts_by_key);
     defer type_table.deinit();
 
     for (modules) |mod| {
@@ -260,7 +250,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         for (artifact.platform_required_declarations.declarations) |declaration| {
             const name = artifact.canonical_names.exportNameText(declaration.platform_name);
             const checked_type = platformRequiredEntrypointCheckedType(artifact, declaration);
-            const type_id = type_table.getOrInsert(artifact, checked_type) catch |err| switch (err) {
+            type_table.boundary_value_name = name;
+            defer type_table.boundary_value_name = null;
+            const type_id = type_table.getOrInsertRoot(artifact, checked_type) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
             };
@@ -273,7 +265,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
                 glueInvariant("provided entry has no top-level value", .{});
             const scheme = artifact.checked_types.schemeForKey(top_level.source_scheme) orelse
                 glueInvariant("provided entry has no checked type scheme", .{});
-            const type_id = type_table.getOrInsert(artifact, scheme.root) catch |err| switch (err) {
+            type_table.boundary_value_name = artifact.canonical_names.exportNameText(provides_entry.source_name);
+            defer type_table.boundary_value_name = null;
+            const type_id = type_table.getOrInsertRoot(artifact, scheme.root) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
             };
@@ -1545,49 +1539,47 @@ const CollectedModuleTypeInfo = struct {
 };
 
 /// Internal representation of a collected type for the type table.
-const CollectedLayoutFacts = struct {
-    layout_idx: layout.Idx,
-    size_32: u64,
-    alignment_32: u64,
-    size_64: u64,
-    alignment_64: u64,
-};
-
+///
+/// A repr is purely structural: names, field/tag/element relationships, and
+/// the kind of value. Every layout fact (sizes, alignments, offsets, field
+/// order in memory, discriminants) lives in the entry's `CollectedAbiLayout`,
+/// which `attachAbiLayouts` copies out of the compiler's committed layouts.
 const CollectedTypeRepr = union(enum) {
-    bool_: CollectedLayoutFacts,
-    box: struct { inner_id: u64, layout: CollectedLayoutFacts },
-    dec: CollectedLayoutFacts,
-    f32_: CollectedLayoutFacts,
-    f64_: CollectedLayoutFacts,
-    i8_: CollectedLayoutFacts,
-    i16_: CollectedLayoutFacts,
-    i32_: CollectedLayoutFacts,
-    i64_: CollectedLayoutFacts,
-    i128_: CollectedLayoutFacts,
-    u8_: CollectedLayoutFacts,
-    u16_: CollectedLayoutFacts,
-    u32_: CollectedLayoutFacts,
-    u64_: CollectedLayoutFacts,
-    u128_: CollectedLayoutFacts,
-    u8x16: CollectedLayoutFacts,
-    i8x16: CollectedLayoutFacts,
-    u16x8: CollectedLayoutFacts,
-    i16x8: CollectedLayoutFacts,
-    u32x4: CollectedLayoutFacts,
-    i32x4: CollectedLayoutFacts,
-    u64x2: CollectedLayoutFacts,
-    i64x2: CollectedLayoutFacts,
-    str_: CollectedLayoutFacts,
-    unit: CollectedLayoutFacts,
-    list: struct { elem_id: u64, layout: CollectedLayoutFacts },
-    function: struct { arg_ids: []const u64, ret_id: u64, layout: CollectedLayoutFacts },
-    record: struct { name: []const u8, anonymous: bool, fields: []const CollectedRecordField, layout: CollectedLayoutFacts },
-    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo, layout: CollectedLayoutFacts },
-    unknown: struct { name: []const u8, layout: CollectedLayoutFacts },
+    bool_,
+    box: struct { inner_id: u64 },
+    dec,
+    f32_,
+    f64_,
+    i8_,
+    i16_,
+    i32_,
+    i64_,
+    i128_,
+    u8_,
+    u16_,
+    u32_,
+    u64_,
+    u128_,
+    u8x16,
+    i8x16,
+    u16x8,
+    i16x8,
+    u32x4,
+    i32x4,
+    u64x2,
+    i64x2,
+    str_,
+    unit,
+    list: struct { elem_id: u64 },
+    function: struct { arg_ids: []const u64, ret_id: u64 },
+    record: struct { name: []const u8, anonymous: bool, fields: []const CollectedRecordField },
+    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo },
+    unknown: struct { name: []const u8 },
 };
 
 const CollectedRecordField = struct {
     name: []const u8,
+    /// Repointed to a box wrapper entry when the compiler boxed this slot.
     type_id: u64,
     original_index: u64,
     /// True for an unnamed nominal-record padding field (`_` / `_name`). The
@@ -1601,18 +1593,35 @@ const CollectedRecordField = struct {
 
 const CollectedTagInfo = struct {
     name: []const u8,
-    payload_ids: []const u64,
+    /// Repointed to box wrapper entries where the compiler boxed a payload slot.
+    payload_ids: []u64,
 };
 
-/// Source checked type for one public glue type id.
+/// The checked type behind one root glue entry, whose committed layout glue
+/// asks the compiler for directly.
+///
+/// Roots are the types a host sees at the platform boundary (hosted function
+/// arguments and results, provided values, required entrypoints) plus the
+/// arguments and result of every function type reached from them. Every
+/// other glue type gets its layout from its parent's committed layout during
+/// `attachAbiLayouts`, so a root is the only place a checked type id crosses
+/// into the compiler's layout selection.
 ///
 /// Authoritative sources:
 /// - `CheckedModuleArtifact` owns checked type ids.
 /// - `lir.Program.RequestedLayout` in `src/lir/program.zig` is the post-check
 ///   boundary that maps those checked ids to committed LIR layout ids.
-const CollectedTypeSource = struct {
+const RootLayoutRequest = struct {
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
+};
+
+/// A child entry to attach together with the committed layout of the slot
+/// that holds it, after `childSlotFor` has decided whether the slot needs a
+/// box wrapper.
+const ChildSlot = struct {
+    entry: u64,
+    layout_idx: layout.Idx,
 };
 
 const CollectedAbiSizeAlign = struct {
@@ -1672,14 +1681,30 @@ const CollectedAbiLayout = struct {
 
 const CollectedTypeInfo = struct {
     repr: CollectedTypeRepr,
-    source: ?CollectedTypeSource,
+    /// Committed ABI facts, attached by `attachAbiLayouts` once the compiler
+    /// has selected this entry's layout. Every entry has one before the type
+    /// table is handed to a glue spec.
     abi: ?CollectedAbiLayout = null,
 };
 
 /// Maps checked artifact keys to artifacts. Populated once from the compiled
 /// module list before collection so nominal representation refs can resolve
 /// their declaration owners directly.
-const ArtifactKeyMap = checked_artifact_layout_resolver.ArtifactMap;
+const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, *const CheckedArtifact.CheckedModuleArtifact);
+
+/// Where a checked type sits inside the value being converted.
+///
+/// A type held by value inside a composite must have a committed layout of
+/// its own, so an unresolved type variable there is a glue error. Behind a
+/// heap indirection (a list element or a box payload) the host only ever sees
+/// a pointer, so a variable is an opaque pointer target. A boundary root (a
+/// hosted or provided function's argument or result, a provided value) that
+/// is itself a bare variable is likewise an opaque pointer to the host.
+const ValuePosition = enum {
+    by_value,
+    heap_indirect,
+    boundary,
+};
 
 const TypeTableKey = struct {
     artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
@@ -1721,8 +1746,16 @@ const TypeTable = struct {
     /// type-table entry instead of opening forever.
     active_opens: std.ArrayList(ActiveOpen) = .empty,
     gpa: std.mem.Allocator,
-    layouts: *const layout.Store,
-    layout_resolver: *CheckedArtifactLayoutResolver,
+    /// Entries whose committed layout is requested from the compiler by
+    /// checked type id, keyed by entry index in first-registration order; see
+    /// `RootLayoutRequest`. Filled during conversion, consumed by
+    /// `attachAbiLayouts`.
+    roots: std.AutoArrayHashMapUnmanaged(u64, RootLayoutRequest) = .empty,
+    /// Box wrapper entry per child entry, for slots the compiler boxed while
+    /// the child's own layout stays by value (recursive-slot storage inside a
+    /// recursive type group). One wrapper per child keeps every boxed slot of
+    /// the same type on one entry.
+    box_wrappers: std.AutoHashMapUnmanaged(u64, u64) = .empty,
     /// Lookup from checked artifact key to artifact. Borrowed; not owned by the
     /// type table.
     artifacts_by_key: *const ArtifactKeyMap,
@@ -1731,6 +1764,10 @@ const TypeTable = struct {
     /// variable by value. Set alongside `error.UnresolvedByValue`; owned here
     /// and freed in `deinit`.
     unresolved_error: ?[]const u8 = null,
+    /// Source-level name of the hosted, provided, or required value whose
+    /// signature is being converted, for that message. Borrowed from the
+    /// caller for the duration of the conversion.
+    boundary_value_name: ?[]const u8 = null,
 
     /// A checked type resolved through the active formal bindings: the artifact
     /// and checked type to actually convert (an application argument for a
@@ -1775,8 +1812,6 @@ const TypeTable = struct {
     fn init(
         gpa: std.mem.Allocator,
         artifacts_by_key: *const ArtifactKeyMap,
-        layouts: *const layout.Store,
-        layout_resolver: *CheckedArtifactLayoutResolver,
     ) TypeTable {
         return .{
             .entries = std.ArrayList(CollectedTypeInfo).empty,
@@ -1786,8 +1821,8 @@ const TypeTable = struct {
             .active_opens = .empty,
             .open_ctxs = .empty,
             .gpa = gpa,
-            .layouts = layouts,
-            .layout_resolver = layout_resolver,
+            .roots = .empty,
+            .box_wrappers = .empty,
             .artifacts_by_key = artifacts_by_key,
         };
     }
@@ -1805,6 +1840,8 @@ const TypeTable = struct {
         self.active_opens.deinit(self.gpa);
         for (self.open_ctxs.items) |entry| self.gpa.free(entry.arg_keys);
         self.open_ctxs.deinit(self.gpa);
+        self.roots.deinit(self.gpa);
+        self.box_wrappers.deinit(self.gpa);
     }
 
     /// Find or assign a stable open-context id for an open identity.
@@ -1929,13 +1966,14 @@ const TypeTable = struct {
             arg_fields = try self.extractRecordFieldsBound(artifact, func.args[0]);
         }
 
-        const ret_type_id = try self.getOrInsert(artifact, func.ret);
+        const ret_type_id = try self.getOrInsertRoot(artifact, func.ret);
         var arg_type_ids: []const u64 = &.{};
         errdefer if (arg_type_ids.len > 0) self.gpa.free(arg_type_ids);
         if (func.args.len > 0) {
             const ids = try self.gpa.alloc(u64, func.args.len);
+            errdefer self.gpa.free(ids);
             for (func.args, 0..) |arg, i| {
-                ids[i] = try self.getOrInsert(artifact, arg);
+                ids[i] = try self.getOrInsertRoot(artifact, arg);
             }
             arg_type_ids = ids;
         }
@@ -2334,19 +2372,6 @@ const TypeTable = struct {
         self.var_map.clearRetainingCapacity();
     }
 
-    fn layoutFactsForIdx(self: *const TypeTable, layout_idx: layout.Idx) CollectedLayoutFacts {
-        const layout_value = self.layouts.getLayout(layout_idx);
-        const sa32 = self.layouts.layoutSizeAlignAt(layout_value, .u32);
-        const sa64 = self.layouts.layoutSizeAlignAt(layout_value, .u64);
-        return .{
-            .layout_idx = layout_idx,
-            .size_32 = sa32.size,
-            .alignment_32 = sa32.alignment.toByteUnits(),
-            .size_64 = sa64.size,
-            .alignment_64 = sa64.alignment.toByteUnits(),
-        };
-    }
-
     /// Record the user-facing glue error for a glue-visible type that holds an
     /// unresolved (flex/rigid) type variable by value, naming the type and its
     /// declaring module. Keeps the first message; the whole glue run aborts on
@@ -2360,50 +2385,140 @@ const TypeTable = struct {
         const type_name = try self.typeStringAllocBound(artifact, checked_type);
         defer self.gpa.free(type_name);
         const module_name = artifact.moduleEnvConst().module_name;
+        const value_name = self.boundary_value_name orelse "";
         self.unresolved_error = try std.fmt.allocPrint(
             self.gpa,
-            "The type `{s}` from module `{s}` still has an unresolved type variable, so it has no committed memory layout and glue cannot generate bindings for it. Give the type a concrete layout (for example, box the value across the host boundary) so its size is known.",
-            .{ type_name, module_name },
+            "The type `{s}` from module `{s}`{s}{s}{s} still has an unresolved type variable, so it has no committed memory layout and glue cannot generate bindings for it. Give the type a concrete layout (for example, box the value across the host boundary) so its size is known.",
+            .{
+                type_name,
+                module_name,
+                if (value_name.len == 0) "" else " (in the signature of `",
+                value_name,
+                if (value_name.len == 0) "" else "`)",
+            },
         );
     }
 
-    fn layoutFactsForCheckedType(
+    /// Convert a checked type the host sees directly and register it as a root
+    /// layout request, so `attachAbiLayouts` asks the compiler for its
+    /// committed layout by checked type id.
+    fn getOrInsertRoot(
+        self: *TypeTable,
+        artifact_in: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type_in: CheckedArtifact.CheckedTypeId,
+    ) TypeTableError!u64 {
+        const src = self.substituteFormal(artifact_in, checked_type_in);
+        // A root is requested from the compiler by checked type id, which
+        // names a declaration-space type when this root sits inside a nominal
+        // backing opening. Formal substitution only rewrites a type that IS a
+        // bound formal, so a type that merely mentions one has no checked id
+        // for its instantiation and the compiler would lay out the template
+        // with the formal sealed to zero size. Refuse rather than describe a
+        // wrong size to the host.
+        if (self.template_bindings.count() != 0 and try self.mentionsBoundFormal(src.artifact, src.checked_type)) {
+            try self.recordUninstantiatedRoot(src.artifact, src.checked_type);
+            return error.UnresolvedByValue;
+        }
+        const idx = try self.getOrInsert(src.artifact, src.checked_type, .boundary);
+        const slot = try self.roots.getOrPut(self.gpa, idx);
+        if (!slot.found_existing) {
+            slot.value_ptr.* = .{ .artifact = src.artifact, .checked_type = src.checked_type };
+        }
+        return idx;
+    }
+
+    /// True when a checked type contains, anywhere inside it, a type variable
+    /// that the active nominal backing opening binds to an argument. The type
+    /// itself is checked after formal substitution, so only nested mentions
+    /// matter.
+    fn mentionsBoundFormal(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-    ) TypeTableError!CollectedLayoutFacts {
-        const layout_idx = if (self.template_bindings.count() == 0)
-            self.layout_resolver.resolve(artifact, checked_type) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.UnresolvedByValue => {
-                    try self.recordUnresolvedByValue(artifact, checked_type);
-                    return error.UnresolvedByValue;
-                },
-            }
-        else layout_with_bindings: {
-            // Under a backing opening, layout facts for backing subtypes must
-            // resolve the declaration's formals to the application's args.
-            var bindings = std.ArrayList(CheckedArtifactLayoutResolver.FormalArgBinding).empty;
-            defer bindings.deinit(self.gpa);
-            var it = self.template_bindings.iterator();
-            while (it.next()) |entry| {
-                const formal_artifact = self.artifacts_by_key.get(entry.key_ptr.artifact_key) orelse continue;
-                try bindings.append(self.gpa, .{
-                    .formal_artifact = formal_artifact,
-                    .formal = entry.key_ptr.checked_type,
-                    .arg_artifact = entry.value_ptr.artifact,
-                    .arg = entry.value_ptr.checked_type,
-                });
-            }
-            break :layout_with_bindings self.layout_resolver.resolveWithFormalBindings(artifact, checked_type, bindings.items) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.UnresolvedByValue => {
-                    try self.recordUnresolvedByValue(artifact, checked_type);
-                    return error.UnresolvedByValue;
-                },
-            };
-        };
-        return self.layoutFactsForIdx(layout_idx);
+    ) Allocator.Error!bool {
+        var visited = std.AutoHashMap(TypeTableKey, void).init(self.gpa);
+        defer visited.deinit();
+        return self.mentionsBoundFormalInner(artifact, checked_type, &visited);
+    }
+
+    fn mentionsBoundFormalInner(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+        visited: *std.AutoHashMap(TypeTableKey, void),
+    ) Allocator.Error!bool {
+        const key = TypeTableKey{ .artifact_key = artifact.key, .checked_type = checked_type };
+        if (visited.contains(key)) return false;
+        try visited.put(key, {});
+        switch (checkedTypePayload(artifact, checked_type)) {
+            .pending, .err, .empty_record, .empty_tag_union => return false,
+            .flex, .rigid => return self.template_bindings.contains(key),
+            .alias => |alias| return self.mentionsBoundFormalInner(artifact, alias.backing, visited),
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (try self.mentionsBoundFormalInner(artifact, field.ty, visited)) return true;
+                }
+                return self.mentionsBoundFormalInner(artifact, record.ext, visited);
+            },
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    if (try self.mentionsBoundFormalInner(artifact, field.ty, visited)) return true;
+                }
+                return false;
+            },
+            .tuple => |items| {
+                for (items) |item| {
+                    if (try self.mentionsBoundFormalInner(artifact, item, visited)) return true;
+                }
+                return false;
+            },
+            .nominal => |nominal| {
+                for (nominal.args) |arg| {
+                    if (try self.mentionsBoundFormalInner(artifact, arg, visited)) return true;
+                }
+                return false;
+            },
+            .function => |func| {
+                for (func.args) |arg| {
+                    if (try self.mentionsBoundFormalInner(artifact, arg, visited)) return true;
+                }
+                return self.mentionsBoundFormalInner(artifact, func.ret, visited);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.argsSlice(&artifact.checked_types)) |arg| {
+                        if (try self.mentionsBoundFormalInner(artifact, arg, visited)) return true;
+                    }
+                }
+                return self.mentionsBoundFormalInner(artifact, tag_union.ext, visited);
+            },
+        }
+    }
+
+    /// Record the user-facing glue error for a root type that lives inside a
+    /// generic nominal declaration and mentions one of its type parameters,
+    /// so no checked type names its instantiation. Keeps the first message.
+    fn recordUninstantiatedRoot(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        if (self.unresolved_error != null) return;
+        const type_name = try self.typeStringAllocBound(artifact, checked_type);
+        defer self.gpa.free(type_name);
+        const module_name = artifact.moduleEnvConst().module_name;
+        const value_name = self.boundary_value_name orelse "";
+        self.unresolved_error = try std.fmt.allocPrint(
+            self.gpa,
+            "The type `{s}` from module `{s}`{s}{s}{s} is the argument or result of a function stored inside a generic type, and it mentions that type's parameter inside a record, tuple, tag union, or function, so the compiler has no standalone layout for it and glue cannot generate bindings for it. Declare the function's argument and result types without the type parameter, or box the value across the host boundary.",
+            .{
+                type_name,
+                module_name,
+                if (value_name.len == 0) "" else " (in the signature of `",
+                value_name,
+                if (value_name.len == 0) "" else "`)",
+            },
+        );
     }
 
     /// Get an existing type table index for a checked type, or insert a new entry.
@@ -2413,10 +2528,19 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact_in: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type_in: CheckedArtifact.CheckedTypeId,
+        position: ValuePosition,
     ) TypeTableError!u64 {
         const src = self.substituteFormal(artifact_in, checked_type_in);
         const artifact = src.artifact;
         const checked_type = src.checked_type;
+
+        // A type variable held by value has no committed layout of its own.
+        // This runs before the memo lookup: the same variable may already have
+        // an entry from a heap-indirect position, where it is legitimately an
+        // opaque pointer target.
+        if (position == .by_value and unresolvedVariableWithoutDefault(artifact, checked_type)) {
+            return error.UnresolvedByValue;
+        }
 
         // A recursive backing reference to a nominal currently being opened (same
         // declaration + resolved args) resolves to that open's in-progress entry.
@@ -2442,8 +2566,7 @@ const TypeTable = struct {
                 if (self.open_memo.get(mkey)) |existing| return existing;
                 const reserved: u64 = @intCast(self.entries.items.len);
                 try self.entries.append(self.gpa, .{
-                    .repr = .{ .unknown = .{ .name = "", .layout = self.layoutFactsForIdx(.opaque_ptr) } },
-                    .source = .{ .artifact = artifact, .checked_type = checked_type },
+                    .repr = .{ .unknown = .{ .name = "" } },
                 });
                 try self.open_memo.put(mkey, reserved);
                 break :idx reserved;
@@ -2452,8 +2575,7 @@ const TypeTable = struct {
             if (self.var_map.get(key)) |existing| return existing;
             const reserved: u64 = @intCast(self.entries.items.len);
             try self.entries.append(self.gpa, .{
-                .repr = .{ .unknown = .{ .name = "", .layout = self.layoutFactsForIdx(.opaque_ptr) } },
-                .source = .{ .artifact = artifact, .checked_type = checked_type },
+                .repr = .{ .unknown = .{ .name = "" } },
             });
             try self.var_map.put(key, reserved);
             break :idx reserved;
@@ -2477,36 +2599,39 @@ const TypeTable = struct {
             self.gpa.free(popped.arg_keys);
         };
 
-        const repr = try self.convertCheckedType(artifact, checked_type);
+        const repr = self.convertCheckedType(artifact, checked_type, position) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnresolvedByValue => {
+                // The innermost composite holding the variable by value is the
+                // type the user can act on; outer types keep its message.
+                try self.recordUnresolvedByValue(artifact, checked_type);
+                return error.UnresolvedByValue;
+            },
+        };
 
         self.entries.items[@intCast(idx)].repr = repr;
 
-        if (repr == .record) {
-            const rec = repr.record;
-            if (rec.name.len == 0) {
-                // Name anonymous structs by a STRUCTURAL content hash (field
-                // names + each field's structural identity), not the volatile
-                // type-table index. This keeps host-facing names stable across
-                // any change that reorders the type table (issue #9983's
-                // backing opening inserts entries), and deduplicates
-                // structurally identical anonymous structs.
-                var hasher = std.hash.Wyhash.init(0);
-                for (rec.fields) |field| {
-                    hasher.update(field.name);
-                    hasher.update(&[_]u8{0});
-                    self.hashStructuralId(&hasher, field.type_id);
-                    hasher.update(&[_]u8{0});
-                }
-                self.entries.items[@intCast(idx)].repr = .{ .record = .{
-                    .name = try std.fmt.allocPrint(self.gpa, "__AnonStruct_{x}", .{hasher.final()}),
-                    .anonymous = true,
-                    .fields = rec.fields,
-                    .layout = rec.layout,
-                } };
-            }
-        }
-
         return idx;
+    }
+
+    /// Name an anonymous struct by a STRUCTURAL content hash (field names in
+    /// committed memory order + each field's structural identity), not the
+    /// volatile type-table index. This keeps host-facing names stable across
+    /// any change that reorders the type table (issue #9983's backing opening
+    /// inserts entries), and deduplicates structurally identical anonymous
+    /// structs. Runs once the record's fields are in committed order and its
+    /// children carry their final names.
+    fn nameAnonymousRecord(self: *TypeTable, entry_idx: u64) Allocator.Error!void {
+        const rec = self.entries.items[@intCast(entry_idx)].repr.record;
+        if (!rec.anonymous or rec.name.len != 0) return;
+        var hasher = std.hash.Wyhash.init(0);
+        for (rec.fields) |field| {
+            hasher.update(field.name);
+            hasher.update(&[_]u8{0});
+            self.hashStructuralId(&hasher, field.type_id);
+            hasher.update(&[_]u8{0});
+        }
+        self.entries.items[@intCast(entry_idx)].repr.record.name = try std.fmt.allocPrint(self.gpa, "__AnonStruct_{x}", .{hasher.final()});
     }
 
     /// Mix a checked type's STABLE structural identity into `hasher` for naming
@@ -2543,19 +2668,16 @@ const TypeTable = struct {
     /// Insert a Unit type and return its index.
     fn insertUnit(self: *TypeTable) Allocator.Error!u64 {
         const idx: u64 = @intCast(self.entries.items.len);
-        try self.entries.append(self.gpa, .{ .repr = .{ .unit = self.layoutFactsForIdx(.zst) }, .source = null });
+        try self.entries.append(self.gpa, .{ .repr = .unit, .abi = zeroSizedBuiltinAbi() });
         return idx;
     }
 
     /// Insert the ABI representation of a function stored inside another
     /// value. Such a field is an opaque callable pointer; its source-level
     /// argument and return graph does not participate in the containing value's
-    /// memory layout and may legitimately mention for-clause rigids.
-    fn insertOpaqueCallable(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) TypeTableError!u64 {
+    /// memory layout and may legitimately mention for-clause rigids. Its layout
+    /// is the containing value's field layout, attached with the parent.
+    fn insertOpaqueCallable(self: *TypeTable) Allocator.Error!u64 {
         const unit_id = try self.insertUnit();
         const arg_ids = try self.gpa.alloc(u64, 0);
         errdefer self.gpa.free(arg_ids);
@@ -2564,9 +2686,7 @@ const TypeTable = struct {
             .repr = .{ .function = .{
                 .arg_ids = arg_ids,
                 .ret_id = unit_id,
-                .layout = try self.layoutFactsForCheckedType(artifact, checked_type),
             } },
-            .source = .{ .artifact = artifact, .checked_type = checked_type },
         });
         return idx;
     }
@@ -2586,63 +2706,98 @@ const TypeTable = struct {
         }
     }
 
-    fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) (Allocator.Error || lir.CheckedPipeline.HostedBindingError)!void {
-        var artifacts = std.ArrayList(*const CheckedArtifact.CheckedModuleArtifact).empty;
-        defer artifacts.deinit(self.gpa);
+    /// The by-value representation checking assigned to an unresolved type
+    /// variable through its literal or row default, or null when it has none.
+    /// Checking finalizes these defaults before publication and Monotype
+    /// lowering seals them the same way (`lowerCheckedTypeVariable` in
+    /// `src/postcheck/monotype/lower.zig`), so this mirrors that switch and
+    /// the repr matches the committed layout.
+    fn defaultedVariableRepr(variable: CheckedArtifact.CheckedTypeVariable) ?CollectedTypeRepr {
+        if (variable.numeric_default_phase) |phase| {
+            const target = CheckedArtifact.literal_defaulting.defaultTargetForPhase(phase) orelse
+                glueInvariant("checking-finalized numeric variable reached glue unresolved", .{});
+            return switch (target) {
+                .dec => .dec,
+                .str => .str_,
+            };
+        }
+        if (variable.row_default) |row_default| {
+            return switch (row_default) {
+                .empty_record, .empty_tag_union => .unit,
+            };
+        }
+        return null;
+    }
 
-        for (self.entries.items) |*entry| {
-            if (entry.source) |source| {
-                if (!artifactListed(artifacts.items, source.artifact)) {
-                    try artifacts.append(self.gpa, source.artifact);
-                }
-            } else {
-                entry.abi = zeroSizedBuiltinAbi();
+    /// True when a checked type (through aliases) is a type variable that
+    /// checking left without any default, i.e. one with no by-value
+    /// representation.
+    fn unresolvedVariableWithoutDefault(
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) bool {
+        var current = checked_type;
+        while (true) {
+            switch (checkedTypePayload(artifact, current)) {
+                .alias => |alias| current = alias.backing,
+                .flex, .rigid => |variable| return defaultedVariableRepr(variable) == null,
+                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return false,
             }
         }
+    }
 
-        for (artifacts.items) |artifact| {
-            var requests = std.ArrayList(CheckedArtifact.CheckedTypeId).empty;
-            defer requests.deinit(self.gpa);
+    /// One compiler lowering of an artifact that owns roots. Every lowering
+    /// stays alive until all roots are attached, so a root's own committed
+    /// layout is known before any edge walk reaches its entry.
+    const ArtifactLowering = struct {
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        lowered: lir.CheckedPipeline.LoweredProgram,
+        /// Committed layout per requested root checked type.
+        root_layouts: std.AutoHashMapUnmanaged(CheckedArtifact.CheckedTypeId, layout.Idx),
 
-            for (self.entries.items) |entry| {
-                const source = entry.source orelse continue;
-                if (source.artifact == artifact) {
-                    if (!checkedTypeListed(requests.items, source.checked_type)) {
-                        try requests.append(self.gpa, source.checked_type);
-                    }
-                }
-            }
-            if (requests.items.len == 0) continue;
+        fn deinit(self: *ArtifactLowering, gpa: Allocator) void {
+            self.root_layouts.deinit(gpa);
+            self.lowered.deinit();
+        }
+    };
 
-            const imported_artifacts = try build_env.collectImportedArtifactViews(self.gpa, artifact);
-            defer self.gpa.free(imported_artifacts);
-            const relation_artifacts = try build_env.collectRelationArtifactViews(self.gpa, artifact);
-            defer self.gpa.free(relation_artifacts);
+    /// Attach committed ABI facts to every entry.
+    ///
+    /// Each root's checked type is requested from one compiler lowering of the
+    /// artifact that owns it, and that lowering's layout store is the only
+    /// authority for every layout fact glue emits. A root's own layout is the
+    /// type's intrinsic layout, so a root whose layout is a box over a
+    /// by-value repr (an opaque record holding a callable) becomes a box over
+    /// a payload entry before any walk starts. From each root the walk then
+    /// descends the entry graph in lockstep with the committed layout: struct
+    /// fields by original index, tag payloads by discriminant, list elements
+    /// and box payloads by child layout. A slot the compiler boxed while the
+    /// child's own layout stays by value (recursive-slot storage inside a
+    /// recursive type group) is repointed to a box wrapper entry, so a type's
+    /// shape never depends on which parent reached it first.
+    fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) (Allocator.Error || lir.CheckedPipeline.HostedBindingError)!void {
+        var lowerings = std.ArrayList(ArtifactLowering).empty;
+        defer {
+            for (lowerings.items) |*lowering| lowering.deinit(self.gpa);
+            lowerings.deinit(self.gpa);
+        }
 
-            var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-                self.gpa,
-                .{
-                    .root = CheckedArtifact.loweringViewWithRelations(artifact, relation_artifacts),
-                    .imports = imported_artifacts,
-                },
-                .{ .layout_requests = requests.items },
-                // Lowering needs a default width for the layout store, but every
-                // ABI fact glue emits is an explicit dual-width query
-                // (`sizeAt(.u32/.u64)`, `getStructFieldOffsetByOriginalIndexAt(..., .u32/.u64)`,
-                // ...), so this fixed choice cannot affect glue output.
-                .{ .target_usize = .u64, .specialization_strategy = .lss, .layout_request_const_plans = false },
-            );
-            defer lowered.deinit();
+        for (self.roots.values()) |root| {
+            if (findLowering(lowerings.items, root.artifact) != null) continue;
+            try self.lowerArtifactRoots(build_env, root.artifact, &lowerings);
+        }
 
-            for (lowered.lir_result.requested_layouts.items) |request| {
-                for (self.entries.items) |*entry| {
-                    const source = entry.source orelse continue;
-                    if (source.artifact != artifact or source.checked_type != request.checked_type) continue;
-                    if (entry.abi != null) continue;
-                    const layout_idx = request.layout_idx;
-                    entry.abi = try self.abiForLayout(&lowered.lir_result.layouts, layout_idx, entry.repr);
-                }
-            }
+        for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
+            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
+            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
+                glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@intFromEnum(root.checked_type)});
+            try self.boxRootInPlace(&lowering.lowered.lir_result.layouts, entry_idx, layout_idx);
+        }
+
+        for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
+            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
+            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable;
+            try self.attachEntryLayout(&lowering.lowered.lir_result.layouts, entry_idx, layout_idx);
         }
 
         for (self.entries.items, 0..) |entry, idx| {
@@ -2652,24 +2807,335 @@ const TypeTable = struct {
         }
     }
 
-    fn artifactListed(
-        artifacts: []const *const CheckedArtifact.CheckedModuleArtifact,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ) bool {
-        for (artifacts) |item| {
-            if (item == artifact) return true;
+    fn findLowering(lowerings: []ArtifactLowering, artifact: *const CheckedArtifact.CheckedModuleArtifact) ?*ArtifactLowering {
+        for (lowerings) |*lowering| {
+            if (lowering.artifact == artifact) return lowering;
         }
-        return false;
+        return null;
     }
 
-    fn checkedTypeListed(
-        checked_types: []const CheckedArtifact.CheckedTypeId,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) bool {
-        for (checked_types) |item| {
-            if (item == checked_type) return true;
+    fn lowerArtifactRoots(
+        self: *TypeTable,
+        build_env: *BuildEnv,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        lowerings: *std.ArrayList(ArtifactLowering),
+    ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError)!void {
+        var requests = std.ArrayList(CheckedArtifact.CheckedTypeId).empty;
+        defer requests.deinit(self.gpa);
+        var root_layouts: std.AutoHashMapUnmanaged(CheckedArtifact.CheckedTypeId, layout.Idx) = .empty;
+        errdefer root_layouts.deinit(self.gpa);
+        for (self.roots.values()) |root| {
+            if (root.artifact != artifact) continue;
+            const slot = try root_layouts.getOrPut(self.gpa, root.checked_type);
+            if (slot.found_existing) continue;
+            slot.value_ptr.* = .zst;
+            try requests.append(self.gpa, root.checked_type);
         }
-        return false;
+
+        const imported_artifacts = try build_env.collectImportedArtifactViews(self.gpa, artifact);
+        defer self.gpa.free(imported_artifacts);
+        const relation_artifacts = try build_env.collectRelationArtifactViews(self.gpa, artifact);
+        defer self.gpa.free(relation_artifacts);
+
+        var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+            self.gpa,
+            .{
+                .root = CheckedArtifact.loweringViewWithRelations(artifact, relation_artifacts),
+                .imports = imported_artifacts,
+            },
+            .{ .layout_requests = requests.items },
+            // Lowering needs a default width for the layout store, but every
+            // ABI fact glue emits is an explicit dual-width query
+            // (`sizeAt(.u32/.u64)`, `getStructFieldOffsetByOriginalIndexAt(..., .u32/.u64)`,
+            // ...), so this fixed choice cannot affect glue output.
+            .{ .target_usize = .u64, .specialization_strategy = .lss, .layout_request_const_plans = false },
+        );
+        errdefer lowered.deinit();
+
+        var served: usize = 0;
+        for (lowered.lir_result.requested_layouts.items) |request| {
+            const slot = root_layouts.getPtr(request.checked_type) orelse continue;
+            slot.* = request.layout_idx;
+            served += 1;
+        }
+        if (served != requests.items.len) {
+            glueInvariant("compiler served {d} of {d} requested glue root layouts", .{ served, requests.items.len });
+        }
+
+        try lowerings.append(self.gpa, .{
+            .artifact = artifact,
+            .lowered = lowered,
+            .root_layouts = root_layouts,
+        });
+    }
+
+    fn layoutIsBox(layout_val: layout.Layout) bool {
+        return layout_val.tag == .box or layout_val.tag == .box_of_zst;
+    }
+
+    /// A root whose own committed layout is a box over a by-value repr is a
+    /// type the compiler stores behind a compiler-owned box everywhere (an
+    /// opaque nominal record that holds a callable, whose box doubles as the
+    /// recursive-slot storage for closures that capture the record). The host
+    /// sees the box, so the entry becomes the box and its repr moves to a new
+    /// payload entry. Runs before any edge walk so every slot of the type
+    /// already finds the box repr.
+    fn boxRootInPlace(
+        self: *TypeTable,
+        store: *const layout.Store,
+        entry_idx: u64,
+        layout_idx: layout.Idx,
+    ) Allocator.Error!void {
+        if (self.entries.items[@intCast(entry_idx)].abi != null) return;
+        if (!layoutIsBox(store.getLayout(layout_idx))) return;
+        const repr = self.entries.items[@intCast(entry_idx)].repr;
+        if (repr == .box) return;
+        const payload_idx: u64 = @intCast(self.entries.items.len);
+        try self.entries.append(self.gpa, .{ .repr = repr });
+        self.entries.items[@intCast(entry_idx)].repr = .{ .box = .{ .inner_id = payload_idx } };
+    }
+
+    /// The entry a parent slot references for a committed child layout. When
+    /// the compiler boxed the slot but the child's repr is a by-value type,
+    /// the slot gets the child's box wrapper entry and that wrapper is what is
+    /// attached with the box layout; the child itself is attached with the
+    /// payload layout through the wrapper.
+    fn childSlotFor(
+        self: *TypeTable,
+        store: *const layout.Store,
+        child: u64,
+        layout_idx: layout.Idx,
+    ) Allocator.Error!ChildSlot {
+        if (layoutIsBox(store.getLayout(layout_idx)) and self.entries.items[@intCast(child)].repr != .box) {
+            const slot = try self.box_wrappers.getOrPut(self.gpa, child);
+            if (!slot.found_existing) {
+                const wrapper: u64 = @intCast(self.entries.items.len);
+                try self.entries.append(self.gpa, .{ .repr = .{ .box = .{ .inner_id = child } } });
+                slot.value_ptr.* = wrapper;
+            }
+            return .{ .entry = slot.value_ptr.*, .layout_idx = layout_idx };
+        }
+        return .{ .entry = child, .layout_idx = layout_idx };
+    }
+
+    /// Attach the committed layout `layout_idx` to entry `entry_idx`, then
+    /// descend into its children with their committed child layouts. Child
+    /// slots are resolved (and boxed slots wrapped) before this entry's ABI is
+    /// set, and the ABI is set before descending, so a recursive type group
+    /// terminates at the entry already carrying its facts. An entry reached
+    /// again through another parent must agree with the facts it carries.
+    fn attachEntryLayout(
+        self: *TypeTable,
+        store: *const layout.Store,
+        entry_idx: u64,
+        layout_idx: layout.Idx,
+    ) Allocator.Error!void {
+        const layout_val = store.getLayout(layout_idx);
+        if (self.entries.items[@intCast(entry_idx)].abi) |abi| {
+            const size_align = abiSizeAlign(store, layout_val);
+            if (!std.meta.eql(size_align, abi.size_align)) {
+                glueInvariant("glue type id {d} reached ABI attachment with two different committed layouts", .{entry_idx});
+            }
+            return;
+        }
+        switch (self.entries.items[@intCast(entry_idx)].repr) {
+            .record => |rec| {
+                if (layout_val.tag == .zst) {
+                    // Every field is zero-sized; the reflected field order is
+                    // the only order there is.
+                    self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
+                    for (rec.fields) |field| try self.attachEntryLayout(store, field.type_id, .zst);
+                    try self.nameAnonymousRecord(entry_idx);
+                    return;
+                }
+                if (layout_val.tag != .struct_) {
+                    glueInvariant("record glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)});
+                }
+                var slots = std.ArrayList(ChildSlot).empty;
+                defer slots.deinit(self.gpa);
+                const committed_fields = try self.recordFieldsInCommittedOrder(store, layout_val, rec.fields, &slots);
+                self.freeCollectedRecordFields(rec.fields, rec.fields.len);
+                self.entries.items[@intCast(entry_idx)].repr.record.fields = committed_fields;
+                self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
+                for (slots.items) |slot| try self.attachEntryLayout(store, slot.entry, slot.layout_idx);
+                try self.nameAnonymousRecord(entry_idx);
+            },
+            .tag_union => |tu| {
+                if (layout_val.tag == .zst) {
+                    self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
+                    for (tu.tags) |tag| {
+                        for (tag.payload_ids) |payload_id| try self.attachEntryLayout(store, payload_id, .zst);
+                    }
+                    return;
+                }
+                if (layout_val.tag != .tag_union) {
+                    glueInvariant("tag-union glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)});
+                }
+                const info = store.getTagUnionInfo(layout_val);
+                if (info.variants.len != tu.tags.len) {
+                    glueInvariant("tag-union ABI variant count {d} differed from reflected tag count {d}", .{ info.variants.len, tu.tags.len });
+                }
+                var slots = std.ArrayList(ChildSlot).empty;
+                defer slots.deinit(self.gpa);
+                for (tu.tags, 0..) |tag, tag_index| {
+                    const payload_layout_idx = info.variants.get(@intCast(tag_index)).payload_layout;
+                    switch (tag.payload_ids.len) {
+                        0 => {},
+                        // A single payload is stored directly, not as a
+                        // one-field tuple.
+                        1 => {
+                            const slot = try self.childSlotFor(store, tag.payload_ids[0], payload_layout_idx);
+                            tag.payload_ids[0] = slot.entry;
+                            try slots.append(self.gpa, slot);
+                        },
+                        else => {
+                            const payload_layout = store.getLayout(payload_layout_idx);
+                            if (payload_layout.tag == .zst) {
+                                for (tag.payload_ids) |payload_id| try slots.append(self.gpa, .{ .entry = payload_id, .layout_idx = .zst });
+                                continue;
+                            }
+                            if (payload_layout.tag != .struct_) {
+                                glueInvariant("multi-payload tag variant reached ABI attachment with {s} payload layout", .{@tagName(payload_layout.tag)});
+                            }
+                            const payload_info = store.getStructInfo(payload_layout);
+                            for (0..payload_info.fields.len) |field_index| {
+                                const committed = payload_info.fields.get(@intCast(field_index));
+                                if (committed.index >= tag.payload_ids.len) {
+                                    glueInvariant("tag payload field original index {d} out of bounds for {d} payloads", .{ committed.index, tag.payload_ids.len });
+                                }
+                                const slot = try self.childSlotFor(store, tag.payload_ids[committed.index], committed.layout);
+                                tag.payload_ids[committed.index] = slot.entry;
+                                try slots.append(self.gpa, slot);
+                            }
+                        },
+                    }
+                }
+                self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
+                for (slots.items) |slot| try self.attachEntryLayout(store, slot.entry, slot.layout_idx);
+            },
+            .list => |list_repr| {
+                const elem_layout: layout.Idx = switch (layout_val.tag) {
+                    .list => layout_val.getIdx(),
+                    .list_of_zst => .zst,
+                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                };
+                const slot = try self.childSlotFor(store, list_repr.elem_id, elem_layout);
+                self.entries.items[@intCast(entry_idx)].repr.list.elem_id = slot.entry;
+                self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
+                try self.attachEntryLayout(store, slot.entry, slot.layout_idx);
+            },
+            .box => |box_repr| {
+                const inner_layout: layout.Idx = switch (layout_val.tag) {
+                    .box => layout_val.getIdx(),
+                    .box_of_zst => .zst,
+                    // `Box(fn)` is one erased-callable allocation: the boxed
+                    // function is the allocation, so it shares this layout.
+                    .erased_callable => layout_idx,
+                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                };
+                const slot = try self.childSlotFor(store, box_repr.inner_id, inner_layout);
+                self.entries.items[@intCast(entry_idx)].repr.box.inner_id = slot.entry;
+                self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
+                try self.attachEntryLayout(store, slot.entry, slot.layout_idx);
+            },
+            .function,
+            .unknown,
+            .unit,
+            .bool_,
+            .dec,
+            .f32_,
+            .f64_,
+            .i8_,
+            .i16_,
+            .i32_,
+            .i64_,
+            .i128_,
+            .u8_,
+            .u16_,
+            .u32_,
+            .u64_,
+            .u128_,
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            .str_,
+            => {
+                if (layoutIsBox(layout_val)) {
+                    glueInvariant("by-value glue type id {d} reached ABI attachment through an unwrapped boxed slot", .{entry_idx});
+                }
+                self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
+            },
+        }
+    }
+
+    /// Rebuild a record's reflected field list in committed memory order and
+    /// resolve each named field's child slot.
+    ///
+    /// Named fields are matched to committed fields by original index (their
+    /// lexicographic position in the record row, which is also their index in
+    /// `fields`). Committed padding fields are the unnamed `_` spacers of a
+    /// declared-order nominal record: zero-sized ones are layout markers only
+    /// and are dropped, nonzero ones become byte arrays named by their
+    /// declaration ordinal. Emitters render fields in this order, and
+    /// `abiRecordDetails` reads the same list.
+    fn recordFieldsInCommittedOrder(
+        self: *TypeTable,
+        store: *const layout.Store,
+        layout_val: layout.Layout,
+        fields: []const CollectedRecordField,
+        slots: *std.ArrayList(ChildSlot),
+    ) Allocator.Error![]const CollectedRecordField {
+        const struct_idx = layout_val.getStruct().idx;
+        const info = store.getStructInfo(layout_val);
+        const committed = try self.gpa.alloc(CollectedRecordField, info.fields.len);
+        var populated: usize = 0;
+        errdefer self.freeCollectedRecordFields(committed, populated);
+
+        var padding_ordinal: usize = 0;
+        var named_count: usize = 0;
+        for (0..info.fields.len) |position| {
+            const committed_field = info.fields.get(@intCast(position));
+            if (committed_field.is_padding) {
+                const ordinal = padding_ordinal;
+                padding_ordinal += 1;
+                const size32 = store.getStructFieldSizeAt(struct_idx, @intCast(position), .u32);
+                const size64 = store.getStructFieldSizeAt(struct_idx, @intCast(position), .u64);
+                if (size32 == 0 and size64 == 0) continue;
+                committed[populated] = .{
+                    .name = try std.fmt.allocPrint(self.gpa, "_pad{d}", .{ordinal}),
+                    .type_id = 0,
+                    .original_index = committed_field.index,
+                    .is_padding = true,
+                };
+                populated += 1;
+                continue;
+            }
+            named_count += 1;
+            if (committed_field.index >= fields.len or fields[committed_field.index].original_index != committed_field.index) {
+                glueInvariant("committed record field original index {d} missing from {d} reflected fields", .{ committed_field.index, fields.len });
+            }
+            const semantic = fields[committed_field.index];
+            const slot = try self.childSlotFor(store, semantic.type_id, committed_field.layout);
+            try slots.append(self.gpa, slot);
+            committed[populated] = .{
+                .name = try self.gpa.dupe(u8, semantic.name),
+                .type_id = slot.entry,
+                .original_index = committed_field.index,
+                .is_padding = false,
+            };
+            populated += 1;
+        }
+        if (named_count != fields.len) {
+            glueInvariant("record committed field count mismatch: expected {d}, found {d}", .{ fields.len, named_count });
+        }
+
+        if (populated == committed.len) return committed;
+        return try self.gpa.realloc(committed, populated);
     }
 
     fn zeroSizedBuiltinAbi() CollectedAbiLayout {
@@ -2959,61 +3425,68 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
+        position: ValuePosition,
     ) TypeTableError!CollectedTypeRepr {
         const payload = checkedTypePayload(artifact, checked_type);
         return switch (payload) {
             .pending => glueInvariant("pending checked type reached glue type table", .{}),
             .err => glueInvariant("erroneous checked type reached glue type table", .{}),
-            .flex => .{ .unknown = .{ .name = try self.gpa.dupe(u8, "flex"), .layout = self.layoutFactsForIdx(.opaque_ptr) } },
-            .rigid => .{ .unknown = .{ .name = try self.gpa.dupe(u8, "rigid"), .layout = self.layoutFactsForIdx(.opaque_ptr) } },
-            .alias => |alias| try self.getAliasBackingRepr(artifact, alias.backing),
-            .record => |record| try self.convertRecord(artifact, checked_type, record.fields, record.ext),
-            .record_unbound => |fields| try self.convertRecord(artifact, checked_type, fields, null),
-            .tuple => |items| try self.convertTuple(artifact, checked_type, items),
-            .nominal => |nominal| try self.convertNominal(artifact, checked_type, nominal),
-            .function => |func| try self.convertFunc(artifact, checked_type, func),
-            .empty_record, .empty_tag_union => .{ .unit = self.layoutFactsForIdx(.zst) },
-            .tag_union => |tag_union| try self.convertTagUnion(artifact, checked_type, tag_union.tags, tag_union.ext),
+            .flex => |variable| try self.convertTypeVariable(variable, position, "flex"),
+            .rigid => |variable| try self.convertTypeVariable(variable, position, "rigid"),
+            .alias => |alias| try self.convertCheckedType(artifact, alias.backing, position),
+            .record => |record| try self.convertRecord(artifact, record.fields, record.ext),
+            .record_unbound => |fields| try self.convertRecord(artifact, fields, null),
+            .tuple => |items| try self.convertTuple(artifact, items),
+            .nominal => |nominal| try self.convertNominal(artifact, nominal, position),
+            .function => |func| try self.convertFunc(artifact, func),
+            .empty_record, .empty_tag_union => .unit,
+            .tag_union => |tag_union| try self.convertTagUnion(artifact, tag_union.tags, tag_union.ext),
         };
     }
 
-    fn getAliasBackingRepr(
+    /// A checked type variable that checking left unresolved. One with a
+    /// default has the representation `defaultedVariableRepr` assigns; one
+    /// without is only representable behind a heap indirection or at the
+    /// boundary itself, where the host sees a pointer.
+    fn convertTypeVariable(
         self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        backing: CheckedArtifact.CheckedTypeId,
+        variable: CheckedArtifact.CheckedTypeVariable,
+        position: ValuePosition,
+        kind_name: []const u8,
     ) TypeTableError!CollectedTypeRepr {
-        return self.convertCheckedType(artifact, backing);
+        if (defaultedVariableRepr(variable)) |repr| return repr;
+        return switch (position) {
+            .heap_indirect, .boundary => .{ .unknown = .{ .name = try self.gpa.dupe(u8, kind_name) } },
+            .by_value => error.UnresolvedByValue,
+        };
     }
 
     fn convertNominal(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
         nominal: CheckedArtifact.CheckedNominalType,
+        position: ValuePosition,
     ) TypeTableError!CollectedTypeRepr {
         const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
-        const nominal_layout = try self.layoutFactsForCheckedType(artifact, checked_type);
 
         if (nominal.builtin) |builtin_nominal| {
             switch (builtin_nominal) {
                 .list => {
                     if (nominal.args.len >= 1) return .{ .list = .{
-                        .elem_id = try self.getOrInsert(artifact, nominal.args[0]),
-                        .layout = nominal_layout,
+                        .elem_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect),
                     } };
-                    return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "List"), .layout = self.layoutFactsForIdx(.opaque_ptr) } };
+                    return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "List") } };
                 },
                 .box => {
                     if (nominal.args.len >= 1) return .{ .box = .{
-                        .inner_id = try self.getOrInsert(artifact, nominal.args[0]),
-                        .layout = nominal_layout,
+                        .inner_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect),
                     } };
-                    return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "Box"), .layout = self.layoutFactsForIdx(.opaque_ptr) } };
+                    return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "Box") } };
                 },
                 .parse_tag_union_spec,
                 .fields,
                 .field,
-                => return .{ .unit = self.layoutFactsForIdx(.zst) },
+                => return .unit,
                 // Preserve the nominal application and open its declaration
                 // below so the generated representation retains its backing
                 // tag union instantiated with these arguments.
@@ -3025,29 +3498,29 @@ const TypeTable = struct {
                 .crypto_blake3_digest,
                 .crypto_blake3_hasher,
                 => {},
-                .str => return .{ .str_ = self.layoutFactsForIdx(.str) },
-                .bool => return .{ .bool_ = self.layoutFactsForIdx(.bool) },
-                .dec => return .{ .dec = self.layoutFactsForIdx(.dec) },
-                .u8 => return .{ .u8_ = self.layoutFactsForIdx(.u8) },
-                .u16 => return .{ .u16_ = self.layoutFactsForIdx(.u16) },
-                .u32 => return .{ .u32_ = self.layoutFactsForIdx(.u32) },
-                .u64 => return .{ .u64_ = self.layoutFactsForIdx(.u64) },
-                .u128 => return .{ .u128_ = self.layoutFactsForIdx(.u128) },
-                .i8 => return .{ .i8_ = self.layoutFactsForIdx(.i8) },
-                .i16 => return .{ .i16_ = self.layoutFactsForIdx(.i16) },
-                .i32 => return .{ .i32_ = self.layoutFactsForIdx(.i32) },
-                .i64 => return .{ .i64_ = self.layoutFactsForIdx(.i64) },
-                .i128 => return .{ .i128_ = self.layoutFactsForIdx(.i128) },
-                .f32 => return .{ .f32_ = self.layoutFactsForIdx(.f32) },
-                .f64 => return .{ .f64_ = self.layoutFactsForIdx(.f64) },
-                .u8x16 => return .{ .u8x16 = self.layoutFactsForIdx(.u8x16) },
-                .i8x16 => return .{ .i8x16 = self.layoutFactsForIdx(.i8x16) },
-                .u16x8 => return .{ .u16x8 = self.layoutFactsForIdx(.u16x8) },
-                .i16x8 => return .{ .i16x8 = self.layoutFactsForIdx(.i16x8) },
-                .u32x4 => return .{ .u32x4 = self.layoutFactsForIdx(.u32x4) },
-                .i32x4 => return .{ .i32x4 = self.layoutFactsForIdx(.i32x4) },
-                .u64x2 => return .{ .u64x2 = self.layoutFactsForIdx(.u64x2) },
-                .i64x2 => return .{ .i64x2 = self.layoutFactsForIdx(.i64x2) },
+                .str => return .str_,
+                .bool => return .bool_,
+                .dec => return .dec,
+                .u8 => return .u8_,
+                .u16 => return .u16_,
+                .u32 => return .u32_,
+                .u64 => return .u64_,
+                .u128 => return .u128_,
+                .i8 => return .i8_,
+                .i16 => return .i16_,
+                .i32 => return .i32_,
+                .i64 => return .i64_,
+                .i128 => return .i128_,
+                .f32 => return .f32_,
+                .f64 => return .f64_,
+                .u8x16 => return .u8x16,
+                .i8x16 => return .i8x16,
+                .u16x8 => return .u16x8,
+                .i16x8 => return .i16x8,
+                .u32x4 => return .u32x4,
+                .i32x4 => return .i32x4,
+                .u64x2 => return .u64x2,
+                .i64x2 => return .i64x2,
             }
         }
 
@@ -3102,29 +3575,22 @@ const TypeTable = struct {
             self.open_ctx = try self.ctxForOpen(lookup.artifact.key, decl.source_statement, resolved_arg_keys);
             defer self.open_ctx = prev_ctx;
 
-            break :open_blk try self.convertCheckedType(lookup.artifact, decl.backing);
+            // The backing may itself be a formal (`Wrapper(a) := a`), which the
+            // bindings just established resolve to the application's argument.
+            const backing = self.substituteFormal(lookup.artifact, decl.backing);
+            break :open_blk try self.convertCheckedType(backing.artifact, backing.checked_type, position);
         } else glueInvariant("nominal glue conversion could not find declaration backing", .{});
 
         if (backing_repr == .record) {
+            // The nominal keeps its name over the backing's structural fields.
+            // Memory order, including the padding spacers of a declared-order
+            // nominal record, is attached from the committed layout.
             const rec = backing_repr.record;
-            // The backing record `rec.fields` is in the structural (sorted)
-            // order. A nominal record keeps DECLARED source order only when
-            // it opts in with an unnamed `_` padding field.
-            const declared_fields = try self.nominalRecordInDeclaredOrder(artifact, nominal, rec, nominal_layout) orelse
-                return .{ .record = .{
-                    .name = try self.gpa.dupe(u8, display_name),
-                    .anonymous = false,
-                    .fields = rec.fields,
-                    .layout = nominal_layout,
-                } };
-            // `declared_fields` replaces `rec.fields`, which we now own and free.
-            for (rec.fields) |field| self.freeDuped(field.name);
-            self.gpa.free(rec.fields);
+            self.freeDuped(rec.name);
             return .{ .record = .{
                 .name = try self.gpa.dupe(u8, display_name),
                 .anonymous = false,
-                .fields = declared_fields,
-                .layout = nominal_layout,
+                .fields = rec.fields,
             } };
         }
         if (backing_repr == .tag_union) {
@@ -3133,7 +3599,6 @@ const TypeTable = struct {
             return .{ .tag_union = .{
                 .name = try self.gpa.dupe(u8, display_name),
                 .tags = tu.tags,
-                .layout = nominal_layout,
             } };
         }
         return backing_repr;
@@ -3142,7 +3607,6 @@ const TypeTable = struct {
     const NominalDeclarationLookup = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         declaration: CheckedArtifact.CheckedNominalDeclaration,
-        padding_field_types: []const CheckedArtifact.CheckedTypeId,
     };
 
     fn nominalDeclarationFor(
@@ -3159,37 +3623,26 @@ const TypeTable = struct {
             .source_decl = nominal.source_decl,
         };
         if (artifact.checked_types.nominalDeclaration(local_key)) |declaration| {
-            return .{
-                .artifact = artifact,
-                .declaration = declaration,
-                .padding_field_types = declaration.paddingFieldTypes(&artifact.checked_types),
-            };
+            return .{ .artifact = artifact, .declaration = declaration };
         }
         return switch (nominal.representation) {
             .local_declaration => |declaration_id| .{
                 .artifact = artifact,
                 .declaration = artifact.checked_types.nominalDeclarationById(declaration_id),
-                .padding_field_types = artifact.checked_types.nominalDeclarationById(declaration_id).paddingFieldTypes(&artifact.checked_types),
             },
             .imported_declaration => |imported| blk: {
                 const owner = self.artifacts_by_key.get(CheckedArtifact.importedNominalDeclarationModuleId(imported)) orelse
                     glueInvariant("imported nominal declaration referenced an artifact that glue did not load", .{});
-                const declaration = owner.checked_types.nominalDeclarationById(imported.declaration);
                 break :blk .{
                     .artifact = owner,
-                    .declaration = declaration,
-                    .padding_field_types = declaration.paddingFieldTypes(&owner.checked_types),
+                    .declaration = owner.checked_types.nominalDeclarationById(imported.declaration),
                 };
             },
             .local_box_payload_capability => |capability_ref| blk: {
                 const capability = artifact.interface_capabilities.boxPayloadCapability(capability_ref.capability);
                 const declaration = artifact.checked_types.nominalDeclaration(capability.nominal) orelse
                     glueInvariant("boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
-                break :blk .{
-                    .artifact = artifact,
-                    .declaration = declaration,
-                    .padding_field_types = capability.paddingFieldTys(&artifact.interface_capabilities),
-                };
+                break :blk .{ .artifact = artifact, .declaration = declaration };
             },
             .imported_box_payload_capability => |capability_ref| blk: {
                 const owner = self.artifacts_by_key.get(CheckedArtifact.importedBoxPayloadCapabilityModuleId(capability_ref)) orelse
@@ -3197,11 +3650,7 @@ const TypeTable = struct {
                 const capability = owner.interface_capabilities.boxPayloadCapability(capability_ref.capability);
                 const declaration = owner.checked_types.nominalDeclaration(capability.nominal) orelse
                     glueInvariant("imported boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
-                break :blk .{
-                    .artifact = owner,
-                    .declaration = declaration,
-                    .padding_field_types = capability.paddingFieldTys(&owner.interface_capabilities),
-                };
+                break :blk .{ .artifact = owner, .declaration = declaration };
             },
             .builtin,
             .opaque_without_backing,
@@ -3209,134 +3658,9 @@ const TypeTable = struct {
         };
     }
 
-    /// Builds a nominal record's field list in DECLARED source order from
-    /// checked artifact metadata, with nonzero unnamed `_` / `_name` fields
-    /// reinstated as padding spacers, matching the layout store's
-    /// `putNominalStructFields`. Byte offsets/sizes are not computed here; the
-    /// committed ABI facts attach later via `attachAbiLayouts`.
-    /// Returns `null` only when the declaration has no `_` field; such records
-    /// intentionally use structural backing order. `backing` provides each named
-    /// field's already converted `type_id`, matched by name text.
-    fn nominalRecordInDeclaredOrder(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        nominal: CheckedArtifact.CheckedNominalType,
-        backing: anytype,
-        nominal_layout: CollectedLayoutFacts,
-    ) Allocator.Error!?[]const CollectedRecordField {
-        const lookup = self.nominalDeclarationFor(artifact, nominal) orelse return null;
-        const declared_fields = lookup.declaration.declaredRecordFields(&lookup.artifact.checked_types);
-        if (declared_fields.len == 0) return null;
-        const padding_types = lookup.padding_field_types;
-        const layout_value = self.layouts.getLayout(nominal_layout.layout_idx);
-        if (layout_value.tag != .struct_) return null;
-        const struct_idx = layout_value.getStruct().idx;
-
-        const committed_fields = self.layouts.getStructInfo(layout_value).fields;
-
-        // Each named declared field reads its converted shape from the backing
-        // record (matched by name); each nonzero unnamed field becomes a padding
-        // spacer whose per-width byte counts come from the committed ABI layout.
-        const collected = try self.gpa.alloc(CollectedRecordField, declared_fields.len);
-        var populated: usize = 0;
-        errdefer self.freeCollectedRecordFields(collected, populated);
-
-        var padding_cursor: usize = 0;
-        var pad_index: usize = 0;
-        var committed_pos: usize = 0;
-        var saw_unnamed_field = false;
-        for (declared_fields) |field| {
-            switch (field) {
-                .padding => {
-                    saw_unnamed_field = true;
-                    if (padding_cursor >= padding_types.len) {
-                        glueInvariant("nominal declaration had more padding fields than padding types", .{});
-                    }
-                    _ = padding_types[padding_cursor];
-                    padding_cursor += 1;
-                    const padding_ordinal = pad_index;
-                    pad_index += 1;
-                    if (committed_pos >= committed_fields.len) {
-                        glueInvariant("nominal declaration had more padding fields than committed layout fields", .{});
-                    }
-                    const committed_field = committed_fields.get(@intCast(committed_pos));
-                    if (!committed_field.is_padding) {
-                        glueInvariant("nominal padding field did not line up with committed padding field", .{});
-                    }
-                    const size_32 = self.layouts.getStructFieldSizeAt(struct_idx, @intCast(committed_pos), .u32);
-                    const size_64 = self.layouts.getStructFieldSizeAt(struct_idx, @intCast(committed_pos), .u64);
-                    committed_pos += 1;
-                    if (size_32 == 0 and size_64 == 0) continue;
-
-                    const name = try std.fmt.allocPrint(self.gpa, "_pad{d}", .{padding_ordinal});
-                    collected[populated] = .{
-                        .name = name,
-                        .type_id = 0,
-                        .original_index = @intCast(committed_field.index),
-                        .is_padding = true,
-                    };
-                    populated += 1;
-                },
-                .named => |field_name_id| {
-                    const field_name = lookup.artifact.canonical_names.recordFieldLabelText(field_name_id);
-                    const match = backingFieldByName(backing, field_name) orelse
-                        glueInvariant("nominal declaration field '{s}' missing from backing record", .{field_name});
-                    if (committed_pos >= committed_fields.len) {
-                        glueInvariant("nominal declaration had more named fields than committed layout fields", .{});
-                    }
-                    const committed_field = committed_fields.get(@intCast(committed_pos));
-                    if (committed_field.is_padding) {
-                        glueInvariant("nominal named field lined up with committed padding field", .{});
-                    }
-                    committed_pos += 1;
-                    const name = try self.gpa.dupe(u8, field_name);
-                    collected[populated] = .{
-                        .name = name,
-                        .type_id = match.type_id,
-                        .original_index = @intCast(committed_field.index),
-                        .is_padding = false,
-                    };
-                    populated += 1;
-                },
-            }
-        }
-
-        // A nominal record keeps its declared order only when it opts in with an
-        // unnamed `_` field. Without one it lays out like a structural record.
-        if (!saw_unnamed_field) {
-            self.freeCollectedRecordFields(collected, populated);
-            return null;
-        }
-        if (padding_cursor != padding_types.len) {
-            glueInvariant("nominal declaration had more padding types than padding fields", .{});
-        }
-        if (committed_pos != committed_fields.len) {
-            glueInvariant("nominal declaration field count {d} did not match committed field count {d}", .{ committed_pos, committed_fields.len });
-        }
-        const collected_fields = if (populated == collected.len)
-            collected
-        else
-            try self.gpa.realloc(collected, populated);
-
-        return collected_fields;
-    }
-
-    /// Finds a backing record field by its name text, returning its converted
-    /// `type_id` and original index. The backing is a structurally-ordered
-    /// `CollectedTypeRepr.record` payload.
-    fn backingFieldByName(backing: anytype, name: []const u8) ?struct { type_id: u64, original_index: u64 } {
-        for (backing.fields) |field| {
-            if (std.mem.eql(u8, field.name, name)) {
-                return .{ .type_id = field.type_id, .original_index = field.original_index };
-            }
-        }
-        return null;
-    }
-
     fn convertRecord(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
         fields: []const CheckedArtifact.CheckedRecordField,
         ext: ?CheckedArtifact.CheckedTypeId,
     ) TypeTableError!CollectedTypeRepr {
@@ -3344,50 +3668,40 @@ const TypeTable = struct {
         defer all_fields.deinit(self.gpa);
         try appendRecordRowFields(self.gpa, artifact, fields, ext, &all_fields);
         sortRecordFieldsByName(artifact, all_fields.items);
-        return self.convertRecordFields(artifact, checked_type, all_fields.items);
+        return self.convertRecordFields(artifact, all_fields.items);
     }
 
+    /// Convert a record row whose fields are already in lexicographic order.
+    /// Each field's `original_index` is that lexicographic position, which is
+    /// the index the compiler commits alongside the field's memory slot.
     fn convertRecordFields(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
         fields: []const CheckedArtifact.CheckedRecordField,
     ) TypeTableError!CollectedTypeRepr {
-        if (fields.len == 0) return .{ .unit = self.layoutFactsForIdx(.zst) };
-        const record_layout = try self.layoutFactsForCheckedType(artifact, checked_type);
+        if (fields.len == 0) return .unit;
 
-        const field_type_ids = try self.gpa.alloc(u64, fields.len);
-        defer self.gpa.free(field_type_ids);
-        for (fields, 0..) |field, i| {
-            field_type_ids[i] = if (checkedTypeResolvesToFunction(artifact, field.ty))
-                try self.insertOpaqueCallable(artifact, field.ty)
-            else
-                try self.getOrInsert(artifact, field.ty);
-        }
-
-        const record_layout_value = self.layouts.getLayout(record_layout.layout_idx);
-        if (record_layout_value.tag != .struct_) glueInvariant("record type committed to non-struct layout", .{});
-        const record_info = self.layouts.getStructInfo(record_layout_value);
-        if (record_info.fields.len != fields.len) {
-            glueInvariant("record committed field count mismatch: expected {d}, found {d}", .{ fields.len, record_info.fields.len });
-        }
-
-        const collected_fields = try self.gpa.alloc(CollectedRecordField, record_info.fields.len);
+        const collected_fields = try self.gpa.alloc(CollectedRecordField, fields.len);
         var populated: usize = 0;
         errdefer self.freeCollectedRecordFields(collected_fields, populated);
-        for (0..record_info.fields.len) |dst_idx| {
-            const committed_field = record_info.fields.get(@intCast(dst_idx));
-            if (committed_field.is_padding) {
-                glueInvariant("structural record committed an unexpected padding field", .{});
-            }
-            const src_idx: usize = committed_field.index;
-            if (src_idx >= fields.len) {
-                glueInvariant("record committed field index {d} out of bounds for {d} fields", .{ src_idx, fields.len });
-            }
-            collected_fields[dst_idx] = .{
-                .name = try self.gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(fields[src_idx].name)),
-                .type_id = field_type_ids[src_idx],
-                .original_index = @intCast(committed_field.index),
+        for (fields, 0..) |field, i| {
+            const field_name = artifact.canonical_names.recordFieldLabelText(field.name);
+            // design.md "Field Kinds": `required` and `defaulted` fields hold
+            // their value inline. Checking rejects optional fields in every
+            // host-visible signature, so one reaching glue is a checker bug.
+            // An undetermined or erroneous kind never has a committed slot.
+            const type_id = switch (field.kind.tag) {
+                .required, .defaulted => if (checkedTypeResolvesToFunction(artifact, field.ty))
+                    try self.insertOpaqueCallable()
+                else
+                    try self.getOrInsert(artifact, field.ty, .by_value),
+                .optional => glueInvariant("optional record field '{s}' reached glue type conversion", .{field_name}),
+                .undetermined, .err => return error.UnresolvedByValue,
+            };
+            collected_fields[i] = .{
+                .name = try self.gpa.dupe(u8, field_name),
+                .type_id = type_id,
+                .original_index = @intCast(i),
             };
             populated += 1;
         }
@@ -3396,49 +3710,27 @@ const TypeTable = struct {
             .name = "",
             .anonymous = true,
             .fields = collected_fields,
-            .layout = record_layout,
         } };
     }
 
+    /// Convert tuple elements as record fields with positional names
+    /// (`_0`, `_1`, ...); `original_index` is the element position.
     fn convertTuple(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
         elems: []const CheckedArtifact.CheckedTypeId,
     ) TypeTableError!CollectedTypeRepr {
-        if (elems.len == 0) return .{ .unit = self.layoutFactsForIdx(.zst) };
-        const tuple_layout = try self.layoutFactsForCheckedType(artifact, checked_type);
+        if (elems.len == 0) return .unit;
 
-        // Convert tuple elements as record fields with positional names (_0, _1, ...)
-        const field_type_ids = try self.gpa.alloc(u64, elems.len);
-        defer self.gpa.free(field_type_ids);
-        for (elems, 0..) |elem, i| {
-            field_type_ids[i] = try self.getOrInsert(artifact, elem);
-        }
-
-        const tuple_layout_value = self.layouts.getLayout(tuple_layout.layout_idx);
-        if (tuple_layout_value.tag != .struct_) glueInvariant("tuple type committed to non-struct layout", .{});
-        const tuple_info = self.layouts.getStructInfo(tuple_layout_value);
-        if (tuple_info.fields.len != elems.len) {
-            glueInvariant("tuple committed field count mismatch: expected {d}, found {d}", .{ elems.len, tuple_info.fields.len });
-        }
-
-        const collected_fields = try self.gpa.alloc(CollectedRecordField, tuple_info.fields.len);
+        const collected_fields = try self.gpa.alloc(CollectedRecordField, elems.len);
         var populated: usize = 0;
         errdefer self.freeCollectedRecordFields(collected_fields, populated);
-        for (0..tuple_info.fields.len) |dst_idx| {
-            const committed_field = tuple_info.fields.get(@intCast(dst_idx));
-            if (committed_field.is_padding) {
-                glueInvariant("tuple committed an unexpected padding field", .{});
-            }
-            const src_idx: usize = committed_field.index;
-            if (src_idx >= elems.len) {
-                glueInvariant("tuple committed field index {d} out of bounds for {d} fields", .{ src_idx, elems.len });
-            }
-            collected_fields[dst_idx] = .{
-                .name = try std.fmt.allocPrint(self.gpa, "_{d}", .{src_idx}),
-                .type_id = field_type_ids[src_idx],
-                .original_index = @intCast(committed_field.index),
+        for (elems, 0..) |elem, i| {
+            const type_id = try self.getOrInsert(artifact, elem, .by_value);
+            collected_fields[i] = .{
+                .name = try std.fmt.allocPrint(self.gpa, "_{d}", .{i}),
+                .type_id = type_id,
+                .original_index = @intCast(i),
             };
             populated += 1;
         }
@@ -3447,14 +3739,12 @@ const TypeTable = struct {
             .name = "",
             .anonymous = true,
             .fields = collected_fields,
-            .layout = tuple_layout,
         } };
     }
 
     fn convertTagUnion(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
         tags: []const CheckedArtifact.CheckedTag,
         ext: CheckedArtifact.CheckedTypeId,
     ) TypeTableError!CollectedTypeRepr {
@@ -3462,8 +3752,7 @@ const TypeTable = struct {
         defer all_tags.deinit(self.gpa);
         try appendTagRowTags(self.gpa, artifact, tags, ext, &all_tags);
 
-        if (all_tags.items.len == 0) return .{ .unit = self.layoutFactsForIdx(.zst) };
-        const union_layout = try self.layoutFactsForCheckedType(artifact, checked_type);
+        if (all_tags.items.len == 0) return .unit;
 
         // Build sortable array of tag indices
         var tag_indices = try self.gpa.alloc(usize, all_tags.items.len);
@@ -3478,15 +3767,21 @@ const TypeTable = struct {
             names: *const CanonicalNameStore,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_text = ctx.names.tagLabelText(ctx.tags[a].name);
-                const b_text = ctx.names.tagLabelText(ctx.tags[b].name);
-                return std.mem.order(u8, a_text, b_text) == .lt;
+                return ctx.names.tagLabelTextLessThan(ctx.tags[a].name, ctx.tags[b].name);
             }
         };
         std.mem.sort(usize, tag_indices, SortCtx{ .tags = all_tags.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
 
         // Collect tags in discriminant order.
         const collected_tags = try self.gpa.alloc(CollectedTagInfo, all_tags.items.len);
+        var populated: usize = 0;
+        errdefer {
+            for (collected_tags[0..populated]) |tag| {
+                self.freeDuped(tag.name);
+                self.gpa.free(tag.payload_ids);
+            }
+            self.gpa.free(collected_tags);
+        }
 
         // Also build auto-generated name from variant names joined with "Or"
         var name_len: usize = 0;
@@ -3497,6 +3792,7 @@ const TypeTable = struct {
         // Add "Or" separators between names
         if (all_tags.items.len > 1) name_len += (all_tags.items.len - 1) * 2;
         const auto_name_buf: []u8 = try self.gpa.alloc(u8, name_len);
+        errdefer self.gpa.free(auto_name_buf);
         var name_pos: usize = 0;
 
         for (tag_indices, 0..) |src_idx, dst_idx| {
@@ -3505,14 +3801,16 @@ const TypeTable = struct {
 
             const tag_args = tag.argsSlice(&artifact.checked_types);
             const payload_ids = try self.gpa.alloc(u64, tag_args.len);
+            errdefer self.gpa.free(payload_ids);
             for (tag_args, 0..) |arg, i| {
-                payload_ids[i] = try self.getOrInsert(artifact, arg);
+                payload_ids[i] = try self.getOrInsert(artifact, arg, .by_value);
             }
 
             collected_tags[dst_idx] = .{
                 .name = try self.gpa.dupe(u8, name_text),
                 .payload_ids = payload_ids,
             };
+            populated += 1;
 
             // Build auto-name
             if (auto_name_buf.len > 0) {
@@ -3535,26 +3833,27 @@ const TypeTable = struct {
         return .{ .tag_union = .{
             .name = auto_name,
             .tags = collected_tags,
-            .layout = union_layout,
         } };
     }
 
+    /// A function type the host calls or is handed as a value. Its arguments
+    /// and result are roots of their own: the callable's committed layout says
+    /// nothing about them, and hosts need their ABI to call it.
     fn convertFunc(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
         func: CheckedArtifact.CheckedFunctionType,
     ) TypeTableError!CollectedTypeRepr {
         const arg_ids = try self.gpa.alloc(u64, func.args.len);
+        errdefer self.gpa.free(arg_ids);
         for (func.args, 0..) |arg, i| {
-            arg_ids[i] = try self.getOrInsert(artifact, arg);
+            arg_ids[i] = try self.getOrInsertRoot(artifact, arg);
         }
-        const ret_id = try self.getOrInsert(artifact, func.ret);
+        const ret_id = try self.getOrInsertRoot(artifact, func.ret);
 
         return .{ .function = .{
             .arg_ids = arg_ids,
             .ret_id = ret_id,
-            .layout = try self.layoutFactsForCheckedType(artifact, checked_type),
         } };
     }
 
@@ -4686,6 +4985,8 @@ fn collectModuleTypeInfo(
             errdefer if (arg_type_ids.len > 0) gpa.free(arg_type_ids);
             var ret_type_id: u64 = 0;
 
+            type_table.boundary_value_name = local_name;
+            defer type_table.boundary_value_name = null;
             if (try type_table.collectHostedFunctionMetadata(artifact, checked_type)) |metadata| {
                 ret_fields = metadata.ret_fields;
                 arg_fields = metadata.arg_fields;
@@ -4870,7 +5171,8 @@ const GlueProtocolLock = struct {
             }),
             .abi_union => try self.record(idx, "AbiTagUnionLayout", &.{
                 .{ .name = "discriminant_offset32", .type = .u64_ }, .{ .name = "discriminant_offset64", .type = .u64_ },
-                .{ .name = "discriminant_size", .type = .u64_ },     .{ .name = "tags", .type = .list_abi_tag },
+                .{ .name = "discriminant_size", .type = .u64_ },     .{ .name = "has_payload", .type = .bool_ },
+                .{ .name = "tags", .type = .list_abi_tag },
             }),
             .abi_tag => try self.record(idx, "AbiTagLayout", &.{
                 .{ .name = "discriminant", .type = .u64_ },             .{ .name = "name", .type = .str_ },                .{ .name = "payload", .type = .list_u64 },

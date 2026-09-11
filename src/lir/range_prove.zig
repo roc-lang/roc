@@ -32,7 +32,10 @@
 //! statement dominated by every branch that contributed a fact to its proof.
 //! Loop-carried join parameters get fresh unknown values in the loop body, so
 //! only facts re-established inside the body (like a margin test re-checked
-//! every iteration) apply to them. The pass runs proof rounds to a fixpoint
+//! every iteration) apply to them. Facts every entry edge of a loop carries
+//! about values the loop never rebinds hold throughout it; an edge is an
+//! entry edge when it comes from outside the loop's body, and a jump from a
+//! join nested inside that body is a back edge like any other. The pass runs proof rounds to a fixpoint
 //! because folding a branch can leave a join body with a single remaining
 //! jump, which lets facts flow through it on the next round.
 //!
@@ -72,7 +75,10 @@ pub const ResourceError = Allocator.Error;
 
 /// Bound on proof rounds per proc. Each round can only fold branches that
 /// exist, so rounds converge; this bound is a backstop, not a tuning knob.
-const max_rounds: u32 = 12;
+/// A loop lowered as several joins that jump among one another (a search
+/// with a restart state, say) carries a persisted fact one join further per
+/// round, so the backstop must cover a chain of a couple of dozen joins.
+const max_rounds: u32 = 48;
 /// Bound on collected facts along one path.
 const max_facts: usize = 512;
 /// Bound on symbolic value nodes per proc round.
@@ -313,14 +319,20 @@ const merge_env_cap: usize = 64;
 const MergeState = struct {
     captures: u32,
     facts: std.ArrayList(Fact),
+    /// The all-edge meet of the facts in round-stable form, for persisting
+    /// across rounds; `facts` keeps the raw meet for in-round seeding, which
+    /// only helps when the edges share the head's region and its node ids.
+    stable: LoopFacts,
     env: std.ArrayList(EnvMeet),
     /// Facts held by every captured edge arriving from OUTSIDE the merge
-    /// head's own region. For a loop join these are its entry edges; a fact
-    /// between round-stable single-assignment values that holds on entry is
-    /// a loop invariant outright, because nothing in the loop can reassign
-    /// the values it relates.
+    /// head's own region, in round-stable form. For a loop join these are
+    /// its entry edges; a fact between round-stable single-assignment values
+    /// that holds on entry is a loop invariant outright, because nothing in
+    /// the loop can reassign the values it relates. Entry edges may arrive
+    /// from different walk regions, whose nodes for the same value differ,
+    /// so the meet is taken on what the nodes denote rather than on node ids.
     entry_captures: u32,
-    entry_facts: std.ArrayList(Fact),
+    entry_stable: LoopFacts,
 };
 
 /// One endpoint of a cross-round persisted fact, in round-stable form.
@@ -380,6 +392,10 @@ const Pass = struct {
     undo: std.ArrayList(Undo),
     len_terms: collections.DenseMap(NodeId, NodeId),
     assign_counts: collections.DenseMap(LocalId, u32),
+    /// Source local of every `ref.local` alias, so a stable term can name
+    /// the value a chain of single-assignment aliases denotes rather than
+    /// whichever alias first computed it.
+    alias_of: collections.DenseMap(LocalId, LocalId),
     pred_counts: collections.DenseMap(CFStmtId, u32),
     jump_counts: collections.DenseMap(JoinPointId, u32),
     join_stmts: collections.DenseMap(JoinPointId, CFStmtId),
@@ -395,6 +411,8 @@ const Pass = struct {
     value_roots: collections.DenseMap(NodeId, LocalId),
     loop_bounds: std.AutoHashMap(u64, LoopBounds),
     loop_facts: collections.DenseMap(JoinPointId, LoopFacts),
+    /// The round's shared root for constant bounds, made on first use.
+    zero_node: ?NodeId = null,
     /// Per merge head: last round's all-edge fact intersection in stable
     /// form, seeded when the merge must walk before its captures complete
     /// (a forced loop-body or cycle-interior region). Facts held by every
@@ -417,6 +435,13 @@ const Pass = struct {
     /// The merge head whose region is currently being walked; captures into
     /// it from within are its own back or interior edges.
     current_region: ?CFStmtId,
+    /// Innermost join whose body lexically contains each statement. A jump to
+    /// a loop head from a region inside that loop's body is a back edge even
+    /// when a nested join's region lies between; only jumps from outside the
+    /// body are entry edges.
+    enclosing_join: collections.DenseMap(CFStmtId, JoinPointId),
+    /// For each join declared inside another join's body, that outer join.
+    join_parent: collections.DenseMap(JoinPointId, JoinPointId),
     new_loop_bounds: bool,
     /// An unverified length invariant was seeded this round: every fact-based
     /// rewrite is deferred until the assumption is promoted or discarded.
@@ -447,6 +472,7 @@ const Pass = struct {
             .undo = .empty,
             .len_terms = collections.DenseMap(NodeId, NodeId).init(allocator),
             .assign_counts = collections.DenseMap(LocalId, u32).init(allocator),
+            .alias_of = collections.DenseMap(LocalId, LocalId).init(allocator),
             .pred_counts = collections.DenseMap(CFStmtId, u32).init(allocator),
             .jump_counts = collections.DenseMap(JoinPointId, u32).init(allocator),
             .join_stmts = collections.DenseMap(JoinPointId, CFStmtId).init(allocator),
@@ -467,6 +493,8 @@ const Pass = struct {
             .global_facts = .empty,
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .current_region = null,
+            .enclosing_join = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
+            .join_parent = collections.DenseMap(JoinPointId, JoinPointId).init(allocator),
             .new_loop_bounds = false,
             .live_pending = false,
             .deferred_rewrites = false,
@@ -490,6 +518,7 @@ const Pass = struct {
         self.undo.deinit(self.allocator);
         self.len_terms.deinit();
         self.assign_counts.deinit();
+        self.alias_of.deinit();
         self.pred_counts.deinit();
         self.jump_counts.deinit();
         self.join_stmts.deinit();
@@ -510,6 +539,8 @@ const Pass = struct {
         self.merge_env.deinit();
         self.global_facts.deinit(self.allocator);
         self.field_values.deinit();
+        self.enclosing_join.deinit();
+        self.join_parent.deinit();
         self.scratch.deinit(self.allocator);
         self.query_best.deinit();
         self.proof_records.deinit(self.allocator);
@@ -519,6 +550,7 @@ const Pass = struct {
 
     fn resetRound(self: *Pass) void {
         self.nodes.clearRetainingCapacity();
+        self.zero_node = null;
         self.facts.clearRetainingCapacity();
         self.no_overflow_facts.clearRetainingCapacity();
         self.global_facts.clearRetainingCapacity();
@@ -528,6 +560,7 @@ const Pass = struct {
         self.undo.clearRetainingCapacity();
         self.len_terms.clearRetainingCapacity();
         self.assign_counts.clearRetainingCapacity();
+        self.alias_of.clearRetainingCapacity();
         self.pred_counts.clearRetainingCapacity();
         self.jump_counts.clearRetainingCapacity();
         self.join_stmts.clearRetainingCapacity();
@@ -539,6 +572,8 @@ const Pass = struct {
         self.jump_records.clearRetainingCapacity();
         self.clearMergeStates();
         self.body_joins.clearRetainingCapacity();
+        self.enclosing_join.clearRetainingCapacity();
+        self.join_parent.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
         self.value_roots.clearRetainingCapacity();
         self.max_join_id = 0;
@@ -758,6 +793,20 @@ const Pass = struct {
         return (self.assign_counts.get(local) orelse 0) <= 1;
     }
 
+    /// The local a chain of single-assignment aliases denotes: lowering
+    /// binds one alias per use, so the same value is read through a
+    /// different local each time, and a stable term keyed by the alias
+    /// would never meet itself again.
+    fn stableLocalOf(self: *const Pass, local: LocalId) LocalId {
+        var current = local;
+        while (self.isSingleAssign(current)) {
+            const source = self.alias_of.get(current) orelse break;
+            if (!self.isSingleAssign(source)) break;
+            current = source;
+        }
+        return current;
+    }
+
     fn lookup(self: *const Pass, local: LocalId) ?Binding {
         if (self.isSingleAssign(local)) return self.global_env.get(local);
         return self.path_env.get(local);
@@ -765,6 +814,15 @@ const Pass = struct {
 
     fn bind(self: *Pass, local: LocalId, binding: Binding) ResourceError!void {
         if (self.isSingleAssign(local)) {
+            // A single-assignment integer local bound to a root names that
+            // root's value in round-stable form, wherever the root came
+            // from: a sum of two unrelated values or an unproven checked
+            // operation gets a fresh root just as an unbound read does, and
+            // facts about it must persist the same way.
+            if (trackedIntMax(self.localLayout(local)) != null and self.rootOf(binding.node) == binding.node) {
+                const entry = try self.value_roots.getOrPut(binding.node);
+                if (!entry.found_existing) entry.value_ptr.* = self.stableLocalOf(local);
+            }
             try self.global_env.put(local, binding);
             return;
         }
@@ -788,7 +846,7 @@ const Pass = struct {
         // fresh root for the whole round, so the root denotes the local's
         // value in round-stable form.
         if (trackedIntMax(self.localLayout(local)) != null and self.isSingleAssign(local)) {
-            try self.value_roots.put(node, local);
+            try self.value_roots.put(node, self.stableLocalOf(local));
         }
         try self.bind(local, .{ .node = node });
         return node;
@@ -799,7 +857,7 @@ const Pass = struct {
         // As in valueOf: a single-assignment integer local's fresh root
         // denotes its value in round-stable form.
         if (trackedIntMax(self.localLayout(local)) != null and self.isSingleAssign(local)) {
-            try self.value_roots.put(node, local);
+            try self.value_roots.put(node, self.stableLocalOf(local));
         }
         try self.bind(local, .{ .node = node });
     }
@@ -816,7 +874,7 @@ const Pass = struct {
         const node = (try self.unknownFor(self.localLayout(target))) orelse return self.bindFresh(target);
         try self.field_values.put(key, node);
         if (trackedIntMax(self.localLayout(target)) != null and self.isSingleAssign(target)) {
-            try self.value_roots.put(node, target);
+            try self.value_roots.put(node, self.stableLocalOf(target));
         }
         try self.bind(target, .{ .node = node });
     }
@@ -861,6 +919,7 @@ const Pass = struct {
                 },
                 .assign_ref => |s| {
                     try self.bumpAssign(s.target);
+                    if (s.op == .local) try self.alias_of.put(s.target, s.op.local);
                     try self.edgeTo(s.next);
                 },
                 .assign_literal => |s| {
@@ -1017,6 +1076,7 @@ const Pass = struct {
                 .ret, .crash, .runtime_error, .expect_err, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
+        try self.scanJoinNesting(proc.body.?);
     }
 
     fn edgeTo(self: *Pass, stmt: CFStmtId) ResourceError!void {
@@ -1045,7 +1105,6 @@ const Pass = struct {
         while (it.next()) |state| {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
-            state.entry_facts.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
     }
@@ -1066,34 +1125,144 @@ const Pass = struct {
         return false;
     }
 
+    /// Whether the edge being captured into `head` comes from outside the
+    /// loop `head` begins. A jump from any region inside the loop body is a
+    /// back edge, so the regions of joins nested in that body count as
+    /// inside; a merge that begins no loop treats every other region as
+    /// outside.
+    fn edgeEntersLoop(self: *const Pass, head: CFStmtId) bool {
+        const region = self.current_region orelse return true;
+        if (region == head) return false;
+        const loop_join = self.body_joins.get(head) orelse return true;
+        var enclosing = self.enclosing_join.get(region);
+        while (enclosing) |join_id| {
+            if (join_id == loop_join) return false;
+            enclosing = self.join_parent.get(join_id);
+        }
+        return true;
+    }
+
+    /// Record which join body lexically contains each reachable statement.
+    /// Join bodies are descended directly and jump targets are not followed,
+    /// so the result is the declaration nesting rather than the control-flow
+    /// reachability the walk itself uses.
+    fn scanJoinNesting(self: *Pass, body: CFStmtId) ResourceError!void {
+        const Item = struct { stmt: CFStmtId, join: ?JoinPointId };
+        var stack = std.ArrayList(Item).empty;
+        defer stack.deinit(self.allocator);
+        var seen = collections.DenseMap(CFStmtId, void).init(self.allocator);
+        defer seen.deinit();
+        var successors = std.ArrayList(CFStmtId).empty;
+        defer successors.deinit(self.allocator);
+
+        try stack.append(self.allocator, .{ .stmt = body, .join = null });
+        while (stack.pop()) |item| {
+            if (seen.contains(item.stmt)) continue;
+            try seen.put(item.stmt, {});
+            if (item.join) |join_id| try self.enclosing_join.put(item.stmt, join_id);
+            switch (self.store.getCFStmt(item.stmt)) {
+                .join => |s| {
+                    if (item.join) |outer| try self.join_parent.put(s.id, outer);
+                    try stack.append(self.allocator, .{ .stmt = s.body, .join = s.id });
+                    try stack.append(self.allocator, .{ .stmt = s.remainder, .join = item.join });
+                },
+                .jump => {},
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .boxy_tag_match,
+                .loop_continue,
+                .loop_break,
+                .ret,
+                .crash,
+                => {
+                    successors.clearRetainingCapacity();
+                    try BodyClone.appendSuccessors(self.store, &successors, item.stmt);
+                    for (successors.items) |next| try stack.append(self.allocator, .{ .stmt = next, .join = item.join });
+                },
+            }
+        }
+    }
+
     /// Capture the current path state into a merge head's meet: facts keep
     /// only what every captured edge established, and each path-bound local
     /// keeps a common root with a widened offset window.
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty };
+            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
         }
         const state = entry.value_ptr;
 
-        // An edge arriving from another region is an entry edge; its facts
+        // An edge arriving from outside the loop is an entry edge; its facts
         // meet separately so loop-invariant relations survive the back
         // edge's inability to derive them before its region is seeded.
-        if (self.current_region != head) {
+        const mine_stable = self.stabilizeFacts(self.facts.items);
+        if (state.captures == 0) {
+            state.stable = mine_stable;
+        } else {
+            var keep_stable: usize = 0;
+            for (state.stable.items[0..state.stable.len]) |fact| {
+                for (mine_stable.items[0..mine_stable.len]) |candidate| {
+                    if (std.meta.eql(fact, candidate)) {
+                        state.stable.items[keep_stable] = fact;
+                        keep_stable += 1;
+                        break;
+                    }
+                }
+            }
+            state.stable.len = keep_stable;
+        }
+        if (self.edgeEntersLoop(head)) {
             if (state.entry_captures == 0) {
-                try state.entry_facts.appendSlice(self.allocator, self.facts.items);
+                state.entry_stable = mine_stable;
             } else {
                 var keep_entry: usize = 0;
-                for (state.entry_facts.items) |fact| {
-                    for (self.facts.items) |mine| {
-                        if (mine.a == fact.a and mine.b == fact.b and mine.c == fact.c) {
-                            state.entry_facts.items[keep_entry] = fact;
+                for (state.entry_stable.items[0..state.entry_stable.len]) |fact| {
+                    for (mine_stable.items[0..mine_stable.len]) |candidate| {
+                        if (std.meta.eql(fact, candidate)) {
+                            state.entry_stable.items[keep_entry] = fact;
                             keep_entry += 1;
                             break;
                         }
                     }
                 }
-                state.entry_facts.shrinkRetainingCapacity(keep_entry);
+                state.entry_stable.len = keep_entry;
             }
             state.entry_captures += 1;
         }
@@ -1251,7 +1420,11 @@ const Pass = struct {
             return;
         }
 
+        // The raw meet carries node ids, which only mean something for edges
+        // captured in the head's own region; the stable meet is what edges
+        // from other regions agree on.
         try self.facts.appendSlice(self.allocator, state.facts.items);
+        try self.seedStableFacts(&state.stable);
 
         for (state.env.items) |meet| {
             if (meet.valid) {
@@ -1281,8 +1454,15 @@ const Pass = struct {
             if (meet.bounds.len == 0) continue;
             // The edges bind different values, but each proves the same upper
             // bounds; a fresh value carrying those bounds preserves them.
-            const node = (try self.unknownFor(.u64)) orelse continue;
+            var hi = trackedIntMax(self.localLayout(meet.local)) orelse std.math.maxInt(u64);
             for (meet.bounds.slice()) |bound| {
+                const root = self.nodes.items[bound.root];
+                if (root.lo == root.hi) hi = @min(hi, root.lo + bound.c);
+            }
+            const node = (try self.freshRoot(0, hi)) orelse continue;
+            for (meet.bounds.slice()) |bound| {
+                const root = self.nodes.items[bound.root];
+                if (root.lo == root.hi) continue;
                 try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet });
             }
             try self.bind(meet.local, .{ .node = node });
@@ -1356,7 +1536,7 @@ const Pass = struct {
     /// every entry edge makes it hold throughout the loop.
     fn persistLoopFacts(self: *Pass, join_id: JoinPointId, state: *const MergeState) ResourceError!void {
         if (state.entry_captures == 0) return;
-        const stable = self.stabilizeFacts(state.entry_facts.items);
+        const stable = state.entry_stable;
         if (stable.len == 0) return;
         const previous = self.loop_facts.get(join_id);
         if (previous == null or previous.?.len != stable.len) self.new_loop_bounds = true;
@@ -1367,14 +1547,7 @@ const Pass = struct {
     /// materialized against this round's nodes.
     fn seedLoopFacts(self: *Pass, join_id: JoinPointId) ResourceError!void {
         const stored = self.loop_facts.get(join_id) orelse return;
-        for (stored.items[0..stored.len]) |fact| {
-            const a = (try self.materializeTerm(fact.a)) orelse continue;
-            const b = (try self.materializeTerm(fact.b)) orelse continue;
-            // The persisted relation is between values; restated on roots:
-            // root_a <= value_a - off_lo_a and value_b <= root_b + off_hi_b.
-            const c = fact.c + self.offHiOf(b) - self.offLoOf(a);
-            try self.addFact(.{ .a = self.rootOf(a), .b = self.rootOf(b), .c = c, .origin = .meet });
-        }
+        try self.seedStableFacts(&stored);
     }
 
     /// This round's node for a stable term: the local's value, the list
@@ -1389,7 +1562,7 @@ const Pass = struct {
                 const fresh = (try self.freshRoot(0, std.math.maxInt(i64))) orelse return null;
                 try self.len_terms.put(root, fresh);
                 if (self.isSingleAssign(list_local)) {
-                    try self.len_roots.put(fresh, list_local);
+                    try self.len_roots.put(fresh, self.stableLocalOf(list_local));
                 }
                 return fresh;
             },
@@ -1406,7 +1579,16 @@ const Pass = struct {
             const a = self.stabilizeTerm(fact.a) orelse continue;
             const b = self.stabilizeTerm(fact.b) orelse continue;
             if (a == .constant and b == .constant) continue;
-            stable.items[stable.len] = .{ .a = a, .b = b, .c = fact.c };
+            const candidate = StableFact{ .a = a, .b = b, .c = fact.c };
+            var known = false;
+            for (stable.items[0..stable.len]) |have| {
+                if (std.meta.eql(have, candidate)) {
+                    known = true;
+                    break;
+                }
+            }
+            if (known) continue;
+            stable.items[stable.len] = candidate;
             stable.len += 1;
         }
         return stable;
@@ -1415,7 +1597,7 @@ const Pass = struct {
     /// Persist a fully-captured merge's all-edge fact intersection for
     /// seeding when a later round must walk it before capture completes.
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        const stable = self.stabilizeFacts(state.facts.items);
+        const stable = state.stable;
         if (stable.len == 0) return;
         if (self.merge_facts.get(head)) |previous| {
             if (previous.len != stable.len) {
@@ -1434,6 +1616,14 @@ const Pass = struct {
     /// every edge carried last round.
     fn seedMergeFacts(self: *Pass, head: CFStmtId) ResourceError!void {
         const stored = self.merge_facts.get(head) orelse return;
+        try self.seedStableFacts(&stored);
+    }
+
+    /// Add round-stable facts to the current path, materialized against
+    /// this round's nodes. The persisted relation is between values;
+    /// restated on roots: root_a <= value_a - off_lo_a and
+    /// value_b <= root_b + off_hi_b.
+    fn seedStableFacts(self: *Pass, stored: *const LoopFacts) ResourceError!void {
         for (stored.items[0..stored.len]) |fact| {
             const a = (try self.materializeTerm(fact.a)) orelse continue;
             const b = (try self.materializeTerm(fact.b)) orelse continue;
@@ -1486,7 +1676,7 @@ const Pass = struct {
     fn seedMergeEnv(self: *Pass, head: CFStmtId) ResourceError!void {
         const stored = self.merge_env.get(head) orelse return;
         for (stored.items[0..stored.len]) |entry| {
-            const node = (try self.unknownFor(self.localLayout(entry.local))) orelse continue;
+            const node = (try self.metValueNode(entry.local, entry.bounds[0..entry.len])) orelse continue;
             var used = false;
             for (entry.bounds[0..entry.len]) |bound| {
                 switch (bound.base) {
@@ -1500,15 +1690,23 @@ const Pass = struct {
                         try self.addFact(.{ .a = node, .b = self.rootOf(v), .c = bound.c + self.offHiOf(v), .origin = .meet });
                         used = true;
                     },
-                    .constant => {
-                        const const_node = (try self.constNode(bound.c)) orelse continue;
-                        try self.addFact(.{ .a = node, .b = const_node, .c = 0, .origin = .meet });
-                        used = true;
-                    },
+                    // Folded into the node's own range.
+                    .constant => used = true,
                 }
             }
             if (used) try self.bind(entry.local, .{ .node = node });
         }
+    }
+
+    /// A fresh value for a met local: its layout's range narrowed by the
+    /// constant bounds, so the static-range readers (overflow proofs among
+    /// them) see those bounds without a fact query.
+    fn metValueNode(self: *Pass, local: LocalId, bounds: []const StableBound) ResourceError!?NodeId {
+        var hi = trackedIntMax(self.localLayout(local)) orelse std.math.maxInt(u64);
+        for (bounds) |bound| {
+            if (bound.base == .constant) hi = @min(hi, bound.c);
+        }
+        return try self.freshRoot(0, hi);
     }
 
     fn persistLoopBounds(self: *Pass) ResourceError!void {
@@ -1632,7 +1830,7 @@ const Pass = struct {
             try self.seedLenInvariants(stored, local);
             return;
         }
-        const node = (try self.unknownFor(.u64)) orelse return;
+        const node = (try self.metValueNode(local, stored.items[0..stored.len])) orelse return;
         var used = false;
         for (stored.items[0..stored.len]) |bound| {
             switch (bound.base) {
@@ -1642,17 +1840,14 @@ const Pass = struct {
                     const len_node = self.len_terms.get(root) orelse blk: {
                         const fresh = (try self.freshRoot(0, std.math.maxInt(i64))) orelse continue;
                         try self.len_terms.put(root, fresh);
-                        try self.len_roots.put(fresh, list_local);
+                        try self.len_roots.put(fresh, self.stableLocalOf(list_local));
                         break :blk fresh;
                     };
                     try self.addFact(.{ .a = node, .b = len_node, .c = bound.c, .origin = .meet });
                     used = true;
                 },
-                .constant => {
-                    const const_node = (try self.constNode(bound.c)) orelse continue;
-                    try self.addFact(.{ .a = node, .b = const_node, .c = 0, .origin = .meet });
-                    used = true;
-                },
+                // Folded into the node's own range.
+                .constant => used = true,
                 .value_of => |scalar_local| {
                     const v = (try self.valueOf(scalar_local)) orelse continue;
                     try self.addFact(.{ .a = node, .b = self.rootOf(v), .c = bound.c + self.offHiOf(v), .origin = .meet });
@@ -1682,7 +1877,7 @@ const Pass = struct {
                         const fresh = (try self.freshRoot(0, std.math.maxInt(i64))) orelse break :blk null;
                         try self.len_terms.put(root, fresh);
                         if (self.isSingleAssign(list_local)) {
-                            try self.len_roots.put(fresh, list_local);
+                            try self.len_roots.put(fresh, self.stableLocalOf(list_local));
                         }
                         break :inner fresh;
                     };
@@ -1734,7 +1929,57 @@ const Pass = struct {
                 }
             }
         }
-        return bounds;
+        return try self.normalizeUpperBounds(bounds, node);
+    }
+
+    /// Bounds against literal values are keyed by one shared constant root,
+    /// with the literal folded into `c`, so two edges that bound a value by
+    /// different constants (a guard on entry, a shift's range on the back
+    /// edge, say) still meet. A root's own static range is such a bound too.
+    fn constantRoot(self: *Pass) ResourceError!?NodeId {
+        if (self.zero_node) |id| return id;
+        const id = (try self.constNode(0)) orelse return null;
+        self.zero_node = id;
+        return id;
+    }
+
+    fn normalizeUpperBounds(self: *Pass, bounds: MeetBounds, node: Node) ResourceError!MeetBounds {
+        const zero = (try self.constantRoot()) orelse return bounds;
+        var out: MeetBounds = .{};
+        var best: ?i128 = null;
+        for (bounds.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) {
+                const c = root.lo + bound.c;
+                if (best == null or c < best.?) best = c;
+            } else {
+                out.append(bound);
+            }
+        }
+        const root = self.nodes.items[node.root];
+        if (root.hi < std.math.maxInt(u64)) {
+            const c = root.hi + node.off_hi;
+            if (best == null or c < best.?) best = c;
+        }
+        if (best) |c| out.append(.{ .root = zero, .c = c });
+        return out;
+    }
+
+    fn normalizeLowerBounds(self: *Pass, bounds: MeetBounds) ResourceError!MeetBounds {
+        const zero = (try self.constantRoot()) orelse return bounds;
+        var out: MeetBounds = .{};
+        var best: ?i128 = null;
+        for (bounds.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) {
+                const c = bound.c - root.lo;
+                if (best == null or c < best.?) best = c;
+            } else {
+                out.append(bound);
+            }
+        }
+        if (best) |c| out.append(.{ .root = zero, .c = c });
+        return out;
     }
 
     /// Lower bounds `root <= value(len_node) + c` provable from the current
@@ -1762,7 +2007,7 @@ const Pass = struct {
                 }
             }
         }
-        return bounds;
+        return try self.normalizeLowerBounds(bounds);
     }
 
     /// This round's length lower bounds for a local, when its value is a
@@ -2532,7 +2777,12 @@ const Pass = struct {
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
-            if (trackedIntMax(self.localLayout(target)) != null) {
+            // A non-negative literal is the same number whatever its type,
+            // so a signed literal binds too: as a mask it bounds a masked
+            // signed value, which the wrap rules can then carry into the
+            // unsigned world.
+            const layout_idx = self.localLayout(target);
+            if (trackedIntMax(layout_idx) != null or isSignedInt(layout_idx)) {
                 if (try self.constNode(v)) |node| {
                     try self.bind(target, .{ .node = node });
                     return;
@@ -2540,6 +2790,14 @@ const Pass = struct {
             }
         }
         try self.bindFresh(target);
+    }
+
+    fn isSignedInt(layout_idx: layout_mod.Idx) bool {
+        return switch (layout_idx) {
+            .i8, .i16, .i32, .i64, .i128 => true,
+            .u8, .u16, .u32, .u64, .u128, .bool, .str, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => false,
+            _ => false,
+        };
     }
 
     fn modelLowLevel(self: *Pass, stmt: CFStmtId, s: anytype) ResourceError!void {
@@ -2581,7 +2839,7 @@ const Pass = struct {
                         if (try self.freshRoot(0, std.math.maxInt(i64))) |len_node| {
                             try self.len_terms.put(root, len_node);
                             if (self.isSingleAssign(list_local)) {
-                                try self.len_roots.put(len_node, list_local);
+                                try self.len_roots.put(len_node, self.stableLocalOf(list_local));
                             }
                             try self.bind(s.target, .{ .node = len_node });
                             return;
@@ -2607,6 +2865,42 @@ const Pass = struct {
                                 try self.bind(s.target, .{ .node = out_node });
                                 return;
                             }
+                        }
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
+            .i8_to_u8_wrap, .i8_to_u16_wrap, .i8_to_u32_wrap, .i8_to_u64_wrap, .i16_to_u8_wrap, .i16_to_u16_wrap, .i16_to_u32_wrap, .i16_to_u64_wrap, .i32_to_u8_wrap, .i32_to_u16_wrap, .i32_to_u32_wrap, .i32_to_u64_wrap, .i64_to_u8_wrap, .i64_to_u16_wrap, .i64_to_u32_wrap, .i64_to_u64_wrap => {
+                // A signed value the path proves non-negative and in range
+                // (a masked table node, say) is the same number afterwards.
+                // Signed values are otherwise untracked, so the argument's
+                // range is only ever narrower than its type when a rule here
+                // established it.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |node_id| {
+                        const node = self.nodes.items[node_id];
+                        const root = self.nodes.items[node.root];
+                        const max = trackedIntMax(self.localLayout(s.target));
+                        if (max != null and root.lo + node.off_lo >= 0 and root.hi + node.off_hi <= max.?) {
+                            try self.bind(s.target, .{ .node = node_id });
+                            return;
+                        }
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
+            .u16_to_u8_wrap, .u32_to_u8_wrap, .u32_to_u16_wrap, .u64_to_u8_wrap, .u64_to_u16_wrap, .u64_to_u32_wrap, .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap => {
+                // A narrowing that provably cannot wrap leaves the number
+                // alone as well: a shift amount computed from literals, say,
+                // stays a constant the shift rule can read.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |node_id| {
+                        const node = self.nodes.items[node_id];
+                        const root = self.nodes.items[node.root];
+                        const max = trackedIntMax(self.localLayout(s.target));
+                        if (max != null and root.hi + node.off_hi <= max.? and root.lo + node.off_lo >= 0) {
+                            try self.bind(s.target, .{ .node = node_id });
+                            return;
                         }
                     }
                 }
@@ -2659,6 +2953,10 @@ const Pass = struct {
                     // index masked by a runtime table size, say).
                     if (arg_count == 2) {
                         for (0..2) |i| {
+                            // A signed operand can be negative, where the
+                            // result exceeds it; only unsigned operands bound
+                            // the result.
+                            if (trackedIntMax(self.localLayout(GuardedList.at(args, i))) == null) continue;
                             if (try self.valueOf(GuardedList.at(args, i))) |operand| {
                                 const fact = Fact{
                                     .a = node,
@@ -2938,13 +3236,9 @@ const Pass = struct {
             .u8_to_f64,
             .u8_to_dec,
             .i8_to_i128,
-            .i8_to_u8_wrap,
             .i8_to_u8_try,
-            .i8_to_u16_wrap,
             .i8_to_u16_try,
-            .i8_to_u32_wrap,
             .i8_to_u32_try,
-            .i8_to_u64_wrap,
             .i8_to_u64_try,
             .i8_to_u128_wrap,
             .i8_to_u128_try,
@@ -2956,7 +3250,6 @@ const Pass = struct {
             .u16_to_i16_wrap,
             .u16_to_i16_try,
             .u16_to_i128,
-            .u16_to_u8_wrap,
             .u16_to_u8_try,
             .u16_to_u128,
             .u16_to_f32,
@@ -2965,13 +3258,9 @@ const Pass = struct {
             .i16_to_i8_wrap,
             .i16_to_i8_try,
             .i16_to_i128,
-            .i16_to_u8_wrap,
             .i16_to_u8_try,
-            .i16_to_u16_wrap,
             .i16_to_u16_try,
-            .i16_to_u32_wrap,
             .i16_to_u32_try,
-            .i16_to_u64_wrap,
             .i16_to_u64_try,
             .i16_to_u128_wrap,
             .i16_to_u128_try,
@@ -2985,9 +3274,7 @@ const Pass = struct {
             .u32_to_i32_wrap,
             .u32_to_i32_try,
             .u32_to_i128,
-            .u32_to_u8_wrap,
             .u32_to_u8_try,
-            .u32_to_u16_wrap,
             .u32_to_u16_try,
             .u32_to_u128,
             .u32_to_f32,
@@ -2998,13 +3285,9 @@ const Pass = struct {
             .i32_to_i16_wrap,
             .i32_to_i16_try,
             .i32_to_i128,
-            .i32_to_u8_wrap,
             .i32_to_u8_try,
-            .i32_to_u16_wrap,
             .i32_to_u16_try,
-            .i32_to_u32_wrap,
             .i32_to_u32_try,
-            .i32_to_u64_wrap,
             .i32_to_u64_try,
             .i32_to_u128_wrap,
             .i32_to_u128_try,
@@ -3020,11 +3303,8 @@ const Pass = struct {
             .u64_to_i64_wrap,
             .u64_to_i64_try,
             .u64_to_i128,
-            .u64_to_u8_wrap,
             .u64_to_u8_try,
-            .u64_to_u16_wrap,
             .u64_to_u16_try,
-            .u64_to_u32_wrap,
             .u64_to_u32_try,
             .u64_to_u128,
             .u64_to_f32,
@@ -3037,13 +3317,9 @@ const Pass = struct {
             .i64_to_i32_wrap,
             .i64_to_i32_try,
             .i64_to_i128,
-            .i64_to_u8_wrap,
             .i64_to_u8_try,
-            .i64_to_u16_wrap,
             .i64_to_u16_try,
-            .i64_to_u32_wrap,
             .i64_to_u32_try,
-            .i64_to_u64_wrap,
             .i64_to_u64_try,
             .i64_to_u128_wrap,
             .i64_to_u128_try,
@@ -3060,13 +3336,9 @@ const Pass = struct {
             .u128_to_i64_try,
             .u128_to_i128_wrap,
             .u128_to_i128_try,
-            .u128_to_u8_wrap,
             .u128_to_u8_try,
-            .u128_to_u16_wrap,
             .u128_to_u16_try,
-            .u128_to_u32_wrap,
             .u128_to_u32_try,
-            .u128_to_u64_wrap,
             .u128_to_u64_try,
             .u128_to_f32,
             .u128_to_f64,

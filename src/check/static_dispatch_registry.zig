@@ -161,6 +161,8 @@ pub const IteratorKind = enum(u8) {
     drop_first,
     concat,
     append,
+    with_index,
+    step_by,
     forced_dynamic,
 
     /// See `IteratorComponentTopology`. Null for `none` (no minted kind) and
@@ -170,7 +172,7 @@ pub const IteratorKind = enum(u8) {
             .none, .forced_dynamic => null,
             .range, .numeric_until, .numeric_to => .source_without_components,
             .custom, .list, .list_rev, .str, .single => .source_with_components,
-            .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append => .adapter,
+            .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by => .adapter,
         };
     }
 };
@@ -211,6 +213,8 @@ pub const IteratorProcedureId = enum(u8) {
     iter_drop_first,
     iter_concat,
     iter_append,
+    iter_with_index,
+    iter_step_by,
     range_iter,
     numeric_range_delegate,
     numeric_to,
@@ -239,6 +243,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first,
             .iter_concat,
             .iter_append,
+            .iter_with_index,
+            .iter_step_by,
             .range_iter,
             .numeric_range_delegate,
             .numeric_to,
@@ -268,6 +274,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first => .drop_first,
             .iter_concat => .concat,
             .iter_append => .append,
+            .iter_with_index => .with_index,
+            .iter_step_by => .step_by,
             .range_iter => .range,
             .numeric_to => .numeric_to,
             .numeric_until => .numeric_until,
@@ -298,6 +306,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first,
             .iter_concat,
             .iter_append,
+            .iter_with_index,
+            .iter_step_by,
             .range_iter,
             .numeric_range_delegate,
             .numeric_to,
@@ -327,6 +337,10 @@ const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
     .{ "Builtin.Iter.concat", .iter_concat },
     .{ "Builtin.Iter.append", .iter_append },
     .{ "Builtin.Num.Range.iter", .range_iter },
+    .{ "iter_with_index", .iter_with_index },
+    .{ "Builtin.iter_with_index", .iter_with_index },
+    .{ "iter_step_by", .iter_step_by },
+    .{ "Builtin.iter_step_by", .iter_step_by },
     .{ "iter_from_step", .iter_from_step },
     .{ "Builtin.iter_from_step", .iter_from_step },
     .{ "range_done", .range_done },
@@ -2179,6 +2193,31 @@ pub const StaticDispatchPlanTable = struct {
                 .constraint_fn_var = @enumFromInt(quote_plan.fn_var),
             });
             try quote_by_node.put(allocator, node, plan_id);
+        }
+
+        // Only custom/generalized literal patterns have these synthesized
+        // guards. Builtin patterns produce neither a guard nor an equality plan.
+        for (checked_bodies.literal_pattern_exprs.items) |literal| {
+            const source = module_env.store.literalDispatchPlanForNode(@enumFromInt(literal.raw_node)) orelse unreachable;
+            const context = source.patternContext(&module_env.store) orelse unreachable;
+            std.debug.assert(context.equality_fn_var_plus_one != 0);
+            const constraint_fn: Var = @enumFromInt(context.equality_fn_var_plus_one - 1);
+            const args = [_]StaticDispatchOperand{
+                .{ .checked_expr = literal.scrutinee }, .{ .checked_expr = literal.expr },
+            };
+            try plans.append(allocator, .{
+                .expr = literal.equality,
+                .method = try names.internMethodName("is_eq"),
+                .dispatcher = .{ .arg = 0 },
+                .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(source.target_var)),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn),
+                .args = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args),
+                .result_mode = .{ .equality = .{ .structural_allowed = true, .negated = false } },
+            });
+            try plan_sources.append(allocator, .{
+                .dispatcher_var = @enumFromInt(source.target_var),
+                .constraint_fn_var = constraint_fn,
+            });
         }
 
         for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {

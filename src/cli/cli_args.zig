@@ -102,7 +102,7 @@ pub const default_build_opt: OptLevel = .speed;
 /// Values are in megabytes; 0 means unlimited; null uses the default.
 pub const ResolveLimitArgs = struct {
     max_package_mb: ?u32 = null, // per-package decompressed size limit (default 10)
-    max_transitive_mb: ?u32 = null, // per-direct-dependency transitive size limit (default 100)
+    max_transitive_mb: ?u32 = null, // overrides both transitive limits (defaults: packages 100, platforms 512)
 };
 
 const ResolveLimitParse = union(enum) {
@@ -162,7 +162,8 @@ fn parseResolveLimitProblem(arg: []const u8, limits: *ResolveLimitArgs) ?ArgProb
 
 const resolve_limit_help =
     \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
-    \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages (default: 100, 0 for unlimited)
+    \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
+    \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
 ;
 
 /// Arguments for the default `roc` command
@@ -421,8 +422,7 @@ const main_help =
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --no-color                     Do not use ANSI escape codes in CLI output
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
-    \\
-;
+++ "\n" ++ resolve_limit_help ++ "\n";
 
 const run_help =
     \\Run a Roc application
@@ -437,6 +437,9 @@ const run_help =
     \\Running an installed shorthand executes the optimized binary that was
     \\built at install time; no compilation or network access is needed.
     \\File and URL sources accept the same options as the default `roc` command.
+    \\Options:
+++ "\n" ++ resolve_limit_help ++ "\n" ++
+    \\  -h, --help                     Print help
     \\
 ;
 
@@ -594,8 +597,9 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
-            \\      -h, --help                     Print help
-            \\
+            ++ "\n" ++ resolve_limit_help ++ "\n" ++
+                \\      -h, --help                     Print help
+                \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
             if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
@@ -894,8 +898,9 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\      --no-cache                      Disable compilation caching, force re-run all tests
             \\      --watch                         Re-run when source inputs change
             \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
-            \\  -h, --help                          Print help
-            \\
+            ++ "\n" ++ resolve_limit_help ++ "\n" ++
+                \\  -h, --help                          Print help
+                \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
             if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
@@ -1186,8 +1191,9 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache       Disable caching
             \\      --verbose        Enable verbose output including cache statistics
-            \\  -h, --help           Print help
-            \\
+            ++ "\n" ++ resolve_limit_help ++ "\n" ++
+                \\  -h, --help           Print help
+                \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
             if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
@@ -1305,6 +1311,7 @@ const bump_help =
     \\                             as the API diff requires (for release CI)
     \\      --no-cache             Disable caching
     \\      --verbose              Enable verbose output
+++ "\n" ++ resolve_limit_help ++ "\n" ++
     \\  -h, --help                 Print help
     \\
     \\Both the old and new package must compile with this compiler. Only the
@@ -2420,6 +2427,29 @@ test "roc help" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "help", "extrastuff" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "dependency-resolving command help lists size limit flags" {
+    const gpa = testing.allocator;
+    const cases: []const []const []const u8 = &.{
+        &.{"--help"},
+        &.{ "run", "--help" },
+        &.{ "install", "--help" },
+        &.{ "check", "--help" },
+        &.{ "build", "--help" },
+        &.{ "test", "--help" },
+        &.{ "docs", "--help" },
+        &.{ "bump", "--help" },
+    };
+
+    for (cases) |args| {
+        const result = try parse(gpa, testing.io, args);
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+        try testing.expect(std.mem.find(u8, result.help, "--max-package-mb") != null);
+        try testing.expect(std.mem.find(u8, result.help, "--max-transitive-mb") != null);
+        try testing.expect(std.mem.find(u8, result.help, "packages 100, platforms 512") != null);
     }
 }
 

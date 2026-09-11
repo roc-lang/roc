@@ -418,7 +418,7 @@ const Unifier = struct {
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
     unresolved_b: ?Var,
-    /// The two record vars of the innermost record-vs-record relation currently
+    /// The checked record vars of the innermost record relation currently
     /// being unified. A row absorbed into an empty record names that empty row's
     /// var, which for a nested literal is the literal's internal extension var
     /// rather than the literal's own var; the enclosing pair is how the checker
@@ -510,7 +510,10 @@ const Unifier = struct {
                         return Content{ .structure = FlatType{ .tag_union = try self.tagUnionForMerge(vars, tag_union) } };
                     },
                     .fn_pure => |func| {
-                        return Content{ .structure = FlatType{ .fn_pure = try self.funcForMerge(vars, func) } };
+                        // A pure function's effect formula is discharged: every
+                        // dependency it ever had was made pure when the two
+                        // sides unified, so the merged type carries none.
+                        return Content{ .structure = FlatType{ .fn_pure = .{ .args = func.args, .ret = func.ret } } };
                     },
                     .fn_effectful => |func| {
                         return Content{ .structure = FlatType{ .fn_effectful = try self.funcForMerge(vars, func) } };
@@ -733,6 +736,8 @@ const Unifier = struct {
                 self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
                 self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
+            } else if (frame_tag == .restore_enclosing_records) {
+                self.enclosing_records = frame.restore_enclosing_records;
             } else if (frame_tag == .mismatch_handler) {
                 const handler = frame.mismatch_handler;
                 if (handler != .propagate) return try self.applyMismatchHandling(handler);
@@ -1134,7 +1139,9 @@ const Unifier = struct {
                         try self.unifyFunc(vars, a_func, b_func);
                     },
                     .fn_unbound => |b_func| {
-                        // pure unifies with unbound -> pure
+                        // pure unifies with unbound -> pure, which makes every
+                        // function the unbound side's effect depends on pure
+                        try self.demandPureEffectDeps(b_func.effect_deps);
                         try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
                     },
@@ -1180,7 +1187,9 @@ const Unifier = struct {
             .fn_unbound => |a_func| {
                 switch (b_flat_type) {
                     .fn_pure => |b_func| {
-                        // unbound unifies with pure -> pure
+                        // unbound unifies with pure -> pure, which makes every
+                        // function the unbound side's effect depends on pure
+                        try self.demandPureEffectDeps(a_func.effect_deps);
                         try self.scheduleMerge(vars.*, vars.b.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
                     },
@@ -1623,6 +1632,7 @@ const Unifier = struct {
                 // Relate the source construction directly to the backing row.
                 // Never merge the opened backing root with the nominal result:
                 // later constructions may reuse that structural opening.
+                try self.enterRecordRelation(vars);
                 try self.unifyRowWithEmptyRecord(vars, source, record.fields, record.ext, direction);
             }
             return;
@@ -2387,6 +2397,19 @@ const Unifier = struct {
         }
     }
 
+    /// Retain the checked representatives of a record relation while its
+    /// children run. A polymorphic call's raw operand may name a formal slot,
+    /// whereas its checked representative still names the record construction.
+    fn enterRecordRelation(self: *Self, vars: *const ResolvedVarDescs) std.mem.Allocator.Error!void {
+        // Pushed before any child work so it pops once that work has drained;
+        // a plain `defer` would restore while the children are still queued.
+        _ = try self.scratch.unify_work_stack.append(
+            self.scratch.gpa,
+            .{ .restore_enclosing_records = self.enclosing_records },
+        );
+        self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
+    }
+
     /// Unify two extensible records.
     ///
     /// This function implements Elm-style record unification.
@@ -2475,13 +2498,7 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Pushed before any child work so it pops once that work has drained;
-        // a plain `defer` would restore while the children are still queued.
-        _ = try self.scratch.unify_work_stack.append(
-            self.scratch.gpa,
-            .{ .restore_enclosing_records = self.enclosing_records },
-        );
-        self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
+        try self.enterRecordRelation(vars);
 
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
@@ -2819,6 +2836,60 @@ const Unifier = struct {
             .only_in_b = scratch.only_in_b_fields.rangeToEnd(b_fields_start),
             .in_both = scratch.in_both_fields.rangeToEnd(both_fields_start),
         };
+    }
+
+    /// An effect-polymorphic function's effect is the disjunction of the
+    /// effects of the functions in `deps`, so requiring it to be pure requires
+    /// each of them to be pure. A dependency that is still effect-polymorphic
+    /// becomes pure in place (and its own dependencies in turn), while one that
+    /// has already become effectful cannot satisfy the requirement.
+    fn demandPureEffectDeps(self: *Self, deps: Var.SafeList.Range) Error!void {
+        var i: u32 = 0;
+        while (i < deps.len()) : (i += 1) {
+            try self.demandPureFunction(self.types_store.getVarAt(deps, i));
+        }
+    }
+
+    fn demandPureFunction(self: *Self, dep_var: Var) Error!void {
+        var current = dep_var;
+        while (true) {
+            const resolved = self.types_store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    current = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure => return,
+                    .fn_effectful => return error.TypeMismatch,
+                    .fn_unbound => |func| {
+                        // Write the pure type before visiting the dependencies
+                        // so a recursive group, whose members depend on each
+                        // other, terminates at the member already made pure.
+                        // A dependency that turns out effectful fails the
+                        // whole demand, and this function's effect then still
+                        // depends on it, so the write is undone on that path.
+                        try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_pure = .{ .args = func.args, .ret = func.ret } } });
+                        self.demandPureEffectDeps(func.effect_deps) catch |err| {
+                            try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_unbound = func } });
+                            return err;
+                        };
+                        return;
+                    },
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return,
+                },
+                // An effect dependency is recorded from a call, which has
+                // already given the callee a function shape.
+                .flex, .rigid, .field_presence => unreachable,
+                .err => return,
+            }
+        }
     }
 
     /// Preserve every directed effect dependency when two representations of

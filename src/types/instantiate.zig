@@ -99,6 +99,14 @@ pub const Scratch = struct {
     pending_fields: std.ArrayListUnmanaged(RecordField) = .empty,
     pending_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
     pending_parts: std.ArrayListUnmanaged(InterpolationPartMetadata) = .empty,
+    /// Buffers for the scheme pre-walk that decides which monomorphic nodes a
+    /// scheme instantiation copies. `reach_state` maps every visited root to
+    /// whether a generalized variable is reachable from it; `reach_heads`
+    /// maps a child root to its first incoming edge in `reach_edges`.
+    reach_edges: std.ArrayListUnmanaged(ReachEdge) = .empty,
+    reach_heads: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    reach_stack: std.ArrayListUnmanaged(Var) = .empty,
+    reach_state: std.AutoHashMapUnmanaged(Var, bool) = .empty,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -107,7 +115,21 @@ pub const Scratch = struct {
         self.pending_fields.deinit(gpa);
         self.pending_constraints.deinit(gpa);
         self.pending_parts.deinit(gpa);
+        self.reach_edges.deinit(gpa);
+        self.reach_heads.deinit(gpa);
+        self.reach_stack.deinit(gpa);
+        self.reach_state.deinit(gpa);
     }
+};
+
+/// One incoming edge of a type-graph node, recorded by the scheme pre-walk so
+/// reachability of a generalized variable can be propagated from a child to
+/// its parents. Edges with the same child form a list through `next`.
+const ReachEdge = struct {
+    parent: Var,
+    next: u32,
+
+    const none = std.math.maxInt(u32);
 };
 
 /// One suspended copy step on the explicit instantiation worklist. Every
@@ -253,9 +275,12 @@ pub const Instantiator = struct {
     purpose: Purpose = .instantiation,
 
     /// A rank-1 scheme can contain quantified leaves below monomorphic
-    /// structural nodes. While instantiating such a scheme, copy that complete
-    /// structural spine so the walk reaches every generalized descendant;
-    /// monomorphic flex/rigid leaves remain shared.
+    /// structural nodes. While instantiating such a scheme, copy exactly the
+    /// monomorphic nodes from which a generalized variable is reachable (as
+    /// recorded in `Scratch.reach_state`) so the walk reaches every
+    /// generalized descendant. Every other monomorphic node stays shared: it
+    /// is not quantified, so each use must see the same node, including a
+    /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
 
     /// Expected shape is structural context, not another use of a constrained
@@ -322,10 +347,146 @@ pub const Instantiator = struct {
         self: *Self,
         initial_var: Var,
     ) std.mem.Allocator.Error!Var {
+        try self.computeGeneralizedReachability(initial_var);
         const previous = self.copy_scheme_structure;
         self.copy_scheme_structure = true;
         defer self.copy_scheme_structure = previous;
         return self.instantiateVarHelp(initial_var, true);
+    }
+
+    /// Fill `Scratch.reach_state` for every node reachable from `root`: true
+    /// when a generalized variable is reachable from that node. The walk
+    /// follows exactly the child edges the copy follows, stops at monomorphic
+    /// flex and rigid leaves (shared, so their constraints are shared too),
+    /// and records every edge by its child. Reachability then propagates from
+    /// each generalized node to its parents along those edges with a
+    /// worklist, which visits every node and edge at most once whatever the
+    /// sharing or recursion in the graph.
+    fn computeGeneralizedReachability(self: *Self, root: Var) std.mem.Allocator.Error!void {
+        const machine = self.scratch();
+        machine.reach_edges.clearRetainingCapacity();
+        machine.reach_heads.clearRetainingCapacity();
+        machine.reach_stack.clearRetainingCapacity();
+        machine.reach_state.clearRetainingCapacity();
+
+        const root_resolved = self.store.resolveVar(root);
+        try machine.reach_state.put(self.store.gpa, root_resolved.var_, root_resolved.desc.rank == .generalized);
+        try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
+
+        while (machine.reach_stack.pop()) |parent| {
+            const resolved = self.store.resolveVar(parent);
+            switch (resolved.desc.content) {
+                .flex => |flex| {
+                    if (resolved.desc.rank != .generalized) continue;
+                    try self.visitReachConstraints(parent, flex.constraints);
+                },
+                .rigid => |rigid| {
+                    if (resolved.desc.rank != .generalized) continue;
+                    try self.visitReachConstraints(parent, rigid.constraints);
+                },
+                .alias => |alias| {
+                    var arg_span = alias.vars.nonempty;
+                    arg_span.dropFirstElem();
+                    var i: u32 = 0;
+                    while (i < arg_span.count) : (i += 1) {
+                        try self.visitReachChild(parent, self.store.vars.items.items[@intFromEnum(arg_span.start) + i]);
+                    }
+                    try self.visitReachChild(parent, self.store.getAliasBackingVar(alias));
+                },
+                .structure => |flat_type| switch (flat_type) {
+                    .empty_record, .empty_tag_union => {},
+                    .tuple => |tuple| try self.visitReachVars(parent, tuple.elems),
+                    .nominal_type => |nominal| try self.visitReachVars(parent, TypesStore.getNominalArgsRange(nominal)),
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try self.visitReachVars(parent, func.args);
+                        try self.visitReachChild(parent, func.ret);
+                        try self.visitReachVars(parent, func.effect_deps);
+                    },
+                    .record => |record| {
+                        try self.visitReachFields(parent, record.fields);
+                        try self.visitReachChild(parent, record.ext);
+                    },
+                    .record_unbound => |fields| try self.visitReachFields(parent, fields),
+                    .tag_union => |tag_union| {
+                        var i: u32 = 0;
+                        while (i < tag_union.tags.count) : (i += 1) {
+                            const tag = self.store.tags.get(@enumFromInt(@intFromEnum(tag_union.tags.start) + i));
+                            try self.visitReachVars(parent, tag.args);
+                        }
+                        try self.visitReachChild(parent, tag_union.ext);
+                    },
+                },
+                .field_presence, .err => {},
+            }
+        }
+
+        var seeds = machine.reach_state.iterator();
+        while (seeds.next()) |entry| {
+            if (entry.value_ptr.*) try machine.reach_stack.append(self.store.gpa, entry.key_ptr.*);
+        }
+        while (machine.reach_stack.pop()) |child| {
+            var edge_idx = machine.reach_heads.get(child) orelse continue;
+            while (edge_idx != ReachEdge.none) {
+                const edge = machine.reach_edges.items[edge_idx];
+                const parent_state = machine.reach_state.getPtr(edge.parent).?;
+                if (!parent_state.*) {
+                    parent_state.* = true;
+                    try machine.reach_stack.append(self.store.gpa, edge.parent);
+                }
+                edge_idx = edge.next;
+            }
+        }
+    }
+
+    fn visitReachVars(self: *Self, parent: Var, vars: Var.SafeList.Range) std.mem.Allocator.Error!void {
+        var i: u32 = 0;
+        while (i < vars.count) : (i += 1) {
+            try self.visitReachChild(parent, self.store.vars.items.items[@intFromEnum(vars.start) + i]);
+        }
+    }
+
+    fn visitReachFields(self: *Self, parent: Var, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!void {
+        var i: u32 = 0;
+        while (i < fields.count) : (i += 1) {
+            const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(fields.start) + i));
+            try self.visitReachChild(parent, field.presence.typeVar());
+            if (field.presence.presenceVar()) |presence_var| {
+                try self.visitReachChild(parent, presence_var);
+            }
+        }
+    }
+
+    fn visitReachConstraints(self: *Self, parent: Var, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
+        var i: u32 = 0;
+        while (i < constraints.len()) : (i += 1) {
+            const constraint = self.store.static_dispatch_constraints.items.items[@intFromEnum(constraints.start) + i];
+            try self.visitReachChild(parent, constraint.fn_var);
+            if (constraint.interpolation.isPresent()) {
+                const metadata = constraint.interpolation;
+                var part_idx: u32 = 0;
+                while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
+                    try self.visitReachChild(parent, self.store.getInterpolationPartAt(metadata.interpolated_parts, part_idx).var_);
+                }
+                try self.visitReachChild(parent, metadata.item_var);
+            }
+        }
+    }
+
+    /// Record the edge to `child` and schedule the child's own children once.
+    fn visitReachChild(self: *Self, parent: Var, child: Var) std.mem.Allocator.Error!void {
+        const machine = self.scratch();
+        const resolved = self.store.resolveVar(child);
+        const edge_idx: u32 = @intCast(machine.reach_edges.items.len);
+        const head = try machine.reach_heads.getOrPut(self.store.gpa, resolved.var_);
+        try machine.reach_edges.append(self.store.gpa, .{
+            .parent = parent,
+            .next = if (head.found_existing) head.value_ptr.* else ReachEdge.none,
+        });
+        head.value_ptr.* = edge_idx;
+        const entry = try machine.reach_state.getOrPut(self.store.gpa, resolved.var_);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = resolved.desc.rank == .generalized;
+        try machine.reach_stack.append(self.store.gpa, resolved.var_);
     }
 
     fn instantiateVarHelp(
@@ -398,12 +559,13 @@ pub const Instantiator = struct {
         const resolved_var = resolved.var_;
 
         // Ordinary instantiation shares every non-generalized var. A binding
-        // explicitly classified as a scheme instead copies non-generalized
-        // structural nodes so generalized leaves at arbitrary depth remain
-        // reachable, while preserving the identity of monomorphic leaves.
+        // explicitly classified as a scheme instead copies the non-generalized
+        // structural nodes from which a generalized leaf is reachable, so
+        // generalized leaves at arbitrary depth remain reachable while every
+        // monomorphic node and leaf keeps its identity.
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => true,
+                .alias, .structure => machine.reach_state.get(resolved_var) orelse false,
                 .flex, .rigid, .field_presence, .err => false,
             };
             if (!copy_structure) {

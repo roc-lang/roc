@@ -113,7 +113,7 @@ fn forwardLocalAliasChainImpl(
 /// payload arms, string-match arms, and join bodies. This is the reachability
 /// step shared by the proc walkers.
 pub fn appendSuccessors(
-    store: *LirStore,
+    store: *const LirStore,
     work: *std.ArrayList(CFStmtId),
     stmt_id: CFStmtId,
 ) Allocator.Error!void {
@@ -375,6 +375,105 @@ pub fn countStmtReads(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) v
         .loop_break,
         => {},
     }
+}
+
+/// Count definitions of every local reachable from `body`, walking all
+/// successor edges: statement targets, join parameters, descriptor outputs,
+/// and pattern-match captures. Operand reads are not definitions.
+pub fn countReachableDefs(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
+    const counts = try store.allocator.alloc(u32, store.localCount());
+    errdefer store.allocator.free(counts);
+    @memset(counts, 0);
+
+    var work = std.ArrayList(CFStmtId).empty;
+    defer work.deinit(store.allocator);
+    var visited = collections.DenseMap(CFStmtId, void).init(store.allocator);
+    defer visited.deinit();
+
+    try work.append(store.allocator, body);
+    while (work.pop()) |stmt_id| {
+        const entry = try visited.getOrPut(stmt_id);
+        if (entry.found_existing) continue;
+
+        countStmtDefs(store, counts, store.getCFStmt(stmt_id));
+        try appendSuccessors(store, &work, stmt_id);
+    }
+
+    return .{ .allocator = store.allocator, .counts = counts };
+}
+
+/// Add this statement's definitions to an existing per-local count row.
+/// Operand reads are deliberately excluded, matching `countReachableDefs`.
+pub fn countStmtDefs(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
+    switch (stmt) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .set_local,
+        => |s| noteRead(counts, s.target),
+        .assign_call => |s| {
+            noteRead(counts, s.target);
+            if (s.out_desc) |out_desc| noteRead(counts, out_desc);
+        },
+        .assign_call_erased => |s| {
+            noteRead(counts, s.target);
+            if (s.out_desc) |out_desc| noteRead(counts, out_desc);
+        },
+        .assign_boxy_tag_payload => |s| {
+            noteRead(counts, s.target);
+            if (s.target_desc) |target_desc| noteRead(counts, target_desc);
+        },
+        .join => |s| noteSpanReads(store, counts, s.params),
+        .str_match => |s| noteStepCaptures(store, counts, s.steps),
+        .str_match_set => |s| {
+            const arms = store.getStrMatchArms(s.arms);
+            for (0..arms.len) |index| noteStepCaptures(store, counts, GuardedList.at(arms, index).steps);
+        },
+        .store_struct,
+        .store_tag,
+        .debug,
+        .expect,
+        .expect_err,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .boxy_tag_match,
+        .ret,
+        .crash,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .comptime_branch_taken,
+        .jump,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .loop_continue,
+        .loop_break,
+        => {},
+    }
+}
+
+fn noteStepCaptures(store: *const LirStore, counts: []u32, span: LIR.StrMatchStepSpan) void {
+    const steps = store.getStrMatchSteps(span);
+    for (0..steps.len) |index| switch (GuardedList.at(steps, index).capture) {
+        .discard => {},
+        .view => |local| noteRead(counts, local),
+    };
 }
 
 fn noteRead(counts: []u32, local: LocalId) void {
@@ -658,10 +757,11 @@ pub fn cloneCallVariant(
 ///
 ///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)`—required.
 ///     Produces the cloned tail for a source `ret value`.
-///   * `interceptStmt(self: *Rewriter, cloner: anytype, stmt: LIR.CFStmt)`—
+///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt)`—
 ///     optional. Returns a cloned statement id to short-circuit the default
 ///     clone, letting the pass fuse a direct constructor/concat return into
-///     the tail, or `null` to fall through to the ordinary clone.
+///     the tail or rewrite statements it identified up front, or `null` to
+///     fall through to the ordinary clone.
 ///
 /// Both hooks receive the cloner and use its `mapLocal`, `mapLocalSpan`,
 /// `addTemp`, `directReturnOf`, and `store` surface to build their statements.
@@ -782,7 +882,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
 
             const stmt = self.store.getCFStmt(old_id);
             if (@hasDecl(Rewriter, "interceptStmt")) {
-                if (try self.rewriter.interceptStmt(self, stmt)) |intercepted| {
+                if (try self.rewriter.interceptStmt(self, old_id, stmt)) |intercepted| {
                     try self.stmt_map.put(old_id, intercepted);
                     return intercepted;
                 }

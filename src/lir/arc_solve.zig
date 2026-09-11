@@ -135,6 +135,9 @@ pub const Solution = struct {
     /// Bit set => this borrowed local is a direct-call result and therefore
     /// needs its own value-use liveness bit in emission.
     borrowed_call_result: std.bit_set.DynamicBitSetUnmanaged,
+    /// Pure list descriptor aliases with no allocation-dependent uses.
+    /// Their saved representation survives independently of the buffer.
+    representation_alias: std.bit_set.DynamicBitSetUnmanaged,
     /// Owned leader anchoring each local's liveness; the local itself when
     /// the binding is owned or is a borrowed parameter.
     leader: []u32,
@@ -211,6 +214,7 @@ pub const Solution = struct {
     pub fn deinit(self: *Solution) void {
         self.borrowed.deinit(self.allocator);
         self.borrowed_call_result.deinit(self.allocator);
+        self.representation_alias.deinit(self.allocator);
         self.allocator.free(self.leader);
         self.allocator.free(self.alias_source);
         self.allocator.free(self.borrow_source);
@@ -265,6 +269,11 @@ pub const Solution = struct {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return false;
         return self.borrowed_call_result.isSet(index);
+    }
+
+    pub fn isRepresentationAlias(self: *const Solution, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        return index < self.representation_alias.capacity() and self.representation_alias.isSet(index);
     }
 
     /// True when RC statements touching this local's value must use atomic
@@ -560,6 +569,7 @@ const UniqueFact = union(enum) {
     consume: LIR.LocalId,
     destroy: LIR.LocalId,
     read: LIR.LocalId,
+    representation_read: LIR.LocalId,
 };
 
 const UniqueJoinIncoming = struct {
@@ -794,6 +804,8 @@ pub fn solve(
     // simple worklist reaches the same least fixpoint without rescanning any
     // procedure body.
     try collectAll(&solver);
+    var representation_aliases = try solveRepresentationAliases(&solver, layouts);
+    defer representation_aliases.deinit(allocator);
     try solveParameterModes(&solver);
 
     // Phase B: returns become borrowed when every returned value is a borrow
@@ -894,6 +906,8 @@ pub fn solve(
     errdefer borrowed.deinit(allocator);
     var borrowed_call_result = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer borrowed_call_result.deinit(allocator);
+    var representation_alias = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    errdefer representation_alias.deinit(allocator);
     const leader = try allocator.alloc(u32, local_count);
     errdefer allocator.free(leader);
     const alias_source = try allocator.alloc(u32, local_count);
@@ -922,6 +936,12 @@ pub fn solve(
             }
         }
         leader[local_index] = domain.localAt(binding.leader[arc_index]);
+        if (representation_aliases.isSet(arc_index)) {
+            representation_alias.set(local_index);
+            borrowed.set(local_index);
+            leader[local_index] = local_index;
+            borrow_source[local_index] = no_local;
+        }
         const source = solver.alias_source[arc_index];
         if (source != no_local) alias_source[local_index] = domain.localAt(source);
         if (solver.join_param.isSet(arc_index)) join_param.set(local_index);
@@ -940,6 +960,7 @@ pub fn solve(
         .allocator = allocator,
         .borrowed = borrowed,
         .borrowed_call_result = borrowed_call_result,
+        .representation_alias = representation_alias,
         .leader = leader,
         .alias_source = alias_source,
         .borrow_source = borrow_source,
@@ -1636,6 +1657,58 @@ fn computeOutcomeRestitution(
     }
 
     solution.outcomes = try all_outcomes.toOwnedSlice(allocator);
+}
+
+/// Allocation demand over the already-lifted occurrence inventory. Each local
+/// enters the worklist once, and pure alias edges are followed once. Only
+/// independently copied list descriptors qualify; projections still require
+/// their container at the read, and call/join boundaries keep their contracts.
+fn solveRepresentationAliases(solver: *const Solver, layouts: *const layout_mod.Store) SolveError!std.bit_set.DynamicBitSetUnmanaged {
+    const allocator = solver.allocator;
+    const domain = solver.domain;
+    const count = domain.arc_to_local.len;
+    var aliases = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+    errdefer aliases.deinit(allocator);
+    var required = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+    defer required.deinit(allocator);
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+    for (solver.alias_source, 0..) |source, target| {
+        if (source == no_local or solver.defs[target] != .borrow_capable or solver.join_param.isSet(target)) continue;
+        const target_layout = layouts.getLayout(solver.store.getLocal(@enumFromInt(domain.localAt(@intCast(target)))).layout_idx);
+        const source_layout = layouts.getLayout(solver.store.getLocal(@enumFromInt(domain.localAt(source))).layout_idx);
+        if ((target_layout.tag == .list or target_layout.tag == .list_of_zst) and
+            (source_layout.tag == .list or source_layout.tag == .list_of_zst)) aliases.set(target);
+    }
+    const Seed = struct {
+        fn add(s: *const Solver, bits: *std.bit_set.DynamicBitSetUnmanaged, queue: *std.ArrayList(u32), local: LIR.LocalId) SolveError!void {
+            const index = s.domain.indexOf(local) orelse return;
+            if (bits.isSet(index)) return;
+            bits.set(index);
+            try queue.append(s.allocator, index);
+        }
+    };
+    for (solver.unique_facts.items) |fact| switch (fact) {
+        .consume, .destroy, .read, .join_target => |local| try Seed.add(solver, &required, &work, local),
+        .alias => |alias| {
+            const target = domain.indexOf(alias.target);
+            if (target == null or !aliases.isSet(target.?)) try Seed.add(solver, &required, &work, alias.source);
+        },
+        .join_incoming => |incoming| try Seed.add(solver, &required, &work, incoming.source),
+        .birth, .foreign, .representation_read => {},
+    };
+    for (solver.unique_calls.items) |call| {
+        const args = solver.store.getLocalSpan(call.args);
+        for (0..GuardedList.borrowLen(args)) |index| try Seed.add(solver, &required, &work, GuardedList.at(args, index));
+    }
+    while (work.pop()) |target| {
+        if (!aliases.isSet(target)) continue;
+        const source = solver.alias_source[target];
+        if (source != no_local) try Seed.add(solver, &required, &work, @enumFromInt(domain.localAt(source)));
+    }
+    required.toggleAll();
+    aliases.setIntersection(required);
+    return aliases;
 }
 
 const BindingResult = struct {
@@ -3145,7 +3218,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     try solver.unique_facts.append(allocator, .{ .destroy = arg });
                     read_only = false;
                 }
-                if (read_only) try solver.unique_facts.append(allocator, .{ .read = arg });
+                if (read_only) try solver.unique_facts.append(allocator, if ((assign.op.representationArgs() & bit) != 0)
+                    .{ .representation_read = arg }
+                else
+                    .{ .read = arg });
             }
         },
         .assign_list => |assign| {
@@ -4409,7 +4485,7 @@ fn computeUniquenessFromFacts(
         },
         .consume => |local| if (domain.indexOf(local)) |index| Marks.consume(&consumed, &destroyed, index),
         .destroy => |local| if (domain.indexOf(local)) |index| destroyed.set(index),
-        .read => |local| if (domain.indexOf(local)) |index| read.set(index),
+        .read, .representation_read => |local| if (domain.indexOf(local)) |index| read.set(index),
     };
 
     // Direct-call facts are static, but their return origins and argument

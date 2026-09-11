@@ -5124,24 +5124,6 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     try self.env.publishScratchDiagnostics();
 }
 
-/// Validate a module for use in execution mode (e.g. `roc main.roc` or `roc build`).
-/// Requires a valid main! function for type_module headers.
-pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
-    switch (self.env.module_kind) {
-        .type_module => {
-            const main_status = try self.checkMainFunction(true);
-            if (main_status == .not_found) {
-                try self.reportExecutionRequiresAppOrDefaultApp();
-            }
-        },
-        .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
-            // No validation needed for these module kinds in execution mode
-        },
-    }
-
-    try self.env.publishScratchDiagnostics();
-}
-
 /// Creates a definition for a standalone annotation with no Roc implementation.
 fn createAnnotationDef(
     self: *Self,
@@ -10038,6 +10020,7 @@ fn scheduleBlockDeclContinuation(
             if (self.scopeFindBinding(.ident, ident_idx)) |existing_binding| {
                 const existing_pattern_idx = existing_binding.pattern_idx;
                 if (self.isVarPattern(existing_pattern_idx)) {
+                    try self.env.store.recordWriteOccurrence(existing_pattern_idx, ident_region);
                     if (existing_binding.crosses_function_boundary) {
                         if (type_var_scope) |scope_idx| {
                             self.scopeExitTypeVar(scope_idx);
@@ -10497,6 +10480,7 @@ fn canonicalizeStandaloneBlockDecl(
             if (self.scopeFindBinding(.ident, ident_idx)) |existing_binding| {
                 const existing_pattern_idx = existing_binding.pattern_idx;
                 if (self.isVarPattern(existing_pattern_idx)) {
+                    try self.env.store.recordWriteOccurrence(existing_pattern_idx, ident_region);
                     if (existing_binding.crosses_function_boundary) {
                         const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .var_across_function_boundary = .{
                             .region = ident_region,
@@ -18146,6 +18130,7 @@ pub fn canonicalizePattern(
                                     continue :patternkernel_loop .dispatch;
                                 },
                                 .var_reassignment_ok => |existing_pattern_idx| {
+                                    try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
                                     self.pattern_reused_existing_var = true;
                                     // Only record the reassignment target while inside a block
                                     // declaration's pattern (where `allow_pattern_var_reuse` is set):
@@ -18901,6 +18886,7 @@ fn scopeIntroduceVar(
             } });
         },
         .var_reassignment_ok => |existing_pattern_idx| {
+            try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
             // Var reassignment - return the existing pattern
             return existing_pattern_idx;
         },
@@ -22388,18 +22374,6 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
             },
         });
     }
-}
-
-/// Report error when trying to execute a plain type module
-fn reportExecutionRequiresAppOrDefaultApp(self: *Self) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
-    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
-
-    try self.env.pushDiagnostic(.{
-        .execution_requires_app_or_default_app = .{
-            .region = file_region,
-        },
-    });
 }
 
 // We write out this giant literal because it's actually annoying to try to

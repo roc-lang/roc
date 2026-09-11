@@ -1252,6 +1252,16 @@ const State = struct {
     /// carrying outcome-conditioned ownership.
     outcome_discriminants: ArcSnapshot(ValueId, no_value),
     outcome_discriminant_count: usize = 0,
+    /// Discriminant each tag-union container value is proven to hold on this
+    /// exact path: reading a variant's payload proves it, and a discriminant
+    /// switch arm refines it. A dismantled union's residual release dispatches
+    /// on its discriminant, and this is what makes that dispatch certifiable:
+    /// on the path that took the variant's fields, the arms for other
+    /// variants and the whole-release default are infeasible.
+    known_variants: ArcSnapshot(u16, no_variant),
+    /// Scalar discriminant locals read from a tag-union container value on
+    /// this path, so a switch on one refines that container's variant.
+    variant_discriminants: ArcSnapshot(ValueId, no_value),
     /// Statically known discriminant of the current proc's top-level result
     /// along this exact path. The initial restitution capability consumes it
     /// before a terminal jump/return, so it never crosses a join summary.
@@ -1286,6 +1296,8 @@ const State = struct {
             .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
             .claims = ArcSnapshot(ClaimSet, .{}).init(allocator, proc_local_count),
             .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
+            .known_variants = ArcSnapshot(u16, no_variant).init(allocator, proc_local_count),
+            .variant_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
             .result_discriminant = no_dense,
             .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
             .maybe_uninitialized_released = ArcSnapshot(bool, false).init(allocator, proc_local_count),
@@ -1308,6 +1320,20 @@ const State = struct {
         } else {
             try snapshot.put(index, value);
         }
+    }
+
+    fn knownVariant(self: *const State, value: ValueId) ?u16 {
+        const variant = self.known_variants.get(value);
+        return if (variant == no_variant) null else variant;
+    }
+
+    fn setKnownVariant(self: *State, value: ValueId, variant: u16) Allocator.Error!void {
+        try self.put(&self.known_variants, value, variant);
+    }
+
+    fn variantDiscriminant(self: *const State, local: LIR.LocalId) ?ValueId {
+        const value = self.variant_discriminants.get(@intFromEnum(local));
+        return if (value == no_value) null else value;
     }
 
     fn claimsOf(self: *const State, value: ValueId) ClaimSet {
@@ -1424,6 +1450,26 @@ const State = struct {
         self.outcome_discriminant_count = 0;
     }
 };
+
+test "forked state preserves independent tag-union variant witnesses" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const discriminant = try store.addLocal(.{ .layout_idx = .u8 });
+    var source = try State.init(arena.allocator(), &.{0}, 1);
+    try source.setKnownVariant(0, 1);
+    try source.put(&source.variant_discriminants, @intFromEnum(discriminant), @as(ValueId, 0));
+    var forked = try source.clone();
+    try forked.setKnownVariant(0, 2);
+    try forked.put(&forked.variant_discriminants, @intFromEnum(discriminant), no_value);
+
+    try testing.expectEqual(@as(?u16, 1), source.knownVariant(0));
+    try testing.expectEqual(@as(?u16, 2), forked.knownVariant(0));
+    try testing.expectEqual(@as(?ValueId, 0), source.variantDiscriminant(discriminant));
+    try testing.expectEqual(@as(?ValueId, null), forked.variantDiscriminant(discriminant));
+}
 
 test "forked state shares unchanged maybe-uninitialized facts" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1632,17 +1678,25 @@ const LocalSummary = struct {
     /// For owned locals: fields of the value already claimed by field takes.
     /// Set identically on every member of the alias set.
     claims: ClaimSet = .{},
+    /// Discriminant the value is proven to hold on every represented path, or
+    /// `no_variant`. Joins meet it: paths that disagree forget the variant
+    /// rather than walking separately. That loses nothing a residual dispatch
+    /// needs, because a path that took a variant's fields carries claims, and
+    /// claims already keep such paths in their own group.
+    known_variant: u16 = no_variant,
 };
+
+const no_variant: u16 = std.math.maxInt(u16);
 
 const LocalClass = enum(u8) {
     unbound,
     owned,
     conditional_owned,
     borrowed,
-    /// An inline struct binding whose RC ownership unit is gone. Its
+    /// An inline struct or copied list descriptor whose RC unit is gone. Its
     /// representation remains available only for same-value aliases and
-    /// non-RC field reads; no operation may observe or consume RC state
-    /// through it.
+    /// non-RC field or descriptor reads; no operation may observe or consume
+    /// RC state through it.
     representation,
 };
 
@@ -2192,27 +2246,43 @@ const Certifier = struct {
         return value;
     }
 
-    fn isInlineStructRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
+    fn isInlineAggregateRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
         const layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        return layout.tag == .struct_;
+        return layout.tag == .struct_ or layout.tag == .tag_union;
     }
 
-    /// Requires only the inline representation of a struct, not an RC unit
+    fn isListRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
+        const tag = self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag;
+        return tag == .list or tag == .list_of_zst;
+    }
+
+    /// A copied list descriptor remains readable after its buffer dies. Its
+    /// ValueId still records the original allocation, so payload reads and
+    /// retains must separately prove that allocation live with requireLive.
+    fn requireListRepresentation(self: *Certifier, state: *const State, local: LIR.LocalId) CertifyError!ValueId {
+        if (!self.isListRepresentation(local)) return self.fail("list representation read has non-list operand", .{});
+        if (!self.isRc(local)) return no_value;
+        const value = state.valueOf(local);
+        if (value == no_value) return self.fail("use of unbound list representation {d}", .{@intFromEnum(local)});
+        return value;
+    }
+
+    /// Requires only the inline representation of an aggregate, not an RC unit
     /// reachable through it. ARC may move or release every stored RC unit and
-    /// still read an inline scalar sibling; all operations that can observe RC
+    /// still read an inline scalar sibling or union tag; operations that observe RC
     /// state continue to use `requireLive` instead.
-    fn requireStructRepresentation(
+    fn requireAggregateRepresentation(
         self: *Certifier,
         state: *const State,
         local: LIR.LocalId,
     ) CertifyError!ValueId {
         if (!self.isRc(local)) return no_value;
-        if (!self.isInlineStructRepresentation(local)) return self.requireLive(state, local);
+        if (!self.isInlineAggregateRepresentation(local)) return self.requireLive(state, local);
         const value = state.valueOf(local);
         if (value == no_value) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
-            return self.fail("use of unbound struct representation {d}", .{@intFromEnum(local)});
+            return self.fail("use of unbound aggregate representation {d}", .{@intFromEnum(local)});
         }
         return value;
     }
@@ -2709,7 +2779,7 @@ const Certifier = struct {
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
-                } else if (self.isInlineStructRepresentation(self.proc_locals.items[dense])) {
+                } else if (self.isInlineAggregateRepresentation(self.proc_locals.items[dense]) or self.isListRepresentation(self.proc_locals.items[dense])) {
                     summary = .{
                         .class = .representation,
                         .repr = repr,
@@ -2732,6 +2802,9 @@ const Certifier = struct {
             }
             summary.maybe_uninitialized_unresolved = state.maybeUninitializedIsUnresolved(dense);
             summary.maybe_uninitialized_released = state.maybeUninitializedMayBeReleased(dense);
+            if (summary.class != .unbound) {
+                if (state.knownVariant(value)) |known| summary.known_variant = known;
+            }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
@@ -3004,6 +3077,7 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
             entry.claims.hashInto(&hasher);
+            hasher.update(std.mem.asBytes(&entry.known_variant));
         }
         return hasher.final();
     }
@@ -3037,6 +3111,7 @@ const Certifier = struct {
             };
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (!entry.claims.isEmpty()) try state.setClaims(value, entry.claims);
+            if (entry.known_variant != no_variant) try state.setKnownVariant(value, entry.known_variant);
         }
 
         for (summary, 0..) |entry, dense| {
@@ -3291,6 +3366,10 @@ const Certifier = struct {
         for (g, 0..) |*entry, dense| {
             if (!entry.maybe_uninitialized_released and summary[dense].maybe_uninitialized_released) {
                 entry.maybe_uninitialized_released = true;
+                changed = true;
+            }
+            if (entry.known_variant != no_variant and entry.known_variant != summary[dense].known_variant) {
+                entry.known_variant = no_variant;
                 changed = true;
             }
             if (entry.class == .unbound) continue;
@@ -4610,7 +4689,7 @@ const Certifier = struct {
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
-                        } else if (self.isInlineStructRepresentation(local)) {
+                        } else if (self.isInlineAggregateRepresentation(local) or self.isListRepresentation(local)) {
                             summary = .{
                                 .class = .representation,
                                 .repr = repr,
@@ -4640,6 +4719,9 @@ const Certifier = struct {
             // back into every runtime presence subset.
             summary.maybe_uninitialized_unresolved = relevant and condition_unresolved and !declared_by_target;
             summary.maybe_uninitialized_released = relevant and condition_released and !declared_by_target;
+            if (summary.class != .unbound) {
+                if (state.knownVariant(state.valueAtDense(dense))) |known| summary.known_variant = known;
+            }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
@@ -4906,12 +4988,16 @@ const Certifier = struct {
                             }
                         },
                         .discriminant => |op| {
-                            const source_value = try self.requireLive(&state, op.source);
+                            const source_value = try self.requireAggregateRepresentation(&state, op.source);
                             try state.removeOutcomeDiscriminant(assign.target);
                             if (source_value != no_value and
                                 !self.values.items[source_value].call_outcomes.isEmpty())
                             {
                                 try state.setOutcomeDiscriminant(assign.target, source_value);
+                            }
+                            try state.put(&state.variant_discriminants, @intFromEnum(assign.target), no_value);
+                            if (source_value != no_value) {
+                                try state.put(&state.variant_discriminants, @intFromEnum(assign.target), source_value);
                             }
                         },
                         .field => |op| try self.bindPayloadRead(
@@ -4920,6 +5006,7 @@ const Certifier = struct {
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
                             assign.take_kind,
+                            null,
                         ),
                         .tag_payload => |op| try self.bindPayloadRead(
                             &state,
@@ -4927,6 +5014,7 @@ const Certifier = struct {
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
                             assign.take_kind,
+                            op.tag_discriminant,
                         ),
                         .tag_payload_struct => |op| try self.bindPayloadRead(
                             &state,
@@ -4934,6 +5022,7 @@ const Certifier = struct {
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
                             assign.take_kind,
+                            op.tag_discriminant,
                         ),
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
@@ -5230,11 +5319,26 @@ const Certifier = struct {
                     _ = try self.requireLive(&state, switch_stmt.cond);
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     const outcome_result = state.outcomeDiscriminant(switch_stmt.cond);
+                    // A switch on a container's discriminant: arms for other
+                    // variants are infeasible once the variant is proven, and
+                    // an arm proves its variant where nothing did before.
+                    const variant_container = state.variantDiscriminant(switch_stmt.cond);
+                    const known_variant: ?u16 = if (variant_container) |container| state.knownVariant(container) else null;
+                    var known_is_listed = false;
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
+                        if (known_variant) |known| {
+                            if (branch.value != known) continue;
+                            known_is_listed = true;
+                        }
                         var branch_state = try state.clone();
                         errdefer branch_state.deinit();
                         branch_state.clearOutcomeDiscriminants();
+                        if (variant_container) |container| {
+                            if (known_variant == null and branch.value <= std.math.maxInt(u16)) {
+                                try branch_state.setKnownVariant(container, @intCast(branch.value));
+                            }
+                        }
                         if (outcome_result) |result| {
                             if (self.callOutcomeMask(result, branch.value)) |mask| {
                                 try self.restoreCallOutcome(&branch_state, result, mask);
@@ -5242,15 +5346,17 @@ const Certifier = struct {
                         }
                         try work.append(self.allocator, .{ .segment = .{ .cursor = branch.body, .state = branch_state, .origin_join = segment.origin_join } });
                     }
-                    var default_state = try state.clone();
-                    errdefer default_state.deinit();
-                    default_state.clearOutcomeDiscriminants();
-                    if (outcome_result) |result| {
-                        if (self.defaultCallOutcomeMask(result, branches)) |mask| {
-                            try self.restoreCallOutcome(&default_state, result, mask);
+                    if (!known_is_listed) {
+                        var default_state = try state.clone();
+                        errdefer default_state.deinit();
+                        default_state.clearOutcomeDiscriminants();
+                        if (outcome_result) |result| {
+                            if (self.defaultCallOutcomeMask(result, branches)) |mask| {
+                                try self.restoreCallOutcome(&default_state, result, mask);
+                            }
                         }
+                        try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
                     }
-                    try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
                     return;
                 },
                 .switch_initialized_payload => |switch_stmt| {
@@ -5471,12 +5577,33 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, take_kind: LIR.TakeKind) CertifyError!void {
-        if (!self.isRc(target) and self.isRc(source) and self.isInlineStructRepresentation(source)) {
-            _ = try self.requireStructRepresentation(state, source);
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, take_kind: LIR.TakeKind, tag_discriminant: ?u16) CertifyError!void {
+        if (!self.isRc(target) and self.isRc(source) and
+            self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .struct_)
+        {
+            _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
         const source_value = try self.requireLive(state, source);
+        // Reading a variant's payload proves the container holds that variant
+        // on this path; anything else is already undefined.
+        if (tag_discriminant) |discriminant| {
+            if (source_value != no_value and self.isRc(source)) {
+                const source_layout = self.layouts.getLayout(self.store.getLocal(self.values.items[source_value].origin).layout_idx);
+                if (source_layout.tag == .tag_union) {
+                    if (state.knownVariant(source_value)) |known| {
+                        if (known != discriminant) {
+                            return self.fail(
+                                "payload read of discriminant {d} on a value proven to hold discriminant {d}",
+                                .{ discriminant, known },
+                            );
+                        }
+                    } else {
+                        try state.setKnownVariant(source_value, discriminant);
+                    }
+                }
+            }
+        }
         if (!self.isRc(target)) return;
         if (source_value != no_value and take_kind == .none) try self.requireFieldUntaken(state, source_value, source, target, projection);
         const value = if (source_value == no_value)
@@ -5599,8 +5726,10 @@ const Certifier = struct {
     fn bindLocalAlias(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
         const target_layout = self.store.getLocal(target).layout_idx;
         const source_layout = self.store.getLocal(source).layout_idx;
-        const source_value = if (self.isRc(source) and target_layout == source_layout and self.isInlineStructRepresentation(source))
-            try self.requireStructRepresentation(state, source)
+        const source_value = if (self.isRc(source) and target_layout == source_layout and self.isInlineAggregateRepresentation(source))
+            try self.requireAggregateRepresentation(state, source)
+        else if (self.isListRepresentation(source) and self.isListRepresentation(target))
+            try self.requireListRepresentation(state, source)
         else
             try self.requireLive(state, source);
         if (!self.isRc(target)) return;
@@ -5617,7 +5746,10 @@ const Certifier = struct {
     }
 
     fn bindSameValue(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
-        const source_value = try self.requireLive(state, source);
+        const source_value = if (self.isListRepresentation(source) and self.isListRepresentation(target))
+            try self.requireListRepresentation(state, source)
+        else
+            try self.requireLive(state, source);
         if (!self.isRc(target)) return;
         if (source_value == no_value) {
             self.diag.context_local = source;
@@ -5791,7 +5923,8 @@ const Certifier = struct {
         var arg_values_buffer: [64]ValueId = undefined;
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
             const arg = GuardedList.at(arg_locals, index);
-            const value = try self.requireLive(state, arg);
+            const representation_only = index < 64 and (assign.op.representationArgs() & (@as(u64, 1) << @as(u6, @intCast(index)))) != 0;
+            const value = if (representation_only) try self.requireListRepresentation(state, arg) else try self.requireLive(state, arg);
             if (index < arg_values_buffer.len) arg_values_buffer[index] = value;
         }
 
@@ -5957,6 +6090,95 @@ fn refOpReadsLocal(op: LIR.RefOp, needle: LIR.LocalId) bool {
 
 test "certifier declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "certify list metadata survives release but payload and retain do not" {
+    const Use = enum { length, capacity, payload, retain };
+    for (std.enums.values(Use)) |use| {
+        for ([_]bool{ false, true }) |cross_join| {
+            var f = try CertifyTest.init(testing.allocator);
+            defer f.deinit();
+            const list_layout = try f.layouts.insertList(.u64);
+            const list = try f.local(list_layout);
+            const alias = try f.local(list_layout);
+            const result = try f.local(.u64);
+            const index = try f.local(.u64);
+            const ret = try f.ret(result);
+            const op: LIR.LowLevel = switch (use) {
+                .length, .retain => .list_len,
+                .capacity => .list_capacity,
+                .payload => .list_get_unsafe,
+            };
+            var read = try f.store.addCFStmt(.{ .assign_low_level = .{
+                .target = result,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try f.store.addLocalSpan(if (use == .payload) &.{ alias, index } else &.{alias}),
+                .next = ret,
+            } });
+            if (use == .retain) read = try f.increfStmt(alias, list_layout, read);
+            const copy = try f.store.addCFStmt(.{ .assign_ref = .{
+                .target = alias,
+                .op = .{ .local = list },
+                .next = read,
+            } });
+            const continuation = if (cross_join) blk: {
+                const join_id = f.freshJoinPointId();
+                const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+                break :blk try f.store.addCFStmt(.{ .join = .{
+                    .id = join_id,
+                    .params = .empty(),
+                    .body = copy,
+                    .remainder = jump,
+                } });
+            } else copy;
+            const release = try f.decrefStmt(list, list_layout, continuation);
+            _ = try f.addProc(&.{ list, index }, release, .u64);
+            if (use == .length or use == .capacity) {
+                try f.certify();
+            } else {
+                try testing.expectError(error.Certification, f.certify());
+                try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+            }
+        }
+    }
+}
+
+test "certify list metadata from a container requires extraction before release" {
+    for ([_]bool{ false, true }) |extract_first| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const inner_layout = try f.layouts.insertList(.u64);
+        const outer_layout = try f.layouts.insertList(inner_layout);
+        const outer = try f.local(outer_layout);
+        const inner = try f.local(inner_layout);
+        const index = try f.local(.u64);
+        const length = try f.local(.u64);
+        const ret = try f.ret(length);
+        const read_length = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = length,
+            .op = .list_len,
+            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .args = try f.store.addLocalSpan(&.{inner}),
+            .next = ret,
+        } });
+        const after_extract = if (extract_first) try f.decrefStmt(outer, outer_layout, read_length) else read_length;
+        const extract = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = inner,
+            .op = .list_get_unsafe,
+            .rc_effect = LIR.LowLevel.list_get_unsafe.rcEffect(),
+            .args = try f.store.addLocalSpan(&.{ outer, index }),
+            .next = after_extract,
+        } });
+        const body = if (extract_first) extract else try f.decrefStmt(outer, outer_layout, extract);
+        _ = try f.addProc(&.{ outer, index }, body, .u64);
+        if (extract_first) {
+            try f.certify();
+        } else {
+            try testing.expectError(error.Certification, f.certify());
+            try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+        }
+    }
 }
 
 const testing = std.testing;
@@ -7973,6 +8195,60 @@ test "certify carries a released struct representation across a join for scalar 
     } });
     _ = try f.addProc(&.{record}, body, .i64);
     try f.certify();
+}
+
+test "certify carries a released union tag across a join and alias" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), f.pair_str });
+    const tag = try f.local(tag_layout);
+    const alias = try f.local(tag_layout);
+    const disc = try f.local(.u16);
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(disc);
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = alias } },
+        .next = ret,
+    } });
+    const copy = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = tag },
+        .next = read,
+    } });
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const release = try f.decrefStmt(tag, tag_layout, jump);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = copy,
+        .remainder = release,
+    } });
+    _ = try f.addProc(&.{tag}, body, .u16);
+    try f.certify();
+}
+
+test "certify rejects a payload view through a released union representation" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), f.pair_str });
+    const tag = try f.local(tag_layout);
+    const view = try f.local(f.pair_str);
+    const disc = try f.local(.u16);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const read_payload = try tagPayloadStructReadStmt(&f, view, tag, 1, result_assign);
+    const read_tag = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = tag } },
+        .next = read_payload,
+    } });
+    const release = try f.decrefStmt(tag, tag_layout, read_tag);
+    _ = try f.addProc(&.{tag}, release, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+    try testing.expectEqual(read_payload, f.diag.context_stmt.?);
 }
 
 test "certify rejects a released struct alias without exact residual-shell fields" {

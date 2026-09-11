@@ -61,7 +61,7 @@ const BranchRewriter = struct {
         return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } });
     }
 
-    pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, stmt: LIR.CFStmt) ResourceError!?LIR.CFStmtId {
+    pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt) ResourceError!?LIR.CFStmtId {
         if (stmt != .assign_ref) return null;
         const assign = stmt.assign_ref;
         if (assign.op == .tag_payload_struct) {

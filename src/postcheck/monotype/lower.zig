@@ -39,9 +39,12 @@ const GuardedList = collections.GuardedList;
 const TypeFieldSpanBorrow = Type.StoreSpanBorrow(Type.Field, "fields");
 const PatternRefutability = can.PatternRefutability;
 
+/// Whether a dispatch instantiation replays a template's checked relations
+/// or serves an expression. Result-type queries serve expressions: they
+/// lower argument evidence and complete iterator results exactly as the
+/// expression's own lowering does, so the two agree on every result cell.
 const DispatchInstantiationPhase = enum {
     template_relation_replay,
-    type_query,
     expression_lowering,
 };
 
@@ -609,6 +612,7 @@ pub const BodyDiagnostics = struct {
     expr_relation_requests: u64 = 0,
     argument_spans_prepared: u64 = 0,
     arguments_prepared: u64 = 0,
+    direct_call_request_reuses: u64 = 0,
     nested_callable_checks: u64 = 0,
     nested_lambdas_prepared: u64 = 0,
     nested_closures_prepared: u64 = 0,
@@ -4179,13 +4183,16 @@ const Builder = struct {
             const callee, const completed_fn = dispatch: {
                 var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
                 defer dispatch_timing_scope.end();
+                const edge = if (request.root_evidence) |root_evidence|
+                    try ctx.checkedProcedureEdgeAtRequest(template_ref, root_evidence, root_node, .body_lowering)
+                else
+                    EdgeEvidence{ .subst = &.{}, .vector = &.{} };
                 const selected = try ctx.draftFnSlotForProcedureUseAtNode(
                     procedure,
                     request.checked_type,
                     procedure.source_fn_ty_template,
                     root_node,
-                    .{ .subst = &.{}, .vector = &.{} },
-                    request.root_evidence,
+                    edge,
                     false,
                 );
                 const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
@@ -5906,14 +5913,15 @@ const Builder = struct {
         partial_edge: EdgeEvidence,
         request_edge: DraftRequestEdge,
         signature_relation: Ast.SignatureRelation,
-        codec_contract_anchor: ?CheckedCodecContractAnchor,
+        codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
-        const codec_contract: ?DraftCodecContractContext = if (codec_contract_anchor) |anchor|
-            source_ctx.activeCodecContractContextForAnchor(anchor)
-        else
-            source_ctx.activeCodecContractContext();
+        const codec_contract: ?DraftCodecContractContext = switch (codec_contract_selection) {
+            .inherit => source_ctx.activeCodecContractContext(),
+            .independent => null,
+            .anchored => |anchor| source_ctx.activeCodecContractContextForAnchor(anchor),
+        };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         if (partial_edge.vector.len > template.evidence_params.len) {
@@ -5985,7 +5993,7 @@ const Builder = struct {
         const structural_lexical_dependent = template.target != .hosted and
             source_ctx.local_proc_contexts.count() != 0 and
             (specEvidenceContainsStructural(evidence) or
-                source_ctx.activeCodecContractContainsLocalTarget());
+                (codec_contract != null and source_ctx.activeCodecContractContainsLocalTarget()));
         const lexical_context_key: ?names.TypeDigest = if (structural_lexical_dependent)
             try source_ctx.codecLexicalContextKey()
         else
@@ -6002,12 +6010,7 @@ const Builder = struct {
         // still be joined by later body/evidence relations, so it must not be
         // promoted to a durable TypeId before the single final seal.
         var selection = DraftOpenCandidateSelection{};
-        const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
-            try source_ctx.activeTypeFromNode(request_fn_node)
-        else if (try source_ctx.graph.typeIsSpecializationDefaultable(request_fn_node))
-            try source_ctx.graph.specializationTypeViewForNode(request_fn_node)
-        else
-            null;
+        const resolved_request_ty: ?Type.TypeId = try source_ctx.specializationLookupTypeForNode(request_fn_node);
         // Closed requests—and requests whose only open cells have the explicit
         // required field-kind default—key on an immutable structural view, so
         // a repeat skips the graph-native recursive lookup below. The latter
@@ -6029,9 +6032,7 @@ const Builder = struct {
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                     if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                    const spec_request = draftTemplateSpecLookupRequestNode(spec);
-                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec_request)) continue;
-                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec_request);
+                    const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -6103,9 +6104,7 @@ const Builder = struct {
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                     if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                    const spec_request = draftTemplateSpecLookupRequestNode(spec);
-                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec_request)) continue;
-                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec_request);
+                    const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -6155,14 +6154,22 @@ const Builder = struct {
                     .prefix_proof = try source_ctx.currentRuntimeImpossibilityProof(null),
                 });
             }
+            // The closed address memoizes this hit only when the join left
+            // the request's lookup type unchanged: `resolved_request_ty` is
+            // the pre-join view, the selected specialization's is the
+            // post-join one. A partial recursive join can leave that
+            // interface with open cells the lookup view does not admit, in
+            // which case the memo is simply skipped and later requests take
+            // the open-interface and resolved scans.
             if (resolved_lookup_address) |address| {
-                const active_spec_fn_ty = try source_ctx.activeTypeFromNode(draftTemplateSpecLookupRequestNode(spec));
-                if (try source_ctx.typeStore().typeEql(
-                    source_ctx.nameStore(),
-                    active_spec_fn_ty,
-                    resolved_request_ty.?,
-                )) {
-                    try registerTemplateSpecLookup(source_ctx.draft, address, raw_spec);
+                if (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) |active_spec_fn_ty| {
+                    if (try source_ctx.typeStore().typeEql(
+                        source_ctx.nameStore(),
+                        active_spec_fn_ty,
+                        resolved_request_ty.?,
+                    )) {
+                        try registerTemplateSpecLookup(source_ctx.draft, address, raw_spec);
+                    }
                 }
             }
             return .{ .local = .{ .draft = spec.fn_id } };
@@ -7838,6 +7845,7 @@ const Builder = struct {
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 const fn_target = try self.lowerDraftNestedFromContext(
                     &fn_ctx,
+                    fn_ctx.draft.current_owner,
                     checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def),
                     nested,
                     fn_template.source_fn_ty,
@@ -7848,7 +7856,7 @@ const Builder = struct {
                     null,
                     false,
                     .exact_graph,
-                    null,
+                    .inherit,
                 );
                 const draft_fn = switch (fn_target) {
                     .draft => |id| id,
@@ -7971,6 +7979,7 @@ const Builder = struct {
     fn lowerDraftNestedFromContext(
         self: *Builder,
         source_ctx: *BodyContext,
+        request_owner: DraftOwner,
         expr_id: checked.CheckedExprId,
         nested: Ast.NestedFn,
         source_fn_ty: checked.CheckedTypeId,
@@ -7981,14 +7990,15 @@ const Builder = struct {
         owned_scope: ?checked.DispatchScopeId,
         recursive_reference: bool,
         signature_relation: Ast.SignatureRelation,
-        codec_contract_anchor: ?CheckedCodecContractAnchor,
+        codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftFnTarget {
         self.count("nested_requests");
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
-        const codec_contract: ?DraftCodecContractContext = if (codec_contract_anchor) |anchor|
-            source_ctx.activeCodecContractContextForAnchor(anchor)
-        else
-            source_ctx.activeCodecContractContext();
+        const codec_contract: ?DraftCodecContractContext = switch (codec_contract_selection) {
+            .inherit => source_ctx.activeCodecContractContext(),
+            .independent => null,
+            .anchored => |anchor| source_ctx.activeCodecContractContextForAnchor(anchor),
+        };
         const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
         self.countBodyDiagnostic("nested_lookup_probes");
         const family_exists = source_ctx.draft.nested_spec_families.contains(family);
@@ -8104,7 +8114,7 @@ const Builder = struct {
                             const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                             const exact_interface = source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node);
                             const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
+                                request_owner,
                                 spec.fn_id,
                             );
                             if (!draftOpenCandidateQualifies(
@@ -8142,7 +8152,7 @@ const Builder = struct {
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                 if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                if (!source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id)) continue;
+                if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
                 const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!selection.add(raw_spec, false)) {
                     Common.invariant("checked recursive nested reference matched more than one in-progress specialization on its ownership chain");
@@ -8156,7 +8166,7 @@ const Builder = struct {
             // checked cells before reusing the in-progress definition.
             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
             const active_recursive_edge = spec.state == .lowering and
-                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
+                source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id);
             if (active_recursive_edge) {
                 // A recursive edge into a function with no arguments carries
                 // its recursive value flow through the result alone.
@@ -10862,6 +10872,7 @@ const Builder = struct {
         if (lambda_expr.data != .lambda) Common.invariant("stored capturing function did not reference a checked lambda");
         const restored_fn = try self.lowerDraftNestedFromContext(
             &fn_ctx,
+            fn_ctx.draft.current_owner,
             lambda_expr_id,
             nested,
             template.source_fn_ty,
@@ -10872,7 +10883,7 @@ const Builder = struct {
             null,
             false,
             .exact_graph,
-            null,
+            .inherit,
         );
 
         defer self.allocator.free(capture_values);
@@ -11943,6 +11954,27 @@ const ClosedDirectDraftSpecialization = struct {
     draft_spec: ?u32,
 };
 
+/// The callee specialization selected for one direct-call request interface,
+/// with the request node the selection completed.
+const CompletedDirectCallee = struct {
+    callee: DraftFnSlot,
+    fn_node: NodeId,
+};
+
+/// The graph request one direct call expression instantiated. A body asks
+/// for a direct call's result type from several places (structural-equality
+/// operand sealing, argument evidence for an enclosing call, argument
+/// preparation) before it lowers the call itself, and every one of those
+/// reads the same checked expression against the same checked argument
+/// cells, so they share one request interface, one argument preparation,
+/// and one callee selection instead of instantiating the callee's checked
+/// type again for each read.
+const DirectCallRequest = struct {
+    fn_node: NodeId,
+    args_prepared: bool = false,
+    completed: ?CompletedDirectCallee = null,
+};
+
 const DraftProcCallee = union(enum(u8)) {
     func: DraftFnSlot,
     lifted: Ast.LiftedFnId,
@@ -12984,6 +13016,15 @@ const DraftCodecLexicalContext = struct {
 const CodecKind = enum {
     parser,
     encoder,
+};
+
+/// Whether a callee actually depends on compiler-generated codec callbacks.
+/// Ordinary calls inherit their lexical contract; first-order format methods
+/// are self-contained and specialize only by their own interface and evidence.
+const CodecContractSelection = union(enum) {
+    inherit,
+    independent,
+    anchored: CheckedCodecContractAnchor,
 };
 
 /// Durable checker-owned grounding for a codec method body. The selected call
@@ -16224,6 +16265,11 @@ const TypeInstantiationContext = struct {
     }
 };
 
+const ParserErrorRowKey = struct {
+    source: Type.TypeId,
+    target: Type.TypeId,
+};
+
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
@@ -16286,6 +16332,9 @@ const BodyContext = struct {
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
     propagate_constructor_value_evidence: bool = false,
+    /// One shared request interface per direct call expression of this body;
+    /// see `DirectCallRequest`.
+    direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
     /// Exact return cell owned by the active checked lambda specialization.
     /// Source `return` expressions must consume this cell rather than create a
     /// new instantiation of the lambda's checked return type.
@@ -16331,6 +16380,9 @@ const BodyContext = struct {
     /// once at the boundary; individual call preparation only selects from
     /// these graph-native identities.
     instantiated_codec_calls: std.ArrayList(InstantiatedGeneratedCodecCall) = .empty,
+    /// Sealed rows are immutable. Retain each source-to-target tag mapping once
+    /// per emission context; no solved-graph cache survives a solver mutation.
+    parser_error_rows: std.AutoHashMapUnmanaged(ParserErrorRowKey, []const u32) = .empty,
     active_codec_contract: ?ActiveCodecContract = null,
     codec_contract_expansion_stack: std.ArrayList(CodecContractExpansion) = .empty,
     /// Final structural serialization emission consumes only durable types and
@@ -16382,18 +16434,12 @@ const BodyContext = struct {
     /// While recursively restoring a stored constant, the concrete type of the
     /// whole restored value. Nested stored closures use this to instantiate the
     /// owner callable's return when synthesizing the constant scheme's evidence.
-    const PatternLiteralGuard = struct {
-        local: DraftLocalId,
-        ty: Type.TypeId,
-        check: union(enum) {
-            /// Compare against the literal's `from_numeral`/`from_quote`
-            /// conversion result.
-            conversion: checked.CheckedExprId,
-            /// The literal's value is unrepresentable at the scrutinee's
-            /// concrete type, so the branch can never match (checking reports
-            /// these; an I8 can never equal 300).
-            never,
-        },
+    const PatternLiteralGuard = union(enum) {
+        /// The checker-produced comparison, including conversion and exact
+        /// equality dispatch, reads the bound pattern value.
+        condition: checked.CheckedExprId,
+        /// This literal is unrepresentable at the specialized builtin type.
+        never,
     };
 
     /// A user binder deferred while an optional destructure is translated
@@ -16713,36 +16759,6 @@ const BodyContext = struct {
             .missing_tag = missing_tag,
             .present_tag = present_tag,
         };
-    }
-
-    fn errorRowIsIncludedIn(
-        self: *BodyContext,
-        source_err_ty: Type.TypeId,
-        target_err_ty: Type.TypeId,
-    ) Allocator.Error!bool {
-        if (source_err_ty == target_err_ty or
-            try self.typeStore().typeEql(self.nameStore(), source_err_ty, target_err_ty))
-        {
-            return true;
-        }
-        const source_tags = self.tagUnionTags(source_err_ty);
-        for (0..GuardedList.borrowLen(source_tags)) |index| {
-            const source_tag = GuardedList.at(source_tags, index);
-            const target_tag = self.tagByNameOrNull(target_err_ty, source_tag.name) orelse return false;
-            const source_payloads = self.typeStore().span(source_tag.payloads);
-            const target_payloads = self.typeStore().span(target_tag.payloads);
-            if (source_payloads.len != target_payloads.len) return false;
-            for (0..GuardedList.borrowLen(source_payloads)) |payload_index| {
-                const source_payload = GuardedList.at(source_payloads, payload_index);
-                const target_payload = GuardedList.at(target_payloads, payload_index);
-                if (!try self.typeStore().typeEql(
-                    self.nameStore(),
-                    source_payload,
-                    target_payload,
-                )) return false;
-            }
-        }
-        return true;
     }
 
     /// Primitive construction already targets this body's active type domain.
@@ -17310,6 +17326,9 @@ const BodyContext = struct {
     }
 
     fn deinit(self: *BodyContext) void {
+        var error_rows = self.parser_error_rows.valueIterator();
+        while (error_rows.next()) |row| self.allocator.free(row.*);
+        self.parser_error_rows.deinit(self.allocator);
         if (self.specialization_dispatch_divergence) |*divergence| divergence.deinit(self.allocator);
         if (self.owns_specialization_dispatch_crashes) {
             self.allocator.free(self.specialization_dispatch_crashes.?);
@@ -17323,6 +17342,7 @@ const BodyContext = struct {
         self.equality_expansion_stack.deinit();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
+        self.direct_call_requests.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
@@ -17341,6 +17361,18 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         return try self.graph.activeTypeViewForNode(node);
+    }
+
+    /// The immutable type a specialization request or a recorded
+    /// specialization keys on: the active type of a resolved interface, the
+    /// required-defaulted view of an interface whose only open cells are
+    /// undetermined field kinds, and nothing for an interface still carrying
+    /// other open evidence. Every draft-specialization lookup and memo reads
+    /// both sides of a comparison through this one policy.
+    fn specializationLookupTypeForNode(self: *BodyContext, node: NodeId) Allocator.Error!?Type.TypeId {
+        if (try self.graph.typeIsResolved(node)) return try self.activeTypeFromNode(node);
+        if (try self.graph.typeIsSpecializationDefaultable(node)) return try self.graph.specializationTypeViewForNode(node);
+        return null;
     }
 
     fn activeTypeFromCell(self: *BodyContext, cell: DraftTypeCell) Allocator.Error!Type.TypeId {
@@ -20208,7 +20240,7 @@ const BodyContext = struct {
         };
         return try self.graph.newNode(.{ .tag_union = .{
             .tags = tags,
-            .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
+            .ext = try self.graph.newNode(.empty_tag_union),
         } });
     }
 
@@ -20745,10 +20777,7 @@ const BodyContext = struct {
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
-        const partial_edge = if (root_evidence) |producer_evidence|
-            try self.checkedProcedureEdgeAtRequest(template_ref, producer_evidence, request_fn_node, .specialization_interface)
-        else
-            try self.evidenceForUseSiteForPurposeAtNode(record.expr, .specialization_interface, request_fn_node);
+        const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .specialization_interface);
         var edge = if (partial_edge.vector.len == template.evidence_params.len)
             partial_edge
         else
@@ -21993,7 +22022,7 @@ const BodyContext = struct {
         defer timing_scope.end();
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
-            .call => |call| try self.callResultTypeNode(expr.ty, call, null),
+            .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
             .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
@@ -22016,7 +22045,7 @@ const BodyContext = struct {
             // so an unconstrained occurrence uses unit while contextual lowering
             // supplies the exact expected type through lowerExprAtType.
             .runtime_error => try self.unitType(),
-            .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
+            .call => |call| (try self.callResultMonoType(expr_id, expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
             .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerTypeView(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
@@ -22144,7 +22173,10 @@ const BodyContext = struct {
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                if (!try self.graph.typeIsResolved(expr_node)) {
+                // Only an unpinned target variable takes the checked literal
+                // default. Openness inside a custom target is not evidence
+                // that the target itself should default to a builtin.
+                if (self.graph.content(expr_node) == .unresolved) {
                     self.graph.materializeLiteralDefault(expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
@@ -22993,7 +23025,7 @@ const BodyContext = struct {
         if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
             return expr;
         }
-        const lowered = try self.lowerCall(checked_ret_ty, call);
+        const lowered = try self.lowerCall(checked_expr_id, checked_ret_ty, call);
         const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
         const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
         var result_request_node = checked_ret_node;
@@ -23134,6 +23166,25 @@ const BodyContext = struct {
         };
     }
 
+    /// Apply the checked intrinsic's result source to its callable request.
+    /// Result queries and call-site lowering share these exact graph relations;
+    /// the intrinsic wrapper never supplies an ordinary procedure body.
+    fn callsiteIntrinsicRequestNode(
+        self: *BodyContext,
+        intrinsic: checked.IntrinsicId,
+        callable_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const callable = try self.graph.functionNodes(callable_node);
+        return switch (intrinsic.requestResultSource()) {
+            .declared_return => callable_node,
+            .argument => |index| blk: {
+                if (index >= callable.args.len) Common.invariant("checked intrinsic result argument was outside its callable request");
+                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact);
+                break :blk try functionRequestNode(self.graph, callable_node, callable.args, request_ret);
+            },
+        };
+    }
+
     /// Lower every syntax form for a call-site intrinsic through one exact
     /// monomorphic body generator. The checked callable request owns the
     /// specialization cells; neither source syntax nor the intrinsic wrapper
@@ -23149,19 +23200,10 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
         const args = self.checkedCallsiteIntrinsicArgs(intrinsic, operands, &checked_arg_storage);
-        var callable_node = initial_callable_node;
-        var callable = try self.graph.functionNodes(callable_node);
+        const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, initial_callable_node);
+        const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != args.len) {
             Common.invariant("checked call-site intrinsic request had an unexpected arity");
-        }
-        switch (intrinsic.requestResultSource()) {
-            .declared_return => {},
-            .argument => |index| {
-                if (index >= callable.args.len) Common.invariant("checked intrinsic result argument was outside its callable request");
-                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact);
-                callable_node = try functionRequestNode(self.graph, callable_node, callable.args, request_ret);
-                callable = try self.graph.functionNodes(callable_node);
-            },
         }
 
         if (!self.frozen_sealed_emission) {
@@ -23325,7 +23367,7 @@ const BodyContext = struct {
                         request_fn_node,
                         try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
                         record.recursive_reference,
-                        null,
+                        .inherit,
                     );
                     const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                     return try self.addExprWithTypeCell(
@@ -24663,7 +24705,7 @@ const BodyContext = struct {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
             .numeric_range_delegate => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_to, .numeric_until => {},
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_to, .numeric_until => {},
         };
 
         switch (procedure) {
@@ -24765,7 +24807,7 @@ const BodyContext = struct {
                 );
             },
             .iter_map, .iter_keep_if, .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_take_first, .iter_drop_first, .iter_append => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_take_first, .iter_drop_first, .iter_append, .iter_with_index, .iter_step_by => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
             .iter_concat => {
                 if (checked_args.len != 2 or request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
@@ -26759,14 +26801,15 @@ const BodyContext = struct {
             if (!self.sameType(GuardedList.at(parse_arg_tys, 1), state_ty)) Common.invariant("parser target state type differed from input state type");
 
             const parse_args = [_]DraftExprId{ encoding_expr, state_expr };
-            return try self.addExpr(.{
-                .ty = ret_ty,
+            const result = try self.addExpr(.{
+                .ty = parse_fn.ret,
                 .data = .{ .call_proc = .{
                     .callee = draftProcCalleeForSlot(prepared.callee),
                     .args = try self.addExprSpan(&parse_args),
                     .captures = try self.methodTargetCaptureSpan(parse_lookup),
                 } },
             });
+            return try self.injectTryErrorRow(result, parse_fn.ret, ret_ty);
         }
         if (parse_arg_tys.len != 3) Common.invariant("parser target tag-union method had an unexpected arity");
         if (!self.sameType(GuardedList.at(parse_arg_tys, 0), encoding_ty)) Common.invariant("parser target tag-union encoding type differed from input encoding type");
@@ -26793,14 +26836,48 @@ const BodyContext = struct {
                 Common.invariant("generated tag-union spec had no backing type");
             break :blk try self.lowerParseTagUnionSpecValue(spec_ty, spec_backing_ty, record_shapes, plan);
         };
-        return try self.addExpr(.{
-            .ty = ret_ty,
+        const result = try self.addExpr(.{
+            .ty = callable_fn.ret,
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, final_spec_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
         });
+        if (self.nominalConstructionLayer(shape_ty) != null) {
+            const source_info = self.tryInfo(callable_fn.ret);
+            const value_name = try self.nameStoreMut().internRecordFieldLabel("value");
+            const rest_name = try self.nameStoreMut().internRecordFieldLabel("rest");
+            const source_value_ty = self.recordFieldType(source_info.ok_ty, value_name);
+            if (!self.sameType(self.recordFieldType(source_info.ok_ty, rest_name), state_ty)) {
+                Common.invariant("tag-union parser result changed the state type");
+            }
+            const value_local = try self.addLocal(self.builder.symbols.fresh(), source_value_ty);
+            const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+            const value = try self.wrapParsedTagUnionValue(
+                try self.localExpr(value_local, source_value_ty),
+                source_value_ty,
+                shape_ty,
+            );
+            const ok_body = try self.parseResultOk(ret_ty, value, try self.localExpr(rest_local, state_ty), state_ty);
+            return try self.sequenceTryRecord(result, callable_fn.ret, value_local, value_name, rest_local, rest_name, ok_body, ret_ty);
+        }
+        return try self.injectTryErrorRow(result, callable_fn.ret, ret_ty);
+    }
+
+    /// A format method may return the structural tag union backing the
+    /// checked nominal shape. Construct each declared nominal layer explicitly.
+    fn wrapParsedTagUnionValue(
+        self: *BodyContext,
+        value: DraftExprId,
+        source_ty: Type.TypeId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (self.sameType(source_ty, target_ty)) return value;
+        const layer = self.nominalConstructionLayer(target_ty) orelse
+            Common.invariant("tag-union parser value differed from its checked nominal backing");
+        const backing = try self.wrapParsedTagUnionValue(value, source_ty, layer.backing);
+        return try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing } });
     }
 
     fn lowerParseNominalScalarFromState(
@@ -26910,7 +26987,6 @@ const BodyContext = struct {
         const fields_ty = GuardedList.at(parse_arg_tys, 1);
         const step_try_ty = parse_fn.ret;
         const step_try_info = self.tryInfo(step_try_ty);
-        if (!self.sameType(step_try_info.err_ty, ret_info.err_ty)) Common.invariant("parse_record_field error type differed from structural parser error type");
         const event_ty = step_try_info.ok_ty;
         const field_handle_ty = try self.recordEventFieldHandleTemplate(event_ty);
         const fields_backing_ty = self.namedBackingType(fields_ty) orelse
@@ -27864,7 +27940,7 @@ const BodyContext = struct {
         if (!self.sameType(GuardedList.at(arg_tys, 1), state_ty)) Common.invariant("skip_record_field state type differed from record state type");
 
         const skip_expr = try self.addExpr(.{
-            .ty = skip_try_ty,
+            .ty = skip_fn.ret,
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, try self.localExpr(rest_local, state_ty) }),
@@ -29362,7 +29438,6 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const null_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
         const prepared = try self.frozenFormatCodecCall(.parser, "parse_null");
         const parse_null_lookup = prepared.lookup;
         const parse_null_mono_ty = prepared.callable_ty;
@@ -29371,7 +29446,7 @@ const BodyContext = struct {
         if (parse_null_arg_tys.len != 2) Common.invariant("parse_null target method had an unexpected arity");
         if (!self.sameType(GuardedList.at(parse_null_arg_tys, 0), encoding_ty)) Common.invariant("parse_null encoding type differed from input encoding type");
         if (!self.sameType(GuardedList.at(parse_null_arg_tys, 1), state_ty)) Common.invariant("parse_null state type differed from input state type");
-        if (!self.sameType(parse_null_fn.ret, null_try_ty)) Common.invariant("parse_null return type differed from generated Try type");
+        const null_try_ty = parse_null_fn.ret;
 
         const parse_null_expr = try self.addExpr(.{
             .ty = null_try_ty,
@@ -29458,9 +29533,6 @@ const BodyContext = struct {
         if (!self.sameType(source_ret_info.ok_ty, target_ret_info.ok_ty)) {
             Common.invariant("custom parser result Ok type differed from derived parser result Ok type");
         }
-        if (!try self.errorRowIsIncludedIn(source_ret_info.err_ty, target_ret_info.err_ty)) {
-            Common.invariant("custom parser error row was not included in derived parser error row");
-        }
         const parse_ok_fields = switch (self.shapeContent(source_ret_info.ok_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("custom parser result Ok type was not a parse result record"),
@@ -29501,48 +29573,48 @@ const BodyContext = struct {
         target_try_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         if (self.sameType(source_try_ty, target_try_ty)) return source_expr;
-
         const source_info = self.tryInfo(source_try_ty);
         const target_info = self.tryInfo(target_try_ty);
         if (!self.sameType(source_info.ok_ty, target_info.ok_ty)) {
             Common.invariant("parser Try error-row injection changed the Ok type");
         }
-        if (!try self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
-            Common.invariant("parser Try error-row injection source was not included in target");
-        }
-
         const ok_local = try self.addLocal(self.builder.symbols.fresh(), source_info.ok_ty);
-        const ok_payload_pat = try self.bindPat(ok_local, source_info.ok_ty);
-        const ok_backing_pat = try self.addPat(.{ .ty = source_info.backing_ty, .data = .{ .tag = .{
-            .name = source_info.ok_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{ok_payload_pat}),
-        } } });
-        const ok_pat = try self.addPat(.{ .ty = source_try_ty, .data = .{ .nominal = ok_backing_pat } });
-        const ok_body = try self.tryOk(target_try_ty, try self.localExpr(ok_local, source_info.ok_ty));
+        return try self.sequenceTryTo(
+            source_expr,
+            source_try_ty,
+            ok_local,
+            try self.tryOk(target_try_ty, try self.localExpr(ok_local, source_info.ok_ty)),
+            target_try_ty,
+            null,
+        );
+    }
 
-        const source_err_tags = self.tagUnionTags(source_info.err_ty);
-        const branch_count: usize = if (source_err_tags.len == 0) 1 else 2;
-        const branches = try self.allocator.alloc(DraftBranch, branch_count);
-        defer self.allocator.free(branches);
-        branches[0] = .{ .pat = ok_pat, .body = ok_body };
-
-        if (source_err_tags.len != 0) {
-            const err_local = try self.addLocal(self.builder.symbols.fresh(), source_info.err_ty);
-            const err_payload_pat = try self.bindPat(err_local, source_info.err_ty);
-            const err_backing_pat = try self.addPat(.{ .ty = source_info.backing_ty, .data = .{ .tag = .{
-                .name = source_info.err_tag.name,
-                .payloads = try self.addPatSpan(&[_]DraftPatId{err_payload_pat}),
-            } } });
-            const err_pat = try self.addPat(.{ .ty = source_try_ty, .data = .{ .nominal = err_backing_pat } });
-            const err_value = try self.localExpr(err_local, source_info.err_ty);
-            const injected_err = try self.injectErrorRow(err_value, source_info.err_ty, target_info.err_ty);
-            branches[1] = .{ .pat = err_pat, .body = try self.tryErr(target_try_ty, injected_err) };
+    /// Specialization's immutable tag rows are sorted by label. One linear
+    /// merge commits their correspondence, which emission reuses directly.
+    fn parserErrorRowMapping(self: *BodyContext, source: Type.TypeId, target: Type.TypeId) Allocator.Error![]const u32 {
+        const key = ParserErrorRowKey{ .source = source, .target = target };
+        if (self.parser_error_rows.get(key)) |mapping| return mapping;
+        const source_tags = self.tagUnionTags(source);
+        const target_tags = self.tagUnionTags(target);
+        const mapping = try self.allocator.alloc(u32, source_tags.len);
+        errdefer self.allocator.free(mapping);
+        var target_index: usize = 0;
+        for (mapping, 0..) |*entry, source_index| {
+            const source_tag = GuardedList.at(source_tags, source_index);
+            while (target_index < target_tags.len and self.nameStore().tagLabelTextLessThan(GuardedList.at(target_tags, target_index).name, source_tag.name)) : (target_index += 1) {}
+            if (target_index == target_tags.len) Common.invariant("parser error row was not included in target");
+            const target_tag = GuardedList.at(target_tags, target_index);
+            if (source_tag.name != target_tag.name) Common.invariant("parser error row was not included in target");
+            const source_payloads = self.typeStore().span(source_tag.payloads);
+            const target_payloads = self.typeStore().span(target_tag.payloads);
+            if (source_payloads.len != target_payloads.len) Common.invariant("parser error injection changed payload arity");
+            for (0..source_payloads.len) |i| {
+                if (!self.sameType(GuardedList.at(source_payloads, i), GuardedList.at(target_payloads, i))) Common.invariant("parser error injection changed payload type");
+            }
+            entry.* = @intCast(target_index);
         }
-
-        return try self.addExpr(.{ .ty = target_try_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.addBranchSpan(branches),
-        } } });
+        try self.parser_error_rows.put(self.allocator, key, mapping);
+        return mapping;
     }
 
     fn injectErrorRow(
@@ -29553,19 +29625,17 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         if (self.sameType(source_err_ty, target_err_ty)) return source_expr;
 
+        const mapping = try self.parserErrorRowMapping(source_err_ty, target_err_ty);
         const source_tags = self.tagUnionTags(source_err_ty);
+        const target_tags = self.tagUnionTags(target_err_ty);
         if (source_tags.len == 0) Common.invariant("cannot inject an empty parser error row into a different row");
         const branches = try self.allocator.alloc(DraftBranch, source_tags.len);
         defer self.allocator.free(branches);
 
         for (0..source_tags.len) |tag_index| {
             const source_tag = GuardedList.at(source_tags, tag_index);
-            const target_tag = self.tagByName(target_err_ty, source_tag.name);
+            const target_tag = GuardedList.at(target_tags, mapping[tag_index]);
             const source_payload_tys = self.typeStore().span(source_tag.payloads);
-            const target_payload_tys = self.typeStore().span(target_tag.payloads);
-            if (source_payload_tys.len != target_payload_tys.len) {
-                Common.invariant("parser error-row injection changed tag payload arity");
-            }
 
             const payload_pats = try self.allocator.alloc(DraftPatId, source_payload_tys.len);
             defer self.allocator.free(payload_pats);
@@ -29573,10 +29643,6 @@ const BodyContext = struct {
             defer self.allocator.free(payload_exprs);
             for (0..source_payload_tys.len) |payload_index| {
                 const source_payload_ty = GuardedList.at(source_payload_tys, payload_index);
-                const target_payload_ty = GuardedList.at(target_payload_tys, payload_index);
-                if (!self.sameType(source_payload_ty, target_payload_ty)) {
-                    Common.invariant("parser error-row injection changed tag payload type");
-                }
                 const local = try self.addLocal(self.builder.symbols.fresh(), source_payload_ty);
                 payload_pats[payload_index] = try self.bindPat(local, source_payload_ty);
                 payload_exprs[payload_index] = try self.localExpr(local, source_payload_ty);
@@ -30558,17 +30624,24 @@ const BodyContext = struct {
         } } });
     }
 
-    fn lowerCall(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!LoweredCall {
-        return try self.lowerCallAtExpectedNode(checked_ret_ty, call, null, null);
+    fn lowerCall(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        checked_ret_ty: checked.CheckedTypeId,
+        call: anytype,
+    ) Allocator.Error!LoweredCall {
+        return try self.lowerCallAtExpectedNode(checked_expr, checked_ret_ty, call, null, null);
     }
 
     fn lowerCallAtType(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!LoweredCall {
         return try self.lowerCallAtExpectedNode(
+            checked_expr,
             checked_ret_ty,
             call,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
@@ -30578,15 +30651,17 @@ const BodyContext = struct {
 
     fn lowerCallAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: NodeId,
     ) Allocator.Error!LoweredCall {
-        return try self.lowerCallAtExpectedNode(checked_ret_ty, call, expected_ret_node, null);
+        return try self.lowerCallAtExpectedNode(checked_expr, checked_ret_ty, call, expected_ret_node, null);
     }
 
     fn lowerCallAtExpectedNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: ?NodeId,
@@ -30598,41 +30673,23 @@ const BodyContext = struct {
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
-            var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-            call_ctx.evidence = self.evidence;
-            defer call_ctx.deinit();
-            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-            call_ctx.current_fn_key = self.current_fn_key;
-            call_ctx.source_region_override = self.source_region_override;
-            call_ctx.current_entry_root = self.current_entry_root;
-            call_ctx.in_deferred_body = self.in_deferred_body;
-
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
             const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
-            var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
-                source_fn_ty,
-                self,
+            const fn_node = try self.directCallRequestNode(
+                checked_expr,
+                target,
+                call,
                 checked_ret_ty,
-                call.args,
+                source_fn_ty,
                 expected_ret_node,
-                try self.hostedTryCapabilityForResolvedTarget(target),
-                try self.iteratorCallNeedsConstructorArgumentEvidence(iterator_procedure, call.args),
             );
-            if (iterator_procedure) |procedure| {
-                const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
-                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
-                    try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
-                    try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
-                    fn_node = private_fn_node;
-                }
-            }
             const fn_nodes = try self.graph.functionNodes(fn_node);
-            try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
+            try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
             if (try self.lowerDirectCallWithUninhabitedArgument(call.args, fn_nodes)) |lowered| return lowered;
             if (iterator_procedure) |procedure| {
                 if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return lowered;
             }
-            const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
+            const source_fn_key = self.view.types.rootKey(source_fn_ty);
             if (self.resolvedTargetIsStrInspect(target)) {
                 const args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
                 if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
@@ -30648,9 +30705,8 @@ const BodyContext = struct {
                     } },
                 };
             }
-            const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
-            const callee_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-            const callee_fn_nodes = try self.graph.functionNodes(callee_fn_node);
+            const completed = try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node);
+            const callee_fn_nodes = try self.graph.functionNodes(completed.fn_node);
             if (callee_fn_nodes.args.len != fn_nodes.args.len) {
                 Common.invariant("completed direct-call specialization changed argument arity");
             }
@@ -30659,7 +30715,7 @@ const BodyContext = struct {
             return .{
                 .ret_ty = DraftTypeCell.fromGraphNode(callee_fn_nodes.ret),
                 .data = .{ .call_proc = .{
-                    .callee = .{ .func = callee },
+                    .callee = .{ .func = completed.callee },
                     .args = lowered_args,
                     .iterator_procedure = iterator_procedure,
                     .captures = captures,
@@ -31304,28 +31360,19 @@ const BodyContext = struct {
             .call => |call| {
                 if (call.direct_target) |target| {
                     const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                    const fn_node = try self.directCallTypeNode(
-                        expr.ty,
+                    const fn_node = try self.directCallRequestNode(
+                        checked_arg,
+                        target,
                         call,
+                        expr.ty,
                         source_fn_ty,
                         if (expected_ty) |expected| try self.activeNodeFromType(expected) else null,
                     );
                     const fn_nodes = try self.graph.functionNodes(fn_node);
                     if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) return fn_nodes.ret;
-                    if (try self.graph.containsIteratorInterface(fn_nodes.ret)) {
-                        try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
-                        const callee = try self.fnTemplateForDirectCallAtNode(
-                            target,
-                            source_fn_ty,
-                            self.view.types.rootKey(source_fn_ty),
-                            fn_node,
-                        );
-                        const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-                        return (try self.graph.functionNodes(completed_fn_node)).ret;
-                    }
-                    return fn_nodes.ret;
+                    return try self.directCallCompletedResultNode(checked_arg, target, call, source_fn_ty, fn_node);
                 }
-                return try self.callResultTypeNode(expr.ty, call, expected_ty);
+                return try self.callResultTypeNode(checked_arg, expr.ty, call, expected_ty);
             },
             .dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
             .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty),
@@ -31838,17 +31885,19 @@ const BodyContext = struct {
 
     fn callResultMonoType(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const ret_node = try self.callResultTypeNode(checked_ret_ty, call, expected_ret_ty);
+        const ret_node = try self.callResultTypeNode(checked_expr, checked_ret_ty, call, expected_ret_ty);
         if (expected_ret_ty) |expected| return expected;
         return try self.activeTypeFromNode(ret_node);
     }
 
     fn callResultTypeNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
@@ -31891,17 +31940,164 @@ const BodyContext = struct {
             };
         }
 
-        const source_fn_ty = self.directCallInstantiationSourceFnType(call.direct_target.?, call.source_fn_ty_payload);
-        const fn_node = try self.directCallTypeNode(
-            checked_ret_ty,
+        const target = call.direct_target.?;
+        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+        const fn_node = try self.directCallRequestNode(
+            checked_expr,
+            target,
             call,
+            checked_ret_ty,
             source_fn_ty,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
         );
-        return switch (self.graph.content(fn_node)) {
-            .func => |function| function.ret,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call instantiated a non-function graph node"),
+        return try self.directCallCompletedResultNode(checked_expr, target, call, source_fn_ty, fn_node);
+    }
+
+    /// The request interface of a direct call expression, instantiated once
+    /// per body and shared by every later read of the same expression (see
+    /// `DirectCallRequest`). A later read that carries an expected result
+    /// cell relates it to the shared request exactly as a fresh
+    /// instantiation would. Requests whose interface depends on the read
+    /// itself are never shared: an iterator procedure's request may be
+    /// replaced by a generated private interface chosen from the argument
+    /// evidence, a hosted `Try` request may be widened by the expected
+    /// result's error labels, and an expected cell carrying generated-private
+    /// evidence becomes the request's own result.
+    fn directCallRequestNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        target: checked.ResolvedValueId,
+        call: anytype,
+        checked_ret_ty: checked.CheckedTypeId,
+        source_fn_ty: checked.CheckedTypeId,
+        expected_ret_node: ?NodeId,
+    ) Allocator.Error!NodeId {
+        if (!try self.directCallRequestIsShareable(target, expected_ret_node)) {
+            return try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        }
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            self.builder.countBodyDiagnostic("direct_call_request_reuses");
+            if (expected_ret_node) |expected| {
+                const fn_nodes = try self.graph.functionNodes(request.fn_node);
+                _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
+            }
+            return request.fn_node;
+        }
+        const fn_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        try self.direct_call_requests.put(self.allocator, checked_expr, .{ .fn_node = fn_node });
+        return fn_node;
+    }
+
+    fn directCallRequestIsShareable(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+        expected_ret_node: ?NodeId,
+    ) Allocator.Error!bool {
+        if (self.iteratorProcedureForResolvedTarget(target) != null) return false;
+        if (try self.hostedTryCapabilityForResolvedTarget(target) != null) return false;
+        if (expected_ret_node) |expected| {
+            if (try self.graph.containsGeneratedPrivate(expected)) return false;
+        }
+        return true;
+    }
+
+    /// Relate a direct call's arguments to its request interface once per
+    /// shared request.
+    fn prepareDirectCallArgsAtNodes(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        fn_node: NodeId,
+        checked_args: []const checked.CheckedExprId,
+        arg_nodes: []const NodeId,
+    ) Allocator.Error!void {
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (request.fn_node == fn_node and request.args_prepared) return;
+        }
+        try self.prepareExprSpanAtNodes(checked_args, arg_nodes);
+        if (self.direct_call_requests.getPtr(checked_expr)) |request| {
+            if (request.fn_node == fn_node) request.args_prepared = true;
+        }
+    }
+
+    /// Select and draft the callee specialization of a direct call's request
+    /// interface, once per shared request.
+    fn completedDirectCalleeAtNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        target: checked.ResolvedValueId,
+        source_fn_ty: checked.CheckedTypeId,
+        fn_node: NodeId,
+    ) Allocator.Error!CompletedDirectCallee {
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (request.fn_node == fn_node) {
+                if (request.completed) |completed| return completed;
+            }
+        }
+        const callee = try self.fnTemplateForDirectCallAtNode(
+            target,
+            source_fn_ty,
+            self.view.types.rootKey(source_fn_ty),
+            fn_node,
+        );
+        const completed = CompletedDirectCallee{
+            .callee = callee,
+            .fn_node = try self.draftFnSlotTypeNode(callee, fn_node),
         };
+        if (self.direct_call_requests.getPtr(checked_expr)) |request| {
+            if (request.fn_node == fn_node) request.completed = completed;
+        }
+        return completed;
+    }
+
+    /// The result cell of a direct call is the selected specialization's
+    /// result. The caller's checked result type only describes what the
+    /// call site observed while the callee's own result was still open: a
+    /// bare tag compared against the call, for instance, is recorded as an
+    /// anonymous tag union that the callee's body completes to a nominal.
+    /// Relating the callee's interface before answering makes the result
+    /// class carry that completion, so a consumer that seals the type from
+    /// this cell agrees with the type the lowered call produces. The
+    /// arguments are related to the request first and the callee is drafted
+    /// after, in the order lowering itself follows, and the calls lowering
+    /// never routes through a callee template (a divergent callee or
+    /// argument expression, an argument proven uninhabited, `Iter.next` on
+    /// generated iterator evidence, or `Str.inspect`) answer with the
+    /// request cell, exactly as their lowering does. Call-site intrinsics
+    /// apply their checked result-source relation without drafting a wrapper.
+    fn directCallCompletedResultNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        target: checked.ResolvedValueId,
+        call: anytype,
+        source_fn_ty: checked.CheckedTypeId,
+        fn_node: NodeId,
+    ) Allocator.Error!NodeId {
+        if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (request.fn_node == fn_node) {
+                if (request.completed) |completed| return (try self.graph.functionNodes(completed.fn_node)).ret;
+            }
+        }
+        if (self.callsiteIntrinsicForResolvedTarget(target)) |intrinsic| {
+            const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, fn_node);
+            return (try self.graph.functionNodes(callable_node)).ret;
+        }
+        const fn_nodes = try self.graph.functionNodes(fn_node);
+        if (self.checkedExprDivergesInLoweredRuntime(call.func)) return fn_nodes.ret;
+        for (call.args) |arg| {
+            if (self.checkedExprDivergesInLoweredRuntime(arg)) return fn_nodes.ret;
+        }
+        try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
+        for (fn_nodes.args) |arg_node| {
+            if (try self.nodeIsProvenUninhabited(arg_node)) return fn_nodes.ret;
+        }
+        if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
+            if (procedure == .iter_next and fn_nodes.args.len == 1 and self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) {
+                return fn_nodes.ret;
+            }
+        }
+        if (self.resolvedTargetIsStrInspect(target)) return fn_nodes.ret;
+        const completed = try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node);
+        return (try self.graph.functionNodes(completed.fn_node)).ret;
     }
 
     fn directCallTypeNode(
@@ -31957,7 +32153,6 @@ const BodyContext = struct {
             Common.invariant("checked direct call target is outside resolved value table");
         }
         const record = self.view.resolved_refs.records[raw];
-        const evidence = try self.evidenceForUseSiteAtNode(record.expr, request_fn_node);
         return switch (record.ref) {
             .local_proc => |local| .{ .local = try self.lowerDraftLocalProcAtNode(
                 local,
@@ -31966,22 +32161,28 @@ const BodyContext = struct {
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
-                evidence,
+                try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
                 record.recursive_reference,
-                null,
+                .inherit,
             ) },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null, record.recursive_reference),
+            => |proc| try self.draftFnSlotForProcedureUseAtNode(
+                proc,
+                source_fn_ty,
+                source_fn_key,
+                request_fn_node,
+                try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
+                record.recursive_reference,
+            ),
             .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(
                 proc.procedure,
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
-                evidence,
-                proc.root_evidence,
+                try self.evidenceForProcedureUseAtNode(proc.procedure, record.expr, proc.root_evidence, request_fn_node, .body_lowering),
                 record.recursive_reference,
             ),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
@@ -31995,24 +32196,19 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         edge: EdgeEvidence,
-        root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftFnSlot {
         const template_ref = self.builder.templateRefForProcedureUse(proc);
-        const requested_edge = if (root_evidence) |producer_evidence|
-            try self.checkedProcedureEdgeAtRequest(template_ref, producer_evidence, request_fn_node, .body_lowering)
-        else
-            edge;
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
             source_fn_ty,
             source_fn_key,
             request_fn_node,
-            requested_edge,
+            edge,
             if (recursive_reference) .recursive_reference else .instantiation,
             if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
-            null,
+            .inherit,
         );
     }
 
@@ -32026,7 +32222,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         edge: EdgeEvidence,
         recursive_reference: bool,
-        codec_contract_anchor: ?CheckedCodecContractAnchor,
+        codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftFnTarget {
         const context = self.validateLocalProcContext(
             context_id,
@@ -32081,6 +32277,8 @@ const BodyContext = struct {
         };
         const lexical_owner_scope = try self.draft.enterOwner(context.lexical_owner);
         defer lexical_owner_scope.leave();
+        // Recursion belongs to the requesting body, retained by the owner
+        // scope, while specialization identity uses the declaration owner.
         // The declaration context's capture types are part of the
         // specialization identity: two enclosing instantiations can request
         // this local procedure at the same monomorphic function type while
@@ -32093,6 +32291,7 @@ const BodyContext = struct {
         }
         return try self.builder.lowerDraftNestedFromContext(
             self,
+            lexical_owner_scope.previous,
             local.expr,
             nested,
             source_fn_ty,
@@ -32103,7 +32302,7 @@ const BodyContext = struct {
             local.dispatch_scope,
             recursive_reference,
             .independent_roots,
-            codec_contract_anchor,
+            codec_contract_selection,
         );
     }
 
@@ -32718,7 +32917,7 @@ const BodyContext = struct {
                     request_fn_node,
                     try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
                     record.recursive_reference,
-                    null,
+                    .inherit,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                 break :blk try self.addExprWithTypeCell(
@@ -32858,7 +33057,7 @@ const BodyContext = struct {
                     expected_node,
                     try self.evidenceForUseSiteAtNode(record.expr, expected_node),
                     record.recursive_reference,
-                    null,
+                    .inherit,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, expected_node);
                 return try self.addExprWithTypeCell(
@@ -32983,7 +33182,7 @@ const BodyContext = struct {
                 edge.vector,
             );
         }
-        const edge = try self.evidenceForProcedureValueAtNode(proc, site_expr, request_fn_node);
+        const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
         const source_fn_ty = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
         const slot = try self.draftFnSlotForProcedureUseAtNode(
@@ -32992,7 +33191,6 @@ const BodyContext = struct {
             proc.source_fn_ty_template,
             request_fn_node,
             edge,
-            root_evidence,
             recursive_reference,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
@@ -34343,6 +34541,7 @@ const BodyContext = struct {
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
+                    fn_ctx.draft.current_owner,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
                     source_fn_ty,
@@ -34353,7 +34552,7 @@ const BodyContext = struct {
                     null,
                     false,
                     .exact_graph,
-                    null,
+                    .inherit,
                 );
             },
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => blk: {
@@ -34372,7 +34571,7 @@ const BodyContext = struct {
                     .{ .subst = subst, .vector = retained_evidence.vector },
                     .instantiation,
                     .independent_roots,
-                    null,
+                    .inherit,
                 ));
             },
         };
@@ -34515,6 +34714,7 @@ const BodyContext = struct {
         const restored_fn_id = switch (lambda_expr.data) {
             .lambda => try self.builder.lowerDraftNestedFromContext(
                 &fn_ctx,
+                fn_ctx.draft.current_owner,
                 lambda_expr_id,
                 capture_nested,
                 fn_value.source_fn_ty,
@@ -34525,7 +34725,7 @@ const BodyContext = struct {
                 null,
                 false,
                 .exact_graph,
-                null,
+                .inherit,
             ),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
@@ -34698,6 +34898,7 @@ const BodyContext = struct {
         const restored_fn_id = switch (lambda_expr.data) {
             .lambda => try self.builder.lowerDraftNestedFromContext(
                 &fn_ctx,
+                fn_ctx.draft.current_owner,
                 lambda_expr_id,
                 capture_nested,
                 template.source_fn_ty,
@@ -34708,7 +34909,7 @@ const BodyContext = struct {
                 null,
                 false,
                 .exact_graph,
-                null,
+                .inherit,
             ),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
@@ -35547,7 +35748,7 @@ const BodyContext = struct {
             .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
             .lookup_external => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
             .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
-            .call => |call| try self.relateCallExprAtNode(expr.ty, call, expected_node),
+            .call => |call| try self.relateCallExprAtNode(checked_expr, expr.ty, call, expected_node),
             .dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
             .interpolation => |interpolation| try self.relateDispatchExprAtNode(expr.ty, interpolation.plan, expected_node),
             .type_dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
@@ -35651,10 +35852,21 @@ const BodyContext = struct {
 
     fn relateCallExprAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: NodeId,
     ) Allocator.Error!void {
+        if (call.direct_target) |target| {
+            if (try self.directCallRequestIsShareable(target, null)) {
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const fn_node = try self.directCallRequestNode(checked_expr, target, call, checked_ret_ty, source_fn_ty, null);
+                const fn_nodes = try self.graph.functionNodes(fn_node);
+                try relateRequestComponent(self.graph, fn_nodes.ret, expected_ret_node);
+                for (call.args, fn_nodes.args) |arg, arg_node| try self.relateExprAtNode(arg, arg_node);
+                return;
+            }
+        }
         var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
@@ -36438,9 +36650,9 @@ const BodyContext = struct {
             // contain unresolved payload cells here, so materializing it as a
             // Monotype TypeId would emit an incomplete output.
             const call_data = if (producer_request) |request|
-                try self.lowerCallAtNode(expr.ty, call, request)
+                try self.lowerCallAtNode(checked_expr, expr.ty, call, request)
             else
-                try self.lowerCall(expr.ty, call);
+                try self.lowerCall(checked_expr, expr.ty, call);
             break :lowered try self.addExprWithTypeCell(call_data.ret_ty, call_data.data);
         };
         const lowered_node = try self.exprTypeCell(lowered).toGraphNode(self.graph);
@@ -36537,7 +36749,7 @@ const BodyContext = struct {
                     return lowered;
                 }
                 try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerCallAtType(expr.ty, call, ty);
+                const lowered = try self.lowerCallAtType(checked_expr, expr.ty, call, ty);
                 if (!self.sameType(ty, try self.activeTypeFromCell(lowered.ret_ty))) {
                     Common.invariant("checked call expression lowered at a type different from its context type");
                 }
@@ -38271,6 +38483,7 @@ const BodyContext = struct {
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
             self,
+            self.draft.current_owner,
             expr_id,
             nested,
             source_fn_ty,
@@ -38281,7 +38494,7 @@ const BodyContext = struct {
             nested_evidence.owned_scope,
             false,
             .exact_graph,
-            null,
+            .inherit,
         );
     }
 
@@ -38404,6 +38617,7 @@ const BodyContext = struct {
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
             self,
+            self.draft.current_owner,
             expr_id,
             nested,
             source_fn_ty,
@@ -38414,7 +38628,7 @@ const BodyContext = struct {
             nested_evidence.owned_scope,
             false,
             .exact_graph,
-            null,
+            .inherit,
         );
     }
 
@@ -38954,7 +39168,7 @@ const BodyContext = struct {
                 edge,
                 .instantiation,
                 .independent_roots,
-                null,
+                .inherit,
             );
             const draft_spec: ?u32 = switch (created) {
                 .local => |local| switch (local) {
@@ -39125,8 +39339,22 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const result = try self.lowerNumeralCallRaw(checked_ret_ty, maybe_plan, target_ty);
+        const callable = switch (self.literalDispatchRuntimePlan(maybe_plan)) {
+            .callable => |callable| callable,
+            .crash => |reason| return try self.runtimeCrashExpr(target_ty, dispatchCrashMessage(reason)),
+        };
+        const result = try self.lowerNumeralCallRaw(checked_ret_ty, callable, target_ty);
         return try self.unwrapNumeralResult(result.call, result.try_ty, target_ty);
+    }
+
+    fn literalDispatchRuntimePlan(
+        self: *BodyContext,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+    ) DispatchRuntimePlan {
+        const plan_id = maybe_plan orelse Common.invariant("checked literal conversion reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (plan.result_mode != .value) Common.invariant("checked literal conversion plan had a non-value result mode");
+        return self.dispatchRuntimePlan(plan);
     }
 
     const NumeralCall = struct {
@@ -39137,13 +39365,11 @@ const BodyContext = struct {
     fn lowerNumeralCallRaw(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        callable: CallableDispatchPlan,
         target_ty: Type.TypeId,
     ) Allocator.Error!NumeralCall {
-        const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
-        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const plan = callable.plan;
+        const plan_args = callable.operands;
 
         var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
@@ -39182,10 +39408,14 @@ const BodyContext = struct {
             .str_from_quote => |quote| quote.plan,
             .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion root did not point at a conversion expression"),
         };
+        const callable = switch (self.literalDispatchRuntimePlan(plan)) {
+            .callable => |callable| callable,
+            .crash => |reason| return try self.runtimeCrashExpr(try_ty, dispatchCrashMessage(reason)),
+        };
         const ok_tag = self.monoTagByText(try_ty, "Ok");
         const ok_payloads = self.typeStore().span(ok_tag.payloads);
         if (ok_payloads.len != 1) Common.invariant("numeral conversion root Try.Ok did not carry one payload");
-        const result = try self.lowerNumeralCallRaw(expr.ty, plan, GuardedList.at(ok_payloads, 0));
+        const result = try self.lowerNumeralCallRaw(expr.ty, callable, GuardedList.at(ok_payloads, 0));
         if (!self.sameType(result.try_ty, try_ty)) {
             Common.invariant("numeral conversion root type differed from the from_numeral result type");
         }
@@ -40234,23 +40464,22 @@ const BodyContext = struct {
         return out;
     }
 
-    /// Materialize a procedure value's checked construction recipe together
-    /// with the exact substitution recorded for that use. Callable-reachable
-    /// entries remain symbolic until the concrete function request can resolve
-    /// their checker-authored paths.
-    fn evidenceForProcedureValueAtNode(
+    /// Select the producer-authored edge before materializing any evidence.
+    /// Platform requirements carry app-owned root evidence; ordinary procedure
+    /// uses carry their checked call-site or construction evidence. Direct calls,
+    /// procedure values, and interface specialization share this selection.
+    fn evidenceForProcedureUseAtNode(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
         expr: checked.CheckedExprId,
+        root_evidence: ?checked.CheckedEvidenceSpan,
         request_fn_node: NodeId,
+        purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!EdgeEvidence {
-        const edge = try self.evidenceForUseSiteAtNode(expr, request_fn_node);
-        const refs = self.view.static_dispatch_plans.siteEvidence(expr) orelse return edge;
-        const schema = self.procedureUseSchema(proc);
-        if (refs.len != schema.params.len or edge.vector.len != refs.len) {
-            Common.invariant("procedure value evidence recipe length differed from its checked scheme");
+        if (root_evidence) |evidence| {
+            return try self.checkedProcedureEdgeAtRequest(self.builder.templateRefForProcedureUse(proc), evidence, request_fn_node, purpose);
         }
-        return edge;
+        return try self.evidenceForUseSiteForPurposeAtNode(expr, purpose, request_fn_node);
     }
 
     /// Resolve every symbolic callable-path entry whose dispatcher is already
@@ -40863,6 +41092,9 @@ const BodyContext = struct {
         site_refs: ?[]const static_dispatch.CheckedEvidence,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
+        // An initializer with no requirements derives no method evidence.
+        // Its value's use may still have a checked recipe for a callable
+        // stored inside that value; that recipe is not an initializer edge.
         if (schema.params.len == 0) return &.{};
         if (site_refs) |refs| {
             if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
@@ -40964,7 +41196,7 @@ const BodyContext = struct {
             for (schema.params, 0..) |param, k| {
                 if (derived[k]) continue;
                 const node = subst[param.slot.?].node;
-                if (self.forwardedRequirement(node, param.method)) |forwarded| switch (forwarded) {
+                if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
                     // Callable targets are selected again from this scheme's
                     // substitution below. Terminal evidence belongs to the
                     // enclosing requirement on this exact cell: structural
@@ -41082,7 +41314,7 @@ const BodyContext = struct {
         node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
-        if (self.forwardedRequirement(node, param.method)) |forwarded| return forwarded;
+        if (self.forwardedRequirement(node, view.names, param.method)) |forwarded| return forwarded;
         const default_phase: ?checked.NumericDefaultPhase = switch (self.graph.content(node)) {
             .redirect => unreachable,
             .unresolved => |variable| variable.numeric_default_phase,
@@ -41103,17 +41335,22 @@ const BodyContext = struct {
 
     /// The enclosing frame entry that already answers `method` for the
     /// cell `node` shares with a quantified variable of an enclosing scheme:
-    /// an requirement on a still-open cell inside a body is the enclosing
-    /// specialization's requirement on that same cell.
-    fn forwardedRequirement(self: *BodyContext, node: NodeId, method: names.MethodNameId) ?SpecEvidence {
+    /// a requirement on a still-open cell inside a body is the enclosing
+    /// specialization's requirement on that same cell. Method IDs belong to
+    /// their checked name store, so translate once per frame before comparing.
+    fn forwardedRequirement(self: *BodyContext, node: NodeId, method_names: *const names.NameStore, method: names.MethodNameId) ?SpecEvidence {
         var frame: ?*const EvidenceChain = &self.evidence;
         while (frame) |current| : (frame = current.parent) {
             const schema = current.schema orelse continue;
             if (current.subst.len != schema.scheme_vars.len or current.vector.len != schema.params.len) {
                 Common.invariant("evidence frame substitution or vector length differed from its scheme");
             }
+            const frame_method = if (schema.view.names == method_names)
+                method
+            else
+                schema.view.names.lookupMethodName(method_names.methodNameText(method)) orelse continue;
             for (schema.params, 0..) |param, k| {
-                if (param.method != method) continue;
+                if (param.method != frame_method) continue;
                 const receiver_slot = param.slot orelse continue;
                 const slot = switch (current.subst[receiver_slot]) {
                     .node => |slot_node| slot_node,
@@ -41887,7 +42124,7 @@ const BodyContext = struct {
             raw_lookup,
             request_fn_node,
             if (contract) |checked_contract| .{ .checked = checked_contract } else .derive,
-            null,
+            .inherit,
         );
     }
 
@@ -41901,7 +42138,7 @@ const BodyContext = struct {
             raw_lookup,
             request_fn_node,
             evidence_source,
-            null,
+            .inherit,
         );
     }
 
@@ -41916,8 +42153,19 @@ const BodyContext = struct {
             raw_lookup,
             request_fn_node,
             .{ .checked = contract },
-            codec_contract_anchor,
+            .{ .anchored = codec_contract_anchor },
         );
+    }
+
+    /// First-order format methods have no generated payload-parser callbacks.
+    /// Their checked callable and evidence fully determine specialization.
+    fn methodTargetCalleeAtNodeForFormat(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        request_fn_node: NodeId,
+        contract: EvidenceContract,
+    ) Allocator.Error!DraftFnSlot {
+        return try self.methodTargetCalleeAtNodeInner(lookup, request_fn_node, .{ .checked = contract }, .independent);
     }
 
     fn methodTargetCalleeAtNodeInner(
@@ -41925,7 +42173,7 @@ const BodyContext = struct {
         raw_lookup: MethodLookup,
         request_fn_node: NodeId,
         evidence_source: TargetEvidenceSource,
-        codec_contract_anchor: ?CheckedCodecContractAnchor,
+        codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftFnSlot {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
@@ -41947,7 +42195,7 @@ const BodyContext = struct {
                     edge,
                     .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
-                    codec_contract_anchor,
+                    codec_contract_selection,
                 );
             },
             .local_proc => |local| blk: {
@@ -41970,7 +42218,7 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     false,
-                    codec_contract_anchor,
+                    codec_contract_selection,
                 ) };
             },
             .structural => Common.invariant("structural method registry result has no callable procedure body"),
@@ -42069,7 +42317,7 @@ const BodyContext = struct {
                     edge,
                     .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
-                    null,
+                    .inherit,
                 );
             },
             .local_proc => |local| blk: {
@@ -42095,7 +42343,7 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     false,
-                    null,
+                    .inherit,
                 ) };
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
@@ -44489,9 +44737,9 @@ const BodyContext = struct {
             const expected = arg_tys[index];
             if (!self.sameType(actual, expected)) Common.invariant("parser_for target method argument type differed from expected type");
         }
-        if (!self.sameType(parse_fn.ret, ret_ty)) Common.invariant("parser_for target method return type differed from expected type");
+        if (!self.sameType(self.tryInfo(parse_fn.ret).ok_ty, self.tryInfo(ret_ty).ok_ty)) Common.invariant("parser_for target method success type differed from expected type");
         return try self.addExpr(.{
-            .ty = ret_ty,
+            .ty = parse_fn.ret,
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(arg_exprs),
@@ -44775,6 +45023,61 @@ const BodyContext = struct {
         });
     }
 
+    /// An infallible source contributes only its success continuation.
+    fn sequenceInfallibleParser(
+        self: *BodyContext,
+        source: DraftExprId,
+        source_ty: Type.TypeId,
+        ok_payload: DraftPatId,
+        ok_body: DraftExprId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const info = self.tryInfo(source_ty);
+        const ok_backing = try self.addPat(.{ .ty = info.backing_ty, .data = .{ .tag = .{
+            .name = info.ok_tag.name,
+            .payloads = try self.addPatSpan(&.{ok_payload}),
+        } } });
+        const ok = try self.addPat(.{ .ty = source_ty, .data = .{ .nominal = ok_backing } });
+        return try self.addExpr(.{ .ty = target_ty, .data = .{ .match_ = .{
+            .scrutinee = source,
+            .branches = try self.addBranchSpan(&.{.{ .pat = ok, .body = ok_body }}),
+        } } });
+    }
+
+    /// Keep ordinary Try sequencing (including its cold error edge and direct
+    /// record-field binding). The error continuation converts straight into
+    /// the final result; no intermediate widened Try is materialized.
+    fn sequenceParserErrorConversion(
+        self: *BodyContext,
+        sequence: union(enum) { value: DraftTrySequence, record: DraftTryRecordSequence },
+        source_err_ty: Type.TypeId,
+        target_ty: Type.TypeId,
+        err_target: ?DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const join = try self.reserveGeneratedJoinPoint(target_ty);
+        const err_local = try self.addLocal(self.builder.symbols.fresh(), source_err_ty);
+        const converted = try self.injectErrorRow(try self.localExpr(err_local, source_err_ty), source_err_ty, self.tryInfo(target_ty).err_ty);
+        const body = if (err_target) |target|
+            try self.jumpToGeneratedJoin(target, &.{converted}, &.{}, &.{}, target_ty)
+        else
+            try self.tryErr(target_ty, converted);
+        const data: BodyExprData = switch (sequence) {
+            .value => |value| blk: {
+                var seq = value;
+                seq.err_target = join;
+                break :blk .{ .try_sequence = seq };
+            },
+            .record => |record| blk: {
+                var seq = record;
+                seq.err_target = join;
+                break :blk .{ .try_record_sequence = seq };
+            },
+        };
+        const remainder = try self.addExpr(.{ .ty = target_ty, .data = data });
+        try self.completeGeneratedJoinPoint(join, &.{.{ .local = err_local, .ty = source_err_ty }}, &.{}, body, remainder);
+        return join;
+    }
+
     fn sequenceTry(
         self: *BodyContext,
         try_expr: DraftExprId,
@@ -44795,17 +45098,25 @@ const BodyContext = struct {
         out_try_ty: Type.TypeId,
         err_target: ?DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const info = self.tryInfo(try_ty);
+        const source_ty = try self.exprType(try_expr);
+        const info = self.tryInfo(source_ty);
+        if (!self.sameType(info.ok_ty, self.tryInfo(try_ty).ok_ty)) Common.invariant("sequenced Try success type differed from expected type");
         const out_info = self.tryInfo(out_try_ty);
-        if (!self.sameType(info.err_ty, out_info.err_ty)) Common.invariant("sequenced Try error type differed from output Try error type");
+        if (self.typeIsClosedEmptyTagUnion(info.err_ty)) {
+            return try self.sequenceInfallibleParser(try_expr, source_ty, try self.bindPat(ok_local, info.ok_ty), ok_body, out_try_ty);
+        }
 
-        return try self.addExpr(.{ .ty = out_try_ty, .data = .{ .try_sequence = .{
+        const data: BodyExprData = .{ .try_sequence = .{
             .try_expr = try_expr,
             .ok_local = ok_local,
             .err_is_cold = true,
             .err_target = err_target,
             .ok_body = ok_body,
-        } } });
+        } };
+        if (!self.sameType(info.err_ty, out_info.err_ty)) {
+            return try self.sequenceParserErrorConversion(.{ .value = data.try_sequence }, info.err_ty, out_try_ty, err_target);
+        }
+        return try self.addExpr(.{ .ty = out_try_ty, .data = data });
     }
 
     fn sequenceEncodeTry(
@@ -44886,9 +45197,11 @@ const BodyContext = struct {
         out_try_ty: Type.TypeId,
         err_target: ?DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const info = self.tryInfo(try_ty);
+        const source_ty = try self.exprType(try_expr);
+        const info = self.tryInfo(source_ty);
+        if (!self.sameType(info.ok_ty, self.tryInfo(try_ty).ok_ty)) Common.invariant("sequenced Try record success type differed from expected type");
         const out_info = self.tryInfo(out_try_ty);
-        if (!self.sameType(info.err_ty, out_info.err_ty)) Common.invariant("sequenced Try record error type differed from output Try error type");
+
         if (!self.sameType(self.recordFieldType(info.ok_ty, value_field), try self.localType(value_local))) {
             Common.invariant("sequenced Try record value local type differed from Ok record field");
         }
@@ -44896,7 +45209,16 @@ const BodyContext = struct {
             Common.invariant("sequenced Try record rest local type differed from Ok record field");
         }
 
-        return try self.addExpr(.{ .ty = out_try_ty, .data = .{ .try_record_sequence = .{
+        if (self.typeIsClosedEmptyTagUnion(info.err_ty)) {
+            const fields = [_]DraftRecordDestruct{
+                .{ .name = value_field, .pattern = try self.bindPat(value_local, try self.localType(value_local)) },
+                .{ .name = rest_field, .pattern = try self.bindPat(rest_local, try self.localType(rest_local)) },
+            };
+            const ok_pat = try self.addPat(.{ .ty = info.ok_ty, .data = .{ .record = try self.addRecordDestructSpan(&fields) } });
+            return try self.sequenceInfallibleParser(try_expr, source_ty, ok_pat, ok_body, out_try_ty);
+        }
+
+        const data: BodyExprData = .{ .try_record_sequence = .{
             .try_expr = try_expr,
             .value_local = value_local,
             .value_field = value_field,
@@ -44905,7 +45227,11 @@ const BodyContext = struct {
             .err_is_cold = true,
             .err_target = err_target,
             .ok_body = ok_body,
-        } } });
+        } };
+        if (!self.sameType(info.err_ty, out_info.err_ty)) {
+            return try self.sequenceParserErrorConversion(.{ .record = data.try_record_sequence }, info.err_ty, out_try_ty, err_target);
+        }
+        return try self.addExpr(.{ .ty = out_try_ty, .data = data });
     }
 
     fn recordFieldType(self: *BodyContext, record_ty: Type.TypeId, field_name: names.RecordFieldNameId) Type.TypeId {
@@ -45056,21 +45382,25 @@ const BodyContext = struct {
         };
     }
 
-    /// Relate the payloads of a custom parser's declared errors to the
+    /// Relate the payloads of a declared parser method's errors to the
     /// enclosing structural parser row without equating the two rows. The
-    /// custom parser result is exact; emission explicitly injects that row into
+    /// method result is exact; emission explicitly injects that row into
     /// the enclosing result, whose additional structural errors remain owned by
     /// the enclosing parser producer.
-    fn relateCustomParserErrorInjection(
+    fn relateParserErrorInjection(
         self: *BodyContext,
         source_err: NodeId,
         target_err: NodeId,
     ) Allocator.Error!void {
+        if (self.graph.rootNode(source_err) == self.graph.rootNode(target_err)) return;
         const source_tags = (try self.graph.tagRowNodes(source_err)).tags;
+        if (source_tags.len == 0) return;
         const target_tags = (try self.graph.tagRowNodes(target_err)).tags;
+        var target_index: usize = 0;
         for (source_tags) |source_tag| {
-            const target_tag = graphTagByName(target_tags, source_tag.name) orelse
-                Common.invariant("custom parser error row was not included in the enclosing parser row");
+            while (target_index < target_tags.len and self.nameStore().tagLabelTextLessThan(target_tags[target_index].name, source_tag.name)) : (target_index += 1) {}
+            if (target_index == target_tags.len or target_tags[target_index].name != source_tag.name) Common.invariant("parser error row was not included in the enclosing parser row");
+            const target_tag = target_tags[target_index];
             if (source_tag.payloads.len != target_tag.payloads.len) {
                 Common.invariant("custom parser error injection changed tag payload arity");
             }
@@ -46031,7 +46361,7 @@ const BodyContext = struct {
                 const target_result = try self.graphParserResultNodes(target_runtime.ret);
                 try relateRequestComponent(self.graph, target_result.value, shape_node);
                 try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
-                try self.relateCustomParserErrorInjection(target_result.err, outer_result.err);
+                try self.relateParserErrorInjection(target_result.err, outer_result.err);
             },
             .encoder => {
                 if (runtime.args.len != 2 or target_runtime.args.len != 2) {
@@ -46463,7 +46793,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
         try relateRequestComponent(self.graph, target.args[2], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try self.relateParserErrorInjection(target_try.err, outer_result.err);
 
         const field_tag_name = try self.nameStoreMut().internTagLabel("Field");
         const field_tag = graphTagByName((try self.graph.tagRowNodes(target_try.ok)).tags, field_tag_name) orelse
@@ -46516,7 +46846,7 @@ const BodyContext = struct {
             &.{ encoding_node, fields_node, state_node },
             result_node,
         );
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, request_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, request_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -46557,9 +46887,9 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
         try relateRequestComponent(self.graph, target_try.ok, state_node);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try self.relateParserErrorInjection(target_try.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -46787,9 +47117,9 @@ const BodyContext = struct {
         const target_result = try self.graphParserResultNodes(target.ret);
         try relateRequestComponent(self.graph, target_result.value, shape_node);
         try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
-        try relateRequestComponent(self.graph, target_result.err, outer_result.err);
+        try self.relateParserErrorInjection(target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -46832,10 +47162,10 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
         try relateRequestComponent(self.graph, target.args[1], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try self.relateParserErrorInjection(target_try.err, outer_result.err);
         if (result_is_state) try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -47163,10 +47493,10 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, arity_arg, u64_node);
         }
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try self.relateParserErrorInjection(target_try.err, outer_result.err);
         try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -47209,9 +47539,9 @@ const BodyContext = struct {
         const target_result = try self.graphParserResultNodes(target.ret);
         try relateRequestComponent(self.graph, target_result.value, value_node);
         try relateRequestComponent(self.graph, target_result.rest, state_node);
-        try relateRequestComponent(self.graph, target_result.err, outer_result.err);
+        try self.relateParserErrorInjection(target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -48445,7 +48775,7 @@ const BodyContext = struct {
         if (self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
-            .call => |call| try self.callResultTypeNode(expr.ty, call, null),
+            .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
             .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
@@ -49622,8 +49952,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.tupleItemTypes(ty), checks_out) };
             },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
             .str_interpolation => |str| try self.lowerStrPatternCollectingLists(str, ty, checks_out),
             .underscore => .wildcard,
         };
@@ -51013,9 +51343,11 @@ const BodyContext = struct {
             .call => |call| blk: {
                 const target = call.direct_target orelse break :blk null;
                 const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                const fn_node = try self.directCallTypeNode(
-                    expr.ty,
+                const fn_node = try self.directCallRequestNode(
+                    checked_value,
+                    target,
                     call,
+                    expr.ty,
                     source_fn_ty,
                     expected_node,
                 );
@@ -51024,14 +51356,8 @@ const BodyContext = struct {
                 if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
 
                 try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
-                const callee = try self.fnTemplateForDirectCallAtNode(
-                    target,
-                    source_fn_ty,
-                    self.view.types.rootKey(source_fn_ty),
-                    fn_node,
-                );
-                const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-                break :blk (try self.graph.functionNodes(completed_fn_node)).ret;
+                const completed = try self.completedDirectCalleeAtNode(checked_value, target, source_fn_ty, fn_node);
+                break :blk (try self.graph.functionNodes(completed.fn_node)).ret;
             },
             .dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
                 expr.ty,
@@ -52788,7 +53114,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
         }
     }
 
@@ -54575,11 +54901,11 @@ const BodyContext = struct {
             },
             .numeral_literal => |num| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk try self.lowerNumeralLiteralPattern(num, ty);
+                break :blk try self.lowerNumeralLiteralPattern(pattern_id, num, ty);
             },
             .str_literal => |str| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk try self.lowerStringLiteralPattern(str, ty);
+                break :blk try self.lowerStringLiteralPattern(pattern_id, str, ty);
             },
             .str_interpolation => |str| try self.lowerStrPattern(str, try self.activeTypeFromNode(node)),
             .underscore => .wildcard,
@@ -54801,8 +55127,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerTuplePattern(items, ty) };
             },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
             .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
         };
@@ -54960,13 +55286,14 @@ const BodyContext = struct {
     /// checker-selected conversion and equality guard.
     fn lowerNumeralLiteralPattern(
         self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
         numeral: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
         return switch (self.shapeContent(ty)) {
             .primitive => try self.numeralPatBits(numeral.literal, ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.guard) |guard|
+                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom numeral pattern had no checked conversion"),
         };
@@ -54977,6 +55304,7 @@ const BodyContext = struct {
     /// can never match, and a custom target uses the checked conversion guard.
     fn lowerStringLiteralPattern(
         self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
         str: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
@@ -54985,8 +55313,8 @@ const BodyContext = struct {
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) }
             else
                 try self.bindNeverMatchPattern(ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.guard) |guard|
+                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom string pattern had no checked conversion"),
         };
@@ -54996,15 +55324,18 @@ const BodyContext = struct {
     /// recording an equality condition for the enclosing match branch.
     fn bindLiteralGuardPattern(
         self: *BodyContext,
-        conversion: checked.CheckedExprId,
+        pattern_id: checked.CheckedPatternId,
+        condition: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
-        const local = try self.addLocal(self.builder.symbols.fresh(), ty);
-        try self.pattern_literal_guards.append(self.allocator, .{
-            .local = local,
-            .ty = ty,
-            .check = .{ .conversion = conversion },
-        });
+        const binder = self.view.bodies.literalPatternBinder(pattern_id);
+        const local = if (self.currentOwnerPatternBinderLocal(binder)) |existing| existing else blk: {
+            const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+            try self.bindLocalName(new_local, binder);
+            try self.binders.put(binder, new_local);
+            break :blk new_local;
+        };
+        try self.pattern_literal_guards.append(self.allocator, .{ .condition = condition });
         return .{ .bind = local };
     }
 
@@ -55014,43 +55345,18 @@ const BodyContext = struct {
     /// compared against the unrepresentable value.
     fn bindNeverMatchPattern(self: *BodyContext, ty: Type.TypeId) Allocator.Error!BodyPatData {
         const local = try self.addLocal(self.builder.symbols.fresh(), ty);
-        try self.pattern_literal_guards.append(self.allocator, .{
-            .local = local,
-            .ty = ty,
-            .check = .never,
-        });
+        try self.pattern_literal_guards.append(self.allocator, .never);
         return .{ .bind = local };
     }
 
-    /// Compare a bound match value against a literal's converted constant,
-    /// dispatching to the type's `is_eq` method when it has one and falling
-    /// back to structural equality otherwise, mirroring `==`. A never-match
-    /// guard is the constant `false` instead.
+    /// Consume the ordinary checked equality expression retained by the
+    /// pattern. Structural and callable equality use the same dispatch path
+    /// as source `==`, including specialization evidence and local captures.
     fn lowerPatternLiteralEq(self: *BodyContext, entry: PatternLiteralGuard) Allocator.Error!DraftExprId {
-        const conversion = switch (entry.check) {
-            .conversion => |conversion| conversion,
-            .never => return try self.boolLiteral(false, try self.primitiveType(.bool)),
+        return switch (entry) {
+            .condition => |condition| try self.lowerExpr(condition),
+            .never => try self.boolLiteral(false, try self.primitiveType(.bool)),
         };
-        const scrutinee = try self.localExpr(entry.local, entry.ty);
-        const expected = try self.lowerExpr(conversion);
-        if (methodOwnerFromType(self.typeStore(), entry.ty)) |owner| {
-            if (try self.lookupMethodTargetByName(owner, "is_eq")) |raw_lookup| {
-                const lookup = try self.withLocalProcContext(raw_lookup);
-                var target_ctx = try self.methodTargetContext(lookup);
-                defer target_ctx.deinit();
-                const target_fn = target_ctx.checkedFunctionType(lookup.target.callable_ty);
-                const bool_ty = try self.lowerTypeFromView(lookup.view, target_fn.ret);
-                const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
-                const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
-                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
-                return try self.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-                    .callee = draftProcCalleeForSlot(callee),
-                    .args = try self.addExprSpan(&.{ scrutinee, expected }),
-                    .captures = try self.methodTargetCaptureSpan(lookup),
-                } } });
-            }
-        }
-        return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.primitiveType(.bool));
     }
 
     /// Take ownership of the literal-equality conditions collected since
@@ -55107,16 +55413,24 @@ const BodyContext = struct {
     /// (optional) user guard, literal conditions first.
     fn conjoinPatternLiteralGuards(self: *BodyContext, user_guard: ?DraftExprId) Allocator.Error!?DraftExprId {
         if (self.pattern_literal_guards.items.len == 0) return user_guard;
+        if (self.pattern_literal_guards.items.len == 1 and user_guard == null) {
+            const condition = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[0]);
+            self.pattern_literal_guards.clearRetainingCapacity();
+            return condition;
+        }
         const bool_ty = try self.primitiveType(.bool);
-        var cond = user_guard;
+        const yes = try self.boolLiteral(true, bool_ty);
+        const no = try self.boolLiteral(false, bool_ty);
+        // Source Bool values and internal comparison predicates need not have
+        // the same Monotype representation. Consume each as a condition and
+        // produce one explicit primitive predicate, rather than returning a
+        // source guard as a branch of a primitive-typed expression.
+        var cond = if (user_guard) |guard| try self.ifExpr(guard, yes, no, bool_ty) else yes;
         var i = self.pattern_literal_guards.items.len;
         while (i > 0) {
             i -= 1;
             const eq = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[i]);
-            cond = if (cond) |inner|
-                try self.ifExpr(eq, inner, try self.boolLiteral(false, bool_ty), bool_ty)
-            else
-                eq;
+            cond = try self.ifExpr(eq, cond, no, bool_ty);
         }
         self.pattern_literal_guards.clearRetainingCapacity();
         return cond;
@@ -55865,6 +56179,96 @@ test "graph constructor representation follows aliases and preserves nominal lay
     try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(alias));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(nominal));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(outer_alias));
+}
+
+test "issue 11265: forwarded evidence compares methods in their owning name stores" {
+    const gpa = std.testing.allocator;
+    var frame_names = names.NameStore.init(gpa);
+    defer frame_names.deinit();
+    var caller_names = names.NameStore.init(gpa);
+    defer caller_names.deinit();
+    const frame_encode = try frame_names.internMethodName("encoder_for");
+    const frame_decode = try frame_names.internMethodName("decode");
+    const caller_decode = try caller_names.internMethodName("decode");
+    const caller_encode = try caller_names.internMethodName("encoder_for");
+    const caller_hash = try caller_names.internMethodName("to_hash");
+    try std.testing.expectEqual(frame_encode, caller_decode);
+    try std.testing.expect(frame_decode != caller_decode);
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &frame_names);
+    defer graph.destroy();
+    const receiver = try graph.newNode(.{ .primitive = .str });
+    const other_receiver = try graph.newNode(.{ .primitive = .i64 });
+    const unrelated_receiver = try graph.newNode(.{ .primitive = .dec });
+    const alias = try graph.newNode(.{ .primitive = .str });
+    try graph.unify(receiver, alias);
+
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, receiver_ty, .{ .flex = .{} });
+    try checked_types.fillSyntheticTypeRoot(gpa, other_receiver_ty, .{ .flex = .{} });
+    const result_ty = try checked_types.appendSyntheticPayloadRoot(gpa, &frame_names, .empty_record);
+    const encode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, result_ty);
+    const other_decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{other_receiver_ty}, other_receiver_ty);
+    const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
+
+    var frame_view: ModuleView = undefined;
+    frame_view.names = &frame_names;
+    frame_view.types = checked_types.view();
+    const params = [_]static_dispatch.EvidenceParamRecord{
+        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true },
+    };
+    const frame: EvidenceChain = .{
+        .scope = undefined,
+        .schema = .{
+            .view = frame_view,
+            .root = null,
+            .scheme_vars = &.{ receiver_ty, other_receiver_ty },
+            .params = &params,
+        },
+        .subst = &.{ .{ .node = receiver }, .{ .node = other_receiver } },
+        .vector = &.{ .{ .structural = .{ .derivation = .encoder } }, .checked_error, .{ .structural = .{ .derivation = .parser } } },
+    };
+    var ctx: BodyContext = undefined;
+    ctx.graph = graph;
+    ctx.evidence = frame;
+
+    // Different methods with equal IDs must stay distinct, and the same
+    // method with different IDs must still find its exact receiver's evidence.
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(alias, &caller_names, caller_decode).?.structural.derivation);
+    try std.testing.expectEqual(.encoder, ctx.forwardedRequirement(receiver, &caller_names, caller_encode).?.structural.derivation);
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(receiver, &frame_names, frame_decode).?.structural.derivation);
+    try std.testing.expect(ctx.forwardedRequirement(receiver, &caller_names, caller_hash) == null);
+    try std.testing.expect(ctx.forwardedRequirement(unrelated_receiver, &caller_names, caller_decode) == null);
+
+    // A name absent from an inner frame must continue to the lexical parent,
+    // even if that inner store assigns its ID to another method.
+    var inner_names = names.NameStore.init(gpa);
+    defer inner_names.deinit();
+    const inner_method = try inner_names.internMethodName("is_eq");
+    try std.testing.expectEqual(caller_decode, inner_method);
+    var inner_view: ModuleView = undefined;
+    inner_view.names = &inner_names;
+    inner_view.types = checked_types.view();
+    ctx.evidence = .{
+        .scope = undefined,
+        .schema = .{
+            .view = inner_view,
+            .root = null,
+            .scheme_vars = &.{receiver_ty},
+            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true }},
+        },
+        .subst = &.{.{ .node = receiver }},
+        .vector = &.{.{ .structural = .{ .derivation = .equality } }},
+        .parent = &frame,
+    };
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(receiver, &caller_names, caller_decode).?.structural.derivation);
 }
 
 test "specialization evidence equality includes exact target instantiation" {

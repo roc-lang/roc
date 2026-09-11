@@ -32,7 +32,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 218)
+(e-call
 	(e-field-access
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope")))
@@ -42,5 +42,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

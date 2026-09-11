@@ -180,6 +180,10 @@ generalizer: Generalizer,
 constraints: Constraint.SafeList,
 /// Return-flow constraints (`return` and `?`) owned by the lambda that produced them.
 return_constraints: std.ArrayListUnmanaged(ReturnConstraint),
+/// Operands of every early return, owned by the lambda that produced them. A
+/// lambda's result is its body tail *or* one of these, so the constructed-tag
+/// facts a payload closing rests on must see them too.
+return_value_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Stack of active lambda-owned return constraint ranges.
 return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 /// A map from one var to another. Used in instantiation and var copying
@@ -234,6 +238,10 @@ optional_field_accesses: std.ArrayList(OptionalFieldAccess),
 /// `literal_field_kind_watermark` tracks the swept prefix (REPL sessions
 /// finalize repeatedly on one Check).
 literal_field_kinds: std.ArrayList(LiteralFieldKind),
+/// Fresh record expressions registered while checking their construction.
+/// Settled equality classes distribute accepted omission decisions to every
+/// contributing literal; ordinary type unions carry no construction metadata.
+record_constructions: std.ArrayList(CIR.Expr.Idx),
 literal_field_kind_watermark: usize = 0,
 /// Update-field probes are committed at their owning generalization boundary
 /// so an unresolved scheme cannot change runtime field layout per caller.
@@ -2280,6 +2288,8 @@ const ReturnConstraintFrame = struct {
     lambda: CIR.Expr.Idx,
     /// Start of this lambda's deferred constraints in the shared scratch list.
     start: usize,
+    /// Start of this lambda's early-return operands in the shared scratch list.
+    returns_start: usize,
     /// The inferred body result that unannotated returns constrain after body checking.
     body_result: Var,
     /// The result supplied by an annotation or another explicit function expectation.
@@ -2571,6 +2581,7 @@ fn initAssumePrepared(
         .var_map = collections.DenseMap(Var, Var).init(gpa),
         .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .return_constraints = .empty,
+        .return_value_exprs = .empty,
         .return_constraint_frames = .empty,
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
@@ -2582,6 +2593,7 @@ fn initAssumePrepared(
         .pending_default_checks = .empty,
         .optional_field_accesses = .empty,
         .literal_field_kinds = .empty,
+        .record_constructions = .empty,
         .pending_record_updates = .empty,
         .pending_record_destructs = .empty,
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
@@ -2777,6 +2789,7 @@ pub fn deinit(self: *Self) void {
     self.var_map.deinit();
     self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
+    self.return_value_exprs.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.var_set.deinit();
     self.inspect_type_visits.deinit();
@@ -2788,6 +2801,7 @@ pub fn deinit(self: *Self) void {
     self.pending_default_checks.deinit(self.gpa);
     self.optional_field_accesses.deinit(self.gpa);
     self.literal_field_kinds.deinit(self.gpa);
+    self.record_constructions.deinit(self.gpa);
     self.pending_record_updates.deinit(self.gpa);
     self.pending_record_destructs.deinit(self.gpa);
     self.pending_default_seen.deinit(self.gpa);
@@ -4955,18 +4969,8 @@ fn recordAbsorbedDefaults(self: *Self, construction_var: ?Var, a: Var, b: Var) s
         const expr = mb_expr orelse
             std.debug.panic("type checker invariant violated: defaulted-field width absorption lost its source record construction", .{});
 
-        var already_recorded = false;
-        for (self.cir.record_omitted_defaults.items.items) |existing| {
-            if (existing.expr == expr and existing.field_name == absorbed.name and
-                existing.origin_module == absorbed.default.origin_module and
-                existing.default_expr_node == absorbed.default.expr_node)
-            {
-                already_recorded = true;
-                break;
-            }
-        }
-        if (already_recorded) continue;
-
+        // Settlement coalesces equal decisions before distributing them to
+        // constructions. Recording an event must not scan the module's prefix.
         _ = try self.cir.record_omitted_defaults.append(self.cir.gpa, .{
             .expr = expr,
             .field_name = absorbed.name,
@@ -7983,7 +7987,7 @@ fn checkNumeralLiteral(
 
     _ = try self.unify(occurrence_var, flex_var, env);
     if (occurrence == .pattern) {
-        try self.mkPatternLiteralEqConstraint(occurrence_var, env, region);
+        try self.mkPatternLiteralEqConstraint(node_idx, occurrence_var, env, region);
     }
 }
 
@@ -10360,7 +10364,7 @@ fn constraintSourceExpr(
             return @enumFromInt(plan.node_idx);
         }
         if (pattern_failure_expr == null) {
-            if (plan.patternFailureOwner()) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
+            if (plan.patternFailureOwner(&self.cir.store)) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
         }
     }
     return pattern_failure_expr;
@@ -10500,7 +10504,7 @@ fn literalPatternFailureExprForConstraint(
         if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-        const raw = plan.patternFailureOwner() orelse continue;
+        const raw = plan.patternFailureOwner(&self.cir.store) orelse continue;
         return self.literalFailureOwnerExpr(@enumFromInt(raw));
     }
     return null;
@@ -10530,7 +10534,7 @@ fn poisonLiteralFailureOwners(
             const owner: CIR.Node.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
                 @enumFromInt(plan.node_idx)
             else
-                @enumFromInt(plan.patternFailureOwner() orelse continue);
+                @enumFromInt(plan.patternFailureOwner(&self.cir.store) orelse continue);
             var already_recorded = false;
             for (owners.items) |recorded| {
                 if (recorded == owner) {
@@ -11938,14 +11942,16 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
         .err, .field_presence => .pure,
         .flex, .rigid => .unresolved,
         .structure => |flat| switch (flat) {
-            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                var result: FunctionEffectState = switch (flat) {
-                    .fn_pure => .pure,
-                    .fn_effectful => .effectful,
-                    .fn_unbound => if (func.effect_deps.len() == 0) .unresolved else .pure,
-                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
-                };
-                if (result == .effectful) break :blk result;
+            // A pure function type carries no effect dependencies: unifying an
+            // effect-polymorphic function with a pure one makes each
+            // dependency pure and discharges the formula.
+            .fn_pure => |func| blk: {
+                std.debug.assert(func.effect_deps.len() == 0);
+                break :blk .pure;
+            },
+            .fn_effectful => .effectful,
+            .fn_unbound => |func| blk: {
+                var result: FunctionEffectState = if (func.effect_deps.len() == 0) .unresolved else .pure;
 
                 var i: u32 = 0;
                 while (i < func.effect_deps.len()) : (i += 1) {
@@ -11974,6 +11980,9 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
 
 fn recordCurrentFunctionEffectDependency(self: *Self, function_var: Var) Allocator.Error!void {
     if (self.function_effect_dependency_frame_starts.items.len == 0) return;
+    // The unifier rewrites a dependency in place when a pure function type
+    // demands it, which needs the dependency to already have a function shape.
+    std.debug.assert(self.varIsFunctionType(function_var) or self.types.resolveVar(function_var).desc.content == .err);
     const root = self.types.resolveVar(function_var).var_;
     const start = self.function_effect_dependency_frame_starts.items[self.function_effect_dependency_frame_starts.items.len - 1];
     for (self.pending_function_effect_dependencies.items[start..]) |existing| {
@@ -14028,7 +14037,7 @@ fn runGroupBoundary(
         if (replayed_before_capture or replayed_after_capture) continue;
         if (self.pending_dispatch_targets.items.len == pending_before) break;
     }
-    try self.finalizeFunctionEffectsAtBoundary(roots, env);
+    try self.finalizeFunctionEffectsAtBoundary(roots);
     // Invariant D: every remaining deferred dispatch constraint targets a
     // checked def, an annotated scheme, or a still-flex receiver.
     std.debug.assert(self.pending_dispatch_targets.items.len == self.currentFramePendingTargetsTop());
@@ -14039,7 +14048,7 @@ fn runGroupBoundary(
 /// scheme generalizes. Unresolved results remain `fn_unbound` because their
 /// dependency formula is part of the generalized scheme and will be resolved
 /// after call-site arguments instantiate and unify it.
-fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
+fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot) Allocator.Error!void {
     for (roots) |root| {
         const resolved = self.types.resolveVar(root.interface);
         const flat = switch (resolved.desc.content) {
@@ -14049,15 +14058,9 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot, e
         if (try self.functionEffectState(resolved.var_) != .effectful) continue;
         switch (flat) {
             .fn_unbound => |func| try self.types.setVarContent(resolved.var_, .{ .structure = .{ .fn_effectful = func } }),
-            .fn_pure => |func| {
-                // The body was still effect-polymorphic when it met a pure
-                // annotation, but a dependency became positive later in this
-                // recursive group. Re-run ordinary effect unification now so
-                // the annotation mismatch is reported instead of mutating the
-                // annotated type behind the user's back.
-                const effectful = try self.freshFromContent(.{ .structure = .{ .fn_effectful = func } }, env, self.getRegionAt(resolved.var_));
-                _ = try self.unifyInContext(resolved.var_, effectful, env, .type_annotation);
-            },
+            // A pure function type has no effect dependencies, so its effect
+            // state is always pure.
+            .fn_pure => unreachable,
             .fn_effectful => {},
             .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => continue,
         }
@@ -16937,7 +16940,7 @@ fn checkPatternHelp(
                 env,
             );
             _ = try self.unify(pattern_var, flex_var, env);
-            try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
+            try self.mkPatternLiteralEqConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, env, pattern_region);
         },
         .str_interpolation => |str| {
             const str_var = try self.freshStr(env, pattern_region);
@@ -18693,6 +18696,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 // Then unify with the actual expression
                 _ = try self.unify(record_being_updated_var, expr_var, env);
             } else {
+                try self.record_constructions.append(self.gpa, expr_idx);
                 const source_fields = self.cir.store.sliceRecordFields(e.fields);
 
                 // Build a record skeleton with one payload slot per supplied
@@ -18833,6 +18837,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_empty_record => {
+            try self.record_constructions.append(self.gpa, expr_idx);
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         // tags //
@@ -19504,7 +19509,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
 
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, lambda_body_expected.withBranchResult(expected_func.ret));
-                try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
+                try self.closeAbsentConstructedPayloadVarsForLambda(expr_idx, lambda.body, body_var);
                 const body_result = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
                 if (body_result.isProblem()) {
                     // Preserve platform unification's exact relation, and refine
@@ -19520,7 +19525,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 break :blk lambda_body_does_fx;
             } else blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, lambda_body_expected);
-                try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
+                try self.closeAbsentConstructedPayloadVarsForLambda(expr_idx, lambda.body, body_var);
                 break :blk lambda_body_does_fx;
             };
 
@@ -19984,7 +19989,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         .optional => .optional,
                     },
                 } }, .construction);
-                if (access_result.isProblem()) {
+                // Suppression preserves the receiver's original diagnostic,
+                // but establishes no record relation or field value type.
+                if (!access_result.isEstablished()) {
                     try self.markErroneous(expr_var);
                     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
                     access_failed = true;
@@ -20392,6 +20399,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 .return_expr => .return_expr,
                 .try_suffix => .try_suffix,
             };
+            try self.recordReturnValueExpr(ret.lambda, ret.expr);
 
             if (expected_return) |annotated_return| {
                 if (return_kind == .try_suffix) {
@@ -21299,6 +21307,39 @@ fn collectKnownEmptyPayloadVarsForExpr(
     return true;
 }
 
+/// Close the payload of every tag this lambda's result can never carry. A
+/// lambda returns its body's tail *or* one of its early-return operands, so
+/// both supply the constructed-tag facts. `?` desugars to an early return, and
+/// without its operand the `Err` it returns would look impossible here.
+fn closeAbsentConstructedPayloadVarsForLambda(
+    self: *Self,
+    lambda_idx: CIR.Expr.Idx,
+    body_expr: CIR.Expr.Idx,
+    target_var: Var,
+) Allocator.Error!void {
+    std.debug.assert(self.return_constraint_frames.items.len > 0);
+    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
+    std.debug.assert(frame.lambda == lambda_idx);
+
+    self.collected_constructed_tags.clearRetainingCapacity();
+    if (!try self.collectConstructedTagsForExpr(body_expr, &self.collected_constructed_tags)) return;
+    for (self.return_value_exprs.items[frame.returns_start..]) |return_expr| {
+        if (!try self.collectConstructedTagsForExpr(return_expr, &self.collected_constructed_tags)) return;
+    }
+    if (self.collected_constructed_tags.items.len == 0) return;
+
+    self.payload_vars_to_close.clearRetainingCapacity();
+    try self.collectAbsentCtorPayloadBlockers(
+        target_var,
+        self.collected_constructed_tags.items,
+        &self.payload_vars_to_close,
+    );
+
+    for (self.payload_vars_to_close.items) |payload_var| {
+        try self.closePayloadVarToEmpty(payload_var);
+    }
+}
+
 fn closeAbsentConstructedPayloadVars(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -21891,6 +21932,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const expected_return = self.expectedReturnResultFor(ret.lambda);
                 const return_expected = expected.forReturnValue(expected_return);
                 does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
+                try self.recordReturnValueExpr(ret.lambda, ret.expr);
 
                 if (expected_return) |annotated_return| {
                     try self.checkReturnRelation(annotated_return, ret.expr, .early_return, env);
@@ -23279,7 +23321,7 @@ fn checkBinopExpr(
             const ret_var = lhs_var;
 
             // Create the binop static dispatch function: lhs.method(rhs) -> lhs
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 lhs_var,
                 rhs_var,
                 ret_var,
@@ -23330,7 +23372,7 @@ fn checkBinopExpr(
             const arg_var = rhs_var;
 
             // Create the binop constraint with unified arg type
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
                 ret_var,
@@ -23387,7 +23429,7 @@ fn checkBinopExpr(
             const ret_var = try self.mkRangeVar(arg_var, env, expr_region);
 
             // Create the binop static dispatch function: bound.method(bound) -> Range(bound)
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
                 ret_var,
@@ -23413,7 +23455,7 @@ fn checkBinopExpr(
             }
 
             const eq_ret_var = try self.freshBool(env, expr_region);
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 rhs_var,
                 rhs_var,
                 eq_ret_var,
@@ -23456,7 +23498,7 @@ fn checkBinopExpr(
             const eq_ret_var = try self.freshBool(env, expr_region);
 
             // Create the eq static dispatch function: arg.is_eq(arg) -> Bool
-            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
+            _ = try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
 
             // Get the not method + ret var
             const not_method_name = self.cir.idents.not;
@@ -23663,12 +23705,14 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
 /// pattern compares the scrutinee against the literal's converted value.
 fn mkPatternLiteralEqConstraint(
     self: *Self,
+    node: CIR.Node.Idx,
     pattern_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
     const ret_var = try self.freshBool(env, region);
-    try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+    const fn_var = try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+    self.cir.store.recordLiteralPatternEquality(node, fn_var);
 }
 
 fn mkBinopConstraint(
@@ -23681,7 +23725,7 @@ fn mkBinopConstraint(
     env: *Env,
     region: Region,
     binop_expr_idx: ?CIR.Expr.Idx,
-) Allocator.Error!void {
+) Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -23717,6 +23761,7 @@ fn mkBinopConstraint(
     _ = try self.unify(constrained_var, lhs_var, env);
     try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint));
+    return constraint_fn_var;
 }
 
 fn publishBinopDispatchExpr(
@@ -25305,6 +25350,7 @@ const Probe = struct {
     pending_generated_parser_error_mappings_len: usize,
     rejected_static_dispatches_len: usize,
     record_omitted_defaults_len: usize,
+    record_constructions_len: usize,
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
@@ -25350,6 +25396,7 @@ const Probe = struct {
         // on descriptors the savepoint rollback above already restored.
         self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
         self.check.cir.record_omitted_defaults.items.shrinkRetainingCapacity(self.record_omitted_defaults_len);
+        self.check.record_constructions.shrinkRetainingCapacity(self.record_constructions_len);
         // Constructor relations recorded during the probe name the operand var
         // and the backing content the savepoint rollback just discarded.
         self.check.accepted_nominal_constructor_backings.shrinkRetainingCapacity(self.accepted_nominal_constructor_backings_len);
@@ -25430,6 +25477,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .pending_generated_parser_error_mappings_len = pending_generated_parser_error_mappings_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
         .record_omitted_defaults_len = record_omitted_defaults_len,
+        .record_constructions_len = self.record_constructions.items.len,
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
@@ -25883,6 +25931,88 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // defaulting rounds and constraint validation settle the types.
 }
 
+/// An accepted omission belongs to every fresh construction of the unified
+/// record that did not supply that field. Preserve the unifier's exact default
+/// identity even if later value relations normalize its field kind to required.
+/// This pass consumes registered constructions and accepted decisions only;
+/// it never discovers defaults by reopening nominal declarations or rows.
+fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
+    const entries = self.cir.record_omitted_defaults.items.items;
+    if (entries.len == 0) return;
+
+    const Decision = struct {
+        root: Var,
+        omission: ModuleEnv.RecordOmittedDefault,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            if (a.root != b.root) return @intFromEnum(a.root) < @intFromEnum(b.root);
+            if (a.omission.field_name != b.omission.field_name)
+                return @as(u32, @bitCast(a.omission.field_name)) < @as(u32, @bitCast(b.omission.field_name));
+            if (a.omission.origin_module != b.omission.origin_module)
+                return @intFromEnum(a.omission.origin_module) < @intFromEnum(b.omission.origin_module);
+            return a.omission.default_expr_node < b.omission.default_expr_node;
+        }
+    };
+    const decisions = try self.gpa.alloc(Decision, entries.len);
+    defer self.gpa.free(decisions);
+    for (entries, decisions) |entry, *decision| {
+        decision.* = .{
+            .root = self.types.resolveVar(ModuleEnv.varFrom(entry.expr)).var_,
+            .omission = entry,
+        };
+    }
+    std.mem.sort(Decision, decisions, {}, Decision.lessThan);
+
+    // Index only classes with accepted defaults. Identical decisions from
+    // already-guided sibling literals are visited once per construction.
+    const Range = struct { start: usize, end: usize };
+    var by_root = collections.DenseMap(Var, Range).init(self.gpa);
+    defer by_root.deinit();
+    var unique_len: usize = 0;
+    for (decisions) |decision| {
+        if (unique_len > 0 and !Decision.lessThan({}, decisions[unique_len - 1], decision)) continue;
+        decisions[unique_len] = decision;
+        const group = try by_root.getOrPut(decision.root);
+        if (!group.found_existing) group.value_ptr.* = .{ .start = unique_len, .end = unique_len };
+        unique_len += 1;
+        group.value_ptr.end = unique_len;
+    }
+
+    var emitted = collections.DenseMap(CIR.Expr.Idx, void).init(self.gpa);
+    defer emitted.deinit();
+    var output = try ModuleEnv.RecordOmittedDefault.SafeList.initCapacity(self.cir.gpa, @intCast(entries.len));
+    errdefer output.deinit(self.cir.gpa);
+    for (self.record_constructions.items) |expr_idx| {
+        if (self.hoistExprInvalidated(expr_idx) or self.erroneous_value_exprs.contains(expr_idx)) continue;
+        const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        if (resolved.desc.content == .err) continue;
+        const group = by_root.get(resolved.var_) orelse continue;
+        const seen = try emitted.getOrPut(expr_idx);
+        if (seen.found_existing) continue;
+        const expr = self.cir.store.getExpr(expr_idx);
+        const supplied_fields = fields: {
+            if (expr == .e_empty_record) break :fields &.{};
+            std.debug.assert(expr == .e_record and expr.e_record.ext == null);
+            break :fields self.cir.store.sliceRecordFields(expr.e_record.fields);
+        };
+        for (decisions[group.start..group.end]) |decision| {
+            const supplied = supplied: {
+                for (supplied_fields) |field_idx| {
+                    if (self.cir.store.getRecordField(field_idx).name == decision.omission.field_name)
+                        break :supplied true;
+                }
+                break :supplied false;
+            };
+            if (supplied) continue;
+            var omission = decision.omission;
+            omission.expr = expr_idx;
+            _ = try output.append(self.cir.gpa, omission);
+        }
+    }
+    self.cir.record_omitted_defaults.deinit(self.cir.gpa);
+    self.cir.record_omitted_defaults = output;
+}
+
 /// Post-settlement cycle residue on defaults (design.md "Defaulted Fields"):
 /// canonicalization's end-of-module pass already rejected every
 /// name-resolvable materialization cycle (and dropped those defaults, so
@@ -25893,6 +26023,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// defaults materialize per specialization, so a parametric field lowers its
 /// default at each site's monotype.)
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
+    try self.distributeRecordOmittedDefaults();
     // Every judgment and retirement below is per pending default, so a
     // module with none has nothing to build or sweep: gating here keeps the
     // evidence indexes (and `dispatch_scheme_uses`' loud release-mode
@@ -29580,6 +29711,7 @@ fn pushReturnConstraintFrame(
     try self.return_constraint_frames.append(self.gpa, .{
         .lambda = lambda_idx,
         .start = self.return_constraints.items.len,
+        .returns_start = self.return_value_exprs.items.len,
         .body_result = body_result,
         .expected_result = expected_result,
     });
@@ -29603,7 +29735,21 @@ fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
     const frame = self.return_constraint_frames.items[frame_idx];
     std.debug.assert(frame.lambda == lambda_idx);
     self.return_constraints.shrinkRetainingCapacity(frame.start);
+    self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
     self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
+}
+
+/// Record one early-return operand for the lambda that owns it. Every return
+/// is recorded, including the ones whose relation is checked immediately, so
+/// that the lambda's constructed-tag facts stay complete.
+fn recordReturnValueExpr(
+    self: *Self,
+    lambda_idx: CIR.Expr.Idx,
+    actual_expr: CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    std.debug.assert(self.return_constraint_frames.items.len > 0);
+    std.debug.assert(self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].lambda == lambda_idx);
+    try self.return_value_exprs.append(self.gpa, actual_expr);
 }
 
 fn appendReturnConstraint(
@@ -29968,6 +30114,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     }
 
     self.return_constraints.shrinkRetainingCapacity(frame.start);
+    self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
     self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
 }
 
@@ -34470,7 +34617,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         };
         self.cir.finalizeLiteralDispatchResolution(@enumFromInt(plan.node_idx), resolution);
         if (resolution == .checked_error) {
-            if (plan.patternFailureOwner()) |owner| {
+            if (plan.patternFailureOwner(&self.cir.store)) |owner| {
                 try failed_pattern_owners.append(self.gpa, @enumFromInt(owner));
             }
         }
@@ -34513,12 +34660,12 @@ test "literal pattern recovery retires all discarded parameter evidence" {
     // No detached parameter plan may survive even though its raw pattern node
     // still exists in the append-only CIR store.
     for (test_env.module_env.store.literalDispatchPlans()) |plan| {
-        try std.testing.expect(plan.patternFailureOwner() == null);
+        try std.testing.expect(plan.patternFailureOwner(&test_env.module_env.store) == null);
         try std.testing.expect(plan.dispatchResolution() == .builtin_direct);
     }
     var retired_patterns: usize = 0;
     for (test_env.checker.retired_literal_dispatch_plans.items) |plan| {
-        if (plan.patternFailureOwner() != null) retired_patterns += 1;
+        if (plan.patternFailureOwner(&test_env.module_env.store) != null) retired_patterns += 1;
     }
     try std.testing.expectEqual(@as(usize, 3), retired_patterns);
 }
@@ -34539,7 +34686,7 @@ test "literal pattern recovery preserves a generalized definition after a reject
     try test_env.assertDefTypeOptions("good", "Bool", .{ .allow_type_errors = true });
     var found_generalized_pattern = false;
     for (test_env.module_env.store.literalDispatchPlans()) |plan| {
-        if (plan.patternFailureOwner() == null) continue;
+        if (plan.patternFailureOwner(&test_env.module_env.store) == null) continue;
         try std.testing.expectEqual(LiteralDispatchPlan.Resolution.specialization_dispatch, plan.dispatchResolution());
         found_generalized_pattern = true;
     }
@@ -37289,14 +37436,18 @@ fn validateParseFormatMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
+    // ParseTagUnionSpec executes compiler-generated payload parsers at this
+    // contract's row. Its format callable therefore depends on the enclosing
+    // error row, unlike first-order methods with no generated payload parser.
+    const child_err_var = if (spec_decl == .tag_union) err_var else try self.fresh(env, region);
     const expected_ret = switch (spec_decl) {
-        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, err_var, env, region),
-        .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
-        .list_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Item", "Done", env, region),
-        .list_after_item => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
-        .list_start, .record_start => try self.freshParseCountedStartTryVar(state_var, err_var, env, region),
-        .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
-        .record_after_field => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, child_err_var, env, region),
+        .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, child_err_var), env, region),
+        .list_next => try self.freshParseArrayEventTryVar(state_var, child_err_var, "Item", "Done", env, region),
+        .list_after_item => try self.freshParseArrayEventTryVar(state_var, child_err_var, "Continue", "Done", env, region),
+        .list_start, .record_start => try self.freshParseCountedStartTryVar(state_var, child_err_var, env, region),
+        .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, child_err_var, env, region),
+        .record_after_field => try self.freshParseArrayEventTryVar(state_var, child_err_var, "Continue", "Done", env, region),
     };
     const expected_fn = switch (spec_decl) {
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_after_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
@@ -37327,6 +37478,11 @@ fn validateParseFormatMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    if (spec_decl != .tag_union) switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    };
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
 }
 
@@ -37410,22 +37566,22 @@ fn validateDerivedParseDictMethods(
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     const start_ret = try self.freshParseCountedStartTryVar(state_var, err_var, env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_start", start_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_start", start_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
     const next_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Entry", "Done", env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_next", next_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_next", next_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
     const after_key_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_after_key", after_key_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_after_key", after_key_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
     const after_entry_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region);
-    switch (try self.validateDictProtocolMethod(dict_var, encoding_var, state_var, "parse_dict_after_entry", after_entry_ret, constraint, env, region, failure_expr)) {
+    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_after_entry", after_entry_ret, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
@@ -37434,6 +37590,7 @@ fn validateDerivedParseDictMethods(
 
 fn validateDictProtocolMethod(
     self: *Self,
+    comptime kind: ModuleEnv.GeneratedCodecDerivation.Kind,
     subject_var: Var,
     encoding_var: Var,
     state_var: Var,
@@ -37448,7 +37605,11 @@ fn validateDictProtocolMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
+    const parent_result = self.tryArgsFromVar(expected_ret).?;
+    const is_parser = kind == .parser;
+    const child_err_var = if (is_parser) try self.fresh(env, region) else parent_result.err;
+    const child_ret = if (is_parser) try self.freshFromContent(try self.mkTryContent(parent_result.ok, child_err_var), env, region) else expected_ret;
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, child_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -37456,6 +37617,11 @@ fn validateDictProtocolMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    if (is_parser) switch (try self.constrainDerivedParserFormatError(parent_result.err, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    };
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
 }
 
@@ -37475,7 +37641,8 @@ fn validateParseKeyMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
-    const expected_ret = try self.freshParseResultTryVar(key_var, state_var, err_var, env, region);
+    const child_err_var = try self.fresh(env, region);
+    const expected_ret = try self.freshParseResultTryVar(key_var, state_var, child_err_var, env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
@@ -37484,6 +37651,11 @@ fn validateParseKeyMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    }
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, key_var);
 }
 
@@ -37529,6 +37701,41 @@ fn constrainDerivedParserRequiredFieldError(
     return if (result.isEstablished()) .ok else .reported_error;
 }
 
+/// Format errors need not be tag rows (for example a format may return Str).
+/// Non-row errors retain ordinary equality. Row composition is the declared
+/// relation only for a tag row or an unconstrained absent-error variable.
+fn constrainDerivedParserFormatError(
+    self: *Self,
+    parent: Var,
+    child: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    var current = child;
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |structure| switch (structure) {
+                .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region),
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
+            },
+            .flex => |flex| if (flex.constraints.len() == 0) {
+                return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region);
+            },
+            .rigid, .field_presence => {},
+            .err => return .ok,
+        }
+        const result = try self.unify(parent, child, env);
+        return if (result.isEstablished()) .ok else .reported_error;
+    }
+}
+
+/// Compose one declared parser's complete error row in one unification. Tag
+/// payload ranges already belong to the type store; copying their Var slices
+/// would duplicate storage without changing the shared-payload relation.
 fn constrainDerivedParserErrorRowIncludes(
     self: *Self,
     parent_err_var: Var,
@@ -37536,49 +37743,51 @@ fn constrainDerivedParserErrorRowIncludes(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const resolved = self.types.resolveVar(child_err_var);
-    return switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .empty_tag_union => .ok,
-            .tag_union => |tag_union| blk: {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const copied_tags = try self.gpa.alloc(types_mod.Tag, tags.len);
-                defer self.gpa.free(copied_tags);
-                for (copied_tags, tags.items(.name), tags.items(.args)) |*copied, name, args| {
-                    copied.* = .{ .name = name, .args = args };
-                }
-
-                for (copied_tags) |child_tag| {
-                    const payload_vars = try self.gpa.dupe(Var, self.types.sliceVars(child_tag.args));
-                    defer self.gpa.free(payload_vars);
-                    const required_tag = try self.types.mkTag(child_tag.name, payload_vars);
-                    const parent_ext = try self.fresh(env, region);
-                    const required_parent = try self.freshFromContent(try self.types.mkTagUnion(&.{required_tag}, parent_ext), env, region);
-                    const result = try self.unify(parent_err_var, required_parent, env);
-                    if (!result.isEstablished()) break :blk .reported_error;
-                }
-
-                break :blk try self.constrainDerivedParserErrorRowIncludes(parent_err_var, tag_union.ext, env, region);
+    const mark = self.scratch_tags.top();
+    defer self.scratch_tags.clearFrom(mark);
+    var current = child_err_var;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .empty_tag_union => {
+                    // Inclusion commits the instantiated child's absent-error
+                    // proof. Publication must retain a closed row here, not a
+                    // default awaiting a relation to the parent's wider row.
+                    if (resolved.desc.flags.empty_tag_union_is_default) {
+                        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+                        const result = try self.unify(resolved.var_, empty, env);
+                        if (!result.isEstablished()) return .reported_error;
+                    }
+                    break;
+                },
+                .tag_union => |row| {
+                    const tags = self.types.getTagsSlice(row.tags);
+                    for (tags.items(.name), tags.items(.args)) |name, args| {
+                        try self.scratch_tags.append(.{ .name = name, .args = args });
+                    }
+                    current = row.ext;
+                },
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return .unsupported,
             },
-            .record,
-            .record_unbound,
-            .tuple,
-            .nominal_type,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            => .unsupported,
-        },
-        .alias => |alias| try self.constrainDerivedParserErrorRowIncludes(parent_err_var, self.types.getAliasBackingVar(alias), env, region),
-        .flex => blk: {
-            const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-            const result = try self.unify(resolved.var_, empty, env);
-            break :blk if (result.isEstablished()) .ok else .reported_error;
-        },
-        .rigid, .field_presence => .unsupported,
-        .err => .ok,
-    };
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .flex => |flex| {
+                if (flex.constraints.len() != 0) return .unsupported;
+                const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+                const result = try self.unify(resolved.var_, empty, env);
+                if (!result.isEstablished()) return .reported_error;
+                break;
+            },
+            .rigid, .field_presence => return .unsupported,
+            .err => return .ok,
+        }
+    }
+    const tags = self.scratch_tags.sliceFromStart(mark);
+    if (tags.len == 0) return .ok;
+    const parent_ext = try self.fresh(env, region);
+    const required_parent = try self.freshFromContent(try self.types.mkTagUnion(tags, parent_ext), env, region);
+    const result = try self.unify(parent_err_var, required_parent, env);
+    return if (result.isEstablished()) .ok else .reported_error;
 }
 
 fn validateInvalidValueMethod(
@@ -37663,7 +37872,8 @@ fn validateSkipRecordFieldMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
-    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+    const child_err_var = try self.fresh(env, region);
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, child_err_var), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
@@ -37672,6 +37882,11 @@ fn validateSkipRecordFieldMethod(
             .method_name = method_name,
         },
     });
+    if (!result.isEstablished()) return .reported_error;
+    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |validation| return validation,
+    }
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
 }
 
@@ -38484,7 +38699,7 @@ fn validateDerivedParseNominal(
             // format whose key position only holds strings does not implement
             // it, so such a key is rejected there rather than by a rule in the
             // compiler that every format has to share.
-            switch (try self.validateDictProtocolMethod(args.key, encoding_var, state_var, "parse_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, failure_expr)) {
+            switch (try self.validateDictProtocolMethod(.parser, args.key, encoding_var, state_var, "parse_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, failure_expr)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
@@ -39206,7 +39421,7 @@ fn validateDerivedEncodeNominal(
         } else {
             // Mirrors the parse side: `encode_key_start` is what admits a key
             // the format cannot render as a key string.
-            switch (try self.validateDictProtocolMethod(args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null)) {
+            switch (try self.validateDictProtocolMethod(.encoder, args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }

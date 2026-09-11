@@ -703,6 +703,33 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 
+    /// Explain why a parsed root cannot supply an executable entrypoint.
+    /// Shared by root preparation and canonicalization diagnostic rendering.
+    pub fn buildExecutionRequiresAppOrDefaultAppReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) Allocator.Error!Report {
+        var report = try Report.init(allocator, "Execution Requires App Or Default App", "This file cannot be executed because it is not an app or default-app module.", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addReflowingText("Add either:");
+        try report.document.addLineBreak();
+        try report.document.addInlineCode("app");
+        try report.document.addReflowingText(" header at the top of the file");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("or:");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("a ");
+        try report.document.addInlineCode("main!");
+        try report.document.addReflowingText(" function with 1 argument (for default-app)");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(region_info, .error_highlight, filename, source, line_starts);
+        return report;
+    }
+
     /// Build a report for "exposed but not implemented" diagnostic
     pub fn buildExposedButNotImplementedReport(
         allocator: Allocator,

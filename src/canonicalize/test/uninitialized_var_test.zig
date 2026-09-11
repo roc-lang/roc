@@ -32,3 +32,37 @@ test "uninitialized var read becomes runtime error expression" {
     try testing.expectEqual(.read_uninitialized_var, std.meta.activeTag(diag));
     try testing.expectEqualStrings("$value", test_env.getIdent(diag.read_uninitialized_var.ident));
 }
+
+test "write occurrences retain each destructured target and exclude fresh binders" {
+    const source =
+        \\{
+        \\    var $x = 0
+        \\    var $y
+        \\    $y = 1
+        \\    (a, var $x, var $z) = (1, $x + 1, 2)
+        \\    { value: var $x, extra: b } = { value: $x + a, extra: $z }
+        \\    ($x, c) = ($x + b, 3)
+        \\    $x + $y + c
+        \\}
+    ;
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+    const result = try test_env.canonicalizeExpr() orelse unreachable;
+    try testing.expect(!test_env.hasParseErrors());
+    const store = &test_env.module_env.store;
+    const block = store.getExpr(result.get_idx()).e_block;
+    const statements = store.sliceStatements(block.stmts);
+    const x = store.getStatement(statements[0]).s_var.pattern_idx;
+    const y = store.getStatement(statements[1]).s_var_uninitialized.pattern_idx;
+    const writes = store.write_occurrences.items.items;
+    try testing.expectEqual(@as(usize, 4), writes.len);
+    try testing.expectEqual(y, writes[0].pattern_idx);
+    try testing.expectEqualStrings("$y", source[writes[0].start..writes[0].end]);
+    for (writes[1..]) |write| {
+        try testing.expectEqual(x, write.pattern_idx);
+        try testing.expectEqualStrings("$x", source[write.start..write.end]);
+        try testing.expect(write.start > store.getPatternRegion(x).end.offset);
+    }
+    try testing.expect(writes[1].start < writes[2].start);
+    try testing.expect(writes[2].start < writes[3].start);
+}

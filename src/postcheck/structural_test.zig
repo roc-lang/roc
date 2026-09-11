@@ -106,7 +106,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
 
     try expectContains(lower_call, "if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {");
-    try expectContains(lower_call, "var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
+    try expectContains(lower_call, "const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
@@ -722,9 +722,13 @@ test "Monotype indirect calls retain graph-native function provenance" {
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret)");
     try expectNotContains(lower_source, "instantiateCallTypeFromCallerAtType");
 
-    const direct_prepare = std.mem.find(u8, call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)").?;
+    const direct_prepare = std.mem.find(u8, call_source, "try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args)").?;
     const direct_specialize = std.mem.find(u8, call_source, "const callee = try self.fnTemplateForDirectCallAtNode").?;
     try std.testing.expect(direct_prepare < direct_specialize);
+    const direct_complete = std.mem.find(u8, call_source, "try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node)").?;
+    try std.testing.expect(direct_prepare < direct_complete);
+    const prepare_source = sourceSliceBetween(lower_source, "fn prepareDirectCallArgsAtNodes(", "fn completedDirectCalleeAtNode(");
+    try expectContains(prepare_source, "try self.prepareExprSpanAtNodes(checked_args, arg_nodes)");
 }
 
 test "Monotype open specialization lookup covers the complete function interface" {
