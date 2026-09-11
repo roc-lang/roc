@@ -507,6 +507,130 @@ test "the lazy matchfinder's search proves every chain read against its entry gu
     try std.testing.expectEqual(@as(usize, 4), search_shape.is_lt);
 }
 
+const real_skip =
+    "State : { hash_tab : List(I16), in_cur_base : U64, next_hash : U64 }\n" ++
+    "required_nbytes : U64\n" ++
+    "required_nbytes = 5\n" ++
+    "table_size : U64\n" ++
+    "table_size = 65536\n" ++
+    "hash_order : U64\n" ++
+    "hash_order = 15\n" ++
+    "lz_hash : U32, U64 -> U64\n" ++
+    "lz_hash = |seq, num_bits|\n" ++
+    "    seq.times_wrap(0x1E35A7BD).shr_zf_wrap((32 - num_bits).to_u8_wrap()).to_u64()\n" ++
+    "rebase : List(I16) -> Try(List(I16), [CompressBug])\n" ++
+    "rebase = |table0| {\n" ++
+    "    var $table = table0\n" ++
+    "    n = List.len($table)\n" ++
+    "    var $i = 0.U64\n" ++
+    "    while $i < n {\n" ++
+    "        v = List.get($table, $i) ?? 0\n" ++
+    "        slid = (-32768).bitwise_or(v.bitwise_and(v.shr_wrap(15).bitwise_not()))\n" ++
+    "        $table = match List.set($table, $i, slid) {\n" ++
+    "            Ok(next) => next\n" ++
+    "            Err(_) => return Err(CompressBug)\n" ++
+    "        }\n" ++
+    "        $i = $i + 1\n" ++
+    "    }\n" ++
+    "    Ok($table)\n" ++
+    "}\n" ++
+    "skip_bytes : List(I16), U64, U64, List(U8), U64, U64, U64 -> Try(State, [CompressBug])\n" ++
+    "skip_bytes = |tab_0, base_0, hash_0, input, in_next0, in_end, count| {\n" ++
+    "    # The run ends at `end`, and every hash read the loop makes lies within\n" ++
+    "    # `required_nbytes` of it. Bounding the run against the input's length\n" ++
+    "    # here, and the bucket table's size once after any slide, lets the\n" ++
+    "    # range prover discharge the bounds test on every read and bucket\n" ++
+    "    # access in the loop, so each byte pays only for the work itself.\n" ++
+    "    end = in_next0 + count\n" ++
+    "    if end + required_nbytes > in_end {\n" ++
+    "        Ok({ hash_tab: tab_0, in_cur_base: base_0, next_hash: hash_0 })\n" ++
+    "    } else if in_end > List.len(input) {\n" ++
+    "        Err(CompressBug)\n" ++
+    "    } else {\n" ++
+    "        var $tab = tab_0\n" ++
+    "        var $base = base_0\n" ++
+    "        var $in_next = in_next0\n" ++
+    "        var $cur_pos = ($in_next - base_0).to_i64_wrap()\n" ++
+    "        # One slide covers the whole run, since it is bounded by a window.\n" ++
+    "        if $cur_pos + count.to_i64_wrap() - 1 >= 32768.to_i64_wrap() {\n" ++
+    "            $tab = rebase($tab)?\n" ++
+    "            $base = $base + 32768\n" ++
+    "            $cur_pos = $cur_pos - 32768.to_i64_wrap()\n" ++
+    "        } else {\n" ++
+    "        }\n" ++
+    "        if List.len($tab) < table_size {\n" ++
+    "            return Err(CompressBug)\n" ++
+    "        } else {\n" ++
+    "        }\n" ++
+    "\n" ++
+    "        var $hash = hash_0\n" ++
+    "        while $in_next < end {\n" ++
+    "            slot0 = $hash.bitwise_and(0x7FFF) * 2\n" ++
+    "            first = List.get($tab, slot0) ?? 0\n" ++
+    "            tab1 = match List.set($tab, slot0 + 1, first) {\n" ++
+    "                Ok(next) => next\n" ++
+    "                Err(_) => return Err(CompressBug)\n" ++
+    "            }\n" ++
+    "            $tab = match List.set(tab1, slot0, $cur_pos.to_i16_wrap()) {\n" ++
+    "                Ok(next) => next\n" ++
+    "                Err(_) => return Err(CompressBug)\n" ++
+    "            }\n" ++
+    "\n" ++
+    "            $in_next = $in_next + 1\n" ++
+    "            $hash = lz_hash(U32.from_le_bytes(input, $in_next) ?? 0, hash_order)\n" ++
+    "            $cur_pos = $cur_pos.plus_wrap(1)\n" ++
+    "        }\n" ++
+    "        Ok({ hash_tab: $tab, in_cur_base: $base, next_hash: $hash })\n" ++
+    "    }\n" ++
+    "}\n" ++
+    "\n" ++
+    "main! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+    "main! = |_args| {\n" ++
+    "    r = skip_bytes([], 0, 3, Str.to_utf8(Str.join_with(_args, \",\")), 1, 90, 8) ?? { hash_tab: [], in_cur_base: 0, next_hash: 0 }\n" ++
+    "    echo!(Str.inspect(r.next_hash))\n" ++
+    "    Ok({})\n" ++
+    "}\n";
+
+const SkipShape = struct { found: bool = false, is_gt: usize = 0, is_lt: usize = 0, folded: usize = 0 };
+var skip_shape: SkipShape = .{};
+
+fn countSkipShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    skip_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") == 0 or std.mem.count(u8, text, "list_set") == 0) continue;
+        skip_shape = .{
+            .found = true,
+            .is_gt = std.mem.count(u8, text, "num_is_gt("),
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .folded = std.mem.count(u8, text, "tag v1 d1"),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== skip proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+// The bucket matchfinder's insert run: a cursor loop whose entry guards bound
+// the run against the input and the bucket table against its size. Its
+// hash read and three bucket accesses per byte all prove from those guards.
+test "the bucket insert run proves every table access and hash read against its entry guards" {
+    try harness.expectLirInspectionWithOptions(
+        real_skip,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countSkipShape,
+    );
+    try std.testing.expect(skip_shape.found);
+    // The two entry guards are the only `>` compares left; the loop
+    // conditions (the run's and the slide's) are the only `<` compares.
+    try std.testing.expectEqual(@as(usize, 2), skip_shape.is_gt);
+    try std.testing.expectEqual(@as(usize, 3), skip_shape.is_lt);
+}
+
 test "checked multiply is discharged from a masked range" {
     arithmetic_selection = .masked_mul;
     try harness.expectLirInspectionWithOptions(

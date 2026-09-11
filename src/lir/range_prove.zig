@@ -392,6 +392,10 @@ const Pass = struct {
     undo: std.ArrayList(Undo),
     len_terms: collections.DenseMap(NodeId, NodeId),
     assign_counts: collections.DenseMap(LocalId, u32),
+    /// Source local of every `ref.local` alias, so a stable term can name
+    /// the value a chain of single-assignment aliases denotes rather than
+    /// whichever alias first computed it.
+    alias_of: collections.DenseMap(LocalId, LocalId),
     pred_counts: collections.DenseMap(CFStmtId, u32),
     jump_counts: collections.DenseMap(JoinPointId, u32),
     join_stmts: collections.DenseMap(JoinPointId, CFStmtId),
@@ -468,6 +472,7 @@ const Pass = struct {
             .undo = .empty,
             .len_terms = collections.DenseMap(NodeId, NodeId).init(allocator),
             .assign_counts = collections.DenseMap(LocalId, u32).init(allocator),
+            .alias_of = collections.DenseMap(LocalId, LocalId).init(allocator),
             .pred_counts = collections.DenseMap(CFStmtId, u32).init(allocator),
             .jump_counts = collections.DenseMap(JoinPointId, u32).init(allocator),
             .join_stmts = collections.DenseMap(JoinPointId, CFStmtId).init(allocator),
@@ -513,6 +518,7 @@ const Pass = struct {
         self.undo.deinit(self.allocator);
         self.len_terms.deinit();
         self.assign_counts.deinit();
+        self.alias_of.deinit();
         self.pred_counts.deinit();
         self.jump_counts.deinit();
         self.join_stmts.deinit();
@@ -554,6 +560,7 @@ const Pass = struct {
         self.undo.clearRetainingCapacity();
         self.len_terms.clearRetainingCapacity();
         self.assign_counts.clearRetainingCapacity();
+        self.alias_of.clearRetainingCapacity();
         self.pred_counts.clearRetainingCapacity();
         self.jump_counts.clearRetainingCapacity();
         self.join_stmts.clearRetainingCapacity();
@@ -786,6 +793,20 @@ const Pass = struct {
         return (self.assign_counts.get(local) orelse 0) <= 1;
     }
 
+    /// The local a chain of single-assignment aliases denotes: lowering
+    /// binds one alias per use, so the same value is read through a
+    /// different local each time, and a stable term keyed by the alias
+    /// would never meet itself again.
+    fn stableLocalOf(self: *const Pass, local: LocalId) LocalId {
+        var current = local;
+        while (self.isSingleAssign(current)) {
+            const source = self.alias_of.get(current) orelse break;
+            if (!self.isSingleAssign(source)) break;
+            current = source;
+        }
+        return current;
+    }
+
     fn lookup(self: *const Pass, local: LocalId) ?Binding {
         if (self.isSingleAssign(local)) return self.global_env.get(local);
         return self.path_env.get(local);
@@ -793,6 +814,15 @@ const Pass = struct {
 
     fn bind(self: *Pass, local: LocalId, binding: Binding) ResourceError!void {
         if (self.isSingleAssign(local)) {
+            // A single-assignment integer local bound to a root names that
+            // root's value in round-stable form, wherever the root came
+            // from: a sum of two unrelated values or an unproven checked
+            // operation gets a fresh root just as an unbound read does, and
+            // facts about it must persist the same way.
+            if (trackedIntMax(self.localLayout(local)) != null and self.rootOf(binding.node) == binding.node) {
+                const entry = try self.value_roots.getOrPut(binding.node);
+                if (!entry.found_existing) entry.value_ptr.* = self.stableLocalOf(local);
+            }
             try self.global_env.put(local, binding);
             return;
         }
@@ -816,7 +846,7 @@ const Pass = struct {
         // fresh root for the whole round, so the root denotes the local's
         // value in round-stable form.
         if (trackedIntMax(self.localLayout(local)) != null and self.isSingleAssign(local)) {
-            try self.value_roots.put(node, local);
+            try self.value_roots.put(node, self.stableLocalOf(local));
         }
         try self.bind(local, .{ .node = node });
         return node;
@@ -827,7 +857,7 @@ const Pass = struct {
         // As in valueOf: a single-assignment integer local's fresh root
         // denotes its value in round-stable form.
         if (trackedIntMax(self.localLayout(local)) != null and self.isSingleAssign(local)) {
-            try self.value_roots.put(node, local);
+            try self.value_roots.put(node, self.stableLocalOf(local));
         }
         try self.bind(local, .{ .node = node });
     }
@@ -844,7 +874,7 @@ const Pass = struct {
         const node = (try self.unknownFor(self.localLayout(target))) orelse return self.bindFresh(target);
         try self.field_values.put(key, node);
         if (trackedIntMax(self.localLayout(target)) != null and self.isSingleAssign(target)) {
-            try self.value_roots.put(node, target);
+            try self.value_roots.put(node, self.stableLocalOf(target));
         }
         try self.bind(target, .{ .node = node });
     }
@@ -889,6 +919,7 @@ const Pass = struct {
                 },
                 .assign_ref => |s| {
                     try self.bumpAssign(s.target);
+                    if (s.op == .local) try self.alias_of.put(s.target, s.op.local);
                     try self.edgeTo(s.next);
                 },
                 .assign_literal => |s| {
@@ -1531,7 +1562,7 @@ const Pass = struct {
                 const fresh = (try self.freshRoot(0, std.math.maxInt(i64))) orelse return null;
                 try self.len_terms.put(root, fresh);
                 if (self.isSingleAssign(list_local)) {
-                    try self.len_roots.put(fresh, list_local);
+                    try self.len_roots.put(fresh, self.stableLocalOf(list_local));
                 }
                 return fresh;
             },
@@ -1809,7 +1840,7 @@ const Pass = struct {
                     const len_node = self.len_terms.get(root) orelse blk: {
                         const fresh = (try self.freshRoot(0, std.math.maxInt(i64))) orelse continue;
                         try self.len_terms.put(root, fresh);
-                        try self.len_roots.put(fresh, list_local);
+                        try self.len_roots.put(fresh, self.stableLocalOf(list_local));
                         break :blk fresh;
                     };
                     try self.addFact(.{ .a = node, .b = len_node, .c = bound.c, .origin = .meet });
@@ -1846,7 +1877,7 @@ const Pass = struct {
                         const fresh = (try self.freshRoot(0, std.math.maxInt(i64))) orelse break :blk null;
                         try self.len_terms.put(root, fresh);
                         if (self.isSingleAssign(list_local)) {
-                            try self.len_roots.put(fresh, list_local);
+                            try self.len_roots.put(fresh, self.stableLocalOf(list_local));
                         }
                         break :inner fresh;
                     };
@@ -2808,7 +2839,7 @@ const Pass = struct {
                         if (try self.freshRoot(0, std.math.maxInt(i64))) |len_node| {
                             try self.len_terms.put(root, len_node);
                             if (self.isSingleAssign(list_local)) {
-                                try self.len_roots.put(len_node, list_local);
+                                try self.len_roots.put(len_node, self.stableLocalOf(list_local));
                             }
                             try self.bind(s.target, .{ .node = len_node });
                             return;
