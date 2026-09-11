@@ -267,6 +267,7 @@ pub fn initWithAdmittedBuiltinForTesting(
     builtin_indices: CIR.BuiltinIndices,
 ) TestEnvError!TestEnv {
     return initWithPreparedBuiltin(
+        std.testing.allocator,
         module_name,
         source,
         &.{},
@@ -290,7 +291,28 @@ pub fn initUncheckedWithAdmittedBuiltinForTesting(
     builtin_validation: Check.ValidatedModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
 ) TestEnvError!TestEnv {
+    return initUncheckedWithAllocatorAndAdmittedBuiltinForTesting(
+        std.testing.allocator,
+        module_name,
+        source,
+        builtin_module,
+        builtin_validation,
+        builtin_indices,
+    );
+}
+
+/// Build the same borrowed-Builtin unchecked fixture with one caller-owned
+/// allocator for every mutable consumer/checker/Env allocation.
+pub fn initUncheckedWithAllocatorAndAdmittedBuiltinForTesting(
+    gpa: Allocator,
+    module_name: []const u8,
+    source: []const u8,
+    builtin_module: builtin_static.BuiltinModuleView,
+    builtin_validation: Check.ValidatedModuleEnv,
+    builtin_indices: CIR.BuiltinIndices,
+) TestEnvError!TestEnv {
     return initWithPreparedBuiltin(
+        gpa,
         module_name,
         source,
         &.{},
@@ -339,6 +361,7 @@ fn initWithCheckRun(
     errdefer owned_builtin_validation.deinit();
 
     return initWithPreparedBuiltin(
+        gpa,
         module_name,
         source,
         explicit_root_names,
@@ -352,6 +375,7 @@ fn initWithCheckRun(
 }
 
 fn initWithPreparedBuiltin(
+    gpa: Allocator,
     module_name: []const u8,
     source: []const u8,
     explicit_root_names: []const []const u8,
@@ -362,8 +386,6 @@ fn initWithPreparedBuiltin(
     owned_builtin_validation: ?Check.OwnedValidatedModuleEnv,
     owns_builtin_module: bool,
 ) TestEnvError!TestEnv {
-    const gpa = std.testing.allocator;
-
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap

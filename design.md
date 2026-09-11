@@ -6440,8 +6440,20 @@ This is not allocation-failure injection. Final normal regenerated-Builtin
 gate `44701` passes 68/68 tests and 41/41 steps, including schema-86 measured
 golden, static/mutable serialization and native/wasm sizes. Compiler hashes
 and formatting match review; independent sol-ultra adversarial review ACCEPTS
-the actual whole bounded availability delta. Final checkpoint publication is
-in progress. Genuine
+the actual whole bounded availability delta. Described checkpoint `tznvqtyt`
+is pushed as `7c6857e5`; exact draft-PR head, branch and full-body readback are
+verified. Child `susumyrk` adds independently accepted bounded unavailable-path
+allocation-failure rollback/retry coverage at Check `fa36c1d4` / TestEnv
+`e0f0daae`. It uses one allocator for the mutable fixture, forces base-only
+plan/registration growth at the live seam, verifies every observed allocation
+failure restores logical and cross-copy state, and retries from an independent
+pending slot against the clean proof/state. Semantic and isolated 2/2 plus
+broader 15/15 gates pass. Final normal regenerated-Builtin gate `66476` passes
+69/69 tests and 41/41 steps, including unchanged schema-86 golden, serde and
+native/wasm sizes; formatting and reviewed hashes match. Publication is in
+progress. This does not
+sweep dormant paths, successful in-place resize permutations, or the full
+checker tail under allocation failure. Genuine
 owning-failure retirement remains unapproved. Complete producer/later-erasure
 semantics must reconcile this measured accepted owning relation with the
 context-only projection rule before implementation.

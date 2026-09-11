@@ -745,10 +745,11 @@ described in full, with trailers; W6b currently has its provisional title):
 | `unupstyw` / `8a1bcb17` | W6b active record-update recovery rebuild and serialization | pushed and exact PR readback verified; reviewed bounded WIP; final normal 58/58 tests, 41/41 steps pass |
 | `tonzpmlt` / `9c027603` | W6b record-update projection relation calibration | original `16c850b6` passed 60/60; final-address harness repair amended into owner, independently accepted and normal 3/3 tests, 7/7 steps pass |
 | `urrksrnp` / `2614bb21` | W6b projection after optional-width body refinement | repaired checkpoint pushed and exact PR readback verified; refreshed normal 61/61 tests, 41/41 steps pass |
-| `tznvqtyt` | W6b benign record-update projection availability | reviewed slices accepted; normal regenerated-Builtin gate passes 68/68 tests and 41/41 steps; final publication in progress |
+| `tznvqtyt` / `7c6857e5` | W6b benign record-update projection availability | whole bounded delta independently accepted; normal gate 68/68 tests and 41/41 steps; push and exact draft-PR readback verified |
+| `susumyrk` | W6b unavailable-projection allocation rollback | independently accepted; normal regenerated-Builtin gate 69/69 tests and 41/41 steps passes; checkpoint publication in progress |
 
-The local and remote `jared/polarity` bookmarks point at repaired `urrksrnp` /
-`2614bb21`, above amended `tonzpmlt` / `9c027603`. Their earlier ancestry
+The published `jared/polarity` checkpoint is `tznvqtyt` / `7c6857e5`, above
+repaired `urrksrnp` / `2614bb21` and amended `tonzpmlt` / `9c027603`. Its earlier ancestry
 includes `unupstyw` / `8a1bcb17`,
 `uovwznvn` / `2df80890`, `nrkxkkmn` / `a1757bdc`,
 `mwttkmrx` / `e2380965`, `mpqnvuvq` / `9c295876`,
@@ -759,8 +760,8 @@ includes `unupstyw` / `8a1bcb17`,
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
 status intact. This published checkpoint is explicitly incomplete. New child
-`tznvqtyt` owns the bounded benign projection-availability task
-and is not part of that publication.
+`susumyrk` owns unavailable-projection allocation-failure coverage and is not
+part of that publication.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -4854,6 +4855,55 @@ subsets below do not override this latest checkpoint.
   finalizing the description and checkpoint publication. This bounded gate
   does not certify unavailable-path allocation failures, genuine owning-error
   retirement, option (e), runtime adapters, or the full checker/minici suite.
+
+- Availability checkpoint `tznvqtyt` is fully described and pushed as
+  `7c6857e529b46c73a2e8c1c72d744a09cd6dd965`. Push `67278` and draft-PR update
+  `45234` succeed; exact readback verifies head, `jared/polarity`, the complete
+  6,650-character body including its terminal newline, and draft status. The
+  next isolated task is exhaustive unavailable-projection allocation-failure
+  rollback/retry coverage using the authentic live calibration seam and one
+  allocator owning the test fixture from construction. No genuine R2/R3 or
+  option-(e) implementation is included in this published checkpoint.
+
+- Allocation-failure slice `susumyrk` is frozen at Check `fa36c1d4`, TestEnv
+  `e0f0daae`, jj `0fbe1444`. Semantic `55497` passes; isolated sweep `28718`
+  and independent sol-ultra adversarial review are running. One consumer
+  allocator owns fixture/checker/pooled-Env storage, while an admitted Builtin
+  is shared immutably outside the measured operation. The test forces growth
+  of the authentic base-only plan/registration prefixes, sweeps every observed
+  real-projection allocation, verifies rollback, and retries from an independent
+  pending slot. Dormant helper branches are not claimed as exercised.
+
+- Isolated `28718` passes 2/2, including the complete observed-allocation sweep
+  at unchanged Check `fa36c1d4` / TestEnv `e0f0daae`. Broader calibration and
+  availability regression gate `92109` is running; independent adversarial
+  review remains open. No production or cache-schema change is included.
+
+- Broader `92109` passes 15/15 at the same frozen hashes: both original
+  calibrations, staged refinement, all availability tests, root-authority
+  rebuild/serde, and three record-update integration tests. Final normal
+  producer-regenerated gate `66476` is running. Review has confirmed the
+  allocator oracle against the installed Zig implementation: failed
+  resize/remap attempts route growth through counted allocations without
+  falsely setting the injected-allocation-failure flag. The coverage is of
+  observed allocation calls in this staged path, not dormant paths or
+  successful in-place resize behavior. Final acceptance remains pending.
+
+- Independent sol-ultra adversarial review ACCEPTS the exact bounded OOM
+  delta at Check `fa36c1d4` / TestEnv `e0f0daae`, frozen diff `30bd24d5`.
+  The review confirms allocator ownership/lifetime, non-vacuous exact failure
+  indexes, full logical and cross-copy rollback before retry, stable value
+  snapshots, and unchanged existing calibration/production semantics. Normal
+  gate `66476` is still running at this review handoff. The deliberate scope
+  exclusions above remain; no new publication is claimed yet.
+
+- Final normal producer-regenerated gate `66476` passes **69/69 tests and
+  41/41 steps**: canonicalization 11, types 10, checker 43, compile/serde 5.
+  Builtin regeneration, unchanged schema-86 golden, static/mutable serde,
+  native/wasm sizes, formatting and exact reviewed compiler hashes pass.
+  Root is describing and publishing the independently accepted test-only
+  checkpoint. The next bounded investigation is authentic child-error field
+  calibration, not an approved genuine-error retirement implementation.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

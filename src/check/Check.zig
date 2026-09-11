@@ -73026,9 +73026,10 @@ const RecordUpdateProjectionRelationMode = enum {
     isolated_write_no_report,
 };
 
-const RecordUpdateProjectionCalibrationBoundary = enum {
+const RecordUpdateProjectionCalibrationBoundary = union(enum) {
     full_relations,
     availability_outer_rollback,
+    availability_allocation: *RecordUpdateProjectionAvailabilityAllocationController,
 };
 
 const RecordUpdateProjectionRelationResult = enum {
@@ -73243,6 +73244,218 @@ const RecordUpdateProjectionAvailabilityTransactionProof = struct {
     }
 };
 
+const RecordUpdateProjectionAvailabilityAllocationStateSnapshot = struct {
+    transaction: RecordUpdateRootTransactionSnapshot,
+    pending_record_updates: []PendingRecordUpdate,
+    optional_field_accesses: []OptionalFieldAccess,
+    aggregate_drafts: []AggregateExpectedRetirementDraft,
+    owner_ranges: []ExpectedOwnerPlanRange,
+    nodes: [3]CheckedErrorRecordUpdateBasePlanNodeSnapshot,
+    copy_lengths: RecordUpdateProjectionAvailabilityCopyLengths,
+    frame_status: CheckedExprStatus,
+    instantiation_source_expr: ?CIR.Expr.Idx,
+
+    fn capture(
+        gpa: Allocator,
+        checker: *const Self,
+        env: *Env,
+        topology: RecordUpdateProjectionRelationTopology,
+        frame_status: CheckedExprStatus,
+    ) !@This() {
+        var transaction = try RecordUpdateRootTransactionSnapshot.capture(gpa, checker, env);
+        errdefer transaction.deinit(gpa);
+        const pending_record_updates = try gpa.dupe(
+            PendingRecordUpdate,
+            checker.pending_record_updates.items,
+        );
+        errdefer gpa.free(pending_record_updates);
+        const optional_field_accesses = try gpa.dupe(
+            OptionalFieldAccess,
+            checker.optional_field_accesses.items,
+        );
+        errdefer gpa.free(optional_field_accesses);
+        const aggregate_drafts = try gpa.dupe(
+            AggregateExpectedRetirementDraft,
+            checker.aggregate_expected_retirement_drafts.items,
+        );
+        errdefer gpa.free(aggregate_drafts);
+        const owner_ranges = try gpa.dupe(
+            ExpectedOwnerPlanRange,
+            checker.expected_owner_plan_ranges.items,
+        );
+        errdefer gpa.free(owner_ranges);
+        return .{
+            .transaction = transaction,
+            .pending_record_updates = pending_record_updates,
+            .optional_field_accesses = optional_field_accesses,
+            .aggregate_drafts = aggregate_drafts,
+            .owner_ranges = owner_ranges,
+            .nodes = .{
+                CheckedErrorRecordUpdateBasePlanNodeSnapshot.capture(checker.cir, topology.record_expr),
+                CheckedErrorRecordUpdateBasePlanNodeSnapshot.capture(checker.cir, topology.base_expr),
+                CheckedErrorRecordUpdateBasePlanNodeSnapshot.capture(checker.cir, topology.field_expr),
+            },
+            .copy_lengths = RecordUpdateProjectionAvailabilityCopyLengths.capture(checker),
+            .frame_status = frame_status,
+            .instantiation_source_expr = checker.instantiation_source_expr,
+        };
+    }
+
+    fn expectEqual(
+        self: *const @This(),
+        gpa: Allocator,
+        checker: *const Self,
+        env: *Env,
+        frame_status: CheckedExprStatus,
+    ) !void {
+        try self.transaction.expectEqual(gpa, checker, env);
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.pending_record_updates,
+            checker.pending_record_updates.items,
+        );
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.optional_field_accesses,
+            checker.optional_field_accesses.items,
+        );
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.aggregate_drafts,
+            checker.aggregate_expected_retirement_drafts.items,
+        );
+        try expectRecordUpdateTestSemanticSlicesEqual(
+            self.owner_ranges,
+            checker.expected_owner_plan_ranges.items,
+        );
+        for (self.nodes) |node| try node.expectEqual(checker.cir);
+        try self.copy_lengths.expectEqual(checker);
+        try expectCheckedExprStatusesEqual(self.frame_status, frame_status);
+        try std.testing.expectEqual(self.instantiation_source_expr, checker.instantiation_source_expr);
+    }
+
+    fn expectSameInstanceRollback(
+        self: *const @This(),
+        gpa: Allocator,
+        checker: *const Self,
+        env: *Env,
+        frame_status: CheckedExprStatus,
+    ) !void {
+        try self.expectEqual(gpa, checker, env, frame_status);
+        try self.transaction.cross_copy.expectEqual(checker);
+    }
+
+    fn deinit(self: *@This(), gpa: Allocator) void {
+        gpa.free(self.owner_ranges);
+        gpa.free(self.aggregate_drafts);
+        gpa.free(self.optional_field_accesses);
+        gpa.free(self.pending_record_updates);
+        self.transaction.deinit(gpa);
+        self.* = undefined;
+    }
+};
+
+const RecordUpdateProjectionAvailabilityAllocationCalibration = struct {
+    before: RecordUpdateProjectionAvailabilityAllocationStateSnapshot,
+    after: RecordUpdateProjectionAvailabilityAllocationStateSnapshot,
+    proof: RecordUpdateProjectionAvailabilityTransactionProof,
+    allocation_count: usize,
+
+    fn deinit(self: *@This(), gpa: Allocator) void {
+        self.after.deinit(gpa);
+        self.before.deinit(gpa);
+        self.* = undefined;
+    }
+};
+
+const RecordUpdateProjectionAvailabilityAllocationRun = union(enum) {
+    calibrate: *?RecordUpdateProjectionAvailabilityAllocationCalibration,
+    fail_and_retry: struct {
+        failure_index: usize,
+        calibration: *const RecordUpdateProjectionAvailabilityAllocationCalibration,
+    },
+};
+
+const RecordUpdateProjectionAvailabilityAllocationController = struct {
+    allocator: *std.testing.FailingAllocator,
+    run: RecordUpdateProjectionAvailabilityAllocationRun,
+};
+
+fn disableRecordUpdateProjectionAvailabilityFailure(
+    allocator: *std.testing.FailingAllocator,
+) void {
+    allocator.fail_index = std.math.maxInt(usize);
+    allocator.resize_fail_index = std.math.maxInt(usize);
+}
+
+fn expectRecordUpdateProjectionAvailabilityAllocatorOwnership(
+    checker: *const Self,
+    env: *const Env,
+    allocator: *std.testing.FailingAllocator,
+) !void {
+    const measured = allocator.allocator();
+    try std.testing.expect(std.meta.eql(measured, checker.gpa));
+    try std.testing.expect(std.meta.eql(measured, checker.cir.gpa));
+    try std.testing.expect(std.meta.eql(measured, checker.types.gpa));
+    try std.testing.expect(std.meta.eql(measured, checker.env_pool.gpa));
+    try std.testing.expect(std.meta.eql(measured, env.var_pool.allocator));
+}
+
+fn constrainRecordUpdateProjectionAvailabilityCapacityForTest(
+    checker: *Self,
+    published_base: PublishedRecordUpdateBasePlan,
+    base_proof: StagedRecordUpdateBasePlanPublicationProof,
+) !void {
+    const plans = &checker.cir.expected_consumption_plans.items;
+    const registrations = &checker.record_update_expected_plan_registrations;
+    if (plans.items.len != 1 or published_base.plan_index != 0 or
+        registrations.items.len != 1)
+    {
+        return error.TestUnexpectedResult;
+    }
+    try std.testing.expectEqualSlices(
+        u8,
+        std.mem.asBytes(&base_proof.plan),
+        std.mem.asBytes(&plans.items[0]),
+    );
+    try std.testing.expect(std.meta.eql(base_proof.registration, registrations.items[0]));
+    const saved_plans = try std.testing.allocator.dupe(
+        ModuleEnv.ExpectedConsumptionPlan,
+        plans.items,
+    );
+    defer std.testing.allocator.free(saved_plans);
+    const saved_registrations = try std.testing.allocator.dupe(
+        RecordUpdateExpectedPlanRegistration,
+        registrations.items,
+    );
+    defer std.testing.allocator.free(saved_registrations);
+    try plans.shrinkToLen(checker.cir.gpa);
+    try registrations.shrinkToLen(checker.gpa);
+    try std.testing.expectEqual(plans.items.len, plans.capacity);
+    try std.testing.expectEqual(registrations.items.len, registrations.capacity);
+    try std.testing.expectEqualSlices(
+        u8,
+        std.mem.sliceAsBytes(saved_plans),
+        std.mem.sliceAsBytes(plans.items),
+    );
+    try expectRecordUpdateExpectedPlanRegistrationsEqual(
+        saved_registrations,
+        registrations.items,
+    );
+}
+
+fn expectRecordUpdateProjectionAvailabilityNoFailureState(checker: *const Self) !void {
+    const cir = checker.cir;
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_failures.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_consumer_retirements.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_retirement_failures.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cir.expected_retired_consumers.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.annotation_expected_failure_drafts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.aggregate_expected_retirement_drafts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.record_update_owner_retirement_drafts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.direct_formal_failure_sources.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.active_direct_binder_failures.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.problems.problems.items.len);
+    try std.testing.expect(!checker.record_update_expected_plan_registrations_consumed);
+}
+
 fn expectStagedRecordUpdateProjectionUnavailable(
     checker: *const Self,
     topology: RecordUpdateProjectionRelationTopology,
@@ -73306,6 +73519,212 @@ fn expectStagedRecordUpdateProjectionUnavailable(
         .registration = registration,
         .slot = slot,
     };
+}
+
+fn runRecordUpdateProjectionAvailabilityAllocationController(
+    checker: *Self,
+    env: *Env,
+    topology: RecordUpdateProjectionRelationTopology,
+    published_base: PublishedRecordUpdateBasePlan,
+    base_proof: StagedRecordUpdateBasePlanPublicationProof,
+    projected_record: Var,
+    initial_slot: ExpectedFreshShapeSlot,
+    field_name: u32,
+    update_context: problem.Context,
+    frame_status: *const CheckedExprStatus,
+    controller: *RecordUpdateProjectionAvailabilityAllocationController,
+) !void {
+    defer disableRecordUpdateProjectionAvailabilityFailure(controller.allocator);
+    try expectRecordUpdateProjectionAvailabilityAllocatorOwnership(
+        checker,
+        env,
+        controller.allocator,
+    );
+    if (initial_slot.expected_plan != ModuleEnv.ExpectedConsumptionPlan.none or
+        initial_slot.role != .record_update_field or initial_slot.slot != 0 or
+        initial_slot.site != topology.field_expr or
+        checker.pending_record_updates.items.len != 1 or
+        checker.optional_field_accesses.items.len != 0)
+    {
+        return error.TestUnexpectedResult;
+    }
+    switch (frame_status.*) {
+        .established => {},
+        .checked_error => return error.TestUnexpectedResult,
+    }
+    try expectRecordUpdateProjectionAvailabilityNoFailureState(checker);
+    try constrainRecordUpdateProjectionAvailabilityCapacityForTest(
+        checker,
+        published_base,
+        base_proof,
+    );
+
+    const cir = checker.cir;
+    const expected_plan_index: u32 = @intCast(cir.expected_consumption_plans.items.items.len);
+    const expected_registration_index = checker.record_update_expected_plan_registrations.items.len;
+    var before = try RecordUpdateProjectionAvailabilityAllocationStateSnapshot.capture(
+        std.testing.allocator,
+        checker,
+        env,
+        topology,
+        frame_status.*,
+    );
+    errdefer before.deinit(std.testing.allocator);
+
+    switch (controller.run) {
+        .calibrate => |output| {
+            if (output.* != null) return error.TestUnexpectedResult;
+            const allocation_base = controller.allocator.alloc_index;
+            controller.allocator.resize_fail_index = controller.allocator.resize_index;
+            var slot = initial_slot;
+            const outcome = try checker.projectExpectedRecordUpdateField(
+                topology.record_expr,
+                published_base.plan_index,
+                .{
+                    .var_ = published_base.copy.var_,
+                    .context = update_context,
+                    .marker_authority = .{ .anchored = .{ .copy_occurrence = published_base.anchor } },
+                    .status = .established,
+                },
+                projected_record,
+                &slot,
+                field_name,
+                env,
+            );
+            disableRecordUpdateProjectionAvailabilityFailure(controller.allocator);
+            switch (outcome) {
+                .not_projected => {},
+                .established, .suppressed => return error.TestUnexpectedResult,
+            }
+            const allocation_count = controller.allocator.alloc_index - allocation_base;
+            try std.testing.expect(!controller.allocator.has_induced_failure);
+            try std.testing.expect(allocation_count >= 4);
+            const proof = try expectStagedRecordUpdateProjectionUnavailable(
+                checker,
+                topology,
+                published_base,
+                slot,
+                expected_plan_index,
+                expected_registration_index,
+            );
+            try before.copy_lengths.expectEqual(checker);
+            try expectRecordUpdateProjectionAvailabilityNoFailureState(checker);
+            var after = try RecordUpdateProjectionAvailabilityAllocationStateSnapshot.capture(
+                std.testing.allocator,
+                checker,
+                env,
+                topology,
+                frame_status.*,
+            );
+            errdefer after.deinit(std.testing.allocator);
+            output.* = .{
+                .before = before,
+                .after = after,
+                .proof = proof,
+                .allocation_count = allocation_count,
+            };
+        },
+        .fail_and_retry => |injected| {
+            try injected.calibration.before.expectEqual(
+                std.testing.allocator,
+                checker,
+                env,
+                frame_status.*,
+            );
+            const failure_allocation_base = controller.allocator.alloc_index;
+            const failure_allocation_index = std.math.add(
+                usize,
+                failure_allocation_base,
+                injected.failure_index,
+            ) catch return error.TestUnexpectedResult;
+            controller.allocator.fail_index = failure_allocation_index;
+            controller.allocator.resize_fail_index = controller.allocator.resize_index;
+            var failed_slot = initial_slot;
+            const failed = checker.projectExpectedRecordUpdateField(
+                topology.record_expr,
+                published_base.plan_index,
+                .{
+                    .var_ = published_base.copy.var_,
+                    .context = update_context,
+                    .marker_authority = .{ .anchored = .{ .copy_occurrence = published_base.anchor } },
+                    .status = .established,
+                },
+                projected_record,
+                &failed_slot,
+                field_name,
+                env,
+            );
+            disableRecordUpdateProjectionAvailabilityFailure(controller.allocator);
+            try std.testing.expectError(error.OutOfMemory, failed);
+            try std.testing.expect(controller.allocator.has_induced_failure);
+            try std.testing.expectEqual(
+                failure_allocation_index,
+                controller.allocator.alloc_index,
+            );
+            try std.testing.expectEqual(initial_slot.site, failed_slot.site);
+            try std.testing.expectEqual(initial_slot.role, failed_slot.role);
+            try std.testing.expectEqual(initial_slot.slot, failed_slot.slot);
+            try std.testing.expectEqual(initial_slot.raw_fresh_var, failed_slot.raw_fresh_var);
+            if (failed_slot.expected_plan != ModuleEnv.ExpectedConsumptionPlan.none and
+                failed_slot.expected_plan != expected_plan_index)
+            {
+                return error.TestUnexpectedResult;
+            }
+            try before.expectSameInstanceRollback(
+                std.testing.allocator,
+                checker,
+                env,
+                frame_status.*,
+            );
+            try expectRecordUpdateProjectionAvailabilityNoFailureState(checker);
+            try std.testing.expectEqual(expected_plan_index, cir.expected_consumption_plans.items.items.len);
+            try std.testing.expectEqual(
+                expected_registration_index,
+                checker.record_update_expected_plan_registrations.items.len,
+            );
+
+            // The caller-local slot is outside the Probe contract. Retry from
+            // another copy of the immutable pending input, never by repairing
+            // the slot that observed the failed attempt.
+            var retry_slot = initial_slot;
+            const retry_outcome = try checker.projectExpectedRecordUpdateField(
+                topology.record_expr,
+                published_base.plan_index,
+                .{
+                    .var_ = published_base.copy.var_,
+                    .context = update_context,
+                    .marker_authority = .{ .anchored = .{ .copy_occurrence = published_base.anchor } },
+                    .status = .established,
+                },
+                projected_record,
+                &retry_slot,
+                field_name,
+                env,
+            );
+            switch (retry_outcome) {
+                .not_projected => {},
+                .established, .suppressed => return error.TestUnexpectedResult,
+            }
+            const retry_proof = try expectStagedRecordUpdateProjectionUnavailable(
+                checker,
+                topology,
+                published_base,
+                retry_slot,
+                expected_plan_index,
+                expected_registration_index,
+            );
+            try injected.calibration.proof.expectEqual(retry_proof);
+            try before.copy_lengths.expectEqual(checker);
+            try expectRecordUpdateProjectionAvailabilityNoFailureState(checker);
+            try injected.calibration.after.expectEqual(
+                std.testing.allocator,
+                checker,
+                env,
+                frame_status.*,
+            );
+            before.deinit(std.testing.allocator);
+        },
+    }
 }
 
 fn expectRecordUpdateProjectionAvailabilityOuterRollback(
@@ -73493,9 +73912,9 @@ fn expectRecordUpdateProjectionAvailabilityOuterRollback(
 
 /// Run the real block-local binding and record-update producer chronology.
 /// The relation boundary reaches the final base relation; the transaction
-/// boundary stops immediately after retrying the field projection. Both stop
-/// before either expression frame finishes, without the later checker-rewrite
-/// sweep, group publication, or terminal admission.
+/// boundaries stop immediately after retrying the field projection. Every
+/// mode stops before either expression frame finishes, without the later
+/// checker-rewrite sweep, group publication, or terminal admission.
 fn calibrateRecordUpdateProjectionRelation(
     test_env: anytype,
     fixture: RecordUpdateProjectionRelationFixture,
@@ -73825,21 +74244,42 @@ fn calibrateRecordUpdateProjectionRelation(
         .record_region_idx = @enumFromInt(@intFromEnum(base_raw_var)),
         .record_name = checker.getExprPatternIdent(topology.base_expr),
     } };
-    if (boundary == .availability_outer_rollback) {
-        if (fixture != .optional_width_refinement) return error.TestUnexpectedResult;
-        failure_stage = "availability outer transaction rollback";
-        try expectRecordUpdateProjectionAvailabilityOuterRollback(
-            checker,
-            &env,
-            topology,
-            published_base,
-            projected_record,
-            slot,
-            @bitCast(field.name),
-            update_context,
-            &record_frame.checked_status,
-        );
-        return null;
+    switch (boundary) {
+        .full_relations => {},
+        .availability_outer_rollback => {
+            if (fixture != .optional_width_refinement) return error.TestUnexpectedResult;
+            failure_stage = "availability outer transaction rollback";
+            try expectRecordUpdateProjectionAvailabilityOuterRollback(
+                checker,
+                &env,
+                topology,
+                published_base,
+                projected_record,
+                slot,
+                @bitCast(field.name),
+                update_context,
+                &record_frame.checked_status,
+            );
+            return null;
+        },
+        .availability_allocation => |controller| {
+            if (fixture != .optional_width_refinement) return error.TestUnexpectedResult;
+            failure_stage = "availability allocation transaction";
+            try runRecordUpdateProjectionAvailabilityAllocationController(
+                checker,
+                &env,
+                topology,
+                published_base,
+                base_publication,
+                projected_record,
+                slot,
+                @bitCast(field.name),
+                update_context,
+                &record_frame.checked_status,
+                controller,
+            );
+            return null;
+        },
     }
     failure_stage = "field projection";
     const projection = try checker.projectExpectedRecordUpdateField(
@@ -74810,6 +75250,107 @@ test "record-update projection availability: outer local transaction restores un
         .availability_outer_rollback,
     );
     try std.testing.expect(result == null);
+}
+
+test "record-update projection availability: unavailable settlement is atomic across every allocation" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
+    var builtin_module = try can.BuiltinStatic.moduleView(
+        std.testing.allocator,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    defer builtin_module.deinit();
+    var owned_builtin_validation = try admitBuiltinOwned(
+        std.testing.allocator,
+        builtin_module.env,
+        builtin_indices,
+    );
+    defer owned_builtin_validation.deinit();
+    const builtin_validation = owned_builtin_validation.capability();
+
+    var calibration_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
+        .fail_index = std.math.maxInt(usize),
+        .resize_fail_index = std.math.maxInt(usize),
+    });
+    const calibration_gpa = calibration_allocator.allocator();
+    var calibration_test_env = try TestEnv.initUncheckedWithAllocatorAndAdmittedBuiltinForTesting(
+        calibration_gpa,
+        "RecordUpdateProjectionAvailabilityOom",
+        record_update_projection_refinement_source,
+        builtin_module,
+        builtin_validation,
+        builtin_indices,
+    );
+    defer {
+        disableRecordUpdateProjectionAvailabilityFailure(&calibration_allocator);
+        calibration_test_env.deinit();
+    }
+    try calibration_test_env.assertCanErrors(&.{});
+    try std.testing.expect(std.meta.eql(calibration_gpa, calibration_test_env.gpa));
+    var calibration_result: ?RecordUpdateProjectionAvailabilityAllocationCalibration = null;
+    var calibration_controller = RecordUpdateProjectionAvailabilityAllocationController{
+        .allocator = &calibration_allocator,
+        .run = .{ .calibrate = &calibration_result },
+    };
+    const calibration_boundary = try calibrateRecordUpdateProjectionRelation(
+        &calibration_test_env,
+        .optional_width_refinement,
+        .production_poison,
+        .{ .availability_allocation = &calibration_controller },
+    );
+    try std.testing.expect(calibration_boundary == null);
+    var calibration = calibration_result orelse return error.TestUnexpectedResult;
+    defer calibration.deinit(std.testing.allocator);
+    try std.testing.expect(calibration.allocation_count >= 4);
+
+    var induced_failures: usize = 0;
+    for (0..calibration.allocation_count) |failure_index| {
+        var failure_stage: []const u8 = "fixture construction";
+        errdefer std.debug.print(
+            "record-update projection availability allocation sweep failed at index={} stage={s}\n",
+            .{ failure_index, failure_stage },
+        );
+        var injected = std.testing.FailingAllocator.init(std.testing.allocator, .{
+            .fail_index = std.math.maxInt(usize),
+            .resize_fail_index = std.math.maxInt(usize),
+        });
+        const injected_gpa = injected.allocator();
+        var failed_test_env = try TestEnv.initUncheckedWithAllocatorAndAdmittedBuiltinForTesting(
+            injected_gpa,
+            "RecordUpdateProjectionAvailabilityOom",
+            record_update_projection_refinement_source,
+            builtin_module,
+            builtin_validation,
+            builtin_indices,
+        );
+        defer {
+            disableRecordUpdateProjectionAvailabilityFailure(&injected);
+            failed_test_env.deinit();
+        }
+        try failed_test_env.assertCanErrors(&.{});
+        try std.testing.expect(std.meta.eql(injected_gpa, failed_test_env.gpa));
+
+        failure_stage = "injected projection and same-instance retry";
+        var failure_controller = RecordUpdateProjectionAvailabilityAllocationController{
+            .allocator = &injected,
+            .run = .{ .fail_and_retry = .{
+                .failure_index = failure_index,
+                .calibration = &calibration,
+            } },
+        };
+        const failure_boundary = try calibrateRecordUpdateProjectionRelation(
+            &failed_test_env,
+            .optional_width_refinement,
+            .production_poison,
+            .{ .availability_allocation = &failure_controller },
+        );
+        try std.testing.expect(failure_boundary == null);
+        induced_failures += 1;
+    }
+    try std.testing.expectEqual(calibration.allocation_count, induced_failures);
 }
 
 const RecordUpdateProjectionAvailabilityProof = struct {
