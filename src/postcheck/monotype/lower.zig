@@ -16434,18 +16434,12 @@ const BodyContext = struct {
     /// While recursively restoring a stored constant, the concrete type of the
     /// whole restored value. Nested stored closures use this to instantiate the
     /// owner callable's return when synthesizing the constant scheme's evidence.
-    const PatternLiteralGuard = struct {
-        local: DraftLocalId,
-        ty: Type.TypeId,
-        check: union(enum) {
-            /// Compare against the literal's `from_numeral`/`from_quote`
-            /// conversion result.
-            conversion: checked.CheckedExprId,
-            /// The literal's value is unrepresentable at the scrutinee's
-            /// concrete type, so the branch can never match (checking reports
-            /// these; an I8 can never equal 300).
-            never,
-        },
+    const PatternLiteralGuard = union(enum) {
+        /// The checker-produced comparison, including conversion and exact
+        /// equality dispatch, reads the bound pattern value.
+        condition: checked.CheckedExprId,
+        /// This literal is unrepresentable at the specialized builtin type.
+        never,
     };
 
     /// A user binder deferred while an optional destructure is translated
@@ -20246,7 +20240,7 @@ const BodyContext = struct {
         };
         return try self.graph.newNode(.{ .tag_union = .{
             .tags = tags,
-            .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
+            .ext = try self.graph.newNode(.empty_tag_union),
         } });
     }
 
@@ -22179,7 +22173,10 @@ const BodyContext = struct {
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                if (!try self.graph.typeIsResolved(expr_node)) {
+                // Only an unpinned target variable takes the checked literal
+                // default. Openness inside a custom target is not evidence
+                // that the target itself should default to a builtin.
+                if (self.graph.content(expr_node) == .unresolved) {
                     self.graph.materializeLiteralDefault(expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
@@ -41199,7 +41196,7 @@ const BodyContext = struct {
             for (schema.params, 0..) |param, k| {
                 if (derived[k]) continue;
                 const node = subst[param.slot.?].node;
-                if (self.forwardedRequirement(node, param.method)) |forwarded| switch (forwarded) {
+                if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
                     // Callable targets are selected again from this scheme's
                     // substitution below. Terminal evidence belongs to the
                     // enclosing requirement on this exact cell: structural
@@ -41317,7 +41314,7 @@ const BodyContext = struct {
         node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
-        if (self.forwardedRequirement(node, param.method)) |forwarded| return forwarded;
+        if (self.forwardedRequirement(node, view.names, param.method)) |forwarded| return forwarded;
         const default_phase: ?checked.NumericDefaultPhase = switch (self.graph.content(node)) {
             .redirect => unreachable,
             .unresolved => |variable| variable.numeric_default_phase,
@@ -41338,17 +41335,22 @@ const BodyContext = struct {
 
     /// The enclosing frame entry that already answers `method` for the
     /// cell `node` shares with a quantified variable of an enclosing scheme:
-    /// an requirement on a still-open cell inside a body is the enclosing
-    /// specialization's requirement on that same cell.
-    fn forwardedRequirement(self: *BodyContext, node: NodeId, method: names.MethodNameId) ?SpecEvidence {
+    /// a requirement on a still-open cell inside a body is the enclosing
+    /// specialization's requirement on that same cell. Method IDs belong to
+    /// their checked name store, so translate once per frame before comparing.
+    fn forwardedRequirement(self: *BodyContext, node: NodeId, method_names: *const names.NameStore, method: names.MethodNameId) ?SpecEvidence {
         var frame: ?*const EvidenceChain = &self.evidence;
         while (frame) |current| : (frame = current.parent) {
             const schema = current.schema orelse continue;
             if (current.subst.len != schema.scheme_vars.len or current.vector.len != schema.params.len) {
                 Common.invariant("evidence frame substitution or vector length differed from its scheme");
             }
+            const frame_method = if (schema.view.names == method_names)
+                method
+            else
+                schema.view.names.lookupMethodName(method_names.methodNameText(method)) orelse continue;
             for (schema.params, 0..) |param, k| {
-                if (param.method != method) continue;
+                if (param.method != frame_method) continue;
                 const receiver_slot = param.slot orelse continue;
                 const slot = switch (current.subst[receiver_slot]) {
                     .node => |slot_node| slot_node,
@@ -49950,8 +49952,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.tupleItemTypes(ty), checks_out) };
             },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
             .str_interpolation => |str| try self.lowerStrPatternCollectingLists(str, ty, checks_out),
             .underscore => .wildcard,
         };
@@ -54899,11 +54901,11 @@ const BodyContext = struct {
             },
             .numeral_literal => |num| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk try self.lowerNumeralLiteralPattern(num, ty);
+                break :blk try self.lowerNumeralLiteralPattern(pattern_id, num, ty);
             },
             .str_literal => |str| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk try self.lowerStringLiteralPattern(str, ty);
+                break :blk try self.lowerStringLiteralPattern(pattern_id, str, ty);
             },
             .str_interpolation => |str| try self.lowerStrPattern(str, try self.activeTypeFromNode(node)),
             .underscore => .wildcard,
@@ -55125,8 +55127,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerTuplePattern(items, ty) };
             },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
             .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
         };
@@ -55284,13 +55286,14 @@ const BodyContext = struct {
     /// checker-selected conversion and equality guard.
     fn lowerNumeralLiteralPattern(
         self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
         numeral: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
         return switch (self.shapeContent(ty)) {
             .primitive => try self.numeralPatBits(numeral.literal, ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.guard) |guard|
+                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom numeral pattern had no checked conversion"),
         };
@@ -55301,6 +55304,7 @@ const BodyContext = struct {
     /// can never match, and a custom target uses the checked conversion guard.
     fn lowerStringLiteralPattern(
         self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
         str: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
@@ -55309,8 +55313,8 @@ const BodyContext = struct {
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) }
             else
                 try self.bindNeverMatchPattern(ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.guard) |guard|
+                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom string pattern had no checked conversion"),
         };
@@ -55320,15 +55324,18 @@ const BodyContext = struct {
     /// recording an equality condition for the enclosing match branch.
     fn bindLiteralGuardPattern(
         self: *BodyContext,
-        conversion: checked.CheckedExprId,
+        pattern_id: checked.CheckedPatternId,
+        condition: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
-        const local = try self.addLocal(self.builder.symbols.fresh(), ty);
-        try self.pattern_literal_guards.append(self.allocator, .{
-            .local = local,
-            .ty = ty,
-            .check = .{ .conversion = conversion },
-        });
+        const binder = self.view.bodies.literalPatternBinder(pattern_id);
+        const local = if (self.currentOwnerPatternBinderLocal(binder)) |existing| existing else blk: {
+            const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+            try self.bindLocalName(new_local, binder);
+            try self.binders.put(binder, new_local);
+            break :blk new_local;
+        };
+        try self.pattern_literal_guards.append(self.allocator, .{ .condition = condition });
         return .{ .bind = local };
     }
 
@@ -55338,43 +55345,18 @@ const BodyContext = struct {
     /// compared against the unrepresentable value.
     fn bindNeverMatchPattern(self: *BodyContext, ty: Type.TypeId) Allocator.Error!BodyPatData {
         const local = try self.addLocal(self.builder.symbols.fresh(), ty);
-        try self.pattern_literal_guards.append(self.allocator, .{
-            .local = local,
-            .ty = ty,
-            .check = .never,
-        });
+        try self.pattern_literal_guards.append(self.allocator, .never);
         return .{ .bind = local };
     }
 
-    /// Compare a bound match value against a literal's converted constant,
-    /// dispatching to the type's `is_eq` method when it has one and falling
-    /// back to structural equality otherwise, mirroring `==`. A never-match
-    /// guard is the constant `false` instead.
+    /// Consume the ordinary checked equality expression retained by the
+    /// pattern. Structural and callable equality use the same dispatch path
+    /// as source `==`, including specialization evidence and local captures.
     fn lowerPatternLiteralEq(self: *BodyContext, entry: PatternLiteralGuard) Allocator.Error!DraftExprId {
-        const conversion = switch (entry.check) {
-            .conversion => |conversion| conversion,
-            .never => return try self.boolLiteral(false, try self.primitiveType(.bool)),
+        return switch (entry) {
+            .condition => |condition| try self.lowerExpr(condition),
+            .never => try self.boolLiteral(false, try self.primitiveType(.bool)),
         };
-        const scrutinee = try self.localExpr(entry.local, entry.ty);
-        const expected = try self.lowerExpr(conversion);
-        if (methodOwnerFromType(self.typeStore(), entry.ty)) |owner| {
-            if (try self.lookupMethodTargetByName(owner, "is_eq")) |raw_lookup| {
-                const lookup = try self.withLocalProcContext(raw_lookup);
-                var target_ctx = try self.methodTargetContext(lookup);
-                defer target_ctx.deinit();
-                const target_fn = target_ctx.checkedFunctionType(lookup.target.callable_ty);
-                const bool_ty = try self.lowerTypeFromView(lookup.view, target_fn.ret);
-                const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
-                const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
-                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
-                return try self.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-                    .callee = draftProcCalleeForSlot(callee),
-                    .args = try self.addExprSpan(&.{ scrutinee, expected }),
-                    .captures = try self.methodTargetCaptureSpan(lookup),
-                } } });
-            }
-        }
-        return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.primitiveType(.bool));
     }
 
     /// Take ownership of the literal-equality conditions collected since
@@ -55431,16 +55413,24 @@ const BodyContext = struct {
     /// (optional) user guard, literal conditions first.
     fn conjoinPatternLiteralGuards(self: *BodyContext, user_guard: ?DraftExprId) Allocator.Error!?DraftExprId {
         if (self.pattern_literal_guards.items.len == 0) return user_guard;
+        if (self.pattern_literal_guards.items.len == 1 and user_guard == null) {
+            const condition = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[0]);
+            self.pattern_literal_guards.clearRetainingCapacity();
+            return condition;
+        }
         const bool_ty = try self.primitiveType(.bool);
-        var cond = user_guard;
+        const yes = try self.boolLiteral(true, bool_ty);
+        const no = try self.boolLiteral(false, bool_ty);
+        // Source Bool values and internal comparison predicates need not have
+        // the same Monotype representation. Consume each as a condition and
+        // produce one explicit primitive predicate, rather than returning a
+        // source guard as a branch of a primitive-typed expression.
+        var cond = if (user_guard) |guard| try self.ifExpr(guard, yes, no, bool_ty) else yes;
         var i = self.pattern_literal_guards.items.len;
         while (i > 0) {
             i -= 1;
             const eq = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[i]);
-            cond = if (cond) |inner|
-                try self.ifExpr(eq, inner, try self.boolLiteral(false, bool_ty), bool_ty)
-            else
-                eq;
+            cond = try self.ifExpr(eq, cond, no, bool_ty);
         }
         self.pattern_literal_guards.clearRetainingCapacity();
         return cond;
@@ -56189,6 +56179,96 @@ test "graph constructor representation follows aliases and preserves nominal lay
     try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(alias));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(nominal));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(outer_alias));
+}
+
+test "issue 11265: forwarded evidence compares methods in their owning name stores" {
+    const gpa = std.testing.allocator;
+    var frame_names = names.NameStore.init(gpa);
+    defer frame_names.deinit();
+    var caller_names = names.NameStore.init(gpa);
+    defer caller_names.deinit();
+    const frame_encode = try frame_names.internMethodName("encoder_for");
+    const frame_decode = try frame_names.internMethodName("decode");
+    const caller_decode = try caller_names.internMethodName("decode");
+    const caller_encode = try caller_names.internMethodName("encoder_for");
+    const caller_hash = try caller_names.internMethodName("to_hash");
+    try std.testing.expectEqual(frame_encode, caller_decode);
+    try std.testing.expect(frame_decode != caller_decode);
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &frame_names);
+    defer graph.destroy();
+    const receiver = try graph.newNode(.{ .primitive = .str });
+    const other_receiver = try graph.newNode(.{ .primitive = .i64 });
+    const unrelated_receiver = try graph.newNode(.{ .primitive = .dec });
+    const alias = try graph.newNode(.{ .primitive = .str });
+    try graph.unify(receiver, alias);
+
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, receiver_ty, .{ .flex = .{} });
+    try checked_types.fillSyntheticTypeRoot(gpa, other_receiver_ty, .{ .flex = .{} });
+    const result_ty = try checked_types.appendSyntheticPayloadRoot(gpa, &frame_names, .empty_record);
+    const encode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, result_ty);
+    const other_decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{other_receiver_ty}, other_receiver_ty);
+    const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
+
+    var frame_view: ModuleView = undefined;
+    frame_view.names = &frame_names;
+    frame_view.types = checked_types.view();
+    const params = [_]static_dispatch.EvidenceParamRecord{
+        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1, .runtime_dictionary = true },
+        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true },
+    };
+    const frame: EvidenceChain = .{
+        .scope = undefined,
+        .schema = .{
+            .view = frame_view,
+            .root = null,
+            .scheme_vars = &.{ receiver_ty, other_receiver_ty },
+            .params = &params,
+        },
+        .subst = &.{ .{ .node = receiver }, .{ .node = other_receiver } },
+        .vector = &.{ .{ .structural = .{ .derivation = .encoder } }, .checked_error, .{ .structural = .{ .derivation = .parser } } },
+    };
+    var ctx: BodyContext = undefined;
+    ctx.graph = graph;
+    ctx.evidence = frame;
+
+    // Different methods with equal IDs must stay distinct, and the same
+    // method with different IDs must still find its exact receiver's evidence.
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(alias, &caller_names, caller_decode).?.structural.derivation);
+    try std.testing.expectEqual(.encoder, ctx.forwardedRequirement(receiver, &caller_names, caller_encode).?.structural.derivation);
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(receiver, &frame_names, frame_decode).?.structural.derivation);
+    try std.testing.expect(ctx.forwardedRequirement(receiver, &caller_names, caller_hash) == null);
+    try std.testing.expect(ctx.forwardedRequirement(unrelated_receiver, &caller_names, caller_decode) == null);
+
+    // A name absent from an inner frame must continue to the lexical parent,
+    // even if that inner store assigns its ID to another method.
+    var inner_names = names.NameStore.init(gpa);
+    defer inner_names.deinit();
+    const inner_method = try inner_names.internMethodName("is_eq");
+    try std.testing.expectEqual(caller_decode, inner_method);
+    var inner_view: ModuleView = undefined;
+    inner_view.names = &inner_names;
+    inner_view.types = checked_types.view();
+    ctx.evidence = .{
+        .scope = undefined,
+        .schema = .{
+            .view = inner_view,
+            .root = null,
+            .scheme_vars = &.{receiver_ty},
+            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true }},
+        },
+        .subst = &.{.{ .node = receiver }},
+        .vector = &.{.{ .structural = .{ .derivation = .equality } }},
+        .parent = &frame,
+    };
+    try std.testing.expectEqual(.parser, ctx.forwardedRequirement(receiver, &caller_names, caller_decode).?.structural.derivation);
 }
 
 test "specialization evidence equality includes exact target instantiation" {

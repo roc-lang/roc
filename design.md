@@ -3150,14 +3150,15 @@ a reachable `checked_error` literal pattern may not enter a checked body. A
 later scheme instantiation still owns failure of its copied static-dispatch
 constraint at the use expression. Ownership is explicit producer data and must
 not be reconstructed from pattern structure. The plan packs its kind and
-resolution into one word, so recording the owner does not increase plan size.
+resolution into one word and references its pattern-only context, keeping the
+common literal plan at five words.
 Discarding a subtree retires its pattern evidence as well as its expression
 evidence. Finalization queues owners of late-rejected patterns and invalidates
 them after sealing the dense plan array, so retirement cannot invalidate its
 iteration. Repeated owners are deduplicated before invalidation. This worklist
 allocates only on failure. `pattern_error` reuses the selected-root body union
 and the existing binder index; it adds no root storage on successful programs.
-No persistent reverse index or owner table is maintained for successful checking.
+No persistent reverse index is maintained for successful checking.
 
 `unresolved` is construction-only and may not cross the checked boundary.
 Checking finalizes each live record exactly once after constraint solving;
@@ -3172,6 +3173,24 @@ They must not inspect the checked target type to reconstruct which literal path
 checking selected. In particular, `builtin_direct` stores neither the synthetic
 conversion callable nor a runtime dispatch plan, and
 `specialization_dispatch` is not a standalone compile-time root.
+
+Custom and generalized literal patterns retain the exact equality constraint
+created alongside their conversion constraint. CIR keeps the failure owner and
+equality callable in a pattern-only context referenced by its five-word literal
+plan; expression literals allocate no context. Checked body construction emits a
+matched-value binder and an ordinary `method_eq` expression whose operands are
+that binder and the existing conversion expression. The pattern's optional
+guard expression id replaces its former conversion id, so checked pattern nodes
+do not grow. Builtin-direct patterns emit no binder, guard, or equality plan.
+The guard participates in its enclosing procedure's ordinary expression,
+dispatch-evidence, and specialization-relation inventories. Both lowering
+strategies bind the matched value and consume that expression through ordinary
+equality lowering; neither reconstructs the pattern's equality target.
+Multiple literal guards and a source guard compose in source evaluation order
+with short-circuiting. Monotype consumes each as a condition and produces an
+explicit internal predicate; it does not equate the representation of a source
+`Bool` value with that of an internal comparison predicate. A sole guard needs
+no composition expression.
 
 #### Erroneous Call Operand Retirement
 
@@ -5850,6 +5869,9 @@ complete):
   representation per field regardless of how many optional siblings the
   record has; a per-record presence BITMASK remains a possible later
   layout optimization that would not change this check-level contract.
+  The instantiation-graph producer records this slot's closed extension as
+  `empty_tag_union` immediately, even when its payload is still generic. A
+  deferred row default would incorrectly leave known storage structure open.
   The slot is deliberately NOT the nominal `Try(τ, [MissingField])`
   monotype: record-type lowering runs on rows in modules that never
   reference `Try`, so minting the builtin nominal there would need a
@@ -5916,6 +5938,15 @@ complete):
   preserves its checked kind-variable identity and uses that same checker-defined
   presence-slot representation: one non-specialized worker can therefore
   serve both required and optional instantiations without cloning its body.
+  Nominal declared-field tables use that same complete slot representation as
+  the backing row. Their source type still identifies the payload, but their
+  representation includes presence storage; descriptor construction must never
+  substitute the payload representation for the field slot.
+  Constant restoration makes the same distinction: a checked optional field's
+  stored value is a presence tag, and only its Present child is restored at the
+  checked payload type. The planned slot variants and explicit Present
+  discriminant select that restoration; the payload's type cannot describe the
+  enclosing presence tag.
   The slot descriptor records the `#Present` discriminant explicitly. Worker
   boundaries use that metadata to wrap an inline required value in `#Present`
   or unwrap a `#Present` slot for an inline required result; optional callers
@@ -6146,7 +6177,20 @@ Restrictions:
   (`Cfg.{...}`) or through an expected nominal type (`cfg : Cfg; cfg = {}`).
   Empty and nonempty literals use the same backing-row relation: omission
   validates every field and the complete extension before retaining the nominal
-  result, and records each default on its source construction. Canonicalization
+  result, and records each default on its source construction. Both nominal
+  lifting paths retain the checked representatives of the record relation,
+  alongside its original operands, so a polymorphic call's formal slot cannot
+  hide the literal that supplies it. Checking registers fresh record expressions
+  as they are checked. At settlement, before default-cycle validation, it groups
+  accepted omission decisions by solved record equality and distributes each
+  decision to every registered construction in that class that did not supply
+  the field. This consumes the unifier's explicit default identity, including
+  when later value relations normalized the field to required; it never
+  reconstructs an omission from a nominal declaration or a solved field kind.
+  Equal decisions are coalesced before visiting constructors, and only classes
+  with omissions are indexed. Type unions, instantiation, and serialized types
+  carry no additional construction state. Speculative checking rolls back
+  construction registrations with its omission decisions. Canonicalization
   analyzes cycles through explicit constructors; checking also analyzes the
   omissions determined by expected types. Derived
   codecs reach defaulted fields through the nominal's derived methods
@@ -8990,6 +9034,12 @@ parents for nested local functions by `depth`). A direct plan's evidence node
 records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
 one.
+
+Requirement forwarding carries the method ID's owning checked name store.
+Raw method IDs are comparable only within the same store; cross-module
+lookups translate the exact method name through the evidence frame's existing
+immutable name index before comparing IDs and live receiver cells. This lookup
+does not mutate checked data or create a second name registry.
 
 When an edge uses a procedure as data, an otherwise-unpinned requirement that
 is reachable through the procedure's own callable type is not

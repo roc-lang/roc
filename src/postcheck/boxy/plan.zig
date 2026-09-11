@@ -4734,17 +4734,26 @@ const Builder = struct {
         field: checked.CheckedRecordField,
     ) Allocator.Error!void {
         const source_type = typeRef(view, field.ty);
-        const rep = switch (field.kind.tag) {
+        try children.append(self.allocator, .{
+            .role = .{ .record_field = field.name },
+            .source_type = source_type,
+            .rep = try self.recordFieldRepresentation(view, field),
+            .record_field_kind = field.kind,
+        });
+    }
+
+    /// Both backing rows and nominal declared fields describe the complete
+    /// runtime slot, including presence storage selected by the checked kind.
+    fn recordFieldRepresentation(
+        self: *Builder,
+        view: ModuleView,
+        field: checked.CheckedRecordField,
+    ) Allocator.Error!TypeRepId {
+        return switch (field.kind.tag) {
             .required, .defaulted => try self.analyzeType(view, field.ty),
             .optional, .undetermined => try self.optionalSlotRepresentation(view, field.ty),
             .err => boxyPlanInvariant("checked-error record field reached boxy representation planning"),
         };
-        try children.append(self.allocator, .{
-            .role = .{ .record_field = field.name },
-            .source_type = source_type,
-            .rep = rep,
-            .record_field_kind = field.kind,
-        });
     }
 
     fn optionalSlotRepresentation(
@@ -5146,7 +5155,7 @@ const Builder = struct {
                     try pending.append(self.allocator, .{
                         .index = alpha_ranks[field.index],
                         .source_type = typeRef(backing.view, field.ty),
-                        .rep = try self.analyzeType(backing.view, field.ty),
+                        .rep = try self.recordFieldRepresentation(backing.view, backing_fields[field.index]),
                     });
                 },
                 .padding => |index| {
@@ -11165,8 +11174,8 @@ const Builder = struct {
                 if (list.rest) |rest| if (rest.pattern) |child| try self.analyzePatternTypes(view, child);
             },
             .tuple => |items| for (items) |child| try self.analyzePatternTypes(view, child),
-            .numeral_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
-            .str_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
+            .numeral_literal => |literal| if (literal.guard) |guard| try self.analyzeExprTypes(view, guard),
+            .str_literal => |literal| if (literal.guard) |guard| try self.analyzeExprTypes(view, guard),
             .str_interpolation => |interpolation| {
                 for (interpolation.steps) |step| {
                     if (step.capture) |capture| try self.analyzePatternTypes(view, capture);

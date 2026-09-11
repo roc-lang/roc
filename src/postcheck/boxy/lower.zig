@@ -15482,17 +15482,60 @@ const ProcBodyBuilder = struct {
         var source_index = items.len;
         while (source_index > 0) {
             source_index -= 1;
-            continuation = try self.restoreConstIntoStorageRep(
-                source_field_locals[source_index].?,
-                store_module,
-                type_module,
-                items[source_index],
-                fields[source_index].ty,
-                source_field_reps[source_index],
-                continuation,
-            );
+            continuation = if (fields[source_index].kind.tag == .optional)
+                try self.restoreConstOptionalSlotInto(
+                    source_field_locals[source_index].?,
+                    store_module,
+                    type_module,
+                    items[source_index],
+                    fields[source_index].ty,
+                    source_field_reps[source_index],
+                    continuation,
+                )
+            else
+                try self.restoreConstIntoStorageRep(
+                    source_field_locals[source_index].?,
+                    store_module,
+                    type_module,
+                    items[source_index],
+                    fields[source_index].ty,
+                    source_field_reps[source_index],
+                    continuation,
+                );
         }
         return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
+    }
+
+    /// An optional field's stored node is its presence slot, while its checked
+    /// field type names only the payload. Restore the slot using the planner's
+    /// explicit presence representation and restore Present's child at that
+    /// checked payload type.
+    fn restoreConstOptionalSlotInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        node: checked.ConstNodeId,
+        payload_ty: checked.CheckedTypeId,
+        slot_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const stored = store_module.const_store.get(node);
+        if (stored != .tag) boxyLowerInvariant("stored optional field did not carry its presence tag");
+        const slot = self.parent.plan.representations.items[@intFromEnum(slot_rep)];
+        const present = slot.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("stored optional field had no planned presence slot");
+        const variant = self.plannedTagVariantByText(slot_rep, stored.tag.tag_name);
+        const payload_tys: []const checked.CheckedTypeId = if (variant.index == present) &.{payload_ty} else &.{};
+        return try self.restoreConstPlannedTagPayloadsInto(
+            target,
+            store_module,
+            type_module,
+            variant,
+            stored.tag,
+            payload_tys,
+            next,
+        );
     }
 
     fn restoreConstTagInto(
@@ -15657,13 +15700,31 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const checked_tag = constTagPayloadTypes(type_module, checked_ty, tag.tag_name);
-        const name = checked_tag.name;
-        const payload_tys = checked_tag.payload_tys;
+        return try self.restoreConstPlannedTagPayloadsInto(
+            target,
+            store_module,
+            type_module,
+            self.tagVariantForModule(rep, type_module, checked_tag.name),
+            tag,
+            checked_tag.payload_tys,
+            next,
+        );
+    }
+
+    fn restoreConstPlannedTagPayloadsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        variant: TagVariantLookup,
+        tag: anytype,
+        payload_tys: []const checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         if (payload_tys.len != tag.payloads.len) {
             boxyLowerInvariant("ConstStore tag payload count differed from checked tag type");
         }
 
-        const variant = self.tagVariantForModule(rep, type_module, name);
         const payload_children = self.parent.plan.childSlice(variant.payloads);
         if (payload_children.len != tag.payloads.len) {
             boxyLowerInvariant("ConstStore tag payload count disagreed with its boxy representation");
@@ -20037,7 +20098,7 @@ const ProcBodyBuilder = struct {
             const pattern = self.module.checked_bodies.pattern(patterns[0].pattern);
             switch (pattern.data) {
                 .numeral_literal => |literal| {
-                    if (literal.conversion != null) return null;
+                    if (literal.guard != null) return null;
                     const magnitude = exact_numeral.intMagnitude(
                         self.module.module_env.exactNumeral(literal.literal),
                     ) orelse return null;
@@ -22295,14 +22356,14 @@ const ProcBodyBuilder = struct {
             .nominal => |nominal| try self.lowerNominalPatternThen(pattern.ty, nominal.backing_pattern, source, on_match, miss, remaps),
             .applied_tag => |tag| try self.lowerAppliedTagPatternThen(pattern.ty, tag.name, tag.args, source, on_match, miss, remaps),
             .numeral_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin numeral pattern reached boxy match lowering before dictionary conversion lowering");
+                if (literal.guard) |guard| {
+                    break :blk try self.lowerCheckedLiteralGuard(pattern_id, guard, source, on_match, miss);
                 }
                 break :blk try self.lowerNumeralPatternThen(pattern.ty, source, literal.literal, on_match, miss);
             },
             .str_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin string pattern reached boxy match lowering before dictionary conversion lowering");
+                if (literal.guard) |guard| {
+                    break :blk try self.lowerCheckedLiteralGuard(pattern_id, guard, source, on_match, miss);
                 }
                 break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .str = literal.literal }, on_match, miss);
             },
@@ -23236,6 +23297,24 @@ const ProcBodyBuilder = struct {
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
         } });
+    }
+
+    /// Bind the matched value before evaluating its checker-selected equality
+    /// guard. Ordinary expression lowering owns conversion and method dispatch.
+    fn lowerCheckedLiteralGuard(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        guard: checked.CheckedExprId,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Allocator.Error!LIR.CFStmtId {
+        const binder = self.module.checked_bodies.literalPatternBinder(pattern_id);
+        try self.reserveBinderLocalIfFresh(binder, self.module.checked_bodies.pattern(pattern_id).ty);
+        const eq = try self.addFrameLocal(.bool);
+        const branch = try self.boolSwitchNoContinuation(eq, on_match, try self.patternMissJump(miss));
+        const compare = try self.lowerExprInto(eq, guard, branch);
+        return try self.bindMatchBinder(binder, source, &.{}, compare);
     }
 
     fn lowerLiteralPatternThen(
@@ -40879,7 +40958,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
             .literal = try testIntNumeral(42),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -41025,7 +41104,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
             .literal = try testSmallDecNumeral(value),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -41181,7 +41260,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
         .source_region = base.Region.zero(),
         .data = .{ .str_literal = .{
             .literal = @enumFromInt(fixtureTableIndex(0)),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{

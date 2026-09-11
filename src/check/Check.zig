@@ -234,6 +234,10 @@ optional_field_accesses: std.ArrayList(OptionalFieldAccess),
 /// `literal_field_kind_watermark` tracks the swept prefix (REPL sessions
 /// finalize repeatedly on one Check).
 literal_field_kinds: std.ArrayList(LiteralFieldKind),
+/// Fresh record expressions registered while checking their construction.
+/// Settled equality classes distribute accepted omission decisions to every
+/// contributing literal; ordinary type unions carry no construction metadata.
+record_constructions: std.ArrayList(CIR.Expr.Idx),
 literal_field_kind_watermark: usize = 0,
 /// Update-field probes are committed at their owning generalization boundary
 /// so an unresolved scheme cannot change runtime field layout per caller.
@@ -2582,6 +2586,7 @@ fn initAssumePrepared(
         .pending_default_checks = .empty,
         .optional_field_accesses = .empty,
         .literal_field_kinds = .empty,
+        .record_constructions = .empty,
         .pending_record_updates = .empty,
         .pending_record_destructs = .empty,
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
@@ -2788,6 +2793,7 @@ pub fn deinit(self: *Self) void {
     self.pending_default_checks.deinit(self.gpa);
     self.optional_field_accesses.deinit(self.gpa);
     self.literal_field_kinds.deinit(self.gpa);
+    self.record_constructions.deinit(self.gpa);
     self.pending_record_updates.deinit(self.gpa);
     self.pending_record_destructs.deinit(self.gpa);
     self.pending_default_seen.deinit(self.gpa);
@@ -4955,18 +4961,8 @@ fn recordAbsorbedDefaults(self: *Self, construction_var: ?Var, a: Var, b: Var) s
         const expr = mb_expr orelse
             std.debug.panic("type checker invariant violated: defaulted-field width absorption lost its source record construction", .{});
 
-        var already_recorded = false;
-        for (self.cir.record_omitted_defaults.items.items) |existing| {
-            if (existing.expr == expr and existing.field_name == absorbed.name and
-                existing.origin_module == absorbed.default.origin_module and
-                existing.default_expr_node == absorbed.default.expr_node)
-            {
-                already_recorded = true;
-                break;
-            }
-        }
-        if (already_recorded) continue;
-
+        // Settlement coalesces equal decisions before distributing them to
+        // constructions. Recording an event must not scan the module's prefix.
         _ = try self.cir.record_omitted_defaults.append(self.cir.gpa, .{
             .expr = expr,
             .field_name = absorbed.name,
@@ -7983,7 +7979,7 @@ fn checkNumeralLiteral(
 
     _ = try self.unify(occurrence_var, flex_var, env);
     if (occurrence == .pattern) {
-        try self.mkPatternLiteralEqConstraint(occurrence_var, env, region);
+        try self.mkPatternLiteralEqConstraint(node_idx, occurrence_var, env, region);
     }
 }
 
@@ -10360,7 +10356,7 @@ fn constraintSourceExpr(
             return @enumFromInt(plan.node_idx);
         }
         if (pattern_failure_expr == null) {
-            if (plan.patternFailureOwner()) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
+            if (plan.patternFailureOwner(&self.cir.store)) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
         }
     }
     return pattern_failure_expr;
@@ -10500,7 +10496,7 @@ fn literalPatternFailureExprForConstraint(
         if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-        const raw = plan.patternFailureOwner() orelse continue;
+        const raw = plan.patternFailureOwner(&self.cir.store) orelse continue;
         return self.literalFailureOwnerExpr(@enumFromInt(raw));
     }
     return null;
@@ -10530,7 +10526,7 @@ fn poisonLiteralFailureOwners(
             const owner: CIR.Node.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
                 @enumFromInt(plan.node_idx)
             else
-                @enumFromInt(plan.patternFailureOwner() orelse continue);
+                @enumFromInt(plan.patternFailureOwner(&self.cir.store) orelse continue);
             var already_recorded = false;
             for (owners.items) |recorded| {
                 if (recorded == owner) {
@@ -16936,7 +16932,7 @@ fn checkPatternHelp(
                 env,
             );
             _ = try self.unify(pattern_var, flex_var, env);
-            try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
+            try self.mkPatternLiteralEqConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, env, pattern_region);
         },
         .str_interpolation => |str| {
             const str_var = try self.freshStr(env, pattern_region);
@@ -18692,6 +18688,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 // Then unify with the actual expression
                 _ = try self.unify(record_being_updated_var, expr_var, env);
             } else {
+                try self.record_constructions.append(self.gpa, expr_idx);
                 const source_fields = self.cir.store.sliceRecordFields(e.fields);
 
                 // Build a record skeleton with one payload slot per supplied
@@ -18832,6 +18829,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_empty_record => {
+            try self.record_constructions.append(self.gpa, expr_idx);
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         // tags //
@@ -23280,7 +23278,7 @@ fn checkBinopExpr(
             const ret_var = lhs_var;
 
             // Create the binop static dispatch function: lhs.method(rhs) -> lhs
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 lhs_var,
                 rhs_var,
                 ret_var,
@@ -23331,7 +23329,7 @@ fn checkBinopExpr(
             const arg_var = rhs_var;
 
             // Create the binop constraint with unified arg type
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
                 ret_var,
@@ -23388,7 +23386,7 @@ fn checkBinopExpr(
             const ret_var = try self.mkRangeVar(arg_var, env, expr_region);
 
             // Create the binop static dispatch function: bound.method(bound) -> Range(bound)
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
                 ret_var,
@@ -23414,7 +23412,7 @@ fn checkBinopExpr(
             }
 
             const eq_ret_var = try self.freshBool(env, expr_region);
-            try self.mkBinopConstraint(
+            _ = try self.mkBinopConstraint(
                 rhs_var,
                 rhs_var,
                 eq_ret_var,
@@ -23457,7 +23455,7 @@ fn checkBinopExpr(
             const eq_ret_var = try self.freshBool(env, expr_region);
 
             // Create the eq static dispatch function: arg.is_eq(arg) -> Bool
-            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
+            _ = try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
 
             // Get the not method + ret var
             const not_method_name = self.cir.idents.not;
@@ -23664,12 +23662,14 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
 /// pattern compares the scrutinee against the literal's converted value.
 fn mkPatternLiteralEqConstraint(
     self: *Self,
+    node: CIR.Node.Idx,
     pattern_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
     const ret_var = try self.freshBool(env, region);
-    try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+    const fn_var = try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+    self.cir.store.recordLiteralPatternEquality(node, fn_var);
 }
 
 fn mkBinopConstraint(
@@ -23682,7 +23682,7 @@ fn mkBinopConstraint(
     env: *Env,
     region: Region,
     binop_expr_idx: ?CIR.Expr.Idx,
-) Allocator.Error!void {
+) Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -23718,6 +23718,7 @@ fn mkBinopConstraint(
     _ = try self.unify(constrained_var, lhs_var, env);
     try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint));
+    return constraint_fn_var;
 }
 
 fn publishBinopDispatchExpr(
@@ -25306,6 +25307,7 @@ const Probe = struct {
     pending_generated_parser_error_mappings_len: usize,
     rejected_static_dispatches_len: usize,
     record_omitted_defaults_len: usize,
+    record_constructions_len: usize,
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
@@ -25351,6 +25353,7 @@ const Probe = struct {
         // on descriptors the savepoint rollback above already restored.
         self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
         self.check.cir.record_omitted_defaults.items.shrinkRetainingCapacity(self.record_omitted_defaults_len);
+        self.check.record_constructions.shrinkRetainingCapacity(self.record_constructions_len);
         // Constructor relations recorded during the probe name the operand var
         // and the backing content the savepoint rollback just discarded.
         self.check.accepted_nominal_constructor_backings.shrinkRetainingCapacity(self.accepted_nominal_constructor_backings_len);
@@ -25431,6 +25434,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .pending_generated_parser_error_mappings_len = pending_generated_parser_error_mappings_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
         .record_omitted_defaults_len = record_omitted_defaults_len,
+        .record_constructions_len = self.record_constructions.items.len,
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
@@ -25884,6 +25888,88 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // defaulting rounds and constraint validation settle the types.
 }
 
+/// An accepted omission belongs to every fresh construction of the unified
+/// record that did not supply that field. Preserve the unifier's exact default
+/// identity even if later value relations normalize its field kind to required.
+/// This pass consumes registered constructions and accepted decisions only;
+/// it never discovers defaults by reopening nominal declarations or rows.
+fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
+    const entries = self.cir.record_omitted_defaults.items.items;
+    if (entries.len == 0) return;
+
+    const Decision = struct {
+        root: Var,
+        omission: ModuleEnv.RecordOmittedDefault,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            if (a.root != b.root) return @intFromEnum(a.root) < @intFromEnum(b.root);
+            if (a.omission.field_name != b.omission.field_name)
+                return @as(u32, @bitCast(a.omission.field_name)) < @as(u32, @bitCast(b.omission.field_name));
+            if (a.omission.origin_module != b.omission.origin_module)
+                return @intFromEnum(a.omission.origin_module) < @intFromEnum(b.omission.origin_module);
+            return a.omission.default_expr_node < b.omission.default_expr_node;
+        }
+    };
+    const decisions = try self.gpa.alloc(Decision, entries.len);
+    defer self.gpa.free(decisions);
+    for (entries, decisions) |entry, *decision| {
+        decision.* = .{
+            .root = self.types.resolveVar(ModuleEnv.varFrom(entry.expr)).var_,
+            .omission = entry,
+        };
+    }
+    std.mem.sort(Decision, decisions, {}, Decision.lessThan);
+
+    // Index only classes with accepted defaults. Identical decisions from
+    // already-guided sibling literals are visited once per construction.
+    const Range = struct { start: usize, end: usize };
+    var by_root = collections.DenseMap(Var, Range).init(self.gpa);
+    defer by_root.deinit();
+    var unique_len: usize = 0;
+    for (decisions) |decision| {
+        if (unique_len > 0 and !Decision.lessThan({}, decisions[unique_len - 1], decision)) continue;
+        decisions[unique_len] = decision;
+        const group = try by_root.getOrPut(decision.root);
+        if (!group.found_existing) group.value_ptr.* = .{ .start = unique_len, .end = unique_len };
+        unique_len += 1;
+        group.value_ptr.end = unique_len;
+    }
+
+    var emitted = collections.DenseMap(CIR.Expr.Idx, void).init(self.gpa);
+    defer emitted.deinit();
+    var output = try ModuleEnv.RecordOmittedDefault.SafeList.initCapacity(self.cir.gpa, @intCast(entries.len));
+    errdefer output.deinit(self.cir.gpa);
+    for (self.record_constructions.items) |expr_idx| {
+        if (self.hoistExprInvalidated(expr_idx) or self.erroneous_value_exprs.contains(expr_idx)) continue;
+        const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        if (resolved.desc.content == .err) continue;
+        const group = by_root.get(resolved.var_) orelse continue;
+        const seen = try emitted.getOrPut(expr_idx);
+        if (seen.found_existing) continue;
+        const expr = self.cir.store.getExpr(expr_idx);
+        const supplied_fields = fields: {
+            if (expr == .e_empty_record) break :fields &.{};
+            std.debug.assert(expr == .e_record and expr.e_record.ext == null);
+            break :fields self.cir.store.sliceRecordFields(expr.e_record.fields);
+        };
+        for (decisions[group.start..group.end]) |decision| {
+            const supplied = supplied: {
+                for (supplied_fields) |field_idx| {
+                    if (self.cir.store.getRecordField(field_idx).name == decision.omission.field_name)
+                        break :supplied true;
+                }
+                break :supplied false;
+            };
+            if (supplied) continue;
+            var omission = decision.omission;
+            omission.expr = expr_idx;
+            _ = try output.append(self.cir.gpa, omission);
+        }
+    }
+    self.cir.record_omitted_defaults.deinit(self.cir.gpa);
+    self.cir.record_omitted_defaults = output;
+}
+
 /// Post-settlement cycle residue on defaults (design.md "Defaulted Fields"):
 /// canonicalization's end-of-module pass already rejected every
 /// name-resolvable materialization cycle (and dropped those defaults, so
@@ -25894,6 +25980,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// defaults materialize per specialization, so a parametric field lowers its
 /// default at each site's monotype.)
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
+    try self.distributeRecordOmittedDefaults();
     // Every judgment and retirement below is per pending default, so a
     // module with none has nothing to build or sweep: gating here keeps the
     // evidence indexes (and `dispatch_scheme_uses`' loud release-mode
@@ -34471,7 +34558,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         };
         self.cir.finalizeLiteralDispatchResolution(@enumFromInt(plan.node_idx), resolution);
         if (resolution == .checked_error) {
-            if (plan.patternFailureOwner()) |owner| {
+            if (plan.patternFailureOwner(&self.cir.store)) |owner| {
                 try failed_pattern_owners.append(self.gpa, @enumFromInt(owner));
             }
         }
@@ -34514,12 +34601,12 @@ test "literal pattern recovery retires all discarded parameter evidence" {
     // No detached parameter plan may survive even though its raw pattern node
     // still exists in the append-only CIR store.
     for (test_env.module_env.store.literalDispatchPlans()) |plan| {
-        try std.testing.expect(plan.patternFailureOwner() == null);
+        try std.testing.expect(plan.patternFailureOwner(&test_env.module_env.store) == null);
         try std.testing.expect(plan.dispatchResolution() == .builtin_direct);
     }
     var retired_patterns: usize = 0;
     for (test_env.checker.retired_literal_dispatch_plans.items) |plan| {
-        if (plan.patternFailureOwner() != null) retired_patterns += 1;
+        if (plan.patternFailureOwner(&test_env.module_env.store) != null) retired_patterns += 1;
     }
     try std.testing.expectEqual(@as(usize, 3), retired_patterns);
 }
@@ -34540,7 +34627,7 @@ test "literal pattern recovery preserves a generalized definition after a reject
     try test_env.assertDefTypeOptions("good", "Bool", .{ .allow_type_errors = true });
     var found_generalized_pattern = false;
     for (test_env.module_env.store.literalDispatchPlans()) |plan| {
-        if (plan.patternFailureOwner() == null) continue;
+        if (plan.patternFailureOwner(&test_env.module_env.store) == null) continue;
         try std.testing.expectEqual(LiteralDispatchPlan.Resolution.specialization_dispatch, plan.dispatchResolution());
         found_generalized_pattern = true;
     }

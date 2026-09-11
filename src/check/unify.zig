@@ -418,7 +418,7 @@ const Unifier = struct {
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
     unresolved_b: ?Var,
-    /// The two record vars of the innermost record-vs-record relation currently
+    /// The checked record vars of the innermost record relation currently
     /// being unified. A row absorbed into an empty record names that empty row's
     /// var, which for a nested literal is the literal's internal extension var
     /// rather than the literal's own var; the enclosing pair is how the checker
@@ -736,6 +736,8 @@ const Unifier = struct {
                 self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
                 self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
+            } else if (frame_tag == .restore_enclosing_records) {
+                self.enclosing_records = frame.restore_enclosing_records;
             } else if (frame_tag == .mismatch_handler) {
                 const handler = frame.mismatch_handler;
                 if (handler != .propagate) return try self.applyMismatchHandling(handler);
@@ -1630,6 +1632,7 @@ const Unifier = struct {
                 // Relate the source construction directly to the backing row.
                 // Never merge the opened backing root with the nominal result:
                 // later constructions may reuse that structural opening.
+                try self.enterRecordRelation(vars);
                 try self.unifyRowWithEmptyRecord(vars, source, record.fields, record.ext, direction);
             }
             return;
@@ -2394,6 +2397,19 @@ const Unifier = struct {
         }
     }
 
+    /// Retain the checked representatives of a record relation while its
+    /// children run. A polymorphic call's raw operand may name a formal slot,
+    /// whereas its checked representative still names the record construction.
+    fn enterRecordRelation(self: *Self, vars: *const ResolvedVarDescs) std.mem.Allocator.Error!void {
+        // Pushed before any child work so it pops once that work has drained;
+        // a plain `defer` would restore while the children are still queued.
+        _ = try self.scratch.unify_work_stack.append(
+            self.scratch.gpa,
+            .{ .restore_enclosing_records = self.enclosing_records },
+        );
+        self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
+    }
+
     /// Unify two extensible records.
     ///
     /// This function implements Elm-style record unification.
@@ -2482,13 +2498,7 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Pushed before any child work so it pops once that work has drained;
-        // a plain `defer` would restore while the children are still queued.
-        _ = try self.scratch.unify_work_stack.append(
-            self.scratch.gpa,
-            .{ .restore_enclosing_records = self.enclosing_records },
-        );
-        self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
+        try self.enterRecordRelation(vars);
 
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var

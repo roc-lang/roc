@@ -8177,6 +8177,10 @@ fn appendStaticDispatchTypeRoots(
         // target and callable roots. Direct builtins need neither.
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.fn_var));
+        if (plan.patternContext(&module.moduleEnvConst().store)) |context| {
+            std.debug.assert(context.equality_fn_var_plus_one != 0);
+            _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(context.equality_fn_var_plus_one - 1));
+        }
     }
 }
 
@@ -10349,16 +10353,15 @@ pub const CheckedPatternData = union(enum) {
     /// monotype lowering for the pattern's concrete type.
     numeral_literal: struct {
         literal: ModuleEnv.NumeralLiteral,
-        /// Synthesized `.numeral` checked conversion expression for matching
-        /// this literal against a non-builtin number type; null on the
-        /// builtin fast path.
-        conversion: ?CheckedExprId = null,
+        /// Checked equality against the converted literal. Its lhs reads this
+        /// pattern's explicit binder; null on the builtin fast path.
+        guard: ?CheckedExprId = null,
     },
     str_literal: struct {
         literal: CheckedStringLiteralId,
-        /// Synthesized `.str_from_quote` checked expression for matching this
-        /// literal against a non-builtin string type; null on the Str fast path.
-        conversion: ?CheckedExprId = null,
+        /// Checked equality against the converted quote, using this pattern's
+        /// explicit binder; null on the Str fast path.
+        guard: ?CheckedExprId = null,
     },
     str_interpolation: struct {
         prefix: CheckedStringLiteralId,
@@ -10716,11 +10719,11 @@ pub const StoredCheckedPatternData = union(enum) {
     tuple: CheckedBodyRange,
     numeral_literal: struct {
         literal: ModuleEnv.NumeralLiteral,
-        conversion: ?CheckedExprId = null,
+        guard: ?CheckedExprId = null,
     },
     str_literal: struct {
         literal: CheckedStringLiteralId,
-        conversion: ?CheckedExprId = null,
+        guard: ?CheckedExprId = null,
     },
     str_interpolation: struct {
         prefix: CheckedStringLiteralId,
@@ -10937,8 +10940,8 @@ fn reconstructCheckedPatternData(pool_owner: anytype, stored: StoredCheckedPatte
             .rest = l.rest,
         } },
         .tuple => |r| .{ .tuple = pool_owner.patternIdPool()[r.start .. r.start + r.len] },
-        .numeral_literal => |v| .{ .numeral_literal = .{ .literal = v.literal, .conversion = v.conversion } },
-        .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .conversion = v.conversion } },
+        .numeral_literal => |v| .{ .numeral_literal = .{ .literal = v.literal, .guard = v.guard } },
+        .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .guard = v.guard } },
         .str_interpolation => |s| .{ .str_interpolation = .{
             .prefix = s.prefix,
             .steps = pool_owner.strPatternStepPool()[s.steps.start .. s.steps.start + s.steps.len],
@@ -11184,6 +11187,12 @@ pub const CheckedBodyStoreView = struct {
 
     pub fn patternBinder(self: CheckedBodyStoreView, id: PatternBinderId) CheckedPatternBinder {
         return self.pattern_binders[@intFromEnum(id)];
+    }
+
+    /// A custom literal guard reads the matched value through this explicit binder.
+    pub fn literalPatternBinder(self: CheckedBodyStoreView, pattern_id: CheckedPatternId) PatternBinderId {
+        return self.pattern_binder_by_pattern[@intFromEnum(pattern_id)] orelse
+            checkedArtifactInvariant("custom literal pattern had no matched-value binder", .{});
     }
 
     pub fn stringLiteral(self: CheckedBodyStoreView, id: CheckedStringLiteralId) []const u8 {
@@ -11805,10 +11814,11 @@ pub const CheckedBodyStore = struct {
     /// Checker-selected defaults attached to their exact omission sites.
     record_omitted_defaults: std.ArrayList(CheckedRecordOmittedDefault) = .empty,
     source_node_map: CheckedSourceNodeMap = .{},
-    /// Synthesized `from_numeral` conversion expressions for literal patterns,
-    /// keyed by the pattern's source node. Pattern nodes already occupy their
-    /// slot in `source_node_map`, so these live in a dedicated table.
-    numeral_conversion_exprs: std.ArrayList(NumeralConversionExpr) = .empty,
+    /// Synthesized conversion, matched-value lookup, and equality expressions
+    /// for custom literal patterns, ordered by source node. Pattern nodes
+    /// already occupy their slot in `source_node_map`, so publication uses
+    /// this build-only table to attach their ordinary checked expression data.
+    literal_pattern_exprs: std.ArrayList(LiteralPatternExprs) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
@@ -11817,11 +11827,13 @@ pub const CheckedBodyStore = struct {
     /// store, so the mixin's `deserialize` resets them to their default. Declared
     /// here so a *data* field accidentally left out of `Serialized` is a compile
     /// error rather than a silently-dropped field.
-    pub const serde_transient_fields = [_][]const u8{ "source_node_map", "numeral_conversion_exprs" };
+    pub const serde_transient_fields = [_][]const u8{ "source_node_map", "literal_pattern_exprs" };
 
-    pub const NumeralConversionExpr = struct {
+    pub const LiteralPatternExprs = struct {
         raw_node: u32,
         expr: CheckedExprId,
+        scrutinee: CheckedExprId,
+        equality: CheckedExprId,
     };
 
     /// See `default_exprs`.
@@ -11916,8 +11928,8 @@ pub const CheckedBodyStore = struct {
         errdefer allocator.free(pattern_binder_by_pattern);
         @memset(pattern_binder_by_pattern, null);
 
-        var numeral_conversion_exprs = std.ArrayList(NumeralConversionExpr).empty;
-        errdefer numeral_conversion_exprs.deinit(allocator);
+        var literal_pattern_exprs = std.ArrayList(LiteralPatternExprs).empty;
+        errdefer literal_pattern_exprs.deinit(allocator);
 
         var match_branch_pattern_pool = std.ArrayList(CheckedMatchBranchPattern).empty;
         errdefer match_branch_pattern_pool.deinit(allocator);
@@ -11938,7 +11950,7 @@ pub const CheckedBodyStore = struct {
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .checked_types = checked_types,
             .exprs = &exprs,
-            .numeral_conversion_exprs = &numeral_conversion_exprs,
+            .literal_pattern_exprs = &literal_pattern_exprs,
             .match_branch_pattern_pool = &match_branch_pattern_pool,
             .binder_remap_pool = &binder_remap_pool,
         };
@@ -11996,8 +12008,12 @@ pub const CheckedBodyStore = struct {
             } else &.{};
         }
 
-        // Allocated after the copy pass because copying literal patterns may
-        // append synthesized numeral-conversion expressions.
+        for (literal_pattern_exprs.items) |literal| {
+            dispatch_operands[@intFromEnum(literal.equality)] = try allocator.dupe(CheckedExprId, &.{ literal.scrutinee, literal.expr });
+        }
+
+        // Allocated after the copy pass because custom literal patterns append
+        // their conversion and equality expressions.
         const expr_diverges = try allocator.alloc(bool, exprs.items.len);
         errdefer allocator.free(expr_diverges);
         @memset(expr_diverges, false);
@@ -12071,7 +12087,7 @@ pub const CheckedBodyStore = struct {
         );
         for (store.stored_exprs.items, expr_contains_diagnostic_error) |*stored, contains_diagnostic_error| stored.contains_diagnostic_error = contains_diagnostic_error;
         try store.pattern_binder_by_pattern.appendSlice(allocator, pattern_binder_by_pattern);
-        try store.numeral_conversion_exprs.appendSlice(allocator, numeral_conversion_exprs.items);
+        try store.literal_pattern_exprs.appendSlice(allocator, literal_pattern_exprs.items);
 
         // The build arrays' per-element owned slices are now copied into pools.
         allocator.free(expr_diverges);
@@ -12081,7 +12097,7 @@ pub const CheckedBodyStore = struct {
         allocator.free(expr_inspect_evaluation_may_be_elided);
         allocator.free(expr_contains_diagnostic_error);
         allocator.free(pattern_binder_by_pattern);
-        numeral_conversion_exprs.deinit(allocator);
+        literal_pattern_exprs.deinit(allocator);
         deinitCheckedExprList(allocator, exprs.items);
         exprs.deinit(allocator);
         deinitCheckedPatternList(allocator, patterns.items);
@@ -12513,8 +12529,8 @@ pub const CheckedBodyStore = struct {
             .record_destructure => |destructs| .{ .record_destructure = try self.appendRecordDestructs(allocator, destructs) },
             .list => |l| .{ .list = .{ .patterns = try self.appendPatternIds(allocator, l.patterns), .rest = l.rest } },
             .tuple => |patterns| .{ .tuple = try self.appendPatternIds(allocator, patterns) },
-            .numeral_literal => |v| .{ .numeral_literal = .{ .literal = v.literal, .conversion = v.conversion } },
-            .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .conversion = v.conversion } },
+            .numeral_literal => |v| .{ .numeral_literal = .{ .literal = v.literal, .guard = v.guard } },
+            .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .guard = v.guard } },
             .str_interpolation => |s| .{ .str_interpolation = .{
                 .prefix = s.prefix,
                 .steps = try self.appendStrPatternSteps(allocator, s.steps),
@@ -12677,7 +12693,7 @@ pub const CheckedBodyStore = struct {
         };
     }
 
-    // `source_node_map` and `numeral_conversion_exprs` are BUILD-ONLY side tables: they
+    // `source_node_map` and `literal_pattern_exprs` are BUILD-ONLY side tables: they
     // are not serialized and are empty on a frozen (deserialized) store. These accessors
     // are only meaningful during build, so they assert `!serialized`—a frozen access is
     // a bug, and this makes it a loud panic instead of a silent wrong `null`.
@@ -12703,9 +12719,17 @@ pub const CheckedBodyStore = struct {
 
     pub fn numeralConversionExprAtRawNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
         std.debug.assert(!self.serialized);
-        for (self.numeral_conversion_exprs.items) |entry| {
-            if (entry.raw_node == raw_node) return entry.expr;
+        // Body copying publishes these rows in source-node order. Binary
+        // lookup keeps repeated literal-plan attachment subquadratic without
+        // a second index or a node-sized allocation.
+        const entries = self.literal_pattern_exprs.items;
+        var lo: usize = 0;
+        var hi = entries.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (entries[mid].raw_node < raw_node) lo = mid + 1 else hi = mid;
         }
+        if (lo < entries.len and entries[lo].raw_node == raw_node) return entries[lo].expr;
         return null;
     }
 
@@ -12730,18 +12754,9 @@ pub const CheckedBodyStore = struct {
         self: *CheckedBodyStore,
         plans: *const static_dispatch.StaticDispatchPlanTable,
     ) void {
-        for (plans.by_expr) |kv| {
-            const src_expr: CIR.Expr.Idx = @enumFromInt(kv.key);
-            const plan_id: static_dispatch.StaticDispatchPlanId = @enumFromInt(kv.val);
-            const checked_expr = self.exprIdForSource(src_expr) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: static dispatch expression {d} has no checked expression id",
-                        .{@intFromEnum(src_expr)},
-                    );
-                }
-                unreachable;
-            };
+        for (plans.plans, 0..) |plan, index| {
+            const plan_id: static_dispatch.StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(index)));
+            const checked_expr = plan.expr;
             const data = &self.stored_exprs.items[@intFromEnum(checked_expr)].data;
             if (data.* == .dispatch_call) {
                 data.* = .{ .dispatch_call = plan_id };
@@ -12751,6 +12766,9 @@ pub const CheckedBodyStore = struct {
                 data.* = .{ .method_eq = plan_id };
             } else if (data.* == .type_dispatch_call) {
                 data.* = .{ .type_dispatch_call = plan_id };
+            } else if (data.* == .numeral or data.* == .str_from_quote) {
+                // Their literal-specific attachment runs below.
+                continue;
             } else {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
@@ -13000,7 +13018,7 @@ pub const CheckedBodyStore = struct {
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
         self.source_node_map.deinit(allocator);
         if (!self.serialized) {
-            self.numeral_conversion_exprs.deinit(allocator);
+            self.literal_pattern_exprs.deinit(allocator);
             self.pattern_binder_by_pattern.deinit(allocator);
             self.pattern_binders.deinit(allocator);
             self.string_ranges.deinit(allocator);
@@ -13603,12 +13621,12 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                 },
                 .tuple => |items| self.patternSpan(items),
                 .numeral_literal => |literal| blk: {
-                    const conversion = literal.conversion orelse break :blk false;
-                    break :blk try self.expr(conversion);
+                    const guard = literal.guard orelse break :blk false;
+                    break :blk try self.expr(guard);
                 },
                 .str_literal => |literal| blk: {
-                    const conversion = literal.conversion orelse break :blk false;
-                    break :blk try self.expr(conversion);
+                    const guard = literal.guard orelse break :blk false;
+                    break :blk try self.expr(guard);
                 },
                 .str_interpolation => |str| blk: {
                     for (str.steps) |step| {
@@ -14315,7 +14333,7 @@ const CheckedBodyPayloadCopier = struct {
     pattern_binder_by_pattern: []?PatternBinderId,
     checked_types: *const CheckedTypePublication,
     exprs: *std.ArrayList(CheckedExpr),
-    numeral_conversion_exprs: *std.ArrayList(CheckedBodyStore.NumeralConversionExpr),
+    literal_pattern_exprs: *std.ArrayList(CheckedBodyStore.LiteralPatternExprs),
     /// Flat pools backing range-form match branches; transferred 1:1 into the
     /// store's pools at commit, so the in-branch ranges stay valid.
     match_branch_pattern_pool: *std.ArrayList(CheckedMatchBranchPattern),
@@ -14561,10 +14579,10 @@ const CheckedBodyPayloadCopier = struct {
         return try self.string_builder.internBytes(bytes.items);
     }
 
-    /// Synthesize the `.str_from_quote` checked expression a string literal
-    /// pattern converts through when its type is a non-builtin string type,
-    /// registered in the conversion table the same way numeral patterns are.
-    fn quoteConversionExprForPattern(
+    /// Synthesize a custom quote pattern's conversion and equality guard.
+    /// Its conversion retains an explicit source-node relation for dispatch
+    /// attachment and compile-time evaluation.
+    fn quoteGuardExprForPattern(
         self: *@This(),
         pattern_idx: CIR.Pattern.Idx,
         literal: StringLiteral.Idx,
@@ -14591,11 +14609,7 @@ const CheckedBodyPayloadCopier = struct {
                 .literal = try self.string_builder.intern(literal),
             } },
         });
-        try self.numeral_conversion_exprs.append(self.allocator, .{
-            .raw_node = @intFromEnum(node),
-            .expr = id,
-        });
-        return id;
+        return try self.literalPatternGuard(pattern_idx, id, plan);
     }
 
     /// Copy a numeric literal into the artifact as its exact digit facts.
@@ -14634,12 +14648,10 @@ const CheckedBodyPayloadCopier = struct {
         };
     }
 
-    /// Synthesize the `.numeral` checked conversion expression a literal
-    /// pattern converts through when its type is a non-builtin number type.
-    /// The expression is registered at the pattern's source node so
-    /// dispatch-plan attachment and compile-time root creation find it the
-    /// same way they find literal expressions.
-    fn numeralConversionExprForPattern(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!?CheckedExprId {
+    /// Synthesize a custom numeral pattern's conversion and equality guard.
+    /// Its conversion retains an explicit source-node relation for dispatch
+    /// attachment and compile-time evaluation.
+    fn numeralGuardExprForPattern(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!?CheckedExprId {
         const node = ModuleEnv.nodeIdxFrom(pattern_idx);
         const plan = self.module.moduleEnvConst().numeralDispatchPlanForNode(node) orelse return null;
         switch (plan.dispatchResolution()) {
@@ -14662,11 +14674,49 @@ const CheckedBodyPayloadCopier = struct {
             .source_region = self.module.regionAt(node),
             .data = .{ .numeral = .{ .literal = literal, .plan = null } },
         });
-        try self.numeral_conversion_exprs.append(self.allocator, .{
-            .raw_node = @intFromEnum(node),
-            .expr = id,
+        return try self.literalPatternGuard(pattern_idx, id, plan);
+    }
+
+    /// A custom pattern owns an ordinary method-equality expression and a
+    /// matched-value binder. Dispatch publication supplies its exact plan.
+    fn literalPatternGuard(
+        self: *@This(),
+        pattern_idx: CIR.Pattern.Idx,
+        conversion: CheckedExprId,
+        plan: can.NodeStore.LiteralDispatchPlan,
+    ) Allocator.Error!CheckedExprId {
+        const pattern_id = self.checkedPattern(pattern_idx);
+        const binder: PatternBinderId = @enumFromInt(@as(u32, @intCast(self.pattern_binders.items.len)));
+        std.debug.assert(self.pattern_binder_by_pattern[@intFromEnum(pattern_id)] == null);
+        try self.pattern_binders.append(self.allocator, .{ .id = binder, .pattern = pattern_id, .reassignable = false });
+        self.pattern_binder_by_pattern[@intFromEnum(pattern_id)] = binder;
+        const context = plan.patternContext(&self.module.moduleEnvConst().store) orelse unreachable;
+        std.debug.assert(context.equality_fn_var_plus_one != 0);
+        const callable = try self.checkedTypeForRequiredVar(@enumFromInt(context.equality_fn_var_plus_one - 1), "literal pattern equality callable was not published");
+        const result_ty = checkedFunctionPayload(&self.checked_types.store, callable, "literal pattern equality").ret;
+        const ty = self.exprs.items[@intFromEnum(conversion)].ty;
+        const region = self.exprs.items[@intFromEnum(conversion)].source_region;
+        const lhs: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = lhs,
+            .ty = ty,
+            .source_region = region,
+            .data = .{ .lookup_local = .{ .pattern = pattern_id, .resolved = null } },
         });
-        return id;
+        const equality: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = equality,
+            .ty = result_ty,
+            .source_region = region,
+            .data = .{ .method_eq = null },
+        });
+        try self.literal_pattern_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(pattern_idx),
+            .expr = conversion,
+            .scrutinee = lhs,
+            .equality = equality,
+        });
+        return equality;
     }
 
     fn copyPatternData(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!CheckedPatternData {
@@ -14700,24 +14750,24 @@ const CheckedBodyPayloadCopier = struct {
             .tuple => |tuple| .{ .tuple = try self.copyPatternSpan(tuple.patterns) },
             .num_literal => .{ .numeral_literal = .{
                 .literal = self.exactNumeralLiteralForPattern(pattern_idx),
-                .conversion = try self.numeralConversionExprForPattern(pattern_idx),
+                .guard = try self.numeralGuardExprForPattern(pattern_idx),
             } },
             .num_from_numeral_literal => .{ .numeral_literal = .{
                 .literal = self.exactNumeralLiteralForPattern(pattern_idx),
-                .conversion = try self.numeralConversionExprForPattern(pattern_idx),
+                .guard = try self.numeralGuardExprForPattern(pattern_idx),
             } },
             .small_dec_literal => |dec| .{ .numeral_literal = .{
                 .literal = self.exactNumeralLiteralForPattern(pattern_idx),
-                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+                .guard = if (dec.has_suffix) null else try self.numeralGuardExprForPattern(pattern_idx),
             } },
             .dec_literal => |dec| .{ .numeral_literal = .{
                 .literal = self.exactNumeralLiteralForPattern(pattern_idx),
-                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+                .guard = if (dec.has_suffix) null else try self.numeralGuardExprForPattern(pattern_idx),
             } },
             .frac_f32_literal, .frac_f64_literal => checkedArtifactInvariant("float-valued CIR literal pattern (no exact digits) reached artifact publication", .{}),
             .str_literal => |str| .{ .str_literal = .{
                 .literal = try self.string_builder.intern(str.literal),
-                .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
+                .guard = try self.quoteGuardExprForPattern(pattern_idx, str.literal),
             } },
             .str_interpolation => |str| .{ .str_interpolation = .{
                 .prefix = try self.string_builder.intern(str.prefix),
@@ -16170,6 +16220,19 @@ pub const ResolvedValueRefTable = struct {
             if (resolved_ref == .local_proc and resolved_ref.local_proc.is_alias) {
                 try callable_aliases.append(allocator, id);
             }
+        }
+
+        for (checked_bodies.literal_pattern_exprs.items) |literal| {
+            const expr = checked_bodies.expr(literal.scrutinee);
+            const binder = checked_bodies.patternBinderForCheckedPattern(expr.data.lookup_local.pattern) orelse unreachable;
+            const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
+            try records.append(allocator, .{
+                .expr = expr.id,
+                .ref = .{ .pattern_binder = .{ .binder = binder } },
+                .checked_ty = expr.ty,
+                .scope_depth = 0,
+            });
+            by_checked_expr[@intFromEnum(expr.id)] = id;
         }
 
         try appendSyntheticLocalLookupRefs(
@@ -20499,10 +20562,10 @@ const CheckedTemplateRefCollector = struct {
                     if (step.capture) |capture| try self.collectPattern(capture);
                 }
             },
+            .numeral_literal => |literal| if (literal.guard) |guard| try self.collectExpr(guard),
+            .str_literal => |literal| if (literal.guard) |guard| try self.collectExpr(guard),
             .pending,
             .assign,
-            .numeral_literal,
-            .str_literal,
             .underscore,
             .runtime_error,
             => {},
@@ -21826,10 +21889,10 @@ const NestedProcSiteBuilder = struct {
                     if (step.capture) |capture| try self.scanPattern(capture, owner);
                 }
             },
+            .numeral_literal => |literal| if (literal.guard) |guard| try self.scanExpr(guard, owner, false),
+            .str_literal => |literal| if (literal.guard) |guard| try self.scanExpr(guard, owner, false),
             .pending,
             .assign,
-            .numeral_literal,
-            .str_literal,
             .underscore,
             .runtime_error,
             => {},
@@ -31269,7 +31332,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 92 distinguishes generalized callable aliases from runtime
     // value bindings and function-body declarations.
     // Version 93 distinguishes rejected function values from callable templates.
-    const serialized_layout_version: u32 = 93;
+    // Version 94 retains explicit equality guards and matched-value binders
+    // for custom literal patterns.
+    const serialized_layout_version: u32 = 94;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37835,8 +37900,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xA8, 0x29, 0x31, 0xA7, 0x6F, 0x2A, 0xF0, 0x18, 0x4F, 0x8D, 0xEF, 0xDC, 0x28, 0xCA, 0xB7, 0x35,
-        0xAF, 0x2C, 0x32, 0x0D, 0x48, 0x6E, 0x0C, 0x54, 0x1D, 0x5C, 0xEA, 0x64, 0x62, 0xCF, 0xB5, 0x8A,
+        0xD7, 0x46, 0xCF, 0x78, 0xBA, 0x30, 0x9B, 0x80, 0xAE, 0xC6, 0x91, 0x50, 0x5F, 0xB2, 0xD7, 0x53,
+        0xDC, 0x7B, 0xEF, 0x6D, 0x06, 0x6C, 0x66, 0x30, 0xD7, 0xF4, 0x5D, 0x5D, 0x06, 0x0C, 0x7F, 0x87,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
