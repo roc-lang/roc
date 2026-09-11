@@ -9066,7 +9066,9 @@ identity. This work is linear only in the function's evidence vector at a
 specialization request; the
 existing specialization cache prevents duplicate function bodies. Aggregate
 restoration neither scans nested values nor reconstructs where a function came
-from.
+from. Resolution borrows immutable evidence until an entry resolves, then copies
+the vector once for that request. An unchanged vector is returned directly.
+Unresolved results are not memoized across instantiation-graph refinement.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
