@@ -289,9 +289,9 @@ pub const ConstFnEvidence = union(enum(u8)) {
     },
     structural: ConstFnStructuralEvidence,
     /// A callable-reachable requirement that must be resolved from the
-    /// concrete function type when this stored function is restored.
+    /// concrete function type when this stored function is restored. The slot
+    /// within its owning evidence vector supplies the checked requirement path.
     from_callable: struct {
-        index: u32,
         independent_callable: bool = false,
     },
     /// Abstract local scheme parameter, supplied by the checked use edge.
@@ -1271,7 +1271,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         } },
         .{ .structural = .{ .derivation = .equality } },
         .checked_error,
-        .{ .from_callable = .{ .index = 2, .independent_callable = true } },
+        .{ .from_callable = .{ .independent_callable = true } },
         .{ .from_scheme = 3 },
     };
     const evidence_frames = [_]ConstFnEvidenceFrame{
@@ -1346,7 +1346,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.subtree_len);
     try std.testing.expectEqual(ConstFnEvidence{ .structural = .{ .derivation = .equality } }, loaded_fn.evidence[1]);
     try std.testing.expectEqual(ConstFnEvidence.checked_error, loaded_fn.evidence[2]);
-    try std.testing.expectEqual(ConstFnEvidence{ .from_callable = .{ .index = 2, .independent_callable = true } }, loaded_fn.evidence[3]);
+    try std.testing.expectEqual(ConstFnEvidence{ .from_callable = .{ .independent_callable = true } }, loaded_fn.evidence[3]);
     try std.testing.expectEqual(ConstFnEvidence{ .from_scheme = 3 }, loaded_fn.evidence[4]);
     try std.testing.expectEqualSlices(ConstFnEvidenceFrame, &evidence_frames, loaded_fn.evidence_frames);
     try std.testing.expectEqual(@as(?u32, 1), loaded_fn.evidence_frame_head);

@@ -249,6 +249,34 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Err(Wrapped(B(\"propagated\")))" },
     },
     .{
+        .name = "issue 11301: stored record callables forward evidence through nested scopes independently",
+        .source_kind = .module,
+        .source =
+        \\stored = { invoke: outer }
+        \\outer = |hooks| {
+        \\    _ = hooks.get
+        \\    forward = |next| middle(next)
+        \\    forward(hooks)
+        \\}
+        \\middle = |hooks| {
+        \\    get = hooks.get
+        \\    _ = get("name")
+        \\    inner(hooks)
+        \\}
+        \\inner = |hooks| {
+        \\    run = hooks.run
+        \\    output = run()?
+        \\    _ = output.trim()
+        \\    Ok({})
+        \\}
+        \\main = (
+        \\    (stored.invoke)({ run: || Err(CommandNotFound), get: |_name| "x" }),
+        \\    (stored.invoke)({ run: || Ok("  found  "), get: |_name| "y" }),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(Err(CommandNotFound), Ok({}))" },
+    },
+    .{
         .name = "issue 11217: stored closures retain enclosing callable alias contexts",
         .source_kind = .module,
         .source =

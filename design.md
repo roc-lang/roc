@@ -9049,8 +9049,12 @@ does not mutate checked data or create a second name registry.
 When an edge uses a procedure as data, an otherwise-unpinned requirement that
 is reachable through the procedure's own callable type is not
 `unreachable`. Checker output records `from_callable(k)` at that construction
-site, where `k` is the requirement's template evidence-param index and its
-evidence-param record owns the exact dispatcher path. If compile-time
+site, where `k` is the containing vector slot, whose evidence-param record owns
+the exact dispatcher path. Symbolic entries carry no separate index: forwarding
+into another scheme makes the destination slot authoritative, even when the two
+schemes enumerate requirements in different orders. Live and stored evidence,
+serialization, and specialization identity all preserve this slot-relative
+meaning and the independent-callable flag. If compile-time
 evaluation stores that function inside another value before the callable is
 concrete, `ConstStore` retains the same symbolic entry in the function's
 evidence vector. Restoring the function projects the recorded path over the
@@ -9059,7 +9063,9 @@ uses the resolved vector as the specialization identity. This work is linear
 only in the function's evidence vector at a specialization request; the
 existing specialization cache prevents duplicate function bodies. Aggregate
 restoration neither scans nested values nor reconstructs where a function came
-from.
+from. Resolution borrows immutable evidence until an entry resolves, then copies
+the vector once for that request. An unchanged vector is returned directly.
+Unresolved results are not memoized across instantiation-graph refinement.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
