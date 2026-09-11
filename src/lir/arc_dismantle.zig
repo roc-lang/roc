@@ -694,9 +694,12 @@ const Analysis = struct {
     /// whole use of the representative, a borrowed target reads through it.
     /// The root defers the read until the representative's plan is known;
     /// the representative's plan never depends on the root's, so solving
-    /// representatives first settles every deferred read exactly once.
+    /// representatives first settles every deferred read exactly once. The
+    /// read's mention stays on the root: the representative's defining read
+    /// dominates this one, so the root's flow already observes the field
+    /// before it, and a mention of the representative here would poison the
+    /// root's own take when the read rejoins its field reads.
     fn noteEquivalencedRead(self: *Analysis, stmt: LIR.CFStmtId, root: LIR.LocalId, field_idx: u32, target: LIR.LocalId, representative: LIR.LocalId) Error!void {
-        if (self.rc_local[@intFromEnum(target)]) try self.noteMention(stmt, representative);
         if (!self.solution.isBorrowed(target)) {
             if (try self.entryOf(representative)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
         }
