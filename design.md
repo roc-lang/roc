@@ -7897,6 +7897,16 @@ supplied or empty. Pending callable evaluation wrappers install the same frame
 before lowering their bodies, whether the requested callable type is sealed or
 still a graph node. Nested bodies consume that frame's exact type bindings.
 
+A procedure root instantiated at its own scheme also installs its complete
+schema and substitution before lowering its body, including when its method
+evidence vector is empty. Its slots reference the cells instantiated in that
+root's context; relating the requested callable constrains those same cells.
+Creating the slots already installs those checked identities, so this path
+does not seed them into the same context again. The slot array belongs to the
+body graph and is not retained in graph-free stored evidence. Recursive root
+reuse and requirement forwarding consume the complete substitution; nested
+bodies continue to import only their checked binding inventory.
+
 Type-only instantiation state is separate from operational body-lowering state.
 Creating a fresh checked-type instance swaps only its exact scope, checked-node
 cache, and nominal declaration-scope stack; it does not construct a parallel
