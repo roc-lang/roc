@@ -11173,11 +11173,22 @@ const ProcedureBuilder = struct {
         }
 
         const host_ret_layout = proc.hostRuntimeLayoutForRep(host_function.ret);
-        const ret_layout = self.result.store.getLocal(ret_local).layout_idx;
-        const host_ret_local = if (host_ret_layout.layoutIdx() == ret_layout)
+        const host_result_desc = try proc.descriptorRefForRepIfNeeded(host_function.ret);
+        const worker_ret = self.result.store.getLocal(ret_local);
+        // Equal layouts can still describe different hosted and worker error
+        // rows. Reuse requires the same descriptor as well; otherwise the
+        // representation boundary must convert between distinct value locals.
+        const host_ret_local = if (host_ret_layout.layoutIdx() == worker_ret.layout_idx and
+            std.meta.eql(worker_ret.boxy_desc, host_result_desc))
             ret_local
         else
-            try proc.addFrameLocalForRuntimeRep(host_ret_layout, host_function.ret);
+            try proc.addFrameLocal(host_ret_layout.layoutIdx());
+        // The hosted call produces this exact descriptor. Generic frame-local
+        // allocation can reserve a runtime descriptor for nested dynamic data,
+        // which would conflict with the call's descriptor even on a fresh local.
+        if (host_result_desc) |desc| {
+            self.result.store.setLocalBoxyDesc(host_ret_local, desc);
+        }
 
         var continuation = ret_stmt;
         if (host_ret_local != ret_local) {
@@ -11189,11 +11200,6 @@ const ProcedureBuilder = struct {
                 continuation,
             );
         }
-        const host_result_desc = try proc.descriptorRefForRepIfNeeded(host_function.ret);
-        if (host_result_desc) |desc| {
-            self.result.store.setLocalBoxyDesc(host_ret_local, desc);
-        }
-
         continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = host_ret_local,
             .proc = try self.emitHostedExternalProc(proc.worker_layout.worker, resolved),
