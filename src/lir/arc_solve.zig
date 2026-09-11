@@ -1416,6 +1416,10 @@ fn computeOutcomeRestitution(
                             assign.op.arcBorrowedResultVariant().?.rcEffect()
                         else
                             assign.op.arcInferenceRcEffect(assign.rc_effect);
+                        // Stored arguments may move their entry unit into the
+                        // result instead of retaining it, just like aggregate
+                        // operands. Neither transfer can promise restitution.
+                        const transferred_args = effect.consume_args | effect.retain_args;
                         const args = store.getLocalSpan(assign.args);
                         for (0..GuardedList.borrowLen(args)) |position| {
                             if (position >= 64) {
@@ -1423,7 +1427,7 @@ fn computeOutcomeRestitution(
                                 break;
                             }
                             const bit = @as(u64, 1) << @as(u6, @intCast(position));
-                            if ((effect.consume_args & bit) == 0) continue;
+                            if ((transferred_args & bit) == 0) continue;
                             if (!consumeOutcomeLocal(solution, active_param, &next_state.present, GuardedList.at(args, position))) {
                                 valid = false;
                                 break;
