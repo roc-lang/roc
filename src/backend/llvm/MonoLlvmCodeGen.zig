@@ -2797,10 +2797,8 @@ pub const MonoLlvmCodeGen = struct {
             if (entry.found_existing) continue;
             count += 1;
             if (count > 32) return false;
-            switch (self.store.getCFStmt(stmt_id)) {
-                .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
-                else => {},
-            }
+            const stmt = self.store.getCFStmt(stmt_id);
+            if (stmt == .join) try joins.append(self.allocator, .{ .id = stmt.join.id, .body = stmt.join.body });
             try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
         }
         // A loop is a join reached again from inside its own body.
@@ -2810,12 +2808,10 @@ pub const MonoLlvmCodeGen = struct {
             while (work.pop()) |stmt_id| {
                 const entry = try visited.getOrPut(@intFromEnum(stmt_id));
                 if (entry.found_existing) continue;
-                switch (self.store.getCFStmt(stmt_id)) {
-                    .jump => |jump| if (jump.target == join.id) {
-                        work.clearRetainingCapacity();
-                        return false;
-                    },
-                    else => {},
+                const stmt = self.store.getCFStmt(stmt_id);
+                if (stmt == .jump and stmt.jump.target == join.id) {
+                    work.clearRetainingCapacity();
+                    return false;
                 }
                 try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
             }
