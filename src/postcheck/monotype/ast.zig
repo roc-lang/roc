@@ -299,7 +299,7 @@ pub fn fnEvidenceDigest(
     head: ?u32,
 ) EvidenceDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v3");
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v4");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
@@ -338,7 +338,6 @@ pub fn fnEvidenceDigest(
                 } else writeU8(&hasher, 0);
             },
             .from_callable => |use| {
-                writeU32(&hasher, use.index);
                 writeU8(&hasher, @intFromBool(use.independent_callable));
             },
             .from_scheme => |index| writeU32(&hasher, index),
@@ -510,15 +509,28 @@ test "function evidence identity uses checked callable type keys" {
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
     };
     const symbolic_left = [_]check.ConstStore.ConstFnEvidence{.{
-        .from_callable = .{ .index = 0, .independent_callable = false },
+        .from_callable = .{ .independent_callable = false },
     }};
     const symbolic_right = [_]check.ConstStore.ConstFnEvidence{.{
-        .from_callable = .{ .index = 1, .independent_callable = false },
+        .from_callable = .{ .independent_callable = true },
     }};
     try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &symbolic_right, &symbolic_frames, 0));
     try std.testing.expect(!std.meta.eql(
         fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
         fnEvidenceDigest(&symbolic_right, &symbolic_frames, 0),
+    ));
+
+    // The vector order still identifies which requirement is symbolic. Dropping
+    // the redundant source index must not erase the destination slot's identity.
+    const slot_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
+    };
+    const first_symbolic = [_]check.ConstStore.ConstFnEvidence{ symbolic_left[0], .unreachable_value };
+    const second_symbolic = [_]check.ConstStore.ConstFnEvidence{ .unreachable_value, symbolic_left[0] };
+    try std.testing.expect(!fnEvidenceEql(&first_symbolic, &slot_frames, 0, &second_symbolic, &slot_frames, 0));
+    try std.testing.expect(!std.meta.eql(
+        fnEvidenceDigest(&first_symbolic, &slot_frames, 0),
+        fnEvidenceDigest(&second_symbolic, &slot_frames, 0),
     ));
 }
 
