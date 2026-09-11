@@ -69,9 +69,22 @@ cd "$repo_root"
 # argument list before the length arithmetic. ARM64 can then pair the length
 # and capacity loads into one ldp, reducing 94 to 93 instructions. The pinned
 # compare loop and vectorized List.repeat setup are unchanged.
+# Always inlining procs that are a few straight-line statements changes the
+# shape LLVM sees around the loop: on arm64musl the index the byte-by-byte tail
+# resumes from is now materialized after the fast loop instead of before it,
+# and the tail's two-instruction merge branch goes away, for a net 93 to 94.
+# The pinned compare loop is unchanged, and x64musl stays at 102.
+# Always inlining leaf procs of moderate size covers the fixture's extension
+# function itself, so it now inlines ahead of the optimization pipeline instead
+# of at LLVM's own later decision. On x64musl the compare loop is identical and
+# the `List.repeat` fill loop takes a shorter induction form, 102 to 98. On
+# arm64musl the compare loop carries one extra register move for its induction
+# variable, ten instructions per eight bytes instead of nine, and the setup and
+# tail are laid out differently, 94 to 100. The loop is still load, load,
+# compare, advance with the `from_le_bytes` bounds test as its termination.
 expectations=(
-    "x64musl:102"
-    "arm64musl:93"
+    "x64musl:98"
+    "arm64musl:100"
 )
 
 failed=0
