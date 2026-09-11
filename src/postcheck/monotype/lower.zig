@@ -56235,11 +56235,15 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
         .{ .ty = inner_ty, .depth = 0, .slot = 0 },
         .{ .ty = outer_ty, .depth = 1, .slot = 0 },
     };
-    var sites = [_]checked.NestedProcSite{site};
-    const nested_sites = checked.NestedProcSiteTable{ .sites = &sites, .type_bindings = &bindings };
+    var sites = std.array_list.Managed(checked.NestedProcSite).init(gpa);
+    defer sites.deinit();
+    const site_id: names.NestedProcSiteId = @enumFromInt(sites.items.len);
+    try sites.append(site);
+    const nested_sites = checked.NestedProcSiteTable{ .sites = sites.items, .type_bindings = &bindings };
 
     // Only type instantiation and lexical binding are exercised here.
     var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
     builder.timing = null;
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
@@ -56252,7 +56256,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     ctx.view.types = checked_types.view();
     ctx.view.templates = &templates;
     ctx.view.nested_proc_sites = &nested_sites;
-    ctx.instantiation = TypeInstantiationContext.init(gpa, @enumFromInt(0), ctx.view.key.bytes);
+    ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer ctx.instantiation.deinit();
 
     const root = try ctx.rootEvidenceAtOwnScheme(template, &.{});
@@ -56264,7 +56268,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     try std.testing.expect(graph.sameClass(outer_node, str_node));
 
     var child = ctx;
-    child.instantiation = TypeInstantiationContext.init(gpa, @enumFromInt(1), ctx.view.key.bytes);
+    child.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer child.instantiation.deinit();
     const inner_node = try graph.newNode(.{ .primitive = .i64 });
     child.evidence = .{
@@ -56273,14 +56277,14 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
         .subst = &.{.{ .node = inner_node }},
         .parent = &root,
     };
-    try child.bindNestedTypes(@enumFromInt(0), false);
+    try child.bindNestedTypes(site_id, false);
     try std.testing.expect(graph.sameClass(try child.instNode(outer_ty), str_node));
     try std.testing.expect(graph.sameClass(try child.instNode(inner_ty), inner_node));
 
     // A sibling root of the same checked scheme can have a different type.
     // Even within one graph its checked identities must instantiate afresh.
     var sibling = ctx;
-    sibling.instantiation = TypeInstantiationContext.init(gpa, @enumFromInt(2), ctx.view.key.bytes);
+    sibling.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer sibling.instantiation.deinit();
     const sibling_root = try sibling.rootEvidenceAtOwnScheme(template, &.{});
     const sibling_node = try sibling.instNode(fn_ty);
