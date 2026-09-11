@@ -6811,11 +6811,16 @@ Other solved-graph mutations:
 - `finalizeFunctionEffectsAtBoundary`—policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.
-- `closeAbsentConstructedPayloadVars` / `closePayloadVarToEmpty`—policy:
-  absent-constructor payload closing. A constructed value's unconstrained,
-  ignorable payload vars for tags the expression provably never constructs
-  close to the empty tag union, so matches on constructed values are
-  exhaustive without wildcard arms.
+- `closeAbsentConstructedPayloadVars` /
+  `closeAbsentConstructedPayloadVarsForLambda` / `closePayloadVarToEmpty`—
+  policy: absent-constructor payload closing. A constructed value's
+  unconstrained, ignorable payload vars for tags the expression provably never
+  constructs close to the empty tag union, so matches on constructed values are
+  exhaustive without wildcard arms. A lambda result is constructed by its body
+  tail *or* by any of its early returns, so the lambda form reads the tags of
+  every recorded return operand as well; `?` desugars to one of those returns,
+  and its `Err` is what keeps an inferred error row open (see Try Return-Row
+  Composition above, whose contributions are composed only after this point).
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
