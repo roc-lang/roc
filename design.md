@@ -13641,6 +13641,25 @@ boxy caller adapts arguments before the hosted call and adapts the result after
 the hosted call. It must not change the hosted dispatch index, hosted symbol
 name, natural C ABI signature, ownership rule, or generated glue declaration.
 
+## Root Application Preparation
+
+The parser's header and declaration index determine an entry module's platform
+wiring: an explicit app platform, the default platform for a headerless root
+with a top-level `main!` definition or a platformless app, or no application.
+This syntactic classification does not establish entrypoint type correctness
+and never grants host effects to imported modules.
+
+CLI `run` and `build` consume this classification during their existing root
+preparation parse, before platform discovery or host linking. Parse failures
+produce source diagnostics directly; a non-app root produces the execution
+requires-app-or-default-app diagnostic. Neither case is staged as a synthetic
+app to obtain an error. Checking still accepts valid type modules, and explicit
+root requests such as `test` do not require an application entrypoint.
+
+Preparation uses only parser state and releases it before compilation. It does
+not allocate a type store, run an extra checking pass, or retain dependency ASTs.
+Checking remains responsible for validating implementations and entrypoint types.
+
 ## Build Outputs And The Targets Header
 
 The `check`, `build`, `run`, and `test` command family resolves its final process

@@ -715,18 +715,31 @@ pub const TokenizedRegion = struct {
 /// Used to distinguish default_app modules (headerless files that provide
 /// a main! entry point) from plain type modules.
 pub fn hasMainBangDecl(self: *const AST) bool {
-    const file = self.store.getFile();
-    for (self.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.store.getStatement(stmt_id);
-        if (stmt == .decl) {
-            const pattern = self.store.getPattern(stmt.decl.pattern);
-            if (pattern == .ident) {
-                const ident_text = self.resolve(pattern.ident.ident_tok);
-                if (std.mem.eql(u8, ident_text, "main!")) return true;
-            }
-        }
+    const ident = self.env.findIdent("main!") orelse return false;
+    var decls = self.decl_index.scopeValueDecls(self.store.getFile().scope, ident).iter();
+    while (decls.next()) |decl_idx| {
+        const decl = self.decl_index.decls.items[@intFromEnum(decl_idx)];
+        if (decl.kind != .value) continue;
+        const pattern = self.store.getPattern(@enumFromInt(decl.pattern.?));
+        if (pattern == .ident) return true;
     }
     return false;
+}
+
+/// The platform wiring requested by a parsed entry module. This is syntactic:
+/// checking still validates the entrypoint's implementation and type. Imported
+/// modules do not acquire a platform through this classification.
+pub const RootAppKind = enum { explicit_platform, default_platform, non_app };
+
+/// Classify entry-module wiring from the header and parser declaration index.
+/// Callers report parse errors before using this to reject an execution request.
+pub fn rootAppKind(self: *const AST) RootAppKind {
+    return switch (self.store.getHeader(self.store.getFile().header)) {
+        .app => |app| if (app.platform_idx == null) .default_platform else .explicit_platform,
+        .type_module => if (self.hasMainBangDecl()) .default_platform else .non_app,
+        .default_app => .default_platform,
+        .module, .package, .platform, .hosted, .malformed => .non_app,
+    };
 }
 
 /// Resolve a token index to a string slice from the source code.
