@@ -6522,10 +6522,28 @@ branch and full-body readback verified. Separate documentation-only child
 record, missing field, existing-field payload mismatch and optional-field
 payload mismatch each crash at record-update Expected-plan topology after the
 local failure/retirement check passes, before marker-copy local validation.
-This establishes a failing boundary, not a shared root cause. The next proposed
-test observes only the first exact empty-record fixture around its first poison
-sweep; no production rule or new retirement mechanism is authorized by these
-diagnostics. This does not
+The independently accepted documentation-only checkpoint is pushed as
+`79392598`; full jj description and exact draft-PR head, branch and complete
+body readback are verified. This establishes a failing boundary, not a shared
+root cause. Separate child `wlzlxpnu` observes only the first exact empty-record
+fixture around its first poison sweep. Reviewed Check `cf850d13` passes semantic
+`43726` and isolated `38299` (2/2). The lookup-use sweep preserves the relevant state;
+the expression sweep replaces the update and enclosing block without owner
+retirement authority, retaining exact P_B/P_F and registrations while
+record-update plan validation changes from true to false. Error tracking remains
+exactly on the block/update, and subtree invalidation removes the live typed
+field's literal dispatch metadata. Failure/retirement validation stays true;
+marker-copy validation is false at all three pre-rebuild seams, not a new
+poisoning failure or a terminal admission result. The test stops before rebuild
+and admission. Independent final review accepts the bounded test-only delta,
+including exact full-bitset and post-sweep inventory/registration assertions;
+refreshed broader `81840` passes 18/18. Final normal producer-regenerated gate
+`16444` passes 75/75 tests and 41/41 steps, including three additional
+shared-helper regressions, regenerated Builtins, unchanged schema-86 golden,
+serde and native/wasm sizes. Formatting and all reviewed hashes match. Root
+is describing and publishing the independently accepted bounded checkpoint.
+No production rule or new retirement mechanism is authorized by this calibration.
+This does not
 sweep dormant paths, successful in-place resize permutations, or the full
 checker tail under allocation failure. Genuine
 owning-failure retirement remains unapproved. Complete producer/later-erasure

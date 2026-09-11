@@ -749,9 +749,11 @@ described in full, with trailers; W6b currently has its provisional title):
 | `susumyrk` / `424c29e2` | W6b unavailable-projection allocation rollback | independently accepted; normal gate 69/69 tests and 41/41 steps passes; push, full description and exact draft-PR readback verified |
 | `ounopmnm` / `6094ad09` | W6b canonical malformed supplied-field syntax and child-error calibration | independently accepted; semantic, isolated 2/2, broader 16/16 and normal 70/70 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
 | `soqtnxus` / `e7b8716e` | W6b full-tail checked-child localization | independently accepted; semantic, isolated 2/2, broader 17/17 and normal 71/71 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
-| `rtwsumuy` | W6b current genuine record-update rejections | four independent normal reruns complete: each crashes at Expected-plan topology; documentation-only checkpoint, no compiler changes |
+| `rtwsumuy` / `79392598` | W6b current genuine record-update rejections | four independent normal reruns complete: each crashes at Expected-plan topology; independently accepted documentation-only checkpoint pushed and exact PR readback verified, no compiler changes |
+| `wlzlxpnu` | W6b first-poison owner-authority calibration | independently accepted; semantic, isolated 2/2, broader 18/18 and normal 75/75 tests (41/41 steps) pass; describing and publishing |
 
-The published `jared/polarity` checkpoint is `soqtnxus` / `e7b8716e`, above
+The published `jared/polarity` checkpoint is `rtwsumuy` / `79392598`, above
+`soqtnxus` / `e7b8716e`,
 `ounopmnm` / `6094ad09`,
 `susumyrk` / `424c29e2`,
 `tznvqtyt` / `7c6857e5`,
@@ -5128,6 +5130,71 @@ subsets below do not override this latest checkpoint.
   next proposed calibration is restricted to the first exact empty-record
   fixture, before and after its first poison sweep; no retirement or solver
   rule follows automatically from this result.
+
+- Described documentation-only checkpoint `rtwsumuy` is pushed as
+  `79392598511103002a495acd6b86f8eead1b4c8b`. Push `40252` succeeds;
+  exact readback verifies full jj description, head, branch, complete
+  12,535-character PR body including terminal newline, and draft status.
+  No compiler code changed. Root opens `wlzlxpnu` for independent scope review
+  of the first-poison calibration before any implementation is authorized.
+
+- Independent scope review ACCEPTS the bounded `wlzlxpnu` calibration:
+  preserve the existing staging helper lifecycle, use the exact empty-record
+  rejection source, and measure each real poison sweep separately. Immutable
+  producer rows and syntax snapshots are copied by value; no hash-map iteration
+  order or diagnostic ordinal is presumed. The test stops before rebuild or
+  admission and authorizes no production retirement rule. Implementation is
+  in progress; no new test result is claimed.
+
+- Initial calibration freeze `8710ffdd` passes semantic gate `33851`.
+  Isolated diagnostic `96431` reaches its intentional measurement stop:
+  lookup-use poisoning preserves the relevant state; expression poisoning
+  replaces the update and enclosing block while retaining P_B/P_F and both
+  registrations. Record-update plan validation changes from true to false,
+  with no owner snapshot, failure, retirement, retired-consumer or owner draft.
+  Local failure/retirement validation stays true. Marker-copy validation is
+  false at all three pre-rebuild seams, not a new failure caused by poisoning.
+  Error tracking remains exactly the block and update; subtree invalidation
+  removes the supplied literal's dispatch metadata while keeping its typed-int
+  syntax. The author is replacing the intentional stop with observed assertions;
+  this diagnostic is not a passing final test or a production fix.
+
+- Final-pin freeze `9d37e189` removes the temporary prints and intentional stop.
+  Semantic `57387` passes; isolated `30486` passes **2/2**. The regression pins
+  measured tracking, node and validator phases, exact typed-field payload
+  preservation except its cleared dispatch-plan word, and distinct node-derived
+  error diagnostics/regions without assuming insertion order. No production or
+  schema change is present. Independent final code review and broader/normal
+  verification are in progress.
+
+- Broader `1448` passes **18/18** on `9d37e189`. Independent review requests
+  focused oracle strengthening before acceptance: count all error-bit slots
+  at each seam, and after each sweep pin the complete two-plan inventory,
+  unconsumed registration flag and registration validator. Root corrected a
+  progress-text grammatical splice. The author is making these test-only
+  changes; all build sessions are closed before thaw.
+
+- Reviewed freeze `cf850d13` adds exact full-bitset counts and post-sweep
+  inventory/registration-state validation without changing the other source.
+  Independent adversarial review ACCEPTS the bounded task at diff `fa3958bc`,
+  with no remaining code findings. Semantic `43726` passes; isolated `38299`
+  passes **2/2**. Refreshed broader and normal producer-regenerated gates remain
+  pending; the normal matrix also includes the three non-record callers of the
+  extracted staging helper.
+
+- Refreshed broader `81840` passes **18/18** on accepted Check `cf850d13`.
+  Root starts the final normal producer-regenerated matrix, including the
+  three extra shared-helper callers. Captured-input diagnostics do not replace
+  this normal certification; source remains frozen throughout.
+
+- Final normal producer-regenerated gate `16444` passes **75/75 tests and
+  41/41 steps**: canonicalization 11, types 10, checker 49, compile/serde 5.
+  This includes the three non-record staging-helper regressions, regenerated
+  Builtins, unchanged schema-86 golden, static/mutable serde and native/wasm
+  sizes. Formatting and all reviewed source hashes match. The bounded task is
+  independently accepted; root is describing and publishing `wlzlxpnu`.
+  This test pins the known first-poison authority loss; it does not fix the
+  four normal rejection crashes or complete W6b.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
