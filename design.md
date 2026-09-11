@@ -6488,7 +6488,7 @@ broader 15/15 gates pass. Final normal regenerated-Builtin gate `66476` passes
 69/69 tests and 41/41 steps, including unchanged schema-86 golden, serde and
 native/wasm sizes; formatting and reviewed hashes match. Described checkpoint
 `susumyrk` is pushed as `424c29e2`; the full jj description and exact draft-PR
-head, branch and full-body readback are verified. The next task calibrates an
+head, branch and full-body readback are verified. The subsequent task calibrates an
 authentic checked-error supplied field before any new owning-error rule is
 declared. Its initial diagnostic exposed a scalar decoder that rejected an
 explicitly published canonical malformed field before checking its body.
@@ -6502,8 +6502,21 @@ with one `hello` field, flex presence, exact Builtin-U8 payload and empty-record
 extension. Semantic, isolated 2/2 and broader 16/16 gates pass. Final normal
 producer-regenerated gate `89680` passes 70/70 tests and 41/41 steps, including
 regenerated Builtins, unchanged schema-86 golden, serde and native/wasm sizes;
-formatting and reviewed hashes match. Root is describing and publishing this
-accepted bounded checkpoint. This does not
+formatting and reviewed hashes match. Described checkpoint `ounopmnm` is pushed
+as `6094ad09`; the full jj description and exact draft-PR head, branch and
+full-body readback are verified. Separate child `soqtnxus` now measures the
+authentic checked-child fixture's full checker tail and produced/distinct-fresh
+recovery replay without adding a production rule or presuming owner retirement.
+At Check `121b979e`, semantic and isolated 2/2 gates pass, and independent
+review accepts the bounded test-only delta. The actual full tail retains a
+live healthy outer/base and truthful P_B/P_F, with the malformed child's sole
+canonical publication/R0 and exact transient error map/bit. There is no R_U,
+owner draft, retired consumer or added checker Problem; local, produced and
+distinct-fresh replay pass. Broader regression passes 17/17; final normal
+producer-regenerated gate `87209` passes 71/71 tests and 41/41 steps, including
+regenerated Builtins, unchanged schema-86 golden, serde and native/wasm sizes.
+Formatting and reviewed hashes match; root is describing and publishing the
+accepted test-only full-tail checkpoint. This does not
 sweep dormant paths, successful in-place resize permutations, or the full
 checker tail under allocation failure. Genuine
 owning-failure retirement remains unapproved. Complete producer/later-erasure

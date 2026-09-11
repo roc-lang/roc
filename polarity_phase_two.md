@@ -747,9 +747,11 @@ described in full, with trailers; W6b currently has its provisional title):
 | `urrksrnp` / `2614bb21` | W6b projection after optional-width body refinement | repaired checkpoint pushed and exact PR readback verified; refreshed normal 61/61 tests, 41/41 steps pass |
 | `tznvqtyt` / `7c6857e5` | W6b benign record-update projection availability | whole bounded delta independently accepted; normal gate 68/68 tests and 41/41 steps; push and exact draft-PR readback verified |
 | `susumyrk` / `424c29e2` | W6b unavailable-projection allocation rollback | independently accepted; normal gate 69/69 tests and 41/41 steps passes; push, full description and exact draft-PR readback verified |
-| `ounopmnm` | W6b canonical malformed supplied-field syntax and child-error calibration | bounded combined-delta review accepts Check `ceff7419`; semantic, isolated 2/2, broader 16/16 and normal 70/70 tests (41/41 steps) pass; publication in progress |
+| `ounopmnm` / `6094ad09` | W6b canonical malformed supplied-field syntax and child-error calibration | independently accepted; semantic, isolated 2/2, broader 16/16 and normal 70/70 tests (41/41 steps) pass; push, full description and exact draft-PR readback verified |
+| `soqtnxus` | W6b full-tail checked-child localization | independently accepted Check `121b979e`; semantic, isolated 2/2, broader 17/17 and normal 71/71 tests (41/41 steps) pass; publication in progress |
 
-The published `jared/polarity` checkpoint is `susumyrk` / `424c29e2`, above
+The published `jared/polarity` checkpoint is `ounopmnm` / `6094ad09`, above
+`susumyrk` / `424c29e2`,
 `tznvqtyt` / `7c6857e5`,
 repaired `urrksrnp` / `2614bb21` and amended `tonzpmlt` / `9c027603`. Its earlier ancestry
 includes `unupstyw` / `8a1bcb17`,
@@ -761,9 +763,9 @@ includes `unupstyw` / `8a1bcb17`,
 `zkmyrwqu` / `1f69432c`
 and `qpmsttws` / `e67aaeb8`.
 The driver verified the exact remote head and updated PR #10434 body with draft
-status intact. This published checkpoint is explicitly incomplete. The new
-child-error relation calibration is not part of that publication and does not
-authorize genuine-error retirement semantics.
+status intact. This published checkpoint is explicitly incomplete. It includes
+the staged child-error relation calibration, not the new full-tail localization
+test, and does not authorize genuine-error retirement semantics.
 Jared's updated authorization
 on 2026-09-09 is to push WIP changes after each completed task and continue
 until the feature is complete; this supersedes the earlier pause-before-W2b
@@ -5053,6 +5055,48 @@ subsets below do not override this latest checkpoint.
   native/wasm sizes pass. Formatting and exact independently reviewed hashes
   match. Root is describing and publishing this bounded checkpoint; full-tail
   child-error localization and whole-feature completion are not claimed.
+
+- Described checkpoint `ounopmnm` is pushed as
+  `6094ad092dbe10777c996285f121795ff1e3abb2`. Push `14859` and PR edit
+  `32659` succeed. Exact readback verifies the full jj description, PR head,
+  `jared/polarity`, complete 9,867-character body including terminal newline,
+  and draft status. Root opens separate test-only child `soqtnxus` for the
+  full-tail localization regression. Independent read-only scope review finds
+  no production/design prerequisite, but requires post-rebuild coordinates
+  and the exact retained transient error map/bit for the malformed child;
+  the outer/base must not borrow that error state. Outcomes remain unmeasured.
+
+- Full-tail test-only slice `soqtnxus` freezes at Check `121b979e`, jj
+  `e1898da2`, diff `5dcc9af0`. It uses real checked and distinct fresh sources,
+  exact canonical diagnostic/R0, rebuilt P_B/P_F/copy coordinates, localized
+  transient error tracking, local validation, produced capability and fresh
+  recovery replay. No finalized field presence or owner retirement is assumed.
+  Semantic `12715` and independent adversarial review are running; the real
+  full-tail outcome has not yet been measured. Production remains unchanged
+  from published `6094ad09`.
+
+- Semantic `12715` and isolated full-tail regression `78825` pass (**2/2**).
+  The real checker confirms a live healthy outer/base, unchanged successful
+  P_B and anchored P_F, exact sole malformed-child publication/R0, localized
+  transient child map/operand bit, and no owner retirement, draft or added
+  checker Problem. Local, produced-capability and distinct-fresh recovery
+  replay all pass. This child-error path is localized and needs no new R_U.
+  Broader regression is running; independent review reports no blocker,
+  pending final gates. Genuine actual-mismatch R2/R3 remains a separate task.
+
+- Independent adversarial review ACCEPTS the exact test-only full-tail delta
+  at `121b979e` / `5dcc9af0`. Broader regression `82525` passes **17/17**;
+  final normal producer-regenerated gate `87209` is running. No production
+  helper, prior test behavior, schema or owner-retirement rule changed.
+
+- Final normal producer-regenerated gate `87209` passes **71/71 tests and
+  41/41 steps**: canonicalization 11, types 10, checker 45, compile/serde 5.
+  Regenerated Builtins, unchanged schema-86 golden, static/mutable serde,
+  native/wasm sizes, formatting and reviewed hashes pass. Root is describing
+  and publishing the accepted test-only full-tail checkpoint. Next, four exact
+  existing genuine record-update rejection tests will run independently with
+  their full one-diagnostic oracles; their current failure phases are not
+  assumed from the historical crash report.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /
