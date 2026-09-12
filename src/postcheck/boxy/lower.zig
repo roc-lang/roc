@@ -1979,12 +1979,12 @@ const ProcedureBuilder = struct {
                 continuation,
             );
         }
-        continuation = try proc.prependWorkerArgumentDescriptorInitializers(continuation);
         continuation = try proc.prependStaticDescriptorMaterializationsForSlotsWithSources(
             &slot_sources,
             &desc_context,
             continuation,
         );
+        continuation = try proc.prependWorkerArgumentDescriptorInitializers(continuation);
 
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const ret_layout = proc.workerRuntimeLayoutForRep(requirement_function.ret).layoutIdx();
@@ -3612,6 +3612,31 @@ const ProcedureBuilder = struct {
         return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
     }
 
+    /// Compose the explicit substitutions along the storage wrapper chain.
+    /// Layout planning has already committed finite storage; a wrapper cycle
+    /// would violate that contract. The representation count bounds the walk
+    /// without allocating a visited set for every static descriptor.
+    fn collectStaticNominalBackingDescriptorSources(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        sources: *StaticDescriptorSourceMap,
+    ) Allocator.Error!void {
+        var current = rep_id;
+        for (0..self.plan.representations.items.len) |_| {
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            for (self.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+                const desc = formal.descriptor orelse continue;
+                const actual = self.effectiveStaticDescriptorSource(substitution.actual_rep, substitution.actual_rep, sources).?;
+                if (substitution.formal_rep != actual) {
+                    try sources.put(self.allocator, desc, actual);
+                }
+            }
+            current = self.descriptorBackingShapeRep(current) orelse return;
+        }
+        boxyLowerInvariant("cyclic static descriptor storage wrapper");
+    }
+
     fn typeDescForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
         try self.ensureTypeDescIds();
         const rep_index = @intFromEnum(rep_id);
@@ -3627,11 +3652,7 @@ const ProcedureBuilder = struct {
         if (nominal_substitutions.len != 0) {
             var descriptor_sources = StaticDescriptorSourceMap{};
             defer descriptor_sources.deinit(self.allocator);
-            for (nominal_substitutions) |substitution| {
-                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
-                const desc = formal.descriptor orelse continue;
-                try descriptor_sources.put(self.allocator, desc, substitution.actual_rep);
-            }
+            try self.collectStaticNominalBackingDescriptorSources(rep_id, &descriptor_sources);
             var context = StaticDescInstantiationContext{};
             defer context.deinit(self.allocator);
             const desc_id = try self.typeDescForWorkerRepWithSourceMap(
@@ -4756,9 +4777,11 @@ const ProcedureBuilder = struct {
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
+        // Body descriptor templates may capture rebuilt argument descriptors.
+        // Initialize those roots from hidden inputs before consuming them.
+        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
         const return_desc = try self.returnDescriptorInfoForBody(
@@ -4837,10 +4860,10 @@ const ProcedureBuilder = struct {
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
+        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
+        body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
         proc_spec.erased_arg_desc_offsets = try proc.erasedArgumentDescriptorCaptureOffsets();
@@ -11941,6 +11964,7 @@ const ProcBodyBuilder = struct {
     const DescriptorTemplateBinding = struct {
         formal: Plan.TypeRepId,
         outer: ?Plan.TypeRepId,
+        actual: Plan.TypeRepId,
     };
 
     /// Identity of a substitution environment, interned as a link to the
@@ -20757,7 +20781,11 @@ const ProcBodyBuilder = struct {
             const descriptor_fields = [_]AggregateDescriptorField{.{
                 .local = payload_local,
                 .target_rep = payload_children[0].rep,
-                .source_rep = self.repForType(self.module.checked_bodies.expr(args[0]).ty),
+                .source_rep = self.exprTagPayloadStorageRep(
+                    payload_local,
+                    payload_children[0].rep,
+                    self.repForType(self.module.checked_bodies.expr(args[0]).ty),
+                ),
             }};
             const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, rep_id, &descriptor_fields);
             defer tag_desc.deinit(self.parent.allocator);
@@ -20787,7 +20815,11 @@ const ProcBodyBuilder = struct {
             descriptor_field.* = .{
                 .local = field_local.*,
                 .target_rep = child.rep,
-                .source_rep = self.repForType(self.module.checked_bodies.expr(arg).ty),
+                .source_rep = self.exprTagPayloadStorageRep(
+                    field_local.*,
+                    child.rep,
+                    self.repForType(self.module.checked_bodies.expr(arg).ty),
+                ),
             };
             switch (child.role) {
                 .tag_payload => {},
@@ -27325,31 +27357,38 @@ const ProcBodyBuilder = struct {
         };
         if (!context.exact_storage) return scope;
 
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-            if (substitution.formal_rep == substitution.actual_rep) continue;
-            const slot = &context.exact_reps[@intFromEnum(substitution.formal_rep)];
-            if (slot.*) |existing| {
-                if (existing == substitution.actual_rep) continue;
+        var current = rep_id;
+        for (0..self.parent.plan.representations.items.len) |_| {
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            const bindings_start = context.bindings.items.len;
+            // Resolve all arguments in the enclosing scope before binding this
+            // declaration's formals. The next wrapper can reuse those formals.
+            for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                const actual = self.descriptorTemplateExactRep(substitution.actual_rep, context);
+                const outer = context.exact_reps[@intFromEnum(substitution.formal_rep)];
+                if (substitution.formal_rep == actual or outer == actual) continue;
+                try context.bindings.append(self.parent.allocator, .{
+                    .formal = substitution.formal_rep,
+                    .outer = outer,
+                    .actual = actual,
+                });
             }
-            try context.bindings.append(self.parent.allocator, .{
-                .formal = substitution.formal_rep,
-                .outer = slot.*,
-            });
-            slot.* = substitution.actual_rep;
-
-            const key = DescriptorTemplateEnvKey{
-                .parent = context.env,
-                .formal = substitution.formal_rep,
-                .actual = substitution.actual_rep,
-            };
-            const entry = try context.env_ids.getOrPut(key);
-            if (!entry.found_existing) {
-                entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+            for (context.bindings.items[bindings_start..]) |binding| {
+                context.exact_reps[@intFromEnum(binding.formal)] = binding.actual;
+                const key = DescriptorTemplateEnvKey{
+                    .parent = context.env,
+                    .formal = binding.formal,
+                    .actual = binding.actual,
+                };
+                const entry = try context.env_ids.getOrPut(key);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+                }
+                context.env = entry.value_ptr.*;
             }
-            context.env = entry.value_ptr.*;
+            current = self.parent.descriptorBackingShapeRep(current) orelse return scope;
         }
-        return scope;
+        boxyLowerInvariant("cyclic exact descriptor storage wrapper");
     }
 
     /// Restore the bindings and environment a descent replaced.
@@ -30949,6 +30988,7 @@ const ProcBodyBuilder = struct {
         try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry));
         continuation = call_with_args;
 
+        continuation = try adapter_proc.prependStaticDescriptorMaterializationsForSlots(continuation);
         continuation = try adapter_proc.prependWorkerArgumentDescriptorInitializers(continuation);
         continuation = try adapter_proc.prependCallableAdapterCaptureBindings(
             capture_arg,
@@ -30957,7 +30997,7 @@ const ProcBodyBuilder = struct {
             descriptor_locals,
             try adapter_proc.prependDescriptorArgMaterializations(
                 capture_descriptor_initializers.items,
-                try adapter_proc.prependStaticDescriptorMaterializationsForSlots(continuation),
+                continuation,
             ),
         );
 
@@ -33136,7 +33176,7 @@ const ProcBodyBuilder = struct {
             field.* = .{
                 .local = field_local,
                 .target_rep = target_field_rep,
-                .source_rep = source_field_rep,
+                .source_rep = self.exprTagPayloadStorageRep(field_local, target_field_rep, source_field_rep),
             };
         }
         const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
@@ -33202,19 +33242,13 @@ const ProcBodyBuilder = struct {
 
         const target_elem = self.repQuery().requiredSingleChild(target_list_rep, .list_elem);
         const source_elem = self.repQuery().requiredSingleChild(source_list_rep, .list_elem);
-        var target_elem_desc_local = try self.reserveDescriptorLocalForRep(target_elem.rep);
-        if (target_elem_desc_local == null and
+        // This list owns its element descriptor identity. A representation's
+        // existing descriptor local can still describe live source values.
+        const target_elem_desc_local = if (self.parent.plan.representations.items[@intFromEnum(target_elem.rep)].descriptor != null or
             self.parent.layoutNeedsNestedBoxyDesc(self.parent.listElementLayout(target_layout)))
-        {
-            target_elem_desc_local = try self.addFrameLocal(.opaque_ptr);
-        }
-        if (target_elem_desc_local) |elem_desc_local| {
-            if (self.parent.result.store.getLocal(target).boxy_desc) |target_desc| {
-                if (target_desc.localOrNull() == elem_desc_local) {
-                    target_elem_desc_local = try self.addFrameLocal(.opaque_ptr);
-                }
-            }
-        }
+            try self.addFrameLocal(.opaque_ptr)
+        else
+            null;
 
         const len = try self.addFrameLocal(.u64);
         const capacity = try self.addFrameLocal(.u64);
@@ -33223,6 +33257,17 @@ const ProcBodyBuilder = struct {
         const initial_list = try self.addFrameLocal(target_layout);
         const acc = try self.addFrameLocal(target_layout);
         const source_elem_desc_info = try self.descriptorForSourceListElement(source, source_list_rep, source_elem.rep);
+        var elem_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer elem_desc_initializers.deinit(self.parent.allocator);
+        try self.appendResultDescriptorInitializers(&elem_desc_initializers, source_elem_desc_info);
+        // Storage conversion needs a target-shaped descriptor even when the
+        // source descriptor omitted zero-sized or statically known fields.
+        // Materialize once outside the loop, including for an empty list.
+        const target_elem_desc_info = if (target_elem_desc_local != null and self.parent.listElementLayout(source_layout) != self.parent.listElementLayout(target_layout))
+            try self.adapterDescriptorForCallBoundary(target_elem.rep, source_elem.rep, source_elem_desc_info, &elem_desc_initializers)
+        else
+            source_elem_desc_info;
+        try self.appendResultDescriptorInitializers(&elem_desc_initializers, target_elem_desc_info);
         const target_desc_info = if (target_elem_desc_local) |elem_desc_local|
             try self.constructedListDescriptorForElementLocal(target, target_rep, elem_desc_local)
         else
@@ -33257,14 +33302,14 @@ const ProcBodyBuilder = struct {
         initial_jump = try self.assignUnaryLowLevel(len, .list_len, source, initial_jump);
         initial_jump = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, initial_jump);
         if (target_elem_desc_local) |elem_desc_local| {
-            const source_elem_desc = source_elem_desc_info.desc orelse
-                boxyLowerInvariant("boxy list boundary initial element descriptor had no source descriptor");
+            const target_elem_desc = target_elem_desc_info.desc orelse
+                boxyLowerInvariant("boxy list boundary initial element descriptor had no target descriptor");
             initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = elem_desc_local,
-                .desc = source_elem_desc,
+                .desc = target_elem_desc,
                 .next = initial_jump,
             } });
-            initial_jump = try self.prependOptionalDescriptorMaterialization(source_elem_desc_info.materialize, initial_jump);
+            initial_jump = try self.prependDescriptorArgMaterializations(elem_desc_initializers.items, initial_jump);
         }
         initial_jump = try self.prependConstructedDescriptorRebindForRep(source_rep, initial_jump);
 
@@ -33333,6 +33378,10 @@ const ProcBodyBuilder = struct {
         else if (self.representationBoundaryIsDirect(target_elem_rep, source_elem_rep) or
             self.repsUseSameDynamicBoxStorage(target_elem_rep, source_elem_rep))
             source_elem
+        else if (target_elem_desc_local != null)
+            // The enclosing list owns this element descriptor. Reserve the
+            // value with that descriptor instead of creating a second identity.
+            try self.addFrameLocal(target_storage_layout)
         else
             try self.addFrameBoundaryTargetLocalForRep(target_elem_rep);
         if (target_elem != source_elem) {
@@ -33367,7 +33416,7 @@ const ProcBodyBuilder = struct {
                     target_storage_layout,
                 ),
                 .source_desc = source_desc,
-                .target_desc = source_desc,
+                .target_desc = if (target_elem_desc_local) |local| .{ .local = local } else try self.parent.staticDescRefForRep(target_elem_rep),
                 .source_mode = .move,
                 .next = continuation,
             } });

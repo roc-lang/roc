@@ -10176,6 +10176,95 @@ test "tail-call lowering preserves a failure after a recursive call" {
     }
 }
 
+test "issue 11290: keyed containers preserve runtime contents and shared ownership" {
+    const source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    original = Dict.single(key, [key])
+        \\    updated = Dict.insert(original, "other", [key])
+        \\    set = Set.single(key)
+        \\    more = Set.insert(set, "other")
+        \\    if Dict.contains(original, "other") { crash "mutated shared dictionary" }
+        \\    if Set.contains(set, "other") { crash "mutated shared set" }
+        \\    if !Set.contains(more, key) { crash "lost set item" }
+        \\    values = match Dict.get(updated, key) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost dictionary entry"
+        \\    }
+        \\    if values != [key] { crash "changed dictionary value" }
+        \\    Dict.len(updated) + Set.len(more) + List.len(values)
+        \\}
+    ;
+    try expectKeyedContainersEvaluate(source, 5);
+}
+
+test "issue 11290: builtin container membership executes in both strategies" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    set = Set.single(key)
+        \\    dict = Dict.single(key, n)
+        \\    if Set.contains(set, key) and Dict.contains(dict, key) { 1 } else { 0 }
+        \\}
+    , 1);
+}
+
+test "issue 11290: empty and nested containers retain distinct type arguments" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    strings = Set.single(key)
+        \\    numbers = Set.single(n)
+        \\    dictionary = Dict.single(n, strings)
+        \\    empty_dict : Dict(U64, Set(Str))
+        \\    empty_dict = Dict.empty()
+        \\    empty_set : Set(U64)
+        \\    empty_set = Set.empty()
+        \\    if Dict.len(empty_dict) != 0 or Set.len(empty_set) != 0 { crash "nonempty container" }
+        \\    nested = match Dict.get(dictionary, n) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost nested container"
+        \\    }
+        \\    if Set.contains(nested, key) and Set.contains(numbers, n) { 1 } else { 0 }
+        \\}
+    , 1);
+}
+
+fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) !void {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
+            .specialization_strategy = strategy,
+        });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                runtime_env.get_ops(),
+                .preserve,
+            );
+            defer interpreter.deinit();
+            var count: u64 = 40;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&count),
+            });
+            try std.testing.expectEqual(expected, evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "tail-call lowering preserves boxy return adaptations" {
     const allocator = std.testing.allocator;
     const source =

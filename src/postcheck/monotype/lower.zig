@@ -7275,14 +7275,10 @@ const Builder = struct {
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
                 break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
             },
-            .builtin => blk: {
+            .builtin => |builtin_nominal| blk: {
                 const source_view = self.moduleForId(nominal.owner_module);
-                const source_decl = nominal.source_decl orelse break :blk null;
-                for (source_view.types.nominal_declarations) |decl| {
-                    if (decl.source_statement != source_decl) continue;
-                    break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
-                }
-                break :blk null;
+                const decl = source_view.types.builtinNominalDeclaration(builtin_nominal) orelse break :blk null;
+                break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
             },
             .opaque_without_backing => null,
         };
@@ -57354,25 +57350,7 @@ fn instRecordFieldLessThan(
 fn nominalHasDeclarationBacking(nominal: checked.CheckedNominalType) bool {
     return switch (nominal.representation) {
         .opaque_without_backing => false,
-        .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-            .primitive,
-            .list,
-            .box,
-            .dict,
-            .set,
-            .parse_tag_union_spec,
-            .fields,
-            .field,
-            => false,
-            .bool_tag_union,
-            .try_nominal,
-            .iterator,
-            .crypto_sha256_digest,
-            .crypto_sha256_hasher,
-            .crypto_blake3_digest,
-            .crypto_blake3_hasher,
-            => true,
-        },
+        .builtin => |builtin| checked.builtinNominalHasDeclarationBacking(builtin),
         .local_declaration,
         .imported_declaration,
         .local_box_payload_capability,

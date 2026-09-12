@@ -5107,9 +5107,16 @@ const Builder = struct {
                     .padding_types = capability.paddingFieldTys(source_view.interface_capabilities),
                 };
             },
-            .builtin,
-            .opaque_without_backing,
-            => null,
+            .builtin => |builtin_nominal| blk: {
+                const declaration = view.checked_types.builtinNominalDeclaration(builtin_nominal) orelse break :blk null;
+                break :blk .{
+                    .view = view,
+                    .declaration = declaration,
+                    .padding_view = view,
+                    .padding_types = declaration.paddingFieldTypes(view.checked_types),
+                };
+            },
+            .opaque_without_backing => null,
         };
     }
 
@@ -8131,6 +8138,16 @@ const Builder = struct {
             return null;
         }
 
+        /// Enclosing nominal arguments can themselves be declaration formals.
+        /// Compose those explicit substitutions before entering a nested backing.
+        fn resolve(self: *const CallDescriptorRepSubstitutionMap, rep: TypeRepId) TypeRepId {
+            var current = rep;
+            for (0..self.entries.items.len + 1) |_| {
+                current = self.get(current) orelse return current;
+            }
+            boxyPlanInvariant("cyclic nominal descriptor substitution");
+        }
+
         fn put(
             self: *CallDescriptorRepSubstitutionMap,
             allocator: Allocator,
@@ -8295,9 +8312,19 @@ const Builder = struct {
         if (!roles_match) return;
 
         if (worker_rep.kind == .nominal) {
+            // Both sides have shared declaration templates. Descending the
+            // call-side backing must apply its formals too, e.g. Set(Str)'s
+            // backing Dict(item, {}) must supply Str, not the template's item.
+            for (self.plan.nominalBackingArgSubstitutionSlice(call_rep.nominal_backing_arg_substitutions)) |call_substitution| {
+                const actual = substitutions.resolve(call_substitution.actual_rep);
+                if (call_substitution.formal_rep != actual) {
+                    try substitutions.put(self.allocator, call_substitution.formal_rep, actual);
+                }
+            }
             for (self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
-                const exact_call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
+                const call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
                     boxyPlanInvariant("checked nominal call was missing a backing argument substitution");
+                const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
                 if (backing_substitution.formal_rep != exact_call_arg_rep) {
                     try substitutions.put(self.allocator, backing_substitution.formal_rep, exact_call_arg_rep);
                 }
@@ -8306,7 +8333,7 @@ const Builder = struct {
         const call_children = self.plan.childSlice(call_rep.children);
         for (self.plan.childSlice(worker_rep.children)) |worker_child| {
             if (worker_child.role != .alias_arg and worker_child.role != .nominal_arg) continue;
-            const exact_call_arg_rep = if (worker_child.role == .nominal_arg)
+            const call_arg_rep = if (worker_child.role == .nominal_arg)
                 self.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg) orelse blk: {
                     const call_child = self.namedQuery().findMatchingChildByRole(call_children, worker_child) orelse
                         boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
@@ -8317,6 +8344,7 @@ const Builder = struct {
                     boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
                 break :blk call_child.rep;
             };
+            const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
             if (worker_child.rep == exact_call_arg_rep) continue;
             try substitutions.put(self.allocator, worker_child.rep, exact_call_arg_rep);
         }

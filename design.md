@@ -2349,6 +2349,17 @@ checked module address. If a checked type mentions an owner checked module id
 that is not present in lowering visibility, the checked module producer is
 incomplete.
 
+Builtin identity and declaration backing are independent. `Dict` and `Set`
+retain their builtin dispatch identities, while their storage comes from the
+ordinary checked declarations in `Builtin.roc`. Each checked type store owns a
+fixed builtin-identity-to-declaration-id index, populated when declarations are
+published or projected and serialized with the store. Both post-check strategies
+consume that index directly; they do not scan source statements to find builtin
+backings or duplicate the containers' storage definitions. Declaration formals
+and backing templates remain shared checked data. Each strategy substitutes the
+actual arguments only when lowering a reachable use, with Boxy preserving the
+explicit nested descriptors and ordinary LIR ownership contract.
+
 ### Platform/App Relation
 
 The app↔platform correspondence is assigned once, at check time, and carried
@@ -9786,6 +9797,9 @@ construction: they are established in the worker prologue or inside a
 descriptor-binding snapshot window whose initializer is prepended above
 everything lowered while the bind is visible.
 
+Worker prologues initialize captured descriptor inputs and reconstructed
+argument roots before body descriptor templates that capture those roots.
+
 An applied-tag worker argument pattern is irrefutable only when its planned
 checked representation contains exactly one tag variant with that checked tag
 identity. Lowering validates that data, reserves the payload binders, and uses
@@ -10010,6 +10024,12 @@ original call operand root plus the exact instantiated descendant; it never
 changes to a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
+Nested backing traversal composes the call-side declaration substitutions as
+well as the worker-side substitutions. For `Set(Str)`, the call-side backing's
+`Dict(item, {})` argument is the instantiated `Str`, even when `item` and the
+worker's corresponding formal live in different checked modules. These scoped
+substitutions reuse the shared templates and never mutate checked types.
+
 The substitution is consumed to produce one exact source for every hidden
 descriptor, hidden dictionary, and erased-callable metadata capture. A source is
 one of static metadata, an argument descriptor, a nested descriptor read from an
@@ -10076,6 +10096,10 @@ separately materialized target descriptor describing the bytes it will produce
 or consume. Argument binding, match-condition binding, result binding, and
 container item extraction copy descriptor identities into fresh locals; they
 never repurpose the source value's descriptor local as operation scratch space.
+List storage adapters materialize the target element descriptor before entering
+the loop, using the same descriptor construction as call boundaries. That
+descriptor also describes an empty target list; changing an element layout
+never reuses a source descriptor whose nested fields describe different storage.
 ARC treats a same-value alias as borrow-capable only when its source and target
 name the exact same explicit Boxy RC descriptor reference. A distinct
 descriptor reference is an ownership boundary: the alias receives a moved or
