@@ -3304,6 +3304,20 @@ identities. A forwarded requirement records its enclosing evidence index
 explicitly; checked errors and unreachable values remain distinct evidence
 kinds.
 
+Instantiation evidence ownership is an explicit input to checking's copy
+operation: no evidence edge, a value lookup, a stored-function use, or a
+selected dispatch target. The source expression used for diagnostics is
+independent of this ownership. Type applications, annotation copies, backing
+substitutions, and compatibility probes never acquire a value-use edge from
+the surrounding expression. Derived-shape validation belongs to the exact
+selected target operation, not to the next copy that happens to run.
+Operations without an evidence edge still perform their required rank,
+region, literal, and constraint bookkeeping, but do not collect, sort, or
+record evidence pairs or enumerate a scheme's evidence parameters. Real
+edges collect their substitutions in the existing variable-registration walk;
+only an empty substitution needs an evidence-parameter query to decide whether
+shared requirements need a record.
+
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
 scheme callable; a checked component path over the scheme-side constraint
@@ -7313,6 +7327,16 @@ and explicit call shape.
 
 ### Boxy Host ABI Adapters
 
+Host ABI planning resolves only requested public signatures and data layouts.
+It opens checked nominal declarations under their exact argument substitutions
+before committing layouts. Instantiation caches include declaration identity and
+resolved arguments; recursive applications reuse their reserved shape. The exact
+ABI shapes and private worker shapes have separate identities even when they
+share the representation table's structural vocabulary. ABI shapes are never
+reconstructed from erased worker children. Wrappers and adapters consume the
+planned pair, including its exact tag payload types and descriptor provenance.
+Equal storage layouts alone do not permit aliasing boundary result locals.
+
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
 `RootAbi.platform` or `RootAbi.hosted`, and any provided static data export,
@@ -7745,6 +7769,14 @@ generalized local-procedure uses. A generalized scope also records its exact
 checked scheme root, so evidence paths are replayed against the same callable
 shape that authored them. Static-dispatch relation records remain the separate
 explicit authority for dispatch constraints.
+
+Record-field steps in callable evidence paths select the explicit source-value
+cell, independently of field-kind resolution. An optional field's tagged runtime
+slot and an undetermined field's placeholder slot are not the checked value
+type. Reading the source-value cell neither commits the field kind nor relates
+the value to its storage slot; ordinary interface relations and relation freeze
+retain ownership of those decisions.
+
 The `CheckedBodyStore.contains_diagnostic_error` column excludes rejected
 expression sites from this relation table; an error-containing checked type is
 not a valid specialization constraint and never reaches Monotype instantiation.
@@ -7901,6 +7933,16 @@ fresh substitution in the body context even when its method evidence is already
 supplied or empty. Pending callable evaluation wrappers install the same frame
 before lowering their bodies, whether the requested callable type is sealed or
 still a graph node. Nested bodies consume that frame's exact type bindings.
+
+A procedure root instantiated at its own scheme also installs its complete
+schema and substitution before lowering its body, including when its method
+evidence vector is empty. Its slots reference the cells instantiated in that
+root's context; relating the requested callable constrains those same cells.
+Creating the slots already installs those checked identities, so this path
+does not seed them into the same context again. The slot array belongs to the
+body graph and is not retained in graph-free stored evidence. Recursive root
+reuse and requirement forwarding consume the complete substitution; nested
+bodies continue to import only their checked binding inventory.
 
 Type-only instantiation state is separate from operational body-lowering state.
 Creating a fresh checked-type instance swaps only its exact scope, checked-node
@@ -9048,18 +9090,27 @@ does not mutate checked data or create a second name registry.
 
 When an edge uses a procedure as data, an otherwise-unpinned requirement that
 is reachable through the procedure's own callable type is not
-`unreachable`. Checker output records `from_callable(k)` at that construction
-site, where `k` is the requirement's template evidence-param index and its
-evidence-param record owns the exact dispatcher path. If compile-time
-evaluation stores that function inside another value before the callable is
-concrete, `ConstStore` retains the same symbolic entry in the function's
-evidence vector. Restoring the function projects the recorded path over the
-consumer's concrete callable request, selects the exact method evidence, and
-uses the resolved vector as the specialization identity. This work is linear
-only in the function's evidence vector at a specialization request; the
+`unreachable`. Checker output records a `from_callable` marker in that
+requirement's evidence-vector slot. The owning schema's parameter at that
+position supplies the exact method and dispatcher path; the marker carries no
+second parameter index. Forwarding follows the checked edge to its source
+requirement and places the marker in the destination requirement's slot, so
+different parameter orders across schemes require no rebasing pass or lookup
+table. Lexical `constraint` references retain their explicit depth and index.
+If compile-time evaluation stores that function inside another value before the
+callable is concrete, `ConstStore` retains the same symbolic entry in the
+function's evidence vector, including inside nested evidence trees. Pool offsets are not
+parameter positions. Restoring the function walks the vector alongside its
+owning schema, validates that each marker has a callable-reachable dispatcher
+path, projects that path over the consumer's concrete callable request, selects
+the exact method evidence, and uses the resolved vector as the specialization
+identity. This work is linear only in the function's evidence vector at a
+specialization request; the
 existing specialization cache prevents duplicate function bodies. Aggregate
 restoration neither scans nested values nor reconstructs where a function came
-from.
+from. Resolution borrows immutable evidence until an entry resolves, then copies
+the vector once for that request. An unchanged vector is returned directly.
+Unresolved results are not memoized across instantiation-graph refinement.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
@@ -10030,6 +10081,18 @@ the aggregate descriptor consumes those adapted field values. Each field's
 descriptor source therefore names the boundary's output representation; a
 proven direct transfer retains the source representation. The pre-conversion
 representation cannot describe a field whose storage the adapter changed.
+
+Nominal construction consumes the same explicit backing parameter substitution.
+The shared backing representation fixes storage; its descriptor binds each
+formal to the exact actual descriptor supplied by this nominal use. Actuals are
+resolved in the enclosing scope before the declaration's bindings are entered,
+and nested construction restores that scope on exit. Construction and its
+representation adapters consume those descriptors before any field requests a
+static descriptor. No checked types or worker representation graphs are cloned
+or mutated to supply this construction context. Static descriptor construction
+resolves nominal parameters lazily in their enclosing substitution environment
+and caches by representation and environment. A record field read supplies the
+field's stored descriptor before lowering any representation adapter.
 
 The substitution is consumed to produce one exact source for every hidden
 descriptor, hidden dictionary, and erased-callable metadata capture. A source is
@@ -11882,12 +11945,22 @@ statically known `assign_tag` discriminant for the current binding of the
 returned local, and whose ownership-neutral
 control-flow graph can account mechanically for every ownership-moving
 statement on every path. The solver propagates one bit per represented owned
-entry parameter. A consuming call position, consuming low-level argument,
+entry parameter. A consuming call position, ownership-transferring low-level argument,
 aggregate operand, tag payload, store operand, moving Boxy operand, or returned
 same-value alias clears that entry bit. Borrowing reads leave it set. At each
 normal return, the bits still set are intersected with every other path that
 returns the same discriminant. A loop is the ordinary finite fixed point over
 the per-resource rows below.
+
+For a low-level operation, ownership-transferring positions are exactly
+`consume_args | retain_args` from its explicit ARC effect. A `retain_args`
+operand supplies a stored unit to the result, and emission may move its existing
+unit instead of retaining it. That entry unit is therefore spent on this path,
+just like an aggregate operand; it cannot also be promised back to the caller.
+Pure same-value aliases preserve this transfer identity. For a checked list
+replacement, success spends both the list and replacement item, while
+failure may restitute both untouched entry units. Ordinary borrowing reads
+continue to preserve the entry bit.
 
 Restitution consumes the structural lift's existing procedure statement
 inventory. Its reusable scratch arrays and statement-to-ordinal lookup contain
@@ -13556,9 +13629,9 @@ When a later compilation materializes a cached const, Monotype lowering turns
   alpha-renaming its parameters, and binding each captured symbol to the
   ordinary Monotype expression materialized from the corresponding captured
   `ConstNodeId`
-- stored function evidence marked `from_callable(k)` is resolved from the
-  checker-authored path of evidence param `k` over the consumer's concrete
-  function request before the checked template is specialized
+- stored function evidence marked `from_callable` is resolved from the
+  checker-authored path of its owning vector slot's parameter over the
+  consumer's concrete function request before the checked template is specialized
 - generated parser runtime functions materialize through their explicit generated
   function kind: Monotype lowering recovers the checked static-dispatch plan,
   materializes generated captures such as transformed field-name strings by their

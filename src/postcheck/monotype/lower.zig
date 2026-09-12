@@ -616,6 +616,10 @@ pub const BodyDiagnostics = struct {
     nested_callable_checks: u64 = 0,
     nested_lambdas_prepared: u64 = 0,
     nested_closures_prepared: u64 = 0,
+    /// Requests that project symbolic evidence over their checked callable.
+    callable_evidence_symbolic_requests: u64 = 0,
+    /// Immutable evidence vectors copied because at least one entry resolved.
+    callable_evidence_vector_copies: u64 = 0,
 };
 
 /// Deterministic Monotype workload counts. These diagnose how much exact
@@ -802,8 +806,9 @@ const SpecEvidence = union(enum) {
     structural: SpecStructuralEvidence,
     /// Callable-reachable evidence that remains symbolic while a reusable
     /// compile-time value is produced and resolves from the eventual request.
+    /// Its position in the owning vector selects the checked parameter; no
+    /// index from a forwarding frame may survive into the destination schema.
     from_callable: struct {
-        index: u32,
         independent_callable: bool,
     },
     /// Abstract local scheme parameter, supplied by the checked use edge.
@@ -4593,7 +4598,6 @@ const Builder = struct {
             } }),
             .from_callable => |use| {
                 try nodes.append(self.allocator, .{ .from_callable = .{
-                    .index = use.index,
                     .independent_callable = use.independent_callable,
                 } });
             },
@@ -5803,6 +5807,8 @@ const Builder = struct {
                 body_ctx.evidence = rootEvidenceWithSubstitution(template_ref, schema, .{ .subst = live, .vector = spec_evidence });
             }
             try body_ctx.seedSubstitution(schema, live);
+        } else if (retained_topology == null) {
+            body_ctx.evidence = try body_ctx.rootEvidenceAtOwnScheme(template, spec_evidence);
         }
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
@@ -40453,7 +40459,6 @@ const BodyContext = struct {
                     } };
                 },
                 .from_callable => |use| .{ .from_callable = .{
-                    .index = use.index,
                     .independent_callable = use.independent_callable,
                 } },
                 .from_scheme => |index| .{ .from_scheme = index },
@@ -40531,7 +40536,7 @@ const BodyContext = struct {
                     .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
                 },
                 .record_field => switch (content) {
-                    .record => node = try self.graph.recordFieldNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
+                    .record => node = try self.graph.recordFieldValueNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
                     .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
                 },
                 .tag_payload_tag => switch (content) {
@@ -40560,26 +40565,16 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
-        var has_symbolic = false;
-        for (evidence) |entry| {
-            if (entry == .from_callable) {
-                has_symbolic = true;
-                break;
-            }
-        }
-        if (!has_symbolic) return evidence;
-
         const params = view.templates.evidenceParams(&template);
         if (evidence.len != params.len) {
             Common.invariant("callable-derived evidence length differed from its checked template");
         }
-        const resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
-        for (resolved) |*entry| switch (entry.*) {
-            .from_callable => |recipe| {
-                if (recipe.index >= params.len) {
-                    Common.invariant("callable-derived evidence referenced an unknown checked parameter");
-                }
-                const param = params[recipe.index];
+        var resolved: ?[]SpecEvidence = null;
+        var has_symbolic = false;
+        for (evidence, 0..) |entry, index| switch (entry) {
+            .from_callable => {
+                has_symbolic = true;
+                const param = params[index];
                 const path = view.templates.evidenceParamPath(param);
                 if (path.len == 0) {
                     Common.invariant("callable-derived evidence named a pathless checked parameter");
@@ -40590,18 +40585,26 @@ const BodyContext = struct {
                     param.structural != null or
                     try self.nodeIsProvenUninhabited(component_node);
                 if (resolvable) {
-                    entry.* = try self.synthesizeComponentEvidenceAtNodeForPurpose(
+                    const replacement = try self.synthesizeComponentEvidenceAtNodeForPurpose(
                         view,
                         param.method,
                         param.structural,
                         component_node,
                         purpose,
                     );
+                    // Evidence can be shared with another request or lexical
+                    // frame. Copy once, only when this request resolves an entry.
+                    if (resolved == null) {
+                        resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
+                        self.builder.countBodyDiagnostic("callable_evidence_vector_copies");
+                    }
+                    resolved.?[index] = replacement;
                 }
             },
             .target, .structural, .from_scheme, .unreachable_value, .checked_error => {},
         };
-        return resolved;
+        if (has_symbolic) self.builder.countBodyDiagnostic("callable_evidence_symbolic_requests");
+        return resolved orelse evidence;
     }
 
     /// The substitution and evidence the scheme instantiated at `expr` (a
@@ -40812,6 +40815,30 @@ const BodyContext = struct {
         };
     }
 
+    /// A root without a supplied substitution still owns every quantified
+    /// slot, even when it has no method requirements. Instantiate those slots
+    /// in this body's context so the root interface, descendants, and recursive
+    /// requests all use the same cells. instNode installs them already; seeding
+    /// them back into this context would only repeat the lookups.
+    fn rootEvidenceAtOwnScheme(
+        self: *BodyContext,
+        template: checked.CheckedProcedureTemplate,
+        vector: []const SpecEvidence,
+    ) Allocator.Error!EvidenceChain {
+        const schema = templateSchemaIn(self.view, &template);
+        // These cells and their slot array live only as long as the body graph.
+        // Stored function evidence retains the vector and scope, never slots.
+        const slots = try self.graph.arena().alloc(SubstSlot, schema.scheme_vars.len);
+        for (schema.scheme_vars, slots) |ty, *slot| {
+            slot.* = switch (checkedPayload(self.view, ty)) {
+                .err => .checked_error,
+                .pending => Common.invariant("pending checked type reached a root substitution"),
+                .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try self.instNode(ty) },
+            };
+        }
+        return rootEvidenceWithSubstitution(self.owner_template, schema, .{ .subst = slots, .vector = vector });
+    }
+
     /// Live slots for a substitution recorded as checked types of
     /// `site_view`, instantiated in this context (or in a context for that
     /// module when the site belongs to another one).
@@ -40955,8 +40982,7 @@ const BodyContext = struct {
                         };
                         break :independent .{ .target = independent_target };
                     },
-                    .from_callable => |use| .{ .from_callable = .{
-                        .index = use.index,
+                    .from_callable => .{ .from_callable = .{
                         .independent_callable = true,
                     } },
                     .structural, .from_scheme, .unreachable_value, .checked_error => entry,
@@ -41136,7 +41162,6 @@ const BodyContext = struct {
                 .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
                 .from_callable => {
                     out[k] = .{ .from_callable = .{
-                        .index = @intCast(k),
                         .independent_callable = false,
                     } };
                     derived[k] = true;
@@ -41161,7 +41186,6 @@ const BodyContext = struct {
                     },
                     .from_callable => |use| {
                         out[k] = .{ .from_callable = .{
-                            .index = use.index,
                             .independent_callable = use.independent_callable or constraint.independent_callable,
                         } };
                         derived[k] = true;
@@ -56179,6 +56203,94 @@ test "graph constructor representation follows aliases and preserves nominal lay
     try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(alias));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(nominal));
     try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(outer_alias));
+}
+
+test "issue 11288: root substitutions share lexical cells and isolate separate instantiations" {
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const outer_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const inner_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, outer_ty, .{ .flex = .{} });
+    try checked_types.fillSyntheticTypeRoot(gpa, inner_ty, .{ .flex = .{} });
+    const fn_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{outer_ty}, outer_ty);
+    var scheme_vars = [_]checked.CheckedTypeId{outer_ty};
+    const templates = checked.CheckedProcedureTemplateTable{ .scheme_vars_pool = &scheme_vars };
+    var template: checked.CheckedProcedureTemplate = undefined;
+    template.checked_fn_root = fn_ty;
+    template.scheme_vars = .{ .start = 0, .len = 1 };
+    template.evidence_params = .{};
+
+    var site: checked.NestedProcSite = undefined;
+    site.type_bindings = .{ .start = 0, .len = 2 };
+    var bindings = [_]checked.NestedProcTypeBinding{
+        .{ .ty = inner_ty, .depth = 0, .slot = 0 },
+        .{ .ty = outer_ty, .depth = 1, .slot = 0 },
+    };
+    var sites = std.array_list.Managed(checked.NestedProcSite).init(gpa);
+    defer sites.deinit();
+    const site_id: names.NestedProcSiteId = @enumFromInt(sites.items.len);
+    try sites.append(site);
+    const nested_sites = checked.NestedProcSiteTable{ .sites = sites.items, .type_bindings = &bindings };
+
+    // Only type instantiation and lexical binding are exercised here.
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.timing = null;
+    builder.diagnostics = null;
+    builder.active_spec_job_diagnostics = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = gpa;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.owner_template = std.mem.zeroes(names.ProcTemplate);
+    ctx.view.key = .{ .bytes = @splat(0) };
+    ctx.view.types = checked_types.view();
+    ctx.view.templates = &templates;
+    ctx.view.nested_proc_sites = &nested_sites;
+    ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer ctx.instantiation.deinit();
+
+    const root = try ctx.rootEvidenceAtOwnScheme(template, &.{});
+    const outer_node = root.subst[0].node;
+    const root_node = try ctx.instNode(fn_ty);
+    const str_node = try graph.newNode(.{ .primitive = .str });
+    const request = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{str_node}), .ret = str_node } });
+    try relateConstructionFunctionRequestInterface(graph, root_node, request);
+    try std.testing.expect(graph.sameClass(outer_node, str_node));
+
+    var child = ctx;
+    child.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer child.instantiation.deinit();
+    const inner_node = try graph.newNode(.{ .primitive = .i64 });
+    child.evidence = .{
+        .scope = root.scope,
+        .schema = .{ .view = ctx.view, .root = null, .scheme_vars = &.{inner_ty}, .params = &.{} },
+        .subst = &.{.{ .node = inner_node }},
+        .parent = &root,
+    };
+    try child.bindNestedTypes(site_id, false);
+    try std.testing.expect(graph.sameClass(try child.instNode(outer_ty), str_node));
+    try std.testing.expect(graph.sameClass(try child.instNode(inner_ty), inner_node));
+
+    // A sibling root of the same checked scheme can have a different type.
+    // Even within one graph its checked identities must instantiate afresh.
+    var sibling = ctx;
+    sibling.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer sibling.instantiation.deinit();
+    const sibling_root = try sibling.rootEvidenceAtOwnScheme(template, &.{});
+    const sibling_node = try sibling.instNode(fn_ty);
+    const sibling_request = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{inner_node}), .ret = inner_node } });
+    try relateConstructionFunctionRequestInterface(graph, sibling_node, sibling_request);
+    try std.testing.expect(graph.sameClass(sibling_root.subst[0].node, inner_node));
+    try std.testing.expect(!graph.sameClass(outer_node, sibling_root.subst[0].node));
+    try std.testing.expect(graph.sameClass(try child.instNode(outer_ty), str_node));
 }
 
 test "issue 11265: forwarded evidence compares methods in their owning name stores" {

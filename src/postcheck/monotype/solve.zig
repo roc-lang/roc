@@ -3631,6 +3631,25 @@ pub const InstGraph = struct {
         return self.recordFieldNodeWithAccess(raw_record, name, .inspectable, "record field access");
     }
 
+    /// Follow a checked field-value type without selecting its storage kind.
+    /// Evidence paths address this source value even while the runtime slot
+    /// remains unresolved or carries an optional field's presence tag.
+    pub fn recordFieldValueNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
+        const field = try self.recordFieldWithAccess(raw_record, name, .inspectable, "record field access");
+        const value = switch (field.kind) {
+            .required, .defaulted => blk: {
+                if (field.value_ty != null) Common.invariant("inline record field carried a separate source value node");
+                break :blk field.ty;
+            },
+            .optional, .undetermined => field.value_ty orelse
+                Common.invariant("record field carried no source value node"),
+            // Sealed Monotypes retain source-value metadata for optional slots;
+            // its absence explicitly denotes an inline source value.
+            .sealed => field.value_ty orelse field.ty,
+        };
+        return self.find(value);
+    }
+
     /// Apply one checked required-access judgment to the field-kind cell and
     /// return the inline value slot selected by that judgment.
     pub fn requiredRecordFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
@@ -7354,6 +7373,100 @@ test "provisional Monotype view preserves an undetermined record field" {
     try std.testing.expectEqual(@as(usize, 1), provisional_fields.len);
     const provisional_value_ty = GuardedList.at(provisional_fields, 0).value_ty orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(provisional_value_ty));
+}
+
+test "issue 11303: reading a field value preserves its undetermined storage until freeze" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const field_name = try name_store.internRecordFieldLabel("render");
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const value = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = try graph.newNode(.{ .primitive = .str }),
+    } });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const kind = try graph.newUndeterminedFieldKind();
+    graph.registerUndeterminedFieldKindCells(kind, slot, value);
+    const record = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{
+            .name = field_name,
+            .ty = slot,
+            .value_ty = value,
+            .kind = .{ .undetermined = kind },
+            .default = null,
+        }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+
+    try std.testing.expectEqual(slot, try graph.recordFieldNode(record, field_name));
+    const node_count = graph.nodes.items.len;
+    try std.testing.expectEqual(value, try graph.recordFieldValueNode(record, field_name));
+    try std.testing.expectEqual(node_count, graph.nodes.items.len);
+    try std.testing.expect(graph.resolvedFieldKind(.{ .undetermined = kind }) == null);
+    try std.testing.expect(graph.content(slot) == .unresolved);
+    try std.testing.expect(!graph.sameClass(slot, value));
+
+    try graph.freezeRelations();
+    try std.testing.expect(graph.resolvedFieldKind(.{ .undetermined = kind }).? == .required);
+    try std.testing.expect(graph.sameClass(slot, value));
+    try std.testing.expectEqual(try graph.recordFieldNode(record, field_name), try graph.recordFieldValueNode(record, field_name));
+}
+
+test "issue 11303: field value reads preserve optional tagged storage and sealed metadata" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const field_name = try name_store.internRecordFieldLabel("render");
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const value = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = try graph.newNode(.{ .primitive = .str }),
+    } });
+    const missing = try name_store.internTagLabel("#Missing");
+    const present = try name_store.internTagLabel("#Present");
+    const slot = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{
+            .{ .name = missing, .checked_name = missing, .payloads = try graph.arena().alloc(NodeId, 0) },
+            .{ .name = present, .checked_name = present, .payloads = try graph.arena().dupe(NodeId, &.{value}) },
+        }),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+
+    const cases = [_]struct { kind: InstFieldKind, optional: bool }{
+        .{ .kind = .optional, .optional = true },
+        .{ .kind = .sealed, .optional = true },
+        .{ .kind = .required, .optional = false },
+        .{ .kind = .sealed, .optional = false },
+    };
+    for (cases) |case| {
+        const field_slot = if (case.optional) slot else value;
+        const record = try graph.newNode(.{ .record = .{
+            .fields = try graph.arena().dupe(InstField, &.{.{
+                .name = field_name,
+                .ty = field_slot,
+                .value_ty = if (case.optional) value else null,
+                .kind = case.kind,
+                .default = null,
+            }}),
+            .ext = try graph.newNode(.empty_record),
+        } });
+        try std.testing.expectEqual(value, try graph.recordFieldValueNode(record, field_name));
+        try std.testing.expectEqual(field_slot, try graph.recordFieldNode(record, field_name));
+        try std.testing.expect(graph.content(value) == .func);
+        try std.testing.expect(graph.content(slot) == .tag_union);
+        try std.testing.expect(!graph.sameClass(slot, value));
+    }
 }
 
 test "record field node carries contextual row evidence into receiver" {
