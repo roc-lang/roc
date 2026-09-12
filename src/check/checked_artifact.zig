@@ -31341,7 +31341,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 93 distinguishes rejected function values from callable templates.
     // Version 94 retains explicit equality guards and matched-value binders
     // for custom literal patterns.
-    const serialized_layout_version: u32 = 94;
+    // Version 95 removes the redundant source-scheme index from stored
+    // callable-derived function evidence; its vector slot owns the requirement.
+    const serialized_layout_version: u32 = 95;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37907,8 +37909,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD7, 0x46, 0xCF, 0x78, 0xBA, 0x30, 0x9B, 0x80, 0xAE, 0xC6, 0x91, 0x50, 0x5F, 0xB2, 0xD7, 0x53,
-        0xDC, 0x7B, 0xEF, 0x6D, 0x06, 0x6C, 0x66, 0x30, 0xD7, 0xF4, 0x5D, 0x5D, 0x06, 0x0C, 0x7F, 0x87,
+        0x17, 0xC0, 0xDF, 0xF1, 0xE9, 0xDA, 0x5A, 0x3F, 0xB8, 0x10, 0x4B, 0x58, 0x33, 0xBF, 0x14, 0xA2,
+        0xA5, 0xA6, 0x52, 0x90, 0x6E, 0x9B, 0xB6, 0x69, 0x6B, 0x9B, 0x96, 0x39, 0x07, 0x3C, 0xA4, 0x49,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

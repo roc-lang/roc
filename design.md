@@ -3313,7 +3313,7 @@ the surrounding expression. Derived-shape validation belongs to the exact
 selected target operation, not to the next copy that happens to run.
 Operations without an evidence edge still perform their required rank,
 region, literal, and constraint bookkeeping, but do not collect, sort, or
-publish evidence pairs or enumerate a scheme's evidence parameters. Real
+record evidence pairs or enumerate a scheme's evidence parameters. Real
 edges collect their substitutions in the existing variable-registration walk;
 only an empty substitution needs an evidence-parameter query to decide whether
 shared requirements need a record.
@@ -7327,6 +7327,16 @@ and explicit call shape.
 
 ### Boxy Host ABI Adapters
 
+Host ABI planning resolves only requested public signatures and data layouts.
+It opens checked nominal declarations under their exact argument substitutions
+before committing layouts. Instantiation caches include declaration identity and
+resolved arguments; recursive applications reuse their reserved shape. The exact
+ABI shapes and private worker shapes have separate identities even when they
+share the representation table's structural vocabulary. ABI shapes are never
+reconstructed from erased worker children. Wrappers and adapters consume the
+planned pair, including its exact tag payload types and descriptor provenance.
+Equal storage layouts alone do not permit aliasing boundary result locals.
+
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
 `RootAbi.platform` or `RootAbi.hosted`, and any provided static data export,
@@ -9063,8 +9073,12 @@ does not mutate checked data or create a second name registry.
 When an edge uses a procedure as data, an otherwise-unpinned requirement that
 is reachable through the procedure's own callable type is not
 `unreachable`. Checker output records `from_callable(k)` at that construction
-site, where `k` is the requirement's template evidence-param index and its
-evidence-param record owns the exact dispatcher path. If compile-time
+site, where `k` is the containing vector slot, whose evidence-param record owns
+the exact dispatcher path. Symbolic entries carry no separate index: forwarding
+into another scheme makes the destination slot authoritative, even when the two
+schemes enumerate requirements in different orders. Live and stored evidence,
+serialization, and specialization identity all preserve this slot-relative
+meaning and the independent-callable flag. If compile-time
 evaluation stores that function inside another value before the callable is
 concrete, `ConstStore` retains the same symbolic entry in the function's
 evidence vector. Restoring the function projects the recorded path over the
@@ -9073,7 +9087,9 @@ uses the resolved vector as the specialization identity. This work is linear
 only in the function's evidence vector at a specialization request; the
 existing specialization cache prevents duplicate function bodies. Aggregate
 restoration neither scans nested values nor reconstructs where a function came
-from.
+from. Resolution borrows immutable evidence until an entry resolves, then copies
+the vector once for that request. An unchanged vector is returned directly.
+Unresolved results are not memoized across instantiation-graph refinement.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
@@ -11875,12 +11891,22 @@ statically known `assign_tag` discriminant for the current binding of the
 returned local, and whose ownership-neutral
 control-flow graph can account mechanically for every ownership-moving
 statement on every path. The solver propagates one bit per represented owned
-entry parameter. A consuming call position, consuming low-level argument,
+entry parameter. A consuming call position, ownership-transferring low-level argument,
 aggregate operand, tag payload, store operand, moving Boxy operand, or returned
 same-value alias clears that entry bit. Borrowing reads leave it set. At each
 normal return, the bits still set are intersected with every other path that
 returns the same discriminant. A loop is the ordinary finite fixed point over
 the per-resource rows below.
+
+For a low-level operation, ownership-transferring positions are exactly
+`consume_args | retain_args` from its explicit ARC effect. A `retain_args`
+operand supplies a stored unit to the result, and emission may move its existing
+unit instead of retaining it. That entry unit is therefore spent on this path,
+just like an aggregate operand; it cannot also be promised back to the caller.
+Pure same-value aliases preserve this transfer identity. For a checked list
+replacement, success spends both the list and replacement item, while
+failure may restitute both untouched entry units. Ordinary borrowing reads
+continue to preserve the entry bit.
 
 Restitution consumes the structural lift's existing procedure statement
 inventory. Its reusable scratch arrays and statement-to-ordinal lookup contain

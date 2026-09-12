@@ -34,6 +34,38 @@ const postcheck = @import("postcheck");
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
 
+/// Committed ordinary-data layouts for checked source ABI requests.
+pub const CheckedAbiLayouts = struct {
+    allocator: Allocator,
+    layouts: @import("layout").Store,
+    roots: []const @import("layout").Idx,
+
+    pub fn deinit(self: *CheckedAbiLayouts) void {
+        self.allocator.free(self.roots);
+        self.layouts.deinit();
+    }
+};
+
+/// Resolve public data layouts without running procedure specialization or LIR
+/// lowering. Requests and results have the same order and share one layout store.
+pub fn resolveCheckedAbiLayouts(
+    allocator: Allocator,
+    modules: CheckedModuleSet,
+    requests: []const checked.CheckedTypeId,
+    target_usize: base.target.TargetUsize,
+) Allocator.Error!CheckedAbiLayouts {
+    var plan = try postcheck.Boxy.Plan.analyzeHostAbi(allocator, .{
+        .root_module = modules.root,
+        .imports = modules.imports,
+        .layout_requests = requests,
+    });
+    defer plan.deinit();
+    var layouts = try @import("layout").Store.init(allocator, target_usize);
+    errdefer layouts.deinit();
+    const roots = try postcheck.Boxy.Layouts.commitHostAbi(allocator, &plan, &layouts);
+    return .{ .allocator = allocator, .layouts = layouts, .roots = roots };
+}
+
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see
 /// `requireHostedProceduresBound`.
