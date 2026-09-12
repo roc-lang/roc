@@ -10010,6 +10010,27 @@ original call operand root plus the exact instantiated descendant; it never
 changes to a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
+Nominal substitution identity does not demand a runtime representation. Boxy
+interns checked type bindings separately from representations; a binding receives
+a representation only when type analysis reaches it through an explicit runtime
+or evidence dependency. Each module-qualified nominal declaration shares one
+ordered vector of formal binding ids, and each checked nominal use records a complete
+vector of exact actual representations in the same order. Formal bindings are
+registered even when their types have not been analyzed. Later analysis fills
+the existing binding, so every use observes it without deferred repair scans or
+duplicated formal metadata. Consumers read actuals by argument index and consult
+the formal binding only for operations on its runtime representation. A formal
+without such a representation has no runtime substitution target; its exact
+actual remains available. Recording formals alone must not allocate layouts,
+descriptor requirements, or dictionaries. Recursive analysis reserves identities
+before descending and never holds growable-table pointers across recursion.
+
+When a record boundary adapts its fields before constructing the target record,
+the aggregate descriptor consumes those adapted field values. Each field's
+descriptor source therefore names the boundary's output representation; a
+proven direct transfer retains the source representation. The pre-conversion
+representation cannot describe a field whose storage the adapter changed.
+
 The substitution is consumed to produce one exact source for every hidden
 descriptor, hidden dictionary, and erased-callable metadata capture. A source is
 one of static metadata, an argument descriptor, a nested descriptor read from an

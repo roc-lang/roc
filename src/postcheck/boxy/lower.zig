@@ -3621,14 +3621,13 @@ const ProcedureBuilder = struct {
         if (self.type_desc_ids[rep_index]) |existing| return existing;
 
         const source_rep = self.plan.representations.items[rep_index];
-        const nominal_substitutions = self.plan.nominalBackingArgSubstitutionSlice(
-            source_rep.nominal_backing_arg_substitutions,
-        );
-        if (nominal_substitutions.len != 0) {
+        if (source_rep.nominal_backing_arg_substitutions.len != 0) {
             var descriptor_sources = StaticDescriptorSourceMap{};
             defer descriptor_sources.deinit(self.allocator);
-            for (nominal_substitutions) |substitution| {
-                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+            var nominal_substitutions = self.plan.nominalBackingSubstitutions(source_rep.nominal_backing_arg_substitutions);
+            while (nominal_substitutions.next()) |substitution| {
+                const formal_rep = substitution.formal_rep orelse continue;
+                const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
                 const desc = formal.descriptor orelse continue;
                 try descriptor_sources.put(self.allocator, desc, substitution.actual_rep);
             }
@@ -17118,12 +17117,15 @@ const ProcBodyBuilder = struct {
         if (entry.found_existing) return;
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-            const put = try substitutions.getOrPut(substitution.formal_rep);
-            if (put.found_existing and put.value_ptr.* != substitution.actual_rep) {
-                boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+        var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitution_iter.next()) |substitution| {
+            if (substitution.formal_rep) |formal_rep| {
+                const put = try substitutions.getOrPut(formal_rep);
+                if (put.found_existing and put.value_ptr.* != substitution.actual_rep) {
+                    boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+                }
+                put.value_ptr.* = substitution.actual_rep;
             }
-            put.value_ptr.* = substitution.actual_rep;
             try self.collectNominalBackingRepActualSubstitutions(substitution.actual_rep, substitutions, seen);
         }
         for (self.parent.plan.childSlice(rep.children)) |child| {
@@ -21363,7 +21365,8 @@ const ProcBodyBuilder = struct {
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => {
-                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                    var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                    while (substitution_iter.next()) |substitution| {
                         if (substitution.formal_rep == backing_rep) return substitution.actual_rep;
                     }
                     return backing_rep;
@@ -27326,21 +27329,23 @@ const ProcBodyBuilder = struct {
         if (!context.exact_storage) return scope;
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-            if (substitution.formal_rep == substitution.actual_rep) continue;
-            const slot = &context.exact_reps[@intFromEnum(substitution.formal_rep)];
+        var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitution_iter.next()) |substitution| {
+            const formal_rep = substitution.formal_rep orelse continue;
+            if (formal_rep == substitution.actual_rep) continue;
+            const slot = &context.exact_reps[@intFromEnum(formal_rep)];
             if (slot.*) |existing| {
                 if (existing == substitution.actual_rep) continue;
             }
             try context.bindings.append(self.parent.allocator, .{
-                .formal = substitution.formal_rep,
+                .formal = formal_rep,
                 .outer = slot.*,
             });
             slot.* = substitution.actual_rep;
 
             const key = DescriptorTemplateEnvKey{
                 .parent = context.env,
-                .formal = substitution.formal_rep,
+                .formal = formal_rep,
                 .actual = substitution.actual_rep,
             };
             const entry = try context.env_ids.getOrPut(key);
@@ -32960,7 +32965,11 @@ const ProcBodyBuilder = struct {
             field.* = .{
                 .local = field_local,
                 .target_rep = target_field_rep,
-                .source_rep = source_field_rep,
+                // This local is the boundary output, not the original field.
+                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                    source_field_rep
+                else
+                    target_field_rep,
             };
         }
         const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
@@ -33136,7 +33145,11 @@ const ProcBodyBuilder = struct {
             field.* = .{
                 .local = field_local,
                 .target_rep = target_field_rep,
-                .source_rep = source_field_rep,
+                // This local is the boundary output, not the original field.
+                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                    source_field_rep
+                else
+                    target_field_rep,
             };
         }
         const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
@@ -36400,22 +36413,15 @@ const ProcBodyBuilder = struct {
         const call_rep = self.parent.plan.representations.items[@intFromEnum(call_rep_id)];
         if (call_rep.kind != .nominal) return;
 
-        const call_substitutions = self.parent.plan.nominalBackingArgSubstitutionSlice(
-            call_rep.nominal_backing_arg_substitutions,
-        );
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
-            var exact_call_arg_rep: ?Plan.TypeRepId = null;
-            for (call_substitutions) |call_substitution| {
-                if (call_substitution.arg_index != backing_substitution.arg_index) continue;
-                if (exact_call_arg_rep != null) {
-                    boxyLowerInvariant("boxy nominal backing substitution found duplicate call arguments");
-                }
-                exact_call_arg_rep = call_substitution.actual_rep;
-            }
-            const exact_rep = exact_call_arg_rep orelse
-                boxyLowerInvariant("boxy nominal backing substitution was missing a call argument");
-            if (backing_substitution.formal_rep == exact_rep) continue;
-            const put = try substitutions.getOrPut(backing_substitution.formal_rep);
+        var substitutions_iter = self.parent.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        while (substitutions_iter.next()) |backing_substitution| {
+            const exact_rep = self.parent.plan.nominalBackingActual(
+                call_rep.nominal_backing_arg_substitutions,
+                backing_substitution.arg_index,
+            ) orelse boxyLowerInvariant("boxy nominal backing substitution was missing a call argument");
+            const formal_rep = backing_substitution.formal_rep orelse continue;
+            if (formal_rep == exact_rep) continue;
+            const put = try substitutions.getOrPut(formal_rep);
             if (put.found_existing and put.value_ptr.* != exact_rep) {
                 boxyLowerInvariant("boxy nominal backing substitution assigned one backing formal to two call arguments");
             }

@@ -41,6 +41,8 @@ const empty_method_registry = static_dispatch.MethodRegistry{};
 
 /// Stable index of a checked type's planned Boxy representation.
 pub const TypeRepId = enum(u32) { _ };
+/// Dense identity of a checked type, independent of runtime demand.
+pub const TypeBindingId = enum(u32) { _ };
 /// Stable index of a requested root in a program plan.
 pub const RootPlanId = enum(u32) { _ };
 /// Stable index of a lowered worker in a program plan.
@@ -193,10 +195,11 @@ pub const DeclaredField = struct {
     is_padding: bool = false,
 };
 
-/// Mapping from a module-qualified checked type to its representation id.
+/// Interned checked identity. A nominal formal can be registered before any
+/// runtime or evidence dependency demands its representation.
 pub const TypeRepBinding = struct {
     source_type: CheckedTypeIdentity,
-    rep: TypeRepId,
+    rep: ?TypeRepId = null,
 };
 
 /// Mapping from exact stored monomorphic type evidence to its Boxy
@@ -208,12 +211,38 @@ pub const StoredTypeRepBinding = struct {
     rep: TypeRepId,
 };
 
-/// Exact substitution from one nominal declaration backing parameter to the
-/// corresponding argument on this nominal use.
+/// A complete nominal use in `nominal_backing_uses`: `start` addresses its
+/// shared-formals offset, followed by `len` exact actual representation ids.
+/// The two-word handle keeps non-nominal representation rows unchanged in size.
+pub const NominalBackingSubstitutions = Span;
+
+/// Transient view of one substitution. A null formal representation means the
+/// binding has no runtime demand; the actual is always present.
 pub const NominalBackingArgSubstitution = struct {
     arg_index: u32,
-    formal_rep: TypeRepId,
+    formal_rep: ?TypeRepId,
     actual_rep: TypeRepId,
+};
+
+/// Reads shared bindings by id on each step, without retaining growable-table slices.
+pub const NominalBackingSubstitutionIterator = struct {
+    plan: *const ProgramPlan,
+    span: NominalBackingSubstitutions,
+    index: u32 = 0,
+
+    /// Return the next exact actual and its formal's current runtime binding.
+    pub fn next(self: *NominalBackingSubstitutionIterator) ?NominalBackingArgSubstitution {
+        if (self.index == self.span.len) return null;
+        const index = self.index;
+        self.index += 1;
+        const formals_start = self.plan.nominal_backing_uses.items[self.span.start];
+        const binding = self.plan.nominal_backing_formals.items[formals_start + index];
+        return .{
+            .arg_index = index,
+            .formal_rep = self.plan.type_reps.items[@intFromEnum(binding)].rep,
+            .actual_rep = @enumFromInt(self.plan.nominal_backing_uses.items[self.span.start + 1 + index]),
+        };
+    }
 };
 
 /// Runtime field-order policy selected from checked nominal metadata.
@@ -232,7 +261,7 @@ pub const TypeRepresentation = struct {
     /// `record_field_order` independently controls its runtime layout.
     declared_fields: Span = .{},
     record_field_order: RecordFieldOrder = .structural,
-    nominal_backing_arg_substitutions: Span = .{},
+    nominal_backing_arg_substitutions: NominalBackingSubstitutions = .{},
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
     /// Set when this planned representation transitively stores at least one
@@ -796,7 +825,10 @@ pub const ProgramPlan = struct {
     children: std.ArrayList(RepChild),
     tag_variants: std.ArrayList(TagVariant),
     declared_fields: std.ArrayList(DeclaredField),
-    nominal_backing_arg_substitutions: std.ArrayList(NominalBackingArgSubstitution),
+    nominal_backing_formals: std.ArrayList(TypeBindingId),
+    /// Packed use records: formal-vector offset, then actual TypeRepId ordinals.
+    /// Only generic nominals pay for a header; no per-argument index is stored.
+    nominal_backing_uses: std.ArrayList(u32),
     descriptors: std.ArrayList(DescriptorRequirement),
     hidden_descriptor_params: std.ArrayList(HiddenDescriptorParam),
     worker_evidence_descriptor_params: std.ArrayList(WorkerEvidenceDescriptorParam),
@@ -847,7 +879,8 @@ pub const ProgramPlan = struct {
             .children = .empty,
             .tag_variants = .empty,
             .declared_fields = .empty,
-            .nominal_backing_arg_substitutions = .empty,
+            .nominal_backing_formals = .empty,
+            .nominal_backing_uses = .empty,
             .descriptors = .empty,
             .hidden_descriptor_params = .empty,
             .worker_evidence_descriptor_params = .empty,
@@ -880,7 +913,8 @@ pub const ProgramPlan = struct {
         self.worker_evidence_descriptor_params.deinit(self.allocator);
         self.hidden_descriptor_params.deinit(self.allocator);
         self.descriptors.deinit(self.allocator);
-        self.nominal_backing_arg_substitutions.deinit(self.allocator);
+        self.nominal_backing_formals.deinit(self.allocator);
+        self.nominal_backing_uses.deinit(self.allocator);
         self.declared_fields.deinit(self.allocator);
         self.tag_variants.deinit(self.allocator);
         self.children.deinit(self.allocator);
@@ -973,11 +1007,23 @@ pub const ProgramPlan = struct {
         return self.declared_fields.items[span.start .. span.start + span.len];
     }
 
-    pub fn nominalBackingArgSubstitutionSlice(
+    /// Iterate a nominal use with its shared declaration bindings.
+    pub fn nominalBackingSubstitutions(
         self: *const ProgramPlan,
-        span: Span,
-    ) []const NominalBackingArgSubstitution {
-        return self.nominal_backing_arg_substitutions.items[span.start .. span.start + span.len];
+        span: NominalBackingSubstitutions,
+    ) NominalBackingSubstitutionIterator {
+        return .{ .plan = self, .span = span };
+    }
+
+    /// Actuals are total and ordered, including when the formal has no runtime
+    /// representation. No child search or formal analysis is needed here.
+    pub fn nominalBackingActual(
+        self: *const ProgramPlan,
+        span: NominalBackingSubstitutions,
+        arg_index: u32,
+    ) ?TypeRepId {
+        if (arg_index >= span.len) return null;
+        return @enumFromInt(self.nominal_backing_uses.items[span.start + 1 + arg_index]);
     }
 
     pub fn dictionarySlice(self: *const ProgramPlan, span: Span) []const DictionaryRequirement {
@@ -1395,6 +1441,11 @@ const Builder = struct {
         shape: CheckedTypeIdentity,
     };
 
+    const NominalDeclarationKey = struct {
+        module: checked.ModuleId,
+        declaration: checked.CheckedNominalDeclarationId,
+    };
+
     allocator: Allocator,
     root_module: ?checked.LoweringModuleView,
     root_view: ModuleView,
@@ -1402,7 +1453,8 @@ const Builder = struct {
     imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
-    by_type: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
+    by_type: std.AutoHashMap(CheckedTypeIdentity, TypeBindingId),
+    nominal_declaration_formals: std.AutoHashMap(NominalDeclarationKey, Span),
     optional_slots: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
     by_stored_type: std.AutoHashMap(StoredTypeIdentity, TypeRepId),
     body_exprs_seen: std.AutoHashMap(BodyExprVisit, void),
@@ -1432,7 +1484,8 @@ const Builder = struct {
             .imports = if (input.root_module != null) input.imports else &.{},
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
-            .by_type = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
+            .by_type = std.AutoHashMap(CheckedTypeIdentity, TypeBindingId).init(allocator),
+            .nominal_declaration_formals = std.AutoHashMap(NominalDeclarationKey, Span).init(allocator),
             .optional_slots = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
             .by_stored_type = std.AutoHashMap(StoredTypeIdentity, TypeRepId).init(allocator),
             .body_exprs_seen = std.AutoHashMap(BodyExprVisit, void).init(allocator),
@@ -1460,6 +1513,7 @@ const Builder = struct {
         self.body_exprs_seen.deinit();
         self.optional_slots.deinit();
         self.by_type.deinit();
+        self.nominal_declaration_formals.deinit();
         self.by_stored_type.deinit();
         self.plan.deinit();
     }
@@ -4133,20 +4187,25 @@ const Builder = struct {
         };
     }
 
-    fn analyzeType(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
-        const source_type = typeRef(view, ty);
+    fn internTypeBinding(self: *Builder, source_type: CheckedTypeIdentity) Allocator.Error!TypeBindingId {
         const entry = try self.by_type.getOrPut(source_type);
         if (entry.found_existing) return entry.value_ptr.*;
+        const id: TypeBindingId = @enumFromInt(@as(u32, @intCast(self.plan.type_reps.items.len)));
+        entry.value_ptr.* = id;
+        try self.plan.type_reps.append(self.allocator, .{ .source_type = source_type });
+        return id;
+    }
+
+    fn analyzeType(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
+        const source_type = typeRef(view, ty);
+        const binding = try self.internTypeBinding(source_type);
+        if (self.plan.type_reps.items[@intFromEnum(binding)].rep) |rep| return rep;
 
         const rep_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
-        entry.value_ptr.* = rep_id;
+        self.plan.type_reps.items[@intFromEnum(binding)].rep = rep_id;
         try self.plan.representations.append(self.allocator, .{
             .source_type = source_type,
             .kind = .in_progress,
-        });
-        try self.plan.type_reps.append(self.allocator, .{
-            .source_type = source_type,
-            .rep = rep_id,
         });
 
         const rep = try self.buildRepresentation(view, ty);
@@ -4919,7 +4978,7 @@ const Builder = struct {
         nominal: checked.CheckedNominalType,
         backing: TypeSource,
         children: []const RepChild,
-    ) Allocator.Error!Span {
+    ) Allocator.Error!NominalBackingSubstitutions {
         if (nominal.args.len == 0) return .{};
 
         const FormalSource = struct {
@@ -4937,29 +4996,38 @@ const Builder = struct {
             boxyPlanInvariant("checked nominal backing substitution arity disagreed with nominal arguments");
         }
 
-        const start: u32 = @intCast(self.plan.nominal_backing_arg_substitutions.items.len);
-        for (formal_args, 0..) |formal_ty, index| {
-            const formal_rep = self.plan.repForSourceType(typeRef(formal_source.view, formal_ty)) orelse continue;
-            var actual_rep: ?TypeRepId = null;
-            for (children) |child| {
-                if (child.role == .nominal_arg and child.role.nominal_arg == index) {
-                    if (actual_rep != null) {
-                        boxyPlanInvariant("checked nominal representation had duplicate argument children");
-                    }
-                    actual_rep = child.rep;
-                }
+        const entry = try self.nominal_declaration_formals.getOrPut(.{
+            .module = formal_source.view.key,
+            .declaration = formal_source.declaration.id,
+        });
+        if (!entry.found_existing) {
+            const start: u32 = @intCast(self.plan.nominal_backing_formals.items.len);
+            try self.plan.nominal_backing_formals.ensureUnusedCapacity(self.allocator, formal_args.len);
+            for (formal_args) |formal_ty| {
+                const binding = try self.internTypeBinding(typeRef(formal_source.view, formal_ty));
+                self.plan.nominal_backing_formals.appendAssumeCapacity(binding);
             }
-            try self.plan.nominal_backing_arg_substitutions.append(self.allocator, .{
-                .arg_index = @intCast(index),
-                .formal_rep = formal_rep,
-                .actual_rep = actual_rep orelse
-                    boxyPlanInvariant("checked nominal representation was missing an argument child"),
-            });
+            entry.value_ptr.* = .{ .start = start, .len = @intCast(formal_args.len) };
         }
-        return .{
-            .start = start,
-            .len = @intCast(self.plan.nominal_backing_arg_substitutions.items.len - start),
-        };
+        const formals = entry.value_ptr.*;
+        std.debug.assert(formals.len == nominal.args.len);
+
+        const start: u32 = @intCast(self.plan.nominal_backing_uses.items.len);
+        try self.plan.nominal_backing_uses.ensureUnusedCapacity(self.allocator, 1 + nominal.args.len);
+        self.plan.nominal_backing_uses.appendAssumeCapacity(formals.start);
+        var next_arg: u32 = 0;
+        for (children) |child| {
+            if (child.role != .nominal_arg) continue;
+            if (child.role.nominal_arg != next_arg) {
+                boxyPlanInvariant("checked nominal argument children were not in declaration order");
+            }
+            self.plan.nominal_backing_uses.appendAssumeCapacity(@intFromEnum(child.rep));
+            next_arg += 1;
+        }
+        if (next_arg != formals.len) {
+            boxyPlanInvariant("checked nominal representation was missing an argument child");
+        }
+        return .{ .start = start, .len = formals.len };
     }
 
     fn generatedEvidenceRepresentation(
@@ -7456,9 +7524,11 @@ const Builder = struct {
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
             const children = self.plan.childSlice(current_rep.children);
             if (current_rep.kind == .nominal) {
-                for (self.plan.nominalBackingArgSubstitutionSlice(current_rep.nominal_backing_arg_substitutions)) |substitution| {
-                    if (substitution.formal_rep == substitution.actual_rep) continue;
-                    try substitutions.put(self.allocator, substitution.formal_rep, substitution.actual_rep);
+                var substitution_iter = self.plan.nominalBackingSubstitutions(current_rep.nominal_backing_arg_substitutions);
+                while (substitution_iter.next()) |substitution| {
+                    const formal_rep = substitution.formal_rep orelse continue;
+                    if (formal_rep == substitution.actual_rep) continue;
+                    try substitutions.put(self.allocator, formal_rep, substitution.actual_rep);
                 }
             }
             const selected = switch (path_step.stepKind()) {
@@ -8153,16 +8223,10 @@ const Builder = struct {
         nominal_rep_id: TypeRepId,
         arg_index: u32,
     ) ?TypeRepId {
-        const nominal_rep = self.plan.representations.items[@intFromEnum(nominal_rep_id)];
-        var found: ?TypeRepId = null;
-        for (self.plan.nominalBackingArgSubstitutionSlice(nominal_rep.nominal_backing_arg_substitutions)) |substitution| {
-            if (substitution.arg_index != arg_index) continue;
-            if (found != null) {
-                boxyPlanInvariant("checked nominal representation had duplicate backing argument substitutions");
-            }
-            found = substitution.actual_rep;
-        }
-        return found;
+        return self.plan.nominalBackingActual(
+            self.plan.representations.items[@intFromEnum(nominal_rep_id)].nominal_backing_arg_substitutions,
+            arg_index,
+        );
     }
 
     fn nominalBackingActualForCallRep(
@@ -8211,7 +8275,8 @@ const Builder = struct {
         const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
         const operand_rep = self.plan.representations.items[@intFromEnum(operand_rep_id)];
         if (call_rep.kind == .nominal and operand_rep.kind == .nominal) {
-            for (self.plan.nominalBackingArgSubstitutionSlice(call_rep.nominal_backing_arg_substitutions)) |call_substitution| {
+            var call_substitution_iter = self.plan.nominalBackingSubstitutions(call_rep.nominal_backing_arg_substitutions);
+            while (call_substitution_iter.next()) |call_substitution| {
                 const operand_actual = self.nominalBackingArgActualRep(operand_rep_id, call_substitution.arg_index) orelse
                     boxyPlanInvariant("call operand nominal was missing a checked backing argument substitution");
                 try self.collectNominalBackingActualForCallRep(
@@ -8260,7 +8325,8 @@ const Builder = struct {
         if (entry.found_existing) return;
 
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+        var substitution_iter = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitution_iter.next()) |substitution| {
             if (substitution.formal_rep == formal_rep and substitution.actual_rep != formal_rep) {
                 if (found.*) |existing| {
                     if (existing != substitution.actual_rep) {
@@ -8295,11 +8361,14 @@ const Builder = struct {
         if (!roles_match) return;
 
         if (worker_rep.kind == .nominal) {
-            for (self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
+            var backing_substitution_iter = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+            while (backing_substitution_iter.next()) |backing_substitution| {
                 const exact_call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
                     boxyPlanInvariant("checked nominal call was missing a backing argument substitution");
-                if (backing_substitution.formal_rep != exact_call_arg_rep) {
-                    try substitutions.put(self.allocator, backing_substitution.formal_rep, exact_call_arg_rep);
+                if (backing_substitution.formal_rep) |formal_rep| {
+                    if (formal_rep != exact_call_arg_rep) {
+                        try substitutions.put(self.allocator, formal_rep, exact_call_arg_rep);
+                    }
                 }
             }
         }
@@ -8307,11 +8376,8 @@ const Builder = struct {
         for (self.plan.childSlice(worker_rep.children)) |worker_child| {
             if (worker_child.role != .alias_arg and worker_child.role != .nominal_arg) continue;
             const exact_call_arg_rep = if (worker_child.role == .nominal_arg)
-                self.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg) orelse blk: {
-                    const call_child = self.namedQuery().findMatchingChildByRole(call_children, worker_child) orelse
-                        boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
-                    break :blk call_child.rep;
-                }
+                self.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg) orelse
+                    boxyPlanInvariant("checked nominal call was missing a type argument substitution")
             else blk: {
                 const call_child = self.namedQuery().findMatchingChildByRole(call_children, worker_child) orelse
                     boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
@@ -8496,11 +8562,13 @@ const Builder = struct {
             try substitutions.put(self.allocator, worker_rep_id, call_rep_id);
         }
         if (worker_rep.kind == .nominal and call_rep.kind == .nominal) {
-            for (self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
+            var backing_substitution_iter = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+            while (backing_substitution_iter.next()) |backing_substitution| {
                 const exact_call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
                     boxyPlanInvariant("checked nominal call was missing a backing dictionary argument substitution");
+                const formal_rep = backing_substitution.formal_rep orelse continue;
                 try self.collectCallDictionaryRepSubstitutions(
-                    backing_substitution.formal_rep,
+                    formal_rep,
                     exact_call_arg_rep,
                     substitutions,
                     seen,
@@ -13570,6 +13638,18 @@ test "boxy dictionary traversal follows checked evidence order through aliases a
     try std.testing.expect(plan.dictionaryChildAt(@enumFromInt(1), 4) == null);
 }
 
+// Synthetic runtime graph tests supply representations directly, without a
+// checked store. Keep their binding-table setup local to these fixtures.
+fn testNominalSubstitution(plan: *ProgramPlan, formal: TypeRepId, actual: TypeRepId) Allocator.Error!NominalBackingSubstitutions {
+    const binding: TypeBindingId = @enumFromInt(@as(u32, @intCast(plan.type_reps.items.len)));
+    try plan.type_reps.append(plan.allocator, .{ .source_type = rootTypeRef(@enumFromInt(@intFromEnum(formal))), .rep = formal });
+    const formals_start: u32 = @intCast(plan.nominal_backing_formals.items.len);
+    try plan.nominal_backing_formals.append(plan.allocator, binding);
+    const start: u32 = @intCast(plan.nominal_backing_uses.items.len);
+    try plan.nominal_backing_uses.appendSlice(plan.allocator, &.{ formals_start, @intFromEnum(actual) });
+    return .{ .start = start, .len = 1 };
+}
+
 test "direct call metadata uses instantiated nominal arguments inside generalized backings" {
     const gpa = std.testing.allocator;
     var builder = Builder.init(gpa, .{});
@@ -13589,10 +13669,8 @@ test "direct call metadata uses instantiated nominal arguments inside generalize
         .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = backing },
         .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = generalized_call_arg },
     });
-    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
-        .{ .arg_index = 0, .formal_rep = worker_arg, .actual_rep = worker_arg },
-        .{ .arg_index = 0, .formal_rep = worker_arg, .actual_rep = exact_arg },
-    });
+    const worker_substitutions = try testNominalSubstitution(&builder.plan, worker_arg, worker_arg);
+    const call_substitutions = try testNominalSubstitution(&builder.plan, worker_arg, exact_arg);
     try builder.plan.dictionaries.append(gpa, .{
         .source_type = rootTypeRef(@enumFromInt(2)),
         .constraint_index = 0,
@@ -13604,10 +13682,10 @@ test "direct call metadata uses instantiated nominal arguments inside generalize
         .num_literal = null,
     });
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .tuple, .children = .{ .start = 2, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .dictionaries = .{ .start = 0, .len = 1 }, .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .primitive = .str } },
     });
@@ -13683,18 +13761,16 @@ test "direct call descriptors use operand nominal substitutions over generic cal
         .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = backing_rep },
         .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(6)), .rep = exact_operand_arg },
     });
-    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
-        .{ .arg_index = 0, .formal_rep = worker_arg, .actual_rep = worker_arg },
-        .{ .arg_index = 0, .formal_rep = call_formal, .actual_rep = generalized_call_arg },
-        .{ .arg_index = 0, .formal_rep = operand_formal, .actual_rep = exact_operand_arg },
-    });
+    const worker_substitutions = try testNominalSubstitution(&builder.plan, worker_arg, worker_arg);
+    const call_substitutions = try testNominalSubstitution(&builder.plan, call_formal, generalized_call_arg);
+    const operand_substitutions = try testNominalSubstitution(&builder.plan, operand_formal, exact_operand_arg);
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .tuple, .children = .{ .start = 2, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 5, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 5, .len = 2 }, .nominal_backing_arg_substitutions = operand_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .primitive = .str } },
         .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
@@ -13750,14 +13826,10 @@ test "evidence representation paths use exact nominal backing substitutions" {
         .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = backing_rep },
         .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = generalized_arg },
     });
-    try builder.plan.nominal_backing_arg_substitutions.append(gpa, .{
-        .arg_index = 0,
-        .formal_rep = generalized_arg,
-        .actual_rep = exact_arg,
-    });
+    const worker_substitutions = try testNominalSubstitution(&builder.plan, generalized_arg, exact_arg);
     try builder.plan.representations.appendSlice(gpa, &.{
         .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure }, .children = .{ .start = 0, .len = 1 } },
-        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 1, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 1, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_record },
         .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .primitive = .str } },
@@ -14641,4 +14713,130 @@ fn dummyProcedureTemplate() checked_names.ProcedureTemplateRef {
         .proc_base = @enumFromInt(fixtureTableIndex(0)),
         .template = @enumFromInt(fixtureTableIndex(0)),
     };
+}
+
+test "boxy nominal substitutions share formals independently of runtime demand and discovery order" {
+    const gpa = std.testing.allocator;
+    const use_count = 32;
+    const key = moduleKey(1);
+    const nominal_key = checked_names.NominalTypeKey{
+        .module = @enumFromInt(4),
+        .type_name = @enumFromInt(3),
+        .source_decl = 9,
+    };
+    const type_pool = [_]checked.CheckedTypeId{
+        @enumFromInt(0), @enumFromInt(1), @enumFromInt(0), // first use's actuals
+        @enumFromInt(1), @enumFromInt(0), @enumFromInt(1), // second use's actuals
+        @enumFromInt(2), @enumFromInt(3), @enumFromInt(4), // declaration formals
+    };
+    const declarations = [_]checked.CheckedNominalDeclaration{.{
+        .id = @enumFromInt(0),
+        .nominal = nominal_key,
+        .source_statement = 9,
+        .declaration_root = @enumFromInt(9),
+        .backing = @enumFromInt(7),
+        .fa_start = 6,
+        .fa_len = 3,
+    }};
+    const constraints = [_]checked.CheckedStaticDispatchConstraint{.{
+        .fn_name = @enumFromInt(9),
+        .fn_ty = @enumFromInt(5),
+        .origin = .method_call,
+    }};
+    var payloads: [9 + use_count]checked.StoredCheckedTypePayload = undefined;
+    payloads[0..9].* = .{
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
+        .{ .rigid = .{ .constraints = .{ .start = 0, .len = 1 } } },
+        .{ .rigid = .{} },
+        .{ .rigid = .{ .constraints = .{ .start = 0, .len = 1 } } },
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(0) } },
+        .{ .tuple = .{ .start = 0, .len = 2 } },
+        .{ .tuple = .{ .start = 6, .len = 2 } },
+        .{ .tuple = .{ .start = 3, .len = 2 } },
+    };
+    for (payloads[9..], 0..) |*payload, index| {
+        payload.* = .{ .nominal = .{
+            .name = nominal_key.type_name,
+            .origin_module = nominal_key.module,
+            .owner_module = key,
+            .source_decl = nominal_key.source_decl,
+            .is_opaque = false,
+            .args = .{ .start = @intCast((index % 2) * 3), .len = 3 },
+            .representation = .{ .local_box_payload_capability = .{ .capability = @enumFromInt(index % 2) } },
+        } };
+    }
+    const capabilities = [_]checked.BoxPayloadCapabilityEntry{
+        .{
+            .id = @enumFromInt(0),
+            .nominal = nominal_key,
+            .source_ty_payload = @enumFromInt(9),
+            .source_ty = typeKey(9),
+            .backing_ty = @enumFromInt(6),
+            .backing_ty_key = typeKey(6),
+            .is_opaque = false,
+        },
+        .{
+            .id = @enumFromInt(1),
+            .nominal = nominal_key,
+            .source_ty_payload = @enumFromInt(10),
+            .source_ty = typeKey(10),
+            .backing_ty = @enumFromInt(8),
+            .backing_ty_key = typeKey(8),
+            .is_opaque = false,
+        },
+    };
+    const interface = checked.ModuleInterfaceCapabilities{ .boxed_payload_templates = &capabilities };
+    const view = ModuleView{
+        .key = key,
+        .checked_types = .{
+            .stored_payloads = &payloads,
+            .type_id_pool = &type_pool,
+            .nominal_declarations = &declarations,
+            .constraint_pool = &constraints,
+        },
+        .interface_capabilities = &interface,
+    };
+
+    for ([_]bool{ false, true }) |backing_first| {
+        var builder = Builder.init(gpa, .{ .root_view = view });
+        defer builder.deinit();
+        if (backing_first) _ = try builder.analyzeType(view, @enumFromInt(7));
+        var uses: [use_count]TypeRepId = undefined;
+        for (&uses, 0..) |*use, index| use.* = try builder.analyzeType(view, @enumFromInt(9 + index));
+
+        // Formal storage is shared once, actual storage grows only with uses.
+        try std.testing.expectEqual(@as(usize, 3), builder.plan.nominal_backing_formals.items.len);
+        try std.testing.expectEqual(@as(usize, use_count * 4), builder.plan.nominal_backing_uses.items.len);
+        try std.testing.expectEqual(@as(usize, use_count + 4 + @as(usize, if (backing_first) 4 else 0)), builder.plan.representations.items.len);
+        if (!backing_first) {
+            try builder.materializeDescriptorRequirements();
+            try std.testing.expectEqual(@as(usize, 0), builder.plan.descriptors.items.len);
+            try std.testing.expectEqual(@as(usize, 0), builder.plan.dictionaries.items.len);
+            for (uses) |use| {
+                var substitutions = builder.plan.nominalBackingSubstitutions(builder.plan.representations.items[@intFromEnum(use)].nominal_backing_arg_substitutions);
+                while (substitutions.next()) |substitution| try std.testing.expectEqual(null, substitution.formal_rep);
+            }
+        }
+
+        // Runtime demand fills the existing bindings; no use is rebuilt.
+        _ = try builder.analyzeType(view, @enumFromInt(7));
+        try builder.materializeDescriptorRequirements();
+        try std.testing.expectEqual(@as(usize, 2), builder.plan.descriptors.items.len);
+        try std.testing.expectEqual(@as(usize, 1), builder.plan.dictionaries.items.len);
+        try std.testing.expectEqual(null, builder.plan.repForSourceType(typeRef(view, @enumFromInt(4))));
+        for (uses, 0..) |use, use_index| {
+            const span = builder.plan.representations.items[@intFromEnum(use)].nominal_backing_arg_substitutions;
+            try std.testing.expectEqual(@as(u32, 0), builder.plan.nominal_backing_uses.items[span.start]);
+            var substitutions = builder.plan.nominalBackingSubstitutions(span);
+            for (0..3) |index| {
+                const substitution = substitutions.next().?;
+                const actual_ty = type_pool[(use_index % 2) * 3 + index];
+                try std.testing.expectEqual(builder.plan.repForSourceType(typeRef(view, actual_ty)).?, substitution.actual_rep);
+                try std.testing.expectEqual(substitution.actual_rep, builder.plan.nominalBackingActual(span, @intCast(index)).?);
+                try std.testing.expectEqual(builder.plan.repForSourceType(typeRef(view, @enumFromInt(2 + index))), substitution.formal_rep);
+            }
+            try std.testing.expectEqual(null, substitutions.next());
+        }
+    }
 }
