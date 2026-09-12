@@ -238,6 +238,16 @@ const max_wrapper_inline_stmts: usize = 32;
 /// size of a compressor's match extender, whose per-call cost in its callers'
 /// loops exceeds the work it does.
 const max_leaf_inline_stmts: usize = 400;
+/// Statement budget for a proc whose every callee is itself inlined
+/// everywhere, which makes it a leaf once those are expanded, to be inlined
+/// at call sites nested in at least two loops of the caller: a compressor's
+/// match search built on such a helper, called once per input position with
+/// a dozen words of arguments and results passing through memory. A site that
+/// deep pays the call often enough to be worth the body; one in an outer loop
+/// alone, run once per block, would only crowd the caller's inner loops.
+const max_expanded_leaf_inline_stmts: usize = 900;
+/// Loop nesting a call site needs before an expanded leaf is inlined there.
+const min_inline_site_loop_depth: u32 = 2;
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
@@ -255,6 +265,15 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     allocator: Allocator,
+    /// Per proc, whether it is marked always-inline; see
+    /// `computeInlineEverywhere`.
+    inline_everywhere: std.ArrayList(bool) = .empty,
+    /// Per proc, whether its calls from deep inside a caller's loops are
+    /// marked always-inline; see `computeInlineEverywhere`.
+    inline_at_loop_sites: std.ArrayList(bool) = .empty,
+    /// For the proc being compiled, how many of its loops each statement
+    /// lies inside; absent means none.
+    stmts_in_loops: std.AutoHashMap(u32, u32),
     target: std.Target,
     triple: []const u8,
     data_layout: []const u8,
@@ -519,6 +538,7 @@ pub const MonoLlvmCodeGen = struct {
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
             .stmt_incoming_counts = std.AutoHashMap(u32, u32).init(allocator),
             .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
+            .stmts_in_loops = std.AutoHashMap(u32, u32).init(allocator),
             .loop_continue_blocks = .empty,
             .loop_break_blocks = .empty,
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -563,6 +583,9 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
+        self.inline_everywhere.deinit(self.allocator);
+        self.inline_at_loop_sites.deinit(self.allocator);
+        self.stmts_in_loops.deinit();
         self.local_slot_storage.deinit(self.allocator);
         self.deferred_str_capture_storage.deinit(self.allocator);
         self.deferred_str_capture_actives.deinit(self.allocator);
@@ -1415,6 +1438,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         try self.ensureLocalScratch();
+        try self.computeInlineEverywhere(procs);
         for (procs, 0..) |proc, i| {
             if (proc.is_static_initializer) continue;
             try self.declareProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
@@ -1508,7 +1532,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("dict_thunk_runtime_desc")
         else
             null;
-        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(3), args_buf, runtime_out_desc, false);
+        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(3), args_buf, runtime_out_desc, false, false);
 
         const return_desc = if (runtime_out_desc) |runtime_desc_ptr|
             try self.loadPointer(runtime_desc_ptr)
@@ -1646,7 +1670,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.enable_default_platform_diagnostics) {
             try attrs_wip.addFnAttr(.@"noinline", builder);
         } else {
-            const inline_everywhere = if (proc.body) |body| try self.procIsWorthInliningEverywhere(body) else false;
+            const inline_everywhere = self.inline_everywhere.items.len > @intFromEnum(proc_id) and self.inline_everywhere.items[@intFromEnum(proc_id)];
             if (inline_everywhere) {
                 try attrs_wip.addFnAttr(.alwaysinline, builder);
             } else {
@@ -1786,6 +1810,7 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_break_blocks.clearRetainingCapacity();
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
+        if (proc.body) |body| try self.collectStmtsInLoops(body) else self.stmts_in_loops.clearRetainingCapacity();
 
         const outer_subprogram = self.current_subprogram;
         const outer_debug_file = self.current_debug_file;
@@ -2059,7 +2084,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.boxyOutDescPtr("entry_runtime_desc")
             else
                 null;
-            try self.callProcFunctionIndex(proc_fn.?, proc, ret_slot, args_buf, runtime_out_desc, false);
+            try self.callProcFunctionIndex(proc_fn.?, proc, ret_slot, args_buf, runtime_out_desc, false, false);
         }
 
         if (ret_registers) |registers| {
@@ -2154,7 +2179,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("entry_runtime_desc")
         else
             null;
-        try self.callProcFunctionIndex(proc_fn, proc, ret_ptr, args_buf, runtime_out_desc, false);
+        try self.callProcFunctionIndex(proc_fn, proc, ret_ptr, args_buf, runtime_out_desc, false, false);
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -2792,32 +2817,131 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    /// Whether a body is worth inlining at every call site. LLVM sizes a proc
-    /// only after the builtins it calls have been expanded into it, so a
-    /// checked wrapper around one operation, or a leaf helper whose bounds
-    /// checks each expand into a compare-and-branch pair, looks far larger to
-    /// it than its LIR is. Two shapes qualify: a handful of statements with no
-    /// loop, and a leaf of moderate size. A leaf calls no other proc, so
-    /// inlining it bounds code growth by its own size.
-    fn procIsWorthInliningEverywhere(self: *MonoLlvmCodeGen, body: CFStmtId) Error!bool {
+    /// What the always-inline decision reads off a body: its statement count,
+    /// whether it loops, whether it calls through a value it cannot name, and
+    /// the procs it calls directly.
+    const InlineShape = struct {
+        count: usize = 0,
+        has_loop: bool = false,
+        opaque_call: bool = false,
+        callees: std.ArrayList(LirProcSpecId) = .empty,
+    };
+
+    /// Decide which procs are worth inlining at every call site. LLVM sizes a
+    /// proc only after the builtins it calls have been expanded into it, so a
+    /// checked wrapper around one operation, or a helper whose bounds checks
+    /// each expand into a compare-and-branch pair, looks far larger to it
+    /// than its LIR is. Two shapes are inlined everywhere: a handful of
+    /// statements with no loop, and a leaf of moderate size. A third, a
+    /// larger proc whose every callee is one of those, is inlined at the
+    /// call sites nested deep in a caller's loops, where the call is paid
+    /// often.
+    fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        const shapes = try self.allocator.alloc(InlineShape, procs.len);
+        defer {
+            for (shapes) |*shape| shape.callees.deinit(self.allocator);
+            self.allocator.free(shapes);
+        }
+        @memset(shapes, .{});
+        for (procs, 0..) |proc, i| {
+            if (proc.is_static_initializer) continue;
+            if (proc.body) |body| try self.inlineShapeOf(body, &shapes[i]);
+        }
+        self.inline_everywhere.clearRetainingCapacity();
+        try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
+        self.inline_at_loop_sites.clearRetainingCapacity();
+        try self.inline_at_loop_sites.appendNTimes(self.allocator, false, procs.len);
+        for (procs, 0..) |proc, i| {
+            if (proc.body == null or proc.is_static_initializer) continue;
+            const shape = &shapes[i];
+            const wrapper = shape.count <= max_wrapper_inline_stmts and !shape.has_loop;
+            const leaf = shape.count <= max_leaf_inline_stmts and shape.callees.items.len == 0 and !shape.opaque_call;
+            self.inline_everywhere.items[i] = wrapper or leaf;
+        }
+        // A proc with one call site is LLVM's to inline: it does so once the
+        // callee has been simplified on its own, which comes out ahead of
+        // forcing the raw body in first. The forced sites are for procs with
+        // several callers, which LLVM prices by their expanded size.
+        const call_sites = try self.allocator.alloc(u32, procs.len);
+        defer self.allocator.free(call_sites);
+        @memset(call_sites, 0);
+        for (shapes) |shape| {
+            for (shape.callees.items) |callee| call_sites[@intFromEnum(callee)] += 1;
+        }
+        for (procs, 0..) |proc, i| {
+            if (proc.body == null or proc.is_static_initializer or self.inline_everywhere.items[i]) continue;
+            const shape = &shapes[i];
+            if (shape.opaque_call or shape.count > max_expanded_leaf_inline_stmts or call_sites[i] < 2) continue;
+            var expanded_leaf = true;
+            for (shape.callees.items) |callee| {
+                if (!self.inline_everywhere.items[@intFromEnum(callee)]) {
+                    expanded_leaf = false;
+                    break;
+                }
+            }
+            self.inline_at_loop_sites.items[i] = expanded_leaf;
+        }
+    }
+
+    /// Record how many loops each statement of `body` lies inside: a loop is
+    /// a join that one of the statements reachable from its body jumps back
+    /// to, and its members are everything so reachable.
+    fn collectStmtsInLoops(self: *MonoLlvmCodeGen, body: CFStmtId) Error!void {
+        self.stmts_in_loops.clearRetainingCapacity();
         var visited = std.AutoHashMap(u32, void).init(self.allocator);
         defer visited.deinit();
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.allocator);
         var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
         defer joins.deinit(self.allocator);
-        var count: usize = 0;
-        var leaf = true;
         try work.append(self.allocator, body);
         while (work.pop()) |stmt_id| {
             const entry = try visited.getOrPut(@intFromEnum(stmt_id));
             if (entry.found_existing) continue;
-            count += 1;
-            if (count > max_leaf_inline_stmts) return false;
+            const stmt = self.store.getCFStmt(stmt_id);
+            if (stmt == .join) try joins.append(self.allocator, .{ .id = stmt.join.id, .body = stmt.join.body });
+            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+        }
+        for (joins.items) |join| {
+            visited.clearRetainingCapacity();
+            var members = std.ArrayList(CFStmtId).empty;
+            defer members.deinit(self.allocator);
+            var loops = false;
+            try work.append(self.allocator, join.body);
+            while (work.pop()) |stmt_id| {
+                const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+                if (entry.found_existing) continue;
+                try members.append(self.allocator, stmt_id);
+                const stmt = self.store.getCFStmt(stmt_id);
+                if (stmt == .jump and stmt.jump.target == join.id) loops = true;
+                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+            }
+            if (!loops) continue;
+            for (members.items) |member| {
+                const depth = try self.stmts_in_loops.getOrPut(@intFromEnum(member));
+                if (!depth.found_existing) depth.value_ptr.* = 0;
+                depth.value_ptr.* += 1;
+            }
+        }
+    }
+
+    fn inlineShapeOf(self: *MonoLlvmCodeGen, body: CFStmtId, shape: *InlineShape) Error!void {
+        var visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer visited.deinit();
+        var work = std.ArrayList(CFStmtId).empty;
+        defer work.deinit(self.allocator);
+        var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
+        defer joins.deinit(self.allocator);
+        try work.append(self.allocator, body);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (entry.found_existing) continue;
+            shape.count += 1;
             const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
                 .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
-                .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn => leaf = false,
+                .assign_call => |call| try shape.callees.append(self.allocator, call.proc),
+                .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn => shape.opaque_call = true,
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -2862,8 +2986,7 @@ pub const MonoLlvmCodeGen = struct {
             }
             try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
         }
-        if (leaf) return true;
-        if (count > max_wrapper_inline_stmts) return false;
+        if (shape.count > max_wrapper_inline_stmts) return;
         // A loop is a join reached again from inside its own body.
         for (joins.items) |join| {
             visited.clearRetainingCapacity();
@@ -2873,13 +2996,13 @@ pub const MonoLlvmCodeGen = struct {
                 if (entry.found_existing) continue;
                 const stmt = self.store.getCFStmt(stmt_id);
                 if (stmt == .jump and stmt.jump.target == join.id) {
+                    shape.has_loop = true;
                     work.clearRetainingCapacity();
-                    return false;
+                    return;
                 }
                 try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
             }
         }
-        return true;
     }
 
     fn noteStmtIncoming(self: *MonoLlvmCodeGen, stack: *std.ArrayList(CFStmtId), stmt_id: CFStmtId) Error!void {
@@ -3778,6 +3901,7 @@ pub const MonoLlvmCodeGen = struct {
         args_ptr: LlvmBuilder.Value,
         out_desc_ptr: ?LlvmBuilder.Value,
         is_cold: bool,
+        inline_here: bool,
     ) Error!void {
         if ((proc.runtime_ret_desc != null) != (out_desc_ptr != null)) {
             llvmInvariantFmt(
@@ -3787,14 +3911,14 @@ pub const MonoLlvmCodeGen = struct {
         }
         if (self.host_call_mode == .extern_symbols) {
             if (out_desc_ptr) |desc_ptr| {
-                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold);
+                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold, inline_here);
             } else {
-                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold);
+                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold, inline_here);
             }
         } else if (out_desc_ptr) |desc_ptr| {
-            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr, desc_ptr }, is_cold);
+            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr, desc_ptr }, is_cold, inline_here);
         } else {
-            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr }, is_cold);
+            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr }, is_cold, inline_here);
         }
     }
 
@@ -3848,7 +3972,11 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("direct_call_desc")
         else
             null;
-        try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold);
+        const inline_here = !is_cold and !self.enable_default_platform_diagnostics and
+            self.inline_at_loop_sites.items.len > @intFromEnum(proc_id) and
+            self.inline_at_loop_sites.items[@intFromEnum(proc_id)] and
+            if (self.current_source_stmt) |stmt| (self.stmts_in_loops.get(@intFromEnum(stmt)) orelse 0) >= min_inline_site_loop_depth else false;
+        try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold, inline_here);
         if (out_desc) |desc_local| {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
@@ -11195,8 +11323,8 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperCall(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
         const func = (try self.declareRcHelper(helper_key, atomicity)) orelse return;
         switch (helper_key.op) {
-            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, self.rocOps() }, false),
-            .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, self.rocOps() }, false),
+            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, self.rocOps() }, false, false),
+            .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, self.rocOps() }, false, false),
         }
     }
 
@@ -12942,14 +13070,18 @@ pub const MonoLlvmCodeGen = struct {
         return func;
     }
 
-    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool) Error!LlvmBuilder.Value {
+    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool, inline_here: bool) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        if (is_cold) {
+        if (is_cold or inline_here) {
             var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
             defer attrs.deinit(builder);
-            try attrs.addFnAttr(.cold, builder);
-            try attrs.addFnAttr(.@"noinline", builder);
+            if (is_cold) {
+                try attrs.addFnAttr(.cold, builder);
+                try attrs.addFnAttr(.@"noinline", builder);
+            } else {
+                try attrs.addFnAttr(.alwaysinline, builder);
+            }
             return wip.call(.normal, .ccc, attrs.finish(builder) catch return error.OutOfMemory, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
         }
         return wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
