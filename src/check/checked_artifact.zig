@@ -31334,8 +31334,8 @@ pub const CheckedModuleArtifact = struct {
     // Version 93 distinguishes rejected function values from callable templates.
     // Version 94 retains explicit equality guards and matched-value binders
     // for custom literal patterns.
-    // Version 95 removes the redundant source-scheme index from stored
-    // callable-derived function evidence; its vector slot owns the requirement.
+    // Version 95 makes stored callable-derived evidence own its vector slot
+    // instead of retaining a parameter index from a forwarding scheme.
     const serialized_layout_version: u32 = 95;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring

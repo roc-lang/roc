@@ -289,8 +289,9 @@ pub const ConstFnEvidence = union(enum(u8)) {
     },
     structural: ConstFnStructuralEvidence,
     /// A callable-reachable requirement that must be resolved from the
-    /// concrete function type when this stored function is restored. The slot
-    /// within its owning evidence vector supplies the checked requirement path.
+    /// concrete function type when this stored function is restored. Its
+    /// position in its evidence vector selects the owning schema parameter,
+    /// independently of offsets in the flattened nested-evidence pool.
     from_callable: struct {
         independent_callable: bool = false,
     },
