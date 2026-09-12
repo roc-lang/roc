@@ -745,7 +745,6 @@ test "Monotype open specialization lookup covers the complete function interface
     );
     inline for (.{ template_source, nested_source }) |lookup_source| {
         try expectContains(lookup_source, "functionInterfaceClassIterator(request_fn_node)");
-        try expectContains(lookup_source, "classMemberIterator(interface_class)");
         try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
         try expectContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
@@ -756,6 +755,15 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
+    try expectContains(template_source, "template_spec_lookup.openPairs(lookup_prefix)");
+    try expectContains(template_source, "if (open_pairs.len != 0)");
+    try expectContains(template_source, ".interface_roots = interface_roots.items");
+    try expectContains(template_source, "template_specs_by_template.get(template_ref)");
+    try expectNotContains(template_source, "classMemberIterator(");
+    try expectNotContains(template_source, "for (source_ctx.draft.template_specs.items");
+    const prefix_lookup = sourceSliceBetween(lower_source, "fn DraftSpecLookup(", "const EagerTemplateResolution");
+    try expectContains(prefix_lookup, "self.graph.sameClass(pair.node, root)");
+    try expectContains(nested_source, "classMemberIterator(interface_class)");
     try expectContains(template_source, "draftTemplateSpecLookupRequestNode(spec)");
     try expectContains(nested_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
     const interface_registration = sourceSliceBetween(
