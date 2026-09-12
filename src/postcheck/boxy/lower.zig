@@ -13304,6 +13304,11 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         if (quote.plan == null) return try self.assignStringLiteral(target, quote.literal, next);
 
+        switch (self.staticDispatchPlan(quote.plan).resolution) {
+            .evidence_dependent, .checked_error, .@"unreachable" => return try self.lowerRuntimeQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
+            .direct_closed, .direct_parametric => {},
+            .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
+        }
         const root = self.module.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
             boxyLowerInvariant("checked from_quote expression had no compile-time conversion root");
         return switch (root.payload) {
@@ -13315,7 +13320,7 @@ const ProcBodyBuilder = struct {
                 checked_ty,
                 next,
             ),
-            .pending => try self.lowerPendingQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
+            .pending => try self.lowerRuntimeQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
             .fn_value,
             .discarded,
             .expect,
@@ -13323,7 +13328,7 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn lowerPendingQuoteConversionInto(
+    fn lowerRuntimeQuoteConversionInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
@@ -18135,6 +18140,12 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
+        // A quote conversion's argument is concrete Str. Its remaining type
+        // parameters (including the conversion error) belong to the selected
+        // dictionary method, rather than to an explicit argument at this call.
+        if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
+            try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
+        }
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, lowered, arg_reps, null, null, &pre_arg_descriptor_initializers);
         defer self.parent.allocator.free(hidden_desc_locals);
 
@@ -18222,6 +18233,33 @@ const ProcBodyBuilder = struct {
             lowered,
             continuation,
         );
+    }
+
+    fn bindQuoteDictionaryDescriptorArgs(
+        self: *ProcBodyBuilder,
+        args: []const Plan.DirectCallHiddenDescriptorArg,
+        dict: LIR.LocalId,
+        method: names.MethodNameId,
+        slot: u32,
+        initializers: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!void {
+        for (args, 0..) |arg, index| {
+            // Constructor descriptors are built by ordinary call lowering from
+            // these exact leaf descriptors supplied by conversion evidence.
+            if (!self.repIsBareDynamic(arg.rep)) continue;
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try initializers.append(self.parent.allocator, .{
+                .local = local,
+                .materialize = .{ .dict_method_hidden = .{
+                    .dict = dict,
+                    .method = method,
+                    .method_slot = slot,
+                    .hidden_index = @intCast(index),
+                    .shape = .requirement,
+                } },
+            });
+            try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
+        }
     }
 
     fn dictionaryCallArgumentDescriptorLocals(

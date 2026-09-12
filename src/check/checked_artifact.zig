@@ -18732,7 +18732,7 @@ const EvidencePass = struct {
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
                 .slot = if (source == .scheme_requirement) null else self.schemeVarSlot(param.dispatcher_var),
-                .runtime_dictionary = source == .constraint_callable or param.constraint.origin.literalKind() == null,
+                .runtime_dictionary = source == .constraint_callable or static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
                 .path = .{ .start = path_start, .len = @intCast(published_path.len) },
@@ -19629,7 +19629,7 @@ const EvidencePass = struct {
         const resolution = (try self.resolveObligation(var_, dispatcher_ty, method, structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
         return .{
             .dispatcher_ty = dispatcher_ty,
-            .runtime_dictionary = param.constraint.origin.literalKind() == null,
+            .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
             .resolution = switch (resolution) {
                 .direct_pending => |node| .{ .direct = node },
                 .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
@@ -19829,7 +19829,7 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("checked procedure-value dispatcher type was not published", .{});
             entries.appendAssumeCapacity(.{
                 .dispatcher_ty = dispatcher_ty,
-                .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                 .resolution = .from_callable,
             });
         }
@@ -19922,7 +19922,7 @@ const EvidencePass = struct {
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
                     .dispatcher_ty = dispatcher_ty,
-                    .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                    .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                     .resolution = if (param.source == .scheme_requirement) .from_scheme else .from_callable,
                 });
                 continue;
