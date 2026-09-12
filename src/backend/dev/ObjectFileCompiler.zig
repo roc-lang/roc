@@ -481,6 +481,7 @@ fn compileWithCodeGen(
         resolved.symbols,
         relocations,
         rodata_relocations.items,
+        codegen.getUnwindFunctions(),
         .{
             .line = dwarf_sections.debug_line,
             .abbrev = dwarf_sections.debug_abbrev,
@@ -683,6 +684,7 @@ fn compileStaticDataObjectBytes(
         resolved.symbols,
         &.{},
         rodata_relocations.items,
+        &.{},
         null,
         &output,
     ) catch |err| switch (err) {
