@@ -6385,7 +6385,7 @@ fn publishBindingScheme(self: *Self, root_var: Var) Allocator.Error!void {
 /// * Substituting generalized flex vars with fresh flex vars
 /// * Substituting generalized rigid vars with fresh flex vars
 ///
-/// Note that the the rigid var structure will be preserved.
+/// Note that the rigid var structure will be preserved.
 /// E.g. In `a -> a`, all `a` will reference the same new flex var
 fn instantiateVar(
     self: *Self,
@@ -6541,7 +6541,7 @@ fn instantiateVarOrphanFlexed(
 /// Based on the provided map, the caller can specifically set specified rigids
 /// to be a specific var. This is used when evaluating type annotation.
 ///
-/// If a rigid is is encountered that's not in the provided map, a debug assertion
+/// If a rigid is encountered that's not in the provided map, a debug assertion
 /// will fail. In production mode, that rigid var will be set as an `.err`
 fn instantiateVarWithSubs(
     self: *Self,
@@ -19184,7 +19184,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const body_var = ModuleEnv.varFrom(lambda.body);
 
-            // Check the the body of the expr
+            // Check the body of the expr
             // If we have an expected function, use that as the expr's expected type
             const exhaustiveness_scope = self.exhaustiveness_context.resetForRuntimeFunction();
             defer exhaustiveness_scope.leave();

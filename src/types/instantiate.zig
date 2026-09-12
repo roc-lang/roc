@@ -265,12 +265,12 @@ pub const Instantiator = struct {
     /// The mode to use when instantiating rigids
     pub const RigidBehavior = union(enum) {
         /// In this mode, all rigids are instantiated as new flex vars
-        /// Note that the the rigid var structure will be preserved.
+        /// Note that the rigid var structure will be preserved.
         /// E.g. `a -> a`, `a` will reference the same new rigid var
         fresh_flex,
 
         /// In this mode, all rigids are instantiated as new rigid variables
-        /// Note that the the rigid var structure will be preserved.
+        /// Note that the rigid var structure will be preserved.
         /// E.g. `a -> a`, `a` will reference the same new flex var
         fresh_rigid,
 
