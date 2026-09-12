@@ -31,6 +31,16 @@ const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
 
+/// Shared policy for checked evidence publication and Boxy's dictionary
+/// inventory. Quote conversion evidence carries its method implementation even
+/// when the constraint originated at a literal.
+pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
+    return if (origin.literalKind()) |kind| switch (kind) {
+        .numeral, .interpolation => false,
+        .quote => true,
+    } else true;
+}
+
 const DispatchExprTag = enum {
     e_dispatch_call,
     e_interpolation,
@@ -1471,9 +1481,9 @@ pub const EvidenceParamRecord = struct {
     /// obligation's receiver is read from. Composite scheme requirements are
     /// supplied by checked evidence and have no quantified-variable slot.
     slot: ?u32,
-    /// Whether this parameter becomes a runtime method dictionary. Literal
-    /// defaulting evidence remains an ABI input for descriptor selection but
-    /// does not carry method implementations at runtime.
+    /// Whether this parameter becomes a runtime method dictionary. Numeral
+    /// defaulting evidence remains an ABI input for descriptor selection; quote
+    /// evidence also carries the conversion implementation.
     runtime_dictionary: bool,
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.

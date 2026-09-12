@@ -270,6 +270,109 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"first\", \"second\", [\"third\"])" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/11316
+        .name = "issue 11316: compile-time loop preserves checked set with the same list as fallback",
+        .source_kind = .module,
+        .source =
+        \\build : List(U64) -> List(U64)
+        \\build = |steps| {
+        \\    var $acc = []
+        \\    for n in steps {
+        \\        $acc = $acc.append(n)
+        \\        $acc = $acc.set(0, n) ?? $acc
+        \\    }
+        \\    $acc
+        \\}
+        \\
+        \\program : List(U64)
+        \\program = build([1, 2, 3])
+        \\main = program
+        ,
+        .expected = .{ .inspect_str = "[3, 2, 3]" },
+    },
+    .{
+        .name = "issue 11316: compile-time checked set inside a match preserves appended elements",
+        .source_kind = .module,
+        .source =
+        \\Step := [Push(U64), Mark]
+        \\build : List(Step), List(U64) -> List(U64)
+        \\build = |steps, acc0| {
+        \\    var $acc = acc0
+        \\    for s in steps {
+        \\        $acc = match s {
+        \\            Push(n) => $acc.append(n)
+        \\            Mark => {
+        \\                w = $acc.append(0).append(7).append(8)
+        \\                w.set(0, w.len()) ?? w
+        \\            }
+        \\        }
+        \\    }
+        \\    $acc
+        \\}
+        \\program : List(U64)
+        \\program = build([Mark, Push(1), Mark, Push(2)], [])
+        \\main = program
+        ,
+        .expected = .{ .inspect_str = "[7, 7, 8, 1, 0, 7, 8, 2]" },
+    },
+    .{
+        .name = "issue 11316: checked set merges success and fallback across loop iterations",
+        .source_kind = .module,
+        .source =
+        \\build : List(U64) -> List(U64)
+        \\build = |steps| {
+        \\    var $acc = []
+        \\    for n in steps {
+        \\        $acc = $acc.append(n)
+        \\        index = if n == 2 99 else 0
+        \\        $acc = $acc.set(index, n) ?? $acc
+        \\    }
+        \\    $acc
+        \\}
+        \\main = build([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "[3, 2, 3]" },
+    },
+    .{
+        .name = "issue 11316: loop entry preserves a retained list with spare capacity",
+        .source =
+        \\{
+        \\    build = |steps, initial| {
+        \\        var $acc = initial
+        \\        for n in steps {
+        \\            $acc = $acc.append(n)
+        \\        }
+        \\        $acc
+        \\    }
+        \\    initial = List.reserve([41.U64], 64)
+        \\    result = build([1, 2, 3], initial)
+        \\    (initial, result)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([41], [41, 1, 2, 3])" },
+    },
+    .{
+        .name = "issue 11316: mixed carrier definitions preserve a retained list and a slice",
+        .source =
+        \\{
+        \\    build = |steps, other| {
+        \\        var $acc = []
+        \\        for n in steps {
+        \\            $acc = if n == 1 other else $acc.append(n)
+        \\        }
+        \\        $acc
+        \\    }
+        \\    other = List.reserve([41.U64], 64)
+        \\    full = List.reserve([40.U64, 41, 42], 64)
+        \\    slice = full.sublist({ start: 1, len: 1 })
+        \\    from_other = build([1, 2, 3], other)
+        \\    from_slice = build([1, 2, 3], slice)
+        \\    (other, full, slice, from_other, from_slice)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([41], [40, 41, 42], [41], [41, 2, 3], [41, 2, 3])" },
+    },
+    .{
         .name = "issue 11235: shared error tails preserve disjoint payloads and the success path",
         .source_kind = .module,
         .source =

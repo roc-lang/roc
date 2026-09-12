@@ -9858,7 +9858,21 @@ lowerer copies the checked literal bytes into the LIR string store and emits
 `str_from_quote` expression whose checked target is builtin `Str` follows the
 same path. A `str_from_quote` expression with a static-dispatch conversion plan
 is not a string literal assignment; it lowers through the checked dispatch plan
-for that conversion.
+for that conversion. Evidence-dependent quote conversions use the existing
+checked dispatch resolution to select runtime conversion without looking for a
+compile-time root. Direct custom conversions still require their checker-selected
+root. Quote constraints carry runtime dictionary evidence,
+including at procedure-value and closure boundaries; their literal origin does
+not make the callable descriptor-only. Checked evidence and Boxy dictionary
+planning use the same classification. Numeral defaulting retains its existing
+descriptor-guided scalar operation. No additional per-literal representation or
+root index is needed. Converted pattern guards evaluate conversion and equality
+only after preceding patterns have matched, through ordinary expression lowering.
+The checked quote callable takes concrete `Str`; its generic result and error
+leaves are supplied by the selected dictionary method's requirement descriptors.
+Boxy binds those exact leaf descriptors in the call's descriptor scope and builds
+constructor descriptors from them through ordinary call lowering. It never asks
+the caller to invent a static descriptor for the conversion's generic error type.
 
 Checked bytes literals follow the same byte-copying LIR literal path as string
 segments: the literal bytes are copied into the LIR string store and referenced
@@ -12733,6 +12747,24 @@ outcome of emission order.
 
 ### In-Place List Transforms
 
+Loop append promotion carries a fill limit and, when needed, an ownership flag
+with each list. Every incoming definition of a promoted value must supply both
+the value and its metadata on the same control-flow edge. The pass classifies
+its existing value-flow edges once per candidate; validation and emission consume
+that classification. Tracked sources forward valid metadata, while sources
+entering the chain establish metadata for their actual allocation. A merged
+local's membership in the chain is not evidence about all of its definitions.
+
+An incoming alias or join argument transfers its ownership unit through the
+existing consuming `list_map_prepare_reuse` identity before querying uniqueness.
+ARC therefore preserves other live uses before the observation. Incoming
+operation results are measured after the operation, since it may replace the
+allocation or change its slice encoding. Measured ownership remains dynamic in
+loop versioning; it cannot authorize an unconditional jump to the unique body.
+Shared metadata locals are needed only for merged definitions, and tracked
+edges retain their existing hot path. Debug validation checks that every planned
+definition emitted its metadata.
+
 `List.map` may overwrite a uniquely owned input list's buffer instead of
 allocating an output list when the input and output item representations are
 interchangeable in one allocation. Fully concrete items require the same
@@ -12752,9 +12784,11 @@ Builtin.roc first calls the consuming `list_map_prepare_reuse` primitive, then
 matches on `list_map_can_reuse` for the returned list. The prepare primitive is
 an ownership-only identity: its LIR `RcEffect` consumes the input list and
 declares that the result aliases that consumed ownership unit, while its runtime
-implementation only copies the list handle. This forces ARC to preserve every
-later use before the transfer. The subsequent reuse query can therefore observe
-the refcount only after all live ownership units are present; leaving the query
+implementation only copies the list handle. Range analysis preserves the input's
+value identity and proven length bounds across this ownership transfer. The
+consuming operation forces ARC to preserve every later use before the transfer.
+The subsequent reuse query can therefore observe the refcount only after all
+live ownership units are present; leaving the query
 on the original, unconsumed argument would allow ARC to move a preservation
 retain after that observation and incorrectly report a shared buffer as unique.
 
