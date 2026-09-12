@@ -18288,10 +18288,17 @@ const EvidencePass = struct {
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
-                    // Re-checks can record the same instantiation twice; keep
-                    // the first.
+                    // Re-checks can record the same binding use twice. A
+                    // different scheme at this site is a producer bug, not
+                    // another candidate from which publication may choose.
                     const entry = try self.value_use_by_node.getOrPut(record.node_idx);
-                    if (!entry.found_existing) entry.value_ptr.* = @intCast(i);
+                    if (entry.found_existing) {
+                        const previous = module_env.scheme_uses.items.items[entry.value_ptr.*];
+                        std.debug.assert(self.types.resolveVar(@enumFromInt(previous.scheme_root)).var_ ==
+                            self.types.resolveVar(@enumFromInt(record.scheme_root)).var_);
+                    } else {
+                        entry.value_ptr.* = @intCast(i);
+                    }
                 },
                 .dispatch_target, .recursive_dispatch_target => {
                     // `slot_data` is the raw constraint-function var: checking

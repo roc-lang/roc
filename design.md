@@ -3304,6 +3304,20 @@ identities. A forwarded requirement records its enclosing evidence index
 explicitly; checked errors and unreachable values remain distinct evidence
 kinds.
 
+Instantiation evidence ownership is an explicit input to checking's copy
+operation: no evidence edge, a value lookup, a stored-function use, or a
+selected dispatch target. The source expression used for diagnostics is
+independent of this ownership. Type applications, annotation copies, backing
+substitutions, and compatibility probes never acquire a value-use edge from
+the surrounding expression. Derived-shape validation belongs to the exact
+selected target operation, not to the next copy that happens to run.
+Operations without an evidence edge still perform their required rank,
+region, literal, and constraint bookkeeping, but do not collect, sort, or
+publish evidence pairs or enumerate a scheme's evidence parameters. Real
+edges collect their substitutions in the existing variable-registration walk;
+only an empty substitution needs an evidence-parameter query to decide whether
+shared requirements need a record.
+
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
 scheme callable; a checked component path over the scheme-side constraint

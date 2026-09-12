@@ -492,15 +492,6 @@ predeclared_annotation_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
 /// this append-only pool until their caller boundary replays off-root
 /// requirements; storage is reclaimed with the checker.
 pending_predeclared_use_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
-/// Handoff to the next `instantiateVarHelp` call: that instantiation validates
-/// a method's shape (derived-shape validation) rather than performing a value
-/// use. Validation only narrows the root copy against an expected callable
-/// shape, and no definition boundary owns the validation site, so a scheme
-/// requirement whose receiver this substitution leaves shared keeps its
-/// original callable relation: minting a per-use copy would strand the copy's
-/// open literals with no owning boundary to protect them until the shared
-/// receiver grounds.
-pending_shape_validation_instantiation: bool = false,
 /// Annotated top-level body currently being checked. Closure wrappers delegate
 /// annotation generation to their inner lambda, so this explicit def identity
 /// carries the predeclared correspondence across that delegation.
@@ -730,11 +721,6 @@ instantiation_source_expr: ?CIR.Expr.Idx = null,
 /// checked. An executable root forces only an invoked constrained scheme, not
 /// a generalized function value passed to another call as data.
 instantiation_is_immediate_callee: bool = false,
-/// While discharging a static-dispatch constraint, the site that constraint
-/// originated at. Scheme instantiations that copy constrained vars are then
-/// recorded against that node's `dispatch_target` evidence slot (see
-/// `recordSchemeUse`).
-evidence_target_site: ?EvidenceTargetSite = null,
 /// One exact selected method instantiation per raw static-dispatch constraint
 /// edge. The checker may revisit a deferred constraint, but that is another
 /// observation of the same edge, not a new target instantiation. Entries are
@@ -758,11 +744,6 @@ scratch_embed_memo: std.AutoHashMapUnmanaged(DispatchEmbedPair, DispatchEmbedGra
 /// began. A result computed below a cut is path-specific, so it is not
 /// memoized; this counter is how completed pairs detect that.
 scratch_embed_cut_count: usize = 0,
-/// One-shot attribution for the outer scheme instantiation performed when a
-/// containing value stores a generalized expression-position function. It is
-/// consumed at `instantiateVarHelp` entry so any instantiations triggered
-/// while processing that edge cannot be misattributed to the same site.
-pending_nested_function_use: ?CIR.Expr.Idx = null,
 /// Scratch buffer for the (scheme var → fresh var) pairs of one constrained
 /// scheme instantiation, flushed into `cir.scheme_uses`.
 scratch_evidence_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
@@ -1238,16 +1219,20 @@ const DefaultMaterialization = struct {
     constraints: StaticDispatchConstraint.SafeList.Range,
 };
 
-/// The evidence-record key for scheme instantiations performed while
-/// discharging a static-dispatch constraint: the source node the constraint
-/// originated at plus the raw fn var of the constraint being discharged
-/// (unique per constraint instantiation). While set, a constrained scheme
-/// instantiated (the chosen method target's scheme) is recorded against that
-/// constraint's `dispatch_target` evidence slot instead of the ambient
-/// expression's `value_use` slot.
-const EvidenceTargetSite = struct {
-    node_idx: u32,
-    constraint_fn_var: Var,
+/// The caller declares which logical edge owns an instantiation. Type
+/// construction and validation have no value-use edge, independently of the
+/// current expression used for diagnostics and ambiguity attribution.
+const InstantiationEvidence = union(enum) {
+    none,
+    value_use: CIR.Expr.Idx,
+    nested_function_use: CIR.Expr.Idx,
+    dispatch_target: struct {
+        node_idx: u32,
+        constraint_fn_var: Var,
+        /// Derived-shape validation preserves a shared receiver's original
+        /// callable requirement until that receiver grounds.
+        shape_validation: bool = false,
+    },
 };
 
 /// The concrete method target and local method var selected for one logical
@@ -1661,7 +1646,6 @@ const PendingPredeclaredSchemeUse = struct {
     checking_executable_root: bool,
     delayed_dependency_depth: u32,
     instantiation_is_immediate_callee: bool,
-    parent_constraint_fn_var: ?Var,
     initial_scheme_use_index: ?u32,
     use_pairs: VarPairRange,
 };
@@ -6515,6 +6499,7 @@ fn instantiateVar(
     var_to_instantiate: Var,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
+    evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -6527,7 +6512,7 @@ fn instantiateVar(
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_flex,
     };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
 }
 
 /// Instantiate a binding explicitly classified as a rank-1 type scheme.
@@ -6536,6 +6521,7 @@ fn instantiateTypeScheme(
     var_to_instantiate: Var,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
+    evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -6548,7 +6534,7 @@ fn instantiateTypeScheme(
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_flex,
     };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, true);
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, true, evidence);
 }
 
 fn instantiateBindingVar(
@@ -6556,12 +6542,13 @@ fn instantiateBindingVar(
     binding_var: Var,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
+    evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     if (self.isBindingSchemeVar(binding_var)) {
-        return self.instantiateTypeScheme(binding_var, env, region_behavior);
+        return self.instantiateTypeScheme(binding_var, env, region_behavior, evidence);
     }
     if (self.types.resolveVar(binding_var).desc.rank == .generalized) {
-        return self.instantiateVar(binding_var, env, region_behavior);
+        return self.instantiateVar(binding_var, env, region_behavior, evidence);
     }
     self.var_map.clearRetainingCapacity();
     return binding_var;
@@ -6577,11 +6564,12 @@ fn instantiateImportedBindingVar(
     imported_var: Var,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
+    evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     if (self.isBindingSchemeVar(imported_var)) {
-        return self.instantiateTypeScheme(imported_var, env, region_behavior);
+        return self.instantiateTypeScheme(imported_var, env, region_behavior, evidence);
     }
-    return self.instantiateVar(imported_var, env, region_behavior);
+    return self.instantiateVar(imported_var, env, region_behavior, evidence);
 }
 
 /// You probably are looking for `instantiateVar`.
@@ -6609,9 +6597,8 @@ fn instantiateVarOrphan(
 }
 
 /// An orphan copy is not a use of any scheme: it records no scheme-use
-/// edge of its own and leaves every pending record slot (the value-use
-/// source, the stored-value use, the dispatch target site) to the
-/// instantiation that owns it.
+/// edge of its own. Diagnostic isolation prevents its temporary variables
+/// from acquiring the enclosing expression's ambiguity attribution.
 fn instantiateOrphanCopy(
     self: *Self,
     var_to_instantiate: Var,
@@ -6620,17 +6607,11 @@ fn instantiateOrphanCopy(
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
     const saved_instantiation_source_expr = self.instantiation_source_expr;
-    const saved_pending_nested_function_use = self.pending_nested_function_use;
-    const saved_evidence_target_site = self.evidence_target_site;
     self.instantiation_source_expr = null;
-    self.pending_nested_function_use = null;
-    self.evidence_target_site = null;
     defer {
         self.instantiation_source_expr = saved_instantiation_source_expr;
-        self.pending_nested_function_use = saved_pending_nested_function_use;
-        self.evidence_target_site = saved_evidence_target_site;
     }
-    return self.instantiateVarHelp(var_to_instantiate, instantiate_ctx, env, region_behavior, false);
+    return self.instantiateVarHelp(var_to_instantiate, instantiate_ctx, env, region_behavior, false, .none);
 }
 
 /// Like `instantiateVarOrphan`, but rigids in the copy become fresh FLEX
@@ -6684,7 +6665,7 @@ fn instantiateVarWithSubs(
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids = subs },
     };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
 }
 
 /// Map a requirement's recorded creation relation through an instantiation
@@ -6720,14 +6701,16 @@ fn instantiateVarHelp(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
     force_type_scheme_root: bool,
+    evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const nested_function_use = self.pending_nested_function_use;
-    self.pending_nested_function_use = null;
-    const shape_validation = self.pending_shape_validation_instantiation;
-    self.pending_shape_validation_instantiation = false;
+    const target = switch (evidence) {
+        .dispatch_target => |site| site,
+        .none, .value_use, .nested_function_use => null,
+    };
+    const shape_validation = if (target) |site| site.shape_validation else false;
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
@@ -6765,47 +6748,49 @@ fn instantiateVarHelp(
 
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
-            // A constrained scheme var was copied: remember (scheme var → fresh
-            // var) so the whole instantiation can be recorded as static-dispatch
-            // evidence below. Rigid copies (annotation-kept rigidity) are
-            // included alongside flex copies. The scheme-side constraints' fn
-            // vars are paired too: nested evidence (a chosen method target that
-            // is itself constrained) is keyed by the instantiated constraint fn
-            // var at discharge time, and publication reaches that key through
-            // these pairs.
-            // Every copied quantified variable is paired, constrained or not:
-            // the pairs are the instantiation's substitution, and a
-            // specialization is the scheme plus that substitution.
-            const fresh_constraints_len = switch (fresh_resolved.desc.content) {
-                .flex => |flex| flex.constraints.len(),
-                .rigid => |rigid| rigid.constraints.len(),
-                .alias, .field_presence, .structure, .err => 0,
-            };
-            const fresh_is_quantified = switch (fresh_resolved.desc.content) {
-                .flex, .rigid => true,
-                .alias, .field_presence, .structure, .err => false,
-            };
-            if (fresh_is_quantified) {
-                try self.scratch_evidence_pairs.append(self.gpa, .{
-                    .old_var = @intFromEnum(x.key_ptr.*),
-                    .fresh_var = @intFromEnum(fresh_var),
-                });
-            }
-            if (fresh_constraints_len > 0) {
-                const old_resolved = self.types.resolveVar(x.key_ptr.*);
-                const old_constraints_range = switch (old_resolved.desc.content) {
-                    .flex => |flex| flex.constraints,
-                    .rigid => |rigid| rigid.constraints,
-                    .alias, .field_presence, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+            if (evidence != .none) {
+                // A constrained scheme var was copied: remember (scheme var → fresh
+                // var) so the whole instantiation can be recorded as static-dispatch
+                // evidence below. Rigid copies (annotation-kept rigidity) are
+                // included alongside flex copies. The scheme-side constraints' fn
+                // vars are paired too: nested evidence (a chosen method target that
+                // is itself constrained) is keyed by the instantiated constraint fn
+                // var at discharge time, and publication reaches that key through
+                // these pairs.
+                // Every copied quantified variable is paired, constrained or not:
+                // the pairs are the instantiation's substitution, and a
+                // specialization is the scheme plus that substitution.
+                const fresh_constraints_len = switch (fresh_resolved.desc.content) {
+                    .flex => |flex| flex.constraints.len(),
+                    .rigid => |rigid| rigid.constraints.len(),
+                    .alias, .field_presence, .structure, .err => 0,
                 };
-                for (self.types.sliceStaticDispatchConstraints(old_constraints_range)) |old_constraint| {
-                    // `var_map` keys are resolved roots (see `Instantiator`).
-                    const old_fn_root = self.types.resolveVar(old_constraint.fn_var).var_;
-                    const fresh_fn_var = instantiator.var_map.get(old_fn_root) orelse continue;
+                const fresh_is_quantified = switch (fresh_resolved.desc.content) {
+                    .flex, .rigid => true,
+                    .alias, .field_presence, .structure, .err => false,
+                };
+                if (fresh_is_quantified) {
                     try self.scratch_evidence_pairs.append(self.gpa, .{
-                        .old_var = @intFromEnum(old_fn_root),
-                        .fresh_var = @intFromEnum(fresh_fn_var),
+                        .old_var = @intFromEnum(x.key_ptr.*),
+                        .fresh_var = @intFromEnum(fresh_var),
                     });
+                }
+                if (fresh_constraints_len > 0) {
+                    const old_resolved = self.types.resolveVar(x.key_ptr.*);
+                    const old_constraints_range = switch (old_resolved.desc.content) {
+                        .flex => |flex| flex.constraints,
+                        .rigid => |rigid| rigid.constraints,
+                        .alias, .field_presence, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    };
+                    for (self.types.sliceStaticDispatchConstraints(old_constraints_range)) |old_constraint| {
+                        // `var_map` keys are resolved roots (see `Instantiator`).
+                        const old_fn_root = self.types.resolveVar(old_constraint.fn_var).var_;
+                        const fresh_fn_var = instantiator.var_map.get(old_fn_root) orelse continue;
+                        try self.scratch_evidence_pairs.append(self.gpa, .{
+                            .old_var = @intFromEnum(old_fn_root),
+                            .fresh_var = @intFromEnum(fresh_fn_var),
+                        });
+                    }
                 }
             }
 
@@ -6827,8 +6812,8 @@ fn instantiateVarHelp(
                     // target belongs to that edge's derivation chain,
                     // literal conversions included: recursive-dispatch
                     // detection walks exactly this lineage.
-                    if (self.evidence_target_site) |target| {
-                        try self.recordDispatchDerivations(flex.constraints, target.constraint_fn_var);
+                    if (target) |site| {
+                        try self.recordDispatchDerivations(flex.constraints, site.constraint_fn_var);
                     }
                     const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
                     var has_literal_constraint = false;
@@ -6875,57 +6860,29 @@ fn instantiateVarHelp(
         }
     }
 
-    // Persist every constrained-scheme edge, including an edge that reused
-    // already-shared vars and therefore copied no constrained vars. The
-    // checked-module producer still needs the scheme root for that use.
-    const value_use_source: ?CIR.Expr.Idx = if (nested_function_use == null and self.evidence_target_site == null)
-        if (self.instantiation_source_expr) |source_expr| blk: {
-            const tag = self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag;
-            break :blk if (tag == .expr_var or tag == .expr_external_lookup or tag == .expr_required_lookup or tag == .expr_field_access)
-                source_expr
-            else
-                null;
-        } else null
-    else
-        null;
-    try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
-    try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
-    const needs_evidence = try self.schemeHasEvidenceParams(var_to_instantiate);
-    if (self.scratch_evidence_pairs.items.len > 0 or needs_evidence) {
-        if (nested_function_use) |source_expr| {
-            try self.cir.recordSchemeUse(
-                @intFromEnum(source_expr),
-                .nested_function_use,
-                0,
-                var_to_instantiate,
-                self.scratch_evidence_pairs.items,
-            );
-        } else if (self.evidence_target_site) |target| {
-            try self.cir.recordSchemeUse(
-                target.node_idx,
-                .dispatch_target,
-                @intFromEnum(target.constraint_fn_var),
-                var_to_instantiate,
-                self.scratch_evidence_pairs.items,
-            );
-        } else if (value_use_source) |source_expr| {
-            try self.cir.recordSchemeUse(
-                @intFromEnum(source_expr),
-                .value_use,
-                0,
-                var_to_instantiate,
-                self.scratch_evidence_pairs.items,
-            );
+    if (evidence != .none) {
+        try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
+        try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
+        // Nonempty substitutions already require a record; only an empty
+        // substitution needs to query whether shared requirements need one.
+        if (self.scratch_evidence_pairs.items.len > 0 or try self.schemeHasEvidenceParams(var_to_instantiate)) {
+            const slot: ModuleEnv.SchemeUseRecord.Slot, const node_idx: u32, const slot_data: u32 = switch (evidence) {
+                .none => unreachable,
+                .value_use => |expr| .{ .value_use, @intFromEnum(expr), 0 },
+                .nested_function_use => |expr| .{ .nested_function_use, @intFromEnum(expr), 0 },
+                .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @intFromEnum(site.constraint_fn_var) },
+            };
+            try self.cir.recordSchemeUse(node_idx, slot, slot_data, var_to_instantiate, self.scratch_evidence_pairs.items);
         }
+        self.scratch_evidence_pairs.clearRetainingCapacity();
     }
-    self.scratch_evidence_pairs.clearRetainingCapacity();
 
     // Explicit scheme requirements are pending facts of this particular use,
     // not constraints merged onto a shared receiver descriptor. Enqueue every
     // copy independently, register it for the same final compatibility
     // fixpoint and ambiguity judgment as a structurally attached constraint,
     // and propagate an unresolved outer-rank relation into an enclosing scheme.
-    const requirement_parent = if (self.evidence_target_site) |target| target.constraint_fn_var else null;
+    const requirement_parent = if (target) |site| site.constraint_fn_var else null;
     for (instantiated_requirements.items) |requirement| {
         try self.registerInstantiatedSchemeRequirement(
             requirement,
@@ -7029,19 +6986,19 @@ fn freshFromContentAtRank(
 /// Create a bool var
 fn freshBool(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     // Use the copied Bool type from the type store (set by copyBuiltinTypes)
-    return try self.instantiateVar(self.bool_var, env, .{ .explicit = new_region });
+    return try self.instantiateVar(self.bool_var, env, .{ .explicit = new_region }, .none);
 }
 
 /// Create a str var
 fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     // Use the copied Str type from the type store (set by copyBuiltinTypes)
-    return try self.instantiateVar(self.str_var, env, .{ .explicit = new_region });
+    return try self.instantiateVar(self.str_var, env, .{ .explicit = new_region }, .none);
 }
 
 /// Create a U64 var
 fn freshU64(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     // Use the copied U64 type from the type store (set by copyBuiltinTypes)
-    return try self.instantiateVar(self.u64_var, env, .{ .explicit = new_region });
+    return try self.instantiateVar(self.u64_var, env, .{ .explicit = new_region }, .none);
 }
 
 const BuiltinNominalDecl = union(enum) {
@@ -7318,7 +7275,7 @@ fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Er
         break :blk ModuleEnv.varFrom(iter_stmt_idx);
     };
 
-    const iter_var = try self.instantiateVar(iter_decl_var, env, .{ .explicit = region });
+    const iter_var = try self.instantiateVar(iter_decl_var, env, .{ .explicit = region }, .none);
     const iter_content = self.types.resolveVar(iter_var).desc.content;
     const nominal = iter_content.unwrapNominalType() orelse {
         if (builtin.mode == .Debug) {
@@ -7361,7 +7318,7 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
         break :blk ModuleEnv.varFrom(range_stmt_idx);
     };
 
-    const range_var = try self.instantiateVar(range_decl_var, env, .{ .explicit = region });
+    const range_var = try self.instantiateVar(range_decl_var, env, .{ .explicit = region }, .none);
     const range_content = self.types.resolveVar(range_var).desc.content;
     const nominal = range_content.unwrapNominalType() orelse {
         if (builtin.mode == .Debug) {
@@ -7654,7 +7611,7 @@ fn unifyLiteralWithSuffixTarget(
             const resolved_var = if (self.isForClauseAliasStatement(stmt_idx))
                 local_decl_var
             else
-                try self.instantiateVar(local_decl_var, env, .{ .explicit = region });
+                try self.instantiateVar(local_decl_var, env, .{ .explicit = region }, .none);
 
             _ = try self.unify(flex_var, resolved_var, env);
         },
@@ -7664,6 +7621,7 @@ fn unifyLiteralWithSuffixTarget(
                     ext_ref.local_var,
                     env,
                     .{ .explicit = region },
+                    .none,
                 );
                 _ = try self.unify(flex_var, instantiated_var, env);
             } else {
@@ -12839,7 +12797,7 @@ fn instantiatePlatformRequiredType(
         };
     }
 
-    const expected_var = try self.instantiateVar(copied, env, .{ .explicit = required_type.region });
+    const expected_var = try self.instantiateVar(copied, env, .{ .explicit = required_type.region }, .none);
 
     // `instantiateVar` keyed `var_map` by the copied store's resolved vars.
     // Clause-bound identities were replaced during copying and already are
@@ -12960,7 +12918,7 @@ fn collectForClauseAliasBindings(
             };
 
             const app_type_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(app_type_stmt));
-            const app_type_var = try self.instantiateVar(ModuleEnv.varFrom(app_type_stmt), env, .{ .explicit = app_type_region });
+            const app_type_var = try self.instantiateVar(ModuleEnv.varFrom(app_type_stmt), env, .{ .explicit = app_type_region }, .none);
             try bindings.append(self.gpa, .{
                 .platform_alias_stmt_idx = alias.alias_stmt_idx,
                 .platform_alias_var = platform_alias_resolved.var_,
@@ -14235,7 +14193,7 @@ fn instantiatePendingPredeclaredSchemeUse(
 ) Allocator.Error!void {
     try self.ensurePredeclaredIdentityCorrespondence(target_def, scheme_var);
     const scheme_uses_before = self.cir.scheme_uses.items.items.len;
-    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
+    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = source_expr });
     const use_pairs_start: u32 = @intCast(self.pending_predeclared_use_pairs.items.len);
     var use_pairs = self.var_map.iterator();
     while (use_pairs.next()) |pair| {
@@ -14272,7 +14230,6 @@ fn instantiatePendingPredeclaredSchemeUse(
         .checking_executable_root = self.checking_executable_root,
         .delayed_dependency_depth = self.delayed_dependency_depth,
         .instantiation_is_immediate_callee = self.instantiation_is_immediate_callee,
-        .parent_constraint_fn_var = if (self.evidence_target_site) |target| target.constraint_fn_var else null,
         .initial_scheme_use_index = initial_scheme_use_index,
         .use_pairs = .{
             .start = use_pairs_start,
@@ -14392,12 +14349,6 @@ fn replayPredeclaredSchemeUse(
         if (fresh_resolved.desc.content == .flex) {
             const flex = fresh_resolved.desc.content.flex;
             if (flex.constraints.len() > 0) {
-                // Every constraint copied out of a selected dispatch target
-                // belongs to that edge's derivation chain, literal conversions
-                // included: recursive-dispatch detection walks this lineage.
-                if (pending.parent_constraint_fn_var) |parent_fn_var| {
-                    try self.recordDispatchDerivations(flex.constraints, parent_fn_var);
-                }
                 const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
                 var has_literal_constraint = false;
                 var has_other_constraint = false;
@@ -14452,7 +14403,7 @@ fn replayPredeclaredSchemeUse(
         try self.registerInstantiatedSchemeRequirement(
             requirement,
             pending.source_expr,
-            pending.parent_constraint_fn_var,
+            null, // Named value uses start their own dispatch lineage.
             env,
         );
     }
@@ -15720,7 +15671,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             try self.markErroneous(anno_var);
                             return;
                         }
-                        const instantiated_var = try self.instantiateVar(local_decl_var, env, .{ .explicit = anno_region });
+                        const instantiated_var = try self.instantiateVar(local_decl_var, env, .{ .explicit = anno_region }, .none);
                         _ = try self.unify(anno_var, instantiated_var, env);
                     }
                 },
@@ -15730,6 +15681,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             ext_ref.local_var,
                             env,
                             .{ .explicit = anno_region },
+                            .none,
                         );
                         _ = try self.unify(anno_var, ext_instantiated_var, env);
                     } else {
@@ -17784,10 +17736,7 @@ fn checkStoredValueExpr(
     const previous_source = self.instantiation_source_expr;
     self.instantiation_source_expr = expr_idx;
     defer self.instantiation_source_expr = previous_source;
-    std.debug.assert(self.pending_nested_function_use == null);
-    self.pending_nested_function_use = expr_idx;
-    const instance_var = try self.instantiateBindingVar(source_var, env, .use_last_var);
-    std.debug.assert(self.pending_nested_function_use == null);
+    const instance_var = try self.instantiateBindingVar(source_var, env, .use_last_var, .{ .nested_function_use = expr_idx });
     return .{
         .does_fx = does_fx,
         .var_ = instance_var,
@@ -19078,7 +19027,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                             // recursive edge, not an external use of the body's
                             // eventual scheme; the enclosing body's own
                             // requirements cover the implementation cycle.
-                            const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
+                            const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = expr_idx });
                             _ = try self.unify(expr_var, instantiated, env);
                             try self.recordRecursiveReference(
                                 @intFromEnum(expr_idx),
@@ -19129,7 +19078,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                                 // shared generalization boundary yet. Preserve
                                 // the annotation's polymorphic-recursion rule
                                 // until that boundary publishes the body scheme.
-                                const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
+                                const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = expr_idx });
                                 _ = try self.unify(expr_var, instantiated, env);
                                 try self.recordRecursiveReference(
                                     @intFromEnum(expr_idx),
@@ -19160,7 +19109,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 if (self.predeclared_local_scheme_vars.get(lookup.pattern_idx)) |scheme_var| {
                     // Annotated local self/enclosing reference: instantiate
                     // the declared scheme (sound polymorphic recursion).
-                    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
+                    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = expr_idx });
                     _ = try self.unify(expr_var, instantiated, env);
                     try self.recordRecursiveReference(
                         @intFromEnum(expr_idx),
@@ -19214,7 +19163,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
 
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
-                const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var);
+                const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
                 // A fully checked top-level definition whose type is ground
@@ -19266,6 +19215,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         ext_ref.local_var,
                         env,
                         .{ .explicit = expr_region },
+                        .{ .value_use = expr_idx },
                     );
                     _ = try self.unify(expr_var, ext_instantiated_var, env);
                 }
@@ -19280,7 +19230,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             try self.checkAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
         },
         .e_lookup_associated_resolved => |lookup| {
-            try self.checkResolvedAssociatedLookup(expr_var, lookup, expr_region, env);
+            try self.checkResolvedAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
         },
         .e_lookup_required => |req| {
             self.markCurrentHoistRuntimeDependency();
@@ -19294,6 +19244,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     type_var,
                     env,
                     .{ .explicit = expr_region },
+                    .{ .value_use = expr_idx },
                 );
                 _ = try self.unify(expr_var, instantiated_var, env);
             } else {
@@ -19646,6 +19597,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                                 call_func_expr_var,
                                 env,
                                 .use_last_var,
+                                .none,
                             );
                         } else {
                             break :blk_instantiate call_func_expr_var;
@@ -20952,7 +20904,7 @@ fn methodVarFromOriginalEnv(
     region: Region,
 ) Allocator.Error!ToInspectMethodVar {
     return .{
-        .var_ = try self.methodTypeVarFromOriginalEnv(original_env, is_this_module, type_node_idx, env, region),
+        .var_ = try self.methodTypeVarFromOriginalEnv(original_env, is_this_module, type_node_idx, env, region, .none),
         .dispatcher_name = dispatcher_name,
     };
 }
@@ -20964,13 +20916,14 @@ fn methodTypeVarFromOriginalEnv(
     type_node_idx: CIR.Node.Idx,
     env: *Env,
     region: Region,
+    evidence: InstantiationEvidence,
 ) Allocator.Error!Var {
     const def_var: Var = ModuleEnv.varFrom(type_node_idx);
     return if (is_this_module) blk: {
-        break :blk try self.instantiateBindingVar(def_var, env, .use_last_var);
+        break :blk try self.instantiateBindingVar(def_var, env, .use_last_var, evidence);
     } else blk: {
         const imported_scheme = try self.importedMethodSchemeFromSource(original_env, type_node_idx);
-        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
     };
 }
 
@@ -22830,7 +22783,7 @@ fn checkMatchExpr(
             try self.copyVar(try_type_var, builtin_env, Region.zero())
         else
             try_type_var;
-        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
+        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated, .none);
 
         // Unify the condition with Try type
         const try_result = try self.unifyInContext(try_var, cond_var, env, .{ .try_operator_expr = .{
@@ -24681,6 +24634,7 @@ fn checkAssociatedLookupFromOwnerVar(
     );
 
     try self.checkResolvedAssociatedTarget(
+        expr_idx,
         expr_var,
         resolution.target.env,
         resolution.target.is_this_module,
@@ -24743,6 +24697,7 @@ fn resolveAssociatedLookup(
 
 fn checkResolvedAssociatedLookup(
     self: *Self,
+    expr_idx: CIR.Expr.Idx,
     expr_var: Var,
     lookup: @FieldType(CIR.Expr, "e_lookup_associated_resolved"),
     region: Region,
@@ -24750,6 +24705,7 @@ fn checkResolvedAssociatedLookup(
 ) Allocator.Error!void {
     const target = self.moduleEnvForIdentity(self.cir, lookup.module_identity);
     try self.checkResolvedAssociatedTarget(
+        expr_idx,
         expr_var,
         target.env,
         target.is_this_module,
@@ -24762,6 +24718,7 @@ fn checkResolvedAssociatedLookup(
 
 fn checkResolvedAssociatedTarget(
     self: *Self,
+    expr_idx: CIR.Expr.Idx,
     expr_var: Var,
     target_env: *const ModuleEnv,
     is_this_module: bool,
@@ -24786,6 +24743,7 @@ fn checkResolvedAssociatedTarget(
         target_node_idx,
         env,
         region,
+        .{ .value_use = expr_idx },
     );
     _ = try self.unify(expr_var, target_var, env);
 }
@@ -25045,7 +25003,7 @@ fn prepareNominalTypeUsage(
     region: Region,
     env: *Env,
 ) std.mem.Allocator.Error!?PreparedNominalTypeUsage {
-    const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region });
+    const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region }, .none);
     const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
     if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
@@ -25871,7 +25829,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // the expected type steers interior numerals to the field's type
         // instead of letting the defaulting rounds commit them blind
         // (`?? 1 + 2` on a `U8` field checks both numerals at U8).
-        const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var);
+        const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var, .none);
         // Snapshot the parameter-derived fresh vars of THIS instantiation
         // before anything can repopulate `var_map`: an entry whose OLD var is
         // rigid content is a declaration type parameter, and its NEW var is
@@ -29604,10 +29562,10 @@ fn staticDispatchConstraintAcceptsCandidate(
     const def_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
 
     const method_var = if (method_lookup.is_this_module) blk: {
-        break :blk try self.instantiateBindingVar(def_var, env, .use_last_var);
+        break :blk try self.instantiateBindingVar(def_var, env, .use_last_var, .none);
     } else blk: {
         const imported_scheme = try self.importedMethodScheme(method_lookup);
-        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = self.getRegionAt(candidate_var) });
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = self.getRegionAt(candidate_var) }, .none);
     };
 
     // The real unify wrapper, not the throwaway-store probe unify: on the commit
@@ -31094,12 +31052,10 @@ fn instantiateDispatchTargetMethodVar(
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
 
-    const previous_evidence_target_site = self.evidence_target_site;
-    self.evidence_target_site = .{
+    const evidence: InstantiationEvidence = .{ .dispatch_target = .{
         .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
         .constraint_fn_var = constraint.fn_var,
-    };
-    defer self.evidence_target_site = previous_evidence_target_site;
+    } };
 
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
     const records_before = self.cir.scheme_uses.items.items.len;
@@ -31107,10 +31063,10 @@ fn instantiateDispatchTargetMethodVar(
         break :blk expr_var_for_method;
     } else if (method_lookup.is_this_module) blk: {
         const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
-        break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var);
+        break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
     } else blk: {
         const imported_scheme = try self.importedMethodScheme(method_lookup);
-        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
     };
 
     // A target that reused an in-flight cycle var performed no instantiation,
@@ -31129,7 +31085,7 @@ fn instantiateDispatchTargetMethodVar(
         self.cir.scheme_uses.items.items.len == records_before)
     {
         try self.cir.recordSchemeUse(
-            self.evidence_target_site.?.node_idx,
+            evidence.dispatch_target.node_idx,
             .dispatch_target,
             @intFromEnum(constraint.fn_var),
             record_scheme_root,
@@ -37007,24 +36963,18 @@ fn instantiateGeneratedCodecMethodTarget(
         try self.importedMethodScheme(method_lookup);
 
     const records_before = self.cir.scheme_uses.items.items.len;
-    const previous_evidence_target_site = self.evidence_target_site;
-    self.evidence_target_site = .{
-        // Generated codec edges have no source expression; dispatch-target
-        // records are identified by `slot_data`, not by this placeholder node.
-        .node_idx = 0,
-        .constraint_fn_var = evidence_var,
+    const evidence: InstantiationEvidence = .{
+        .dispatch_target = .{
+            // Generated calls are identified by their callable relation.
+            .node_idx = 0,
+            .constraint_fn_var = evidence_var,
+            .shape_validation = method_lookup.is_this_module,
+        },
     };
-    defer self.evidence_target_site = previous_evidence_target_site;
-
-    const method_var = if (method_lookup.is_this_module) blk: {
-        // Shape validation can select an annotated method before its body has
-        // been checked. Instantiate the declared binding scheme while keeping
-        // monomorphic receiver obligations attached to their owning scheme.
-        if (self.types.resolveVar(scheme_var).desc.rank == .generalized or self.isBindingSchemeVar(scheme_var)) {
-            self.pending_shape_validation_instantiation = true;
-        }
-        break :blk try self.instantiateBindingVar(scheme_var, env, .use_last_var);
-    } else try self.instantiateVar(scheme_var, env, .{ .explicit = region });
+    const method_var = if (method_lookup.is_this_module)
+        try self.instantiateBindingVar(scheme_var, env, .use_last_var, evidence)
+    else
+        try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
 
     if (self.cir.scheme_uses.items.items.len == records_before and
         try self.schemeHasEvidenceParams(scheme_var))
@@ -39668,15 +39618,10 @@ fn checkFlexVarConstraintCompatibility(
             var committed = false;
             defer if (!committed) commit_probe.rollback();
 
-            const method_var = method_var: {
-                self.evidence_target_site = .{
-                    .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
-                    .constraint_fn_var = constraint.fn_var,
-                };
-                defer self.evidence_target_site = null;
-
-                break :method_var try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
-            };
+            const method_var = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, .{ .dispatch_target = .{
+                .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+                .constraint_fn_var = constraint.fn_var,
+            } });
 
             // The mismatch is reported below, after the rollback, against the
             // pristine relation—occurrence-directed poisoning must not run
