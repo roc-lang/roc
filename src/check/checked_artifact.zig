@@ -31378,7 +31378,8 @@ pub const CheckedModuleArtifact = struct {
     // for custom literal patterns.
     // Version 95 makes stored callable-derived evidence own its vector slot
     // instead of retaining a parameter index from a forwarding scheme.
-    const serialized_layout_version: u32 = 95;
+    // Version 96 stores the builtin-identity-to-declaration index.
+    const serialized_layout_version: u32 = 96;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37994,8 +37995,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x17, 0xC0, 0xDF, 0xF1, 0xE9, 0xDA, 0x5A, 0x3F, 0xB8, 0x10, 0x4B, 0x58, 0x33, 0xBF, 0x14, 0xA2,
-        0xA5, 0xA6, 0x52, 0x90, 0x6E, 0x9B, 0xB6, 0x69, 0x6B, 0x9B, 0x96, 0x39, 0x07, 0x3C, 0xA4, 0x49,
+        0x6D, 0x45, 0x44, 0xDA, 0x43, 0x68, 0x59, 0x3D, 0x5A, 0xB3, 0x39, 0x61, 0xC0, 0x21, 0xE5, 0x8E,
+        0x47, 0xDB, 0x00, 0x86, 0x00, 0xF0, 0x87, 0x2D, 0x49, 0xEA, 0x62, 0x0C, 0x46, 0x29, 0xFD, 0xFE,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
