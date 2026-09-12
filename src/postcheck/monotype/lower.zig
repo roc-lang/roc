@@ -40534,7 +40534,7 @@ const BodyContext = struct {
                     .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
                 },
                 .record_field => switch (content) {
-                    .record => node = try self.graph.recordFieldNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
+                    .record => node = try self.graph.recordFieldValueNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
                     .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
                 },
                 .tag_payload_tag => switch (content) {

@@ -7755,6 +7755,14 @@ generalized local-procedure uses. A generalized scope also records its exact
 checked scheme root, so evidence paths are replayed against the same callable
 shape that authored them. Static-dispatch relation records remain the separate
 explicit authority for dispatch constraints.
+
+Record-field steps in callable evidence paths select the explicit source-value
+cell, independently of field-kind resolution. An optional field's tagged runtime
+slot and an undetermined field's placeholder slot are not the checked value
+type. Reading the source-value cell neither commits the field kind nor relates
+the value to its storage slot; ordinary interface relations and relation freeze
+retain ownership of those decisions.
+
 The `CheckedBodyStore.contains_diagnostic_error` column excludes rejected
 expression sites from this relation table; an error-containing checked type is
 not a valid specialization constraint and never reaches Monotype instantiation.
