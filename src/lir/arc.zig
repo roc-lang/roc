@@ -12647,6 +12647,102 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
 }
 
+test "RC outcome restitution spends retained arguments through aliases only on success" {
+    for ([_]bool{ false, true }) |specialize| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const outcome_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), f.list_str });
+
+        const input_param = try f.local(f.list_str);
+        const index_param = try f.local(.u64);
+        const replacement_param = try f.local(.str);
+        const choose_param = try f.local(.i64);
+        const first_alias = try f.local(.str);
+        const second_alias = try f.local(.str);
+        const changed = try f.local(f.list_str);
+        const result = try f.local(outcome_layout);
+        const join_id = f.freshJoinPointId();
+        const ret = try f.ret(result);
+        const success_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const success_tag = try f.assignTag(result, 1, changed, success_jump);
+        const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = changed,
+            .op = .list_set,
+            .rc_effect = LIR.LowLevel.list_set.rcEffect(),
+            .args = try f.span(&.{ input_param, index_param, second_alias }),
+            .next = success_tag,
+        } });
+        const alias_again = try f.assignRefLocal(second_alias, first_alias, mutate);
+        const success = try f.assignRefLocal(first_alias, replacement_param, alias_again);
+        const failure_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const failure = try f.assignTag(result, 0, null, failure_jump);
+        const choose = try f.switchStmt(choose_param, success, failure, null);
+        const body = try f.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = ret,
+            .remainder = choose,
+        } });
+        const callee = try f.addProc(&.{ input_param, index_param, replacement_param, choose_param }, body, outcome_layout);
+
+        // The caller needs the old list only on failure. The complete outcome
+        // convention must also return the unused replacement on that edge so
+        // the caller can release it. Success stores it in the changed list.
+        const input = try f.local(f.list_str);
+        const index = try f.local(.u64);
+        const replacement = try f.local(.str);
+        const caller_choose = try f.local(.i64);
+        const call_result = try f.local(outcome_layout);
+        const discriminant = try f.local(.u8);
+        const output = try f.local(.i64);
+        const caller_ret = try f.ret(output);
+        const success_done = try f.assignI64(output, 1, caller_ret);
+        const failure_done = try f.assignI64(output, 0, caller_ret);
+        const failure_use = try f.expectStmt(input, failure_done);
+        const refine = try f.switchStmt(discriminant, success_done, failure_use, null);
+        const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = call_result,
+            .proc = callee,
+            .args = try f.span(&.{ input, index, replacement, caller_choose }),
+            .next = read_discriminant,
+        } });
+        const caller = try f.addProc(&.{ input, index, replacement, caller_choose }, call, .i64);
+
+        const rc = try testing.allocator.alloc(bool, f.store.localCount());
+        defer testing.allocator.free(rc);
+        for (rc, 0..) |*is_rc, local_index| {
+            const local = f.store.getLocal(@enumFromInt(@as(u32, @intCast(local_index))));
+            is_rc.* = f.layouts.layoutContainsRefcounted(f.layouts.getLayout(local.layout_idx));
+        }
+        {
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{caller}, true);
+            defer solution.deinit();
+            const outcomes = solution.availableOutcomeSpanOf(callee);
+            try testing.expectEqual(@as(u32, 2), outcomes.len);
+            try testing.expectEqualDeep(arc_sig.Outcome{ .discriminant = 0, .restituted_params = 0b0101 }, solution.outcomes[outcomes.start]);
+            try testing.expectEqualDeep(arc_sig.Outcome{ .discriminant = 1, .restituted_params = 0 }, solution.outcomes[outcomes.start + 1]);
+            try testing.expectEqual(@as(arc_sig.ParamMask, 0b0101), solution.restitutionParamsAt(failure_jump));
+            try testing.expectEqual(@as(arc_sig.ParamMask, 0), solution.restitutionParamsAt(success_jump));
+        }
+
+        const base_proc_count = f.store.procSpecCount();
+        try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
+        try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+        const caller_body = f.store.getCFStmt(f.store.getProcSpec(caller).body.?);
+        try testing.expect(caller_body == .assign_call);
+        try testing.expectEqual(base_proc_count, @intFromEnum(caller_body.assign_call.proc));
+
+        // Neither the caller nor either callee emission needs an extra unit
+        // for the list or replacement. The failure receipt releases exactly
+        // one caller-side replacement; ARC certification checks both paths.
+        for ([_]LIR.LocalId{ input_param, replacement_param, first_alias, second_alias, input, replacement }) |local| {
+            try testing.expectEqual(@as(usize, 0), f.countRc(local, .incref));
+        }
+        try testing.expectEqual(@as(usize, 1), f.countRc(replacement, .decref));
+    }
+}
+
 test "RC outcome restitution releases every returned argument before a nested join" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

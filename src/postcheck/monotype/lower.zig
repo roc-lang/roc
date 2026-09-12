@@ -616,6 +616,10 @@ pub const BodyDiagnostics = struct {
     nested_callable_checks: u64 = 0,
     nested_lambdas_prepared: u64 = 0,
     nested_closures_prepared: u64 = 0,
+    /// Requests that project symbolic evidence over their checked callable.
+    callable_evidence_symbolic_requests: u64 = 0,
+    /// Immutable evidence vectors copied because at least one entry resolved.
+    callable_evidence_vector_copies: u64 = 0,
 };
 
 /// Deterministic Monotype workload counts. These diagnose how much exact
@@ -802,8 +806,9 @@ const SpecEvidence = union(enum) {
     structural: SpecStructuralEvidence,
     /// Callable-reachable evidence that remains symbolic while a reusable
     /// compile-time value is produced and resolves from the eventual request.
+    /// Its containing vector slot selects the receiving scheme's checked path;
+    /// forwarding never retains a coordinate in the sending scheme.
     from_callable: struct {
-        index: u32,
         independent_callable: bool,
     },
     /// Abstract local scheme parameter, supplied by the checked use edge.
@@ -4593,7 +4598,6 @@ const Builder = struct {
             } }),
             .from_callable => |use| {
                 try nodes.append(self.allocator, .{ .from_callable = .{
-                    .index = use.index,
                     .independent_callable = use.independent_callable,
                 } });
             },
@@ -40453,7 +40457,6 @@ const BodyContext = struct {
                     } };
                 },
                 .from_callable => |use| .{ .from_callable = .{
-                    .index = use.index,
                     .independent_callable = use.independent_callable,
                 } },
                 .from_scheme => |index| .{ .from_scheme = index },
@@ -40560,26 +40563,16 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
-        var has_symbolic = false;
-        for (evidence) |entry| {
-            if (entry == .from_callable) {
-                has_symbolic = true;
-                break;
-            }
-        }
-        if (!has_symbolic) return evidence;
-
         const params = view.templates.evidenceParams(&template);
         if (evidence.len != params.len) {
             Common.invariant("callable-derived evidence length differed from its checked template");
         }
-        const resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
-        for (resolved) |*entry| switch (entry.*) {
-            .from_callable => |recipe| {
-                if (recipe.index >= params.len) {
-                    Common.invariant("callable-derived evidence referenced an unknown checked parameter");
-                }
-                const param = params[recipe.index];
+        var resolved: ?[]SpecEvidence = null;
+        var has_symbolic = false;
+        for (evidence, 0..) |entry, index| switch (entry) {
+            .from_callable => {
+                has_symbolic = true;
+                const param = params[index];
                 const path = view.templates.evidenceParamPath(param);
                 if (path.len == 0) {
                     Common.invariant("callable-derived evidence named a pathless checked parameter");
@@ -40590,18 +40583,26 @@ const BodyContext = struct {
                     param.structural != null or
                     try self.nodeIsProvenUninhabited(component_node);
                 if (resolvable) {
-                    entry.* = try self.synthesizeComponentEvidenceAtNodeForPurpose(
+                    const replacement = try self.synthesizeComponentEvidenceAtNodeForPurpose(
                         view,
                         param.method,
                         param.structural,
                         component_node,
                         purpose,
                     );
+                    // Evidence can be shared with another request or lexical
+                    // frame. Copy once, only when this request resolves an entry.
+                    if (resolved == null) {
+                        resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
+                        self.builder.countBodyDiagnostic("callable_evidence_vector_copies");
+                    }
+                    resolved.?[index] = replacement;
                 }
             },
             .target, .structural, .from_scheme, .unreachable_value, .checked_error => {},
         };
-        return resolved;
+        if (has_symbolic) self.builder.countBodyDiagnostic("callable_evidence_symbolic_requests");
+        return resolved orelse evidence;
     }
 
     /// The substitution and evidence the scheme instantiated at `expr` (a
@@ -40955,8 +40956,7 @@ const BodyContext = struct {
                         };
                         break :independent .{ .target = independent_target };
                     },
-                    .from_callable => |use| .{ .from_callable = .{
-                        .index = use.index,
+                    .from_callable => .{ .from_callable = .{
                         .independent_callable = true,
                     } },
                     .structural, .from_scheme, .unreachable_value, .checked_error => entry,
@@ -41136,7 +41136,6 @@ const BodyContext = struct {
                 .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
                 .from_callable => {
                     out[k] = .{ .from_callable = .{
-                        .index = @intCast(k),
                         .independent_callable = false,
                     } };
                     derived[k] = true;
@@ -41161,7 +41160,6 @@ const BodyContext = struct {
                     },
                     .from_callable => |use| {
                         out[k] = .{ .from_callable = .{
-                            .index = use.index,
                             .independent_callable = use.independent_callable or constraint.independent_callable,
                         } };
                         derived[k] = true;

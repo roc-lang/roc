@@ -2751,13 +2751,13 @@ const TypeTable = struct {
     /// layout is known before any edge walk reaches its entry.
     const ArtifactLowering = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        lowered: lir.CheckedPipeline.LoweredProgram,
+        abi_layouts: lir.CheckedPipeline.CheckedAbiLayouts,
         /// Committed layout per requested root checked type.
         root_layouts: std.AutoHashMapUnmanaged(CheckedArtifact.CheckedTypeId, layout.Idx),
 
         fn deinit(self: *ArtifactLowering, gpa: Allocator) void {
             self.root_layouts.deinit(gpa);
-            self.lowered.deinit();
+            self.abi_layouts.deinit();
         }
     };
 
@@ -2791,13 +2791,13 @@ const TypeTable = struct {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
                 glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@intFromEnum(root.checked_type)});
-            try self.boxRootInPlace(&lowering.lowered.lir_result.layouts, entry_idx, layout_idx);
+            try self.boxRootInPlace(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable;
-            try self.attachEntryLayout(&lowering.lowered.lir_result.layouts, entry_idx, layout_idx);
+            try self.attachEntryLayout(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
         for (self.entries.items, 0..) |entry, idx| {
@@ -2837,34 +2837,23 @@ const TypeTable = struct {
         const relation_artifacts = try build_env.collectRelationArtifactViews(self.gpa, artifact);
         defer self.gpa.free(relation_artifacts);
 
-        var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        var abi_layouts = try lir.CheckedPipeline.resolveCheckedAbiLayouts(
             self.gpa,
             .{
                 .root = CheckedArtifact.loweringViewWithRelations(artifact, relation_artifacts),
                 .imports = imported_artifacts,
             },
-            .{ .layout_requests = requests.items },
-            // Lowering needs a default width for the layout store, but every
-            // ABI fact glue emits is an explicit dual-width query
-            // (`sizeAt(.u32/.u64)`, `getStructFieldOffsetByOriginalIndexAt(..., .u32/.u64)`,
-            // ...), so this fixed choice cannot affect glue output.
-            .{ .target_usize = .u64, .specialization_strategy = .lss, .layout_request_const_plans = false },
+            requests.items,
+            .u64,
         );
-        errdefer lowered.deinit();
-
-        var served: usize = 0;
-        for (lowered.lir_result.requested_layouts.items) |request| {
-            const slot = root_layouts.getPtr(request.checked_type) orelse continue;
-            slot.* = request.layout_idx;
-            served += 1;
-        }
-        if (served != requests.items.len) {
-            glueInvariant("compiler served {d} of {d} requested glue root layouts", .{ served, requests.items.len });
+        errdefer abi_layouts.deinit();
+        for (requests.items, abi_layouts.roots) |request, layout_idx| {
+            root_layouts.getPtr(request).?.* = layout_idx;
         }
 
         try lowerings.append(self.gpa, .{
             .artifact = artifact,
-            .lowered = lowered,
+            .abi_layouts = abi_layouts,
             .root_layouts = root_layouts,
         });
     }
