@@ -192,7 +192,9 @@ pub const Constants = struct {
     /// 88: CIR retains exact source occurrences for mutable binding writes.
     /// 89: Literal patterns retain their equality callable and failure owner
     ///     in a pattern-only context.
-    pub const CACHE_VERSION = 89;
+    /// 90: Scheme-use evidence belongs to explicit value and dispatch edges;
+    ///     type applications no longer publish spurious value-use records.
+    pub const CACHE_VERSION = 90;
 };
 
 /// Configuration for the Roc cache system.
