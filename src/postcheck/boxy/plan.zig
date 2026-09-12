@@ -15127,7 +15127,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .fn_ty = @enumFromInt(5),
         .origin = .method_call,
     }};
-    payloads[initialized_payload_count..9].* = .{
+    @memcpy(payloads[initialized_payload_count..9], &[_]checked.StoredCheckedTypePayload{
         .{ .rigid = .{ .constraints = .{ .start = 0, .len = 1 } } },
         .{ .rigid = .{} },
         .{ .rigid = .{ .constraints = .{ .start = 0, .len = 1 } } },
@@ -15135,7 +15135,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .{ .tuple = .{ .start = 0, .len = 2 } },
         .{ .tuple = .{ .start = 6, .len = 2 } },
         .{ .tuple = .{ .start = 3, .len = 2 } },
-    };
+    });
     for (payloads[9..], 0..) |*payload, index| {
         payload.* = .{ .nominal = .{
             .name = nominal_key.type_name,
