@@ -806,8 +806,8 @@ const SpecEvidence = union(enum) {
     structural: SpecStructuralEvidence,
     /// Callable-reachable evidence that remains symbolic while a reusable
     /// compile-time value is produced and resolves from the eventual request.
-    /// Its containing vector slot selects the receiving scheme's checked path;
-    /// forwarding never retains a coordinate in the sending scheme.
+    /// Its position in the owning vector selects the checked parameter; no
+    /// index from a forwarding frame may survive into the destination schema.
     from_callable: struct {
         independent_callable: bool,
     },

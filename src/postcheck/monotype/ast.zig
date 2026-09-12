@@ -506,31 +506,28 @@ test "function evidence identity uses checked callable type keys" {
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 
     const symbolic_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
     };
-    const symbolic_left = [_]check.ConstStore.ConstFnEvidence{.{
-        .from_callable = .{ .independent_callable = false },
-    }};
-    const symbolic_right = [_]check.ConstStore.ConstFnEvidence{.{
-        .from_callable = .{ .independent_callable = true },
-    }};
+    const symbolic_left = [_]check.ConstStore.ConstFnEvidence{
+        .{ .from_callable = .{ .independent_callable = false } },
+        .unreachable_value,
+    };
+    const symbolic_right = [_]check.ConstStore.ConstFnEvidence{
+        .unreachable_value,
+        .{ .from_callable = .{ .independent_callable = false } },
+    };
+    // The vector position owns the symbolic requirement's identity.
     try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &symbolic_right, &symbolic_frames, 0));
     try std.testing.expect(!std.meta.eql(
         fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
         fnEvidenceDigest(&symbolic_right, &symbolic_frames, 0),
     ));
-
-    // The vector order still identifies which requirement is symbolic. Dropping
-    // the redundant source index must not erase the destination slot's identity.
-    const slot_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
-    };
-    const first_symbolic = [_]check.ConstStore.ConstFnEvidence{ symbolic_left[0], .unreachable_value };
-    const second_symbolic = [_]check.ConstStore.ConstFnEvidence{ .unreachable_value, symbolic_left[0] };
-    try std.testing.expect(!fnEvidenceEql(&first_symbolic, &slot_frames, 0, &second_symbolic, &slot_frames, 0));
+    var independent = symbolic_left;
+    independent[0].from_callable.independent_callable = true;
+    try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &independent, &symbolic_frames, 0));
     try std.testing.expect(!std.meta.eql(
-        fnEvidenceDigest(&first_symbolic, &slot_frames, 0),
-        fnEvidenceDigest(&second_symbolic, &slot_frames, 0),
+        fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
+        fnEvidenceDigest(&independent, &symbolic_frames, 0),
     ));
 }
 
