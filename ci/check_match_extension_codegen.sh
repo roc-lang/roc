@@ -82,25 +82,22 @@ cd "$repo_root"
 # variable, ten instructions per eight bytes instead of nine, and the setup and
 # tail are laid out differently, 94 to 100. The loop is still load, load,
 # compare, advance with the `from_le_bytes` bounds test as its termination.
-# Both counts then rose (x64musl 98 to 122, arm64musl 100 to 107) when the list
-# allocation builtins gained overflow guards on their size arithmetic: a
-# `capacity * element_width (+ header)` that overflows `usize` now crashes
-# deterministically instead of wrapping to a tiny allocation and letting the
-# next write run off the heap buffer (a primitive reachable from pure Roc code
-# the compiler also evaluates at compile time). The guards inline into the
-# one-time `List.repeat` buffer setup, where the size is a constant the
-# optimizer has already folded, so what survives is the folded residue rather
-# than a working check: a flag store and a branch on a constant zero, ten such
-# instructions on x64musl and six on arm64musl, plus the cold call to the crash
-# helper each branch targets. x64musl saves one further callee-saved register,
-# and its remaining eleven are `int3` alignment padding after the entrypoint,
-# which this counter includes in its total. The guarded arithmetic itself is
-# off the hot path, and the pinned eight-byte compare loop, which allocates
-# nothing, is instruction-for-instruction the one main generates; only its
-# register allocation differs.
+# The list allocation builtins then gained overflow guards on their size
+# arithmetic: a `capacity * element_width (+ header)` that overflows `usize`
+# now crashes deterministically instead of wrapping to a tiny allocation and
+# letting the next write run off the heap buffer (a primitive reachable from
+# pure Roc code the compiler also evaluates at compile time). Both counts are
+# unchanged by them. The guards are written as comparisons rather than
+# `@mulWithOverflow` precisely so they can fold away wherever the sizes are
+# known, which is everywhere in this fixture; see `checkedByteCount` for why
+# the intrinsic's shape survives the optimizer instead. Written with the
+# intrinsics they left ten dead instructions on x64musl and six on arm64musl
+# inside the one-time `List.repeat` setup -- a flag stored to the stack and a
+# branch on a constant zero -- plus the cold crash-helper call each branch
+# targets, none of which did any work.
 expectations=(
-    "x64musl:122"
-    "arm64musl:107"
+    "x64musl:98"
+    "arm64musl:100"
 )
 
 failed=0
