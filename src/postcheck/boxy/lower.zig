@@ -1064,13 +1064,50 @@ const StaticDescInstantiationEntry = struct {
     worker_rep: Plan.TypeRepId,
     source_rep: ?Plan.TypeRepId,
     desc: LIR.BoxyTypeDescId,
+    env: u32,
 };
 
 const StaticDescInstantiationContext = struct {
     entries: std.ArrayList(StaticDescInstantiationEntry) = .empty,
+    environments: std.ArrayList(Environment) = .empty,
+    env: u32 = 0,
+
+    const Binding = struct {
+        formal: Plan.TypeRepId,
+        actual: Plan.TypeRepId,
+        source: ?Plan.TypeRepId,
+        env: u32,
+    };
+    const Environment = struct { parent: u32, binding: Binding };
+
+    fn bound(self: *const StaticDescInstantiationContext, rep: Plan.TypeRepId) ?Binding {
+        var env = self.env;
+        while (env != 0) {
+            const environment = self.environments.items[env - 1];
+            if (environment.binding.formal == rep) return environment.binding;
+            env = environment.parent;
+        }
+        return null;
+    }
+
+    fn bind(self: *StaticDescInstantiationContext, allocator: Allocator, binding: Binding) Allocator.Error!void {
+        if (self.bound(binding.formal)) |existing| {
+            if (std.meta.eql(existing, binding)) return;
+        }
+        const key = Environment{ .parent = self.env, .binding = binding };
+        for (self.environments.items, 0..) |environment, index| {
+            if (std.meta.eql(environment, key)) {
+                self.env = @intCast(index + 1);
+                return;
+            }
+        }
+        try self.environments.append(allocator, key);
+        self.env = @intCast(self.environments.items.len);
+    }
 
     fn deinit(self: *StaticDescInstantiationContext, allocator: Allocator) void {
         self.entries.deinit(allocator);
+        self.environments.deinit(allocator);
     }
 
     fn get(
@@ -1079,7 +1116,7 @@ const StaticDescInstantiationContext = struct {
         source_rep: ?Plan.TypeRepId,
     ) ?LIR.BoxyTypeDescId {
         for (self.entries.items) |entry| {
-            if (entry.worker_rep == worker_rep and entry.source_rep == source_rep) return entry.desc;
+            if (entry.worker_rep == worker_rep and entry.source_rep == source_rep and entry.env == self.env) return entry.desc;
         }
         return null;
     }
@@ -1095,6 +1132,7 @@ const StaticDescInstantiationContext = struct {
             .worker_rep = worker_rep,
             .source_rep = source_rep,
             .desc = desc,
+            .env = self.env,
         });
     }
 };
@@ -2810,12 +2848,24 @@ const ProcedureBuilder = struct {
         context: *StaticDescInstantiationContext,
     ) Allocator.Error!LIR.BoxyTypeDescId {
         const identity_worker = self.descriptorStorageRep(worker_rep_id);
+        if (context.bound(identity_worker)) |binding| {
+            const outer_env = context.env;
+            context.env = binding.env;
+            defer context.env = outer_env;
+            return try self.typeDescForWorkerRepWithSourceMap(binding.actual, binding.source, descriptor_sources, context);
+        }
         const effective_source = self.effectiveStaticDescriptorSource(identity_worker, source_rep_id, descriptor_sources);
         const identity_source = if (effective_source) |source| self.descriptorIdentityRep(source) else null;
 
         const worker_rep = self.plan.representations.items[@intFromEnum(identity_worker)];
         if (worker_rep.kind == .dynamic) {
             if (identity_source) |source| {
+                if (context.bound(source)) |binding| {
+                    const outer_env = context.env;
+                    context.env = binding.env;
+                    defer context.env = outer_env;
+                    return try self.typeDescForWorkerRepWithSourceMap(binding.actual, binding.source, descriptor_sources, context);
+                }
                 const source_rep = self.plan.representations.items[@intFromEnum(source)];
                 if (!source_rep.contains_dynamic or (worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0)) {
                     return try self.typeDescForRep(source);
@@ -2823,6 +2873,45 @@ const ProcedureBuilder = struct {
             } else if (worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0) {
                 return try self.typeDescForRep(identity_worker);
             }
+        }
+
+        const outer_env = context.env;
+        defer context.env = outer_env;
+        const substitutions = self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions);
+        if (substitutions.len != 0) {
+            var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
+            defer bindings.deinit(self.allocator);
+            for (substitutions) |substitution| {
+                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+                if (formal.descriptor == null) continue;
+                const actual_source = if (identity_source) |source| blk: {
+                    const source_rep = self.plan.representations.items[@intFromEnum(source)];
+                    for (self.plan.nominalBackingArgSubstitutionSlice(source_rep.nominal_backing_arg_substitutions)) |source_substitution| {
+                        if (source_substitution.arg_index == substitution.arg_index) break :blk source_substitution.actual_rep;
+                    }
+                    break :blk null;
+                } else null;
+                if (substitution.formal_rep == substitution.actual_rep and
+                    (actual_source == null or actual_source == substitution.formal_rep)) continue;
+                var binding = StaticDescInstantiationContext.Binding{
+                    .formal = substitution.formal_rep,
+                    .actual = substitution.actual_rep,
+                    .source = actual_source,
+                    .env = outer_env,
+                };
+                // A formal forwarded from an enclosing nominal retains that
+                // nominal's environment, rather than referring to this new scope.
+                while (context.bound(binding.actual)) |forwarded| {
+                    binding.actual = forwarded.actual;
+                    binding.source = forwarded.source;
+                    binding.env = forwarded.env;
+                    context.env = forwarded.env;
+                }
+                context.env = outer_env;
+                if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
+                try bindings.append(self.allocator, binding);
+            }
+            for (bindings.items) |binding| try context.bind(self.allocator, binding);
         }
 
         if (context.get(identity_worker, identity_source)) |existing| return existing;
@@ -21425,8 +21514,29 @@ const ProcBodyBuilder = struct {
         };
         const read_target = if (self.representationBoundaryIsDirect(target_rep, access.field_rep))
             target
+        else if (nested_desc_index != null)
+            try self.addFrameLocal(self.workerRuntimeLayoutForRep(access.field_rep).layoutIdx())
         else
             try self.addFrameLocalForRep(access.field_rep);
+        // Publish the descriptor supplied by the field read before lowering its
+        // adapter. Its initializer executes before the read and conversion; it
+        // must not become a type-wide slot initialized in the worker prologue.
+        const field_desc_local = if (nested_desc_index != null) blk: {
+            if (self.parent.result.store.getLocal(read_target).boxy_desc) |desc| {
+                if (desc.localOrNull() == null) break :blk null;
+            }
+            const local = try self.mutableDescriptorLocalForValue(read_target);
+            break :blk local;
+        } else null;
+        const descriptor_snapshot = if (read_target != target and field_desc_local != null)
+            try self.snapshotDescriptorBindings()
+        else
+            null;
+        defer if (descriptor_snapshot) |snapshot| {
+            self.restoreDescriptorBindings(snapshot);
+            snapshot.deinit(self.parent.allocator);
+        };
+        if (descriptor_snapshot != null) try self.bindDescriptorIdentityLocalForRep(access.field_rep, field_desc_local.?, false);
         const after_read = if (read_target == target)
             next
         else
@@ -21439,17 +21549,13 @@ const ProcBodyBuilder = struct {
             } },
             .next = after_read,
         } });
-        const before_read = if (nested_desc_index) |index| blk: {
-            if (self.parent.result.store.getLocal(read_target).boxy_desc) |desc| {
-                if (desc.localOrNull() == null) break :blk read;
-            }
-            const desc_local = try self.mutableDescriptorLocalForValue(read_target);
+        const before_read = if (field_desc_local) |desc_local| blk: {
             if (self.localIsReadOnlyDescriptorInput(desc_local)) break :blk read;
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = desc_local,
                 .desc = record_desc orelse
                     boxyLowerInvariant("record field descriptor bind had no source descriptor"),
-                .nested_index = index,
+                .nested_index = nested_desc_index.?,
                 .next = read,
             } });
         } else read;
@@ -21686,9 +21792,34 @@ const ProcBodyBuilder = struct {
                 .builtin_other,
                 => {
                     const backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing);
+                    var snapshot: ?DescriptorBindingsSnapshot = null;
+                    defer if (snapshot) |outer| {
+                        self.restoreDescriptorBindings(outer);
+                        outer.deinit(self.parent.allocator);
+                    };
+                    var initializers = std.ArrayList(DescriptorArgLocal).empty;
+                    defer initializers.deinit(self.parent.allocator);
+                    var bindings = std.ArrayList(DescriptorTemplateOverride).empty;
+                    defer bindings.deinit(self.parent.allocator);
+                    // Resolve all actuals in the enclosing scope before binding
+                    // this declaration's formals (including nested uses of the
+                    // same nominal at different arguments).
+                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                        if (substitution.formal_rep == substitution.actual_rep) continue;
+                        const formal = self.parent.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+                        if (formal.descriptor == null) continue;
+                        if (snapshot == null) snapshot = try self.snapshotDescriptorBindings();
+                        const materialization = try self.descriptorMaterializationForKnownRep(substitution.actual_rep);
+                        const local = try self.addFrameLocal(.opaque_ptr);
+                        try self.recordDescriptorLocalTemplate(local, materialization);
+                        try initializers.append(self.parent.allocator, .{ .local = local, .materialize = materialization.desc, .captures = materialization.captures });
+                        try bindings.append(self.parent.allocator, .{ .rep = substitution.formal_rep, .local = local });
+                    }
+                    for (bindings.items) |binding| try self.bindDescriptorIdentityLocalForRep(binding.rep, binding.local, false);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
+                    const body = try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
+                    return try self.prependDescriptorArgMaterializations(initializers.items, body);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -27160,6 +27291,10 @@ const ProcBodyBuilder = struct {
         visited[rep_index] = true;
 
         const rep = self.parent.plan.representations.items[rep_index];
+        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+            if (substitution.actual_rep != substitution.formal_rep and
+                self.descriptorTemplateRefNeedsCaptures(substitution.actual_rep, rep.descriptor, visited)) return true;
+        }
         const current_desc = rep.descriptor;
         const rep_layout = self.parent.layout_plan.rep_layouts[rep_index];
         const payload_layout = rep_layout.descriptor_payload_layout orelse rep_layout.worker.layoutIdx();
@@ -27288,11 +27423,11 @@ const ProcBodyBuilder = struct {
     }
 
     fn descriptorTemplateExactRep(
-        _: *const ProcBodyBuilder,
+        self: *const ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
         context: *const DescriptorTemplateContext,
     ) Plan.TypeRepId {
-        if (!context.exact_storage) return rep_id;
+        if (!context.exact_storage and !self.repIsBareDynamic(rep_id)) return rep_id;
 
         var current = rep_id;
         var remaining = context.exact_reps.len;
@@ -27323,7 +27458,6 @@ const ProcBodyBuilder = struct {
             .bindings_start = context.bindings.items.len,
             .env = context.env,
         };
-        if (!context.exact_storage) return scope;
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
