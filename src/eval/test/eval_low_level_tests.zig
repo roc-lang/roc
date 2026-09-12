@@ -1678,6 +1678,59 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
+    // Security regression: a list's byte size is `capacity * element_width`,
+    // and the capacity is Roc-controlled. Before these were checked, a capacity
+    // whose byte size overflowed `usize` wrapped to a tiny allocation in a
+    // ReleaseFast build while the list still advertised the huge capacity, so
+    // the next element write ran off the end of the heap buffer, a
+    // memory-corruption primitive reachable from ordinary (even pure, compile
+    // time evaluated) Roc code. The allocation must now crash deterministically
+    // instead. `2305843009213693953` is `2^61 + 1`, so `* 8` (a `U64` element)
+    // overflows a 64-bit `usize`.
+    //
+    // Each case enters the allocator by a different route: `reserve` grows a
+    // live allocation through `unsafeReallocate`, `with_capacity` allocates
+    // from empty through `list_allocate`, and `repeat` is `with_capacity`
+    // followed by an unchecked append loop, which is what a wrapped allocation
+    // would have overflowed.
+    //
+    // The interpreter and dev backends are the engines the guard protects, and
+    // both run every case. The two wasm skips are not gaps in it. On wasm
+    // `List.with_capacity` never reaches the allocator at all: its length is
+    // statically zero, so the reservation folds away and the direct case
+    // returns `0` rather than crashing. `repeat`'s append loop then runs off a
+    // buffer that was never sized, which the VM stops as an out-of-bounds
+    // access within its own linear memory, so the corruption these guards
+    // prevent elsewhere is already contained there.
+    .{
+        .name = "low_level - List.reserve rejects growth whose byte size overflows",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.reserve([1, 2, 3], 2305843009213693953)
+        \\List.len(big)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - List.with_capacity rejects a capacity whose byte size overflows",
+        .source =
+        \\{
+        \\big : List(U64)
+        \\big = List.with_capacity(2305843009213693953)
+        \\List.len(big)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "low_level - List.repeat rejects a count whose byte size overflows",
+        .source = "List.len(List.repeat(0.U64, 2305843009213693953))",
+        .expected = .{ .crash = {} },
+        .skip = .{ .wasm = true },
+    },
     .{
         .name = "low_level - List.capacity of zero-sized items stays zero on every backend",
         .source =
@@ -3682,6 +3735,21 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"\"" },
+    },
+    .{
+        // A string's byte size is its length, so no `count * width` can
+        // overflow; the reachable overflow is the `len + spare` that sizes the
+        // request. A wrapped sum always lands below the current capacity, which
+        // would silently turn the reserve into a no-op, so `Str.reserve`
+        // saturates and lets the allocation guard reject the request instead.
+        .name = "low_level - Str.reserve rejects a spare that overflows its length",
+        .source =
+        \\{
+        \\big = Str.reserve("hello", 18446744073709551615)
+        \\big
+        \\}
+        ,
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "low_level - Str.release_excess_capacity preserves content",

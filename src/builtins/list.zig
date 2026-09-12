@@ -430,7 +430,7 @@ pub const RocList = extern struct {
         }
 
         const capacity = utils.calculateCapacity(0, length, element_width);
-        const data_bytes = capacity * element_width;
+        const data_bytes = utils.checkedByteCount(capacity, element_width, roc_ops);
         return RocList{
             .bytes = utils.allocateWithRefcount(
                 data_bytes,
@@ -454,7 +454,7 @@ pub const RocList = extern struct {
             return empty();
         }
 
-        const data_bytes = length * element_width;
+        const data_bytes = utils.checkedByteCount(length, element_width, roc_ops);
         return RocList{
             .bytes = utils.allocateWithRefcount(
                 data_bytes,
@@ -1350,7 +1350,7 @@ pub fn shallowClone(
     const capacity = utils.calculateCapacity(0, desired_capacity, elem_size);
     const new_list = RocList{
         .bytes = utils.allocateWithRefcount(
-            capacity * elem_size,
+            utils.checkedByteCount(capacity, elem_size, roc_ops),
             elem_alignment,
             elements_refcounted,
             roc_ops,

@@ -875,6 +875,93 @@ pub inline fn geometricGrowth(old_capacity: usize, element_width: usize) usize {
     }
 }
 
+/// Refuse an allocation whose size arithmetic overflowed `usize`.
+///
+/// List and Str capacities and lengths come from the running Roc program, so
+/// the `count * element_width` (and `+ header`) that sizes a heap allocation is
+/// attacker-influenced. In a ReleaseFast build those operators are undefined on
+/// overflow: the product wraps to a small value, the allocation comes back far
+/// smaller than the collection's advertised capacity, and the next element
+/// write runs off the end of the buffer. That is a heap-overflow primitive
+/// reachable from ordinary Roc code, including the pure package code the
+/// compiler evaluates at compile time, so a wrap here can corrupt the
+/// compiler's or the running program's memory and escape Roc's guarantees.
+/// Detecting the overflow turns it into a deterministic, in-bounds crash.
+///
+/// These checks sit on the allocate/grow path, never per element, so they add a
+/// single predictable branch to an operation that already touches the allocator
+/// and stay off the hot loop.
+// `noinline` keeps the cold crash setup (message load plus the host call) out
+// of the caller's body, so the guard costs a hot path only the overflow branch
+// itself and does not bloat entrypoints that inline an allocation.
+noinline fn crashAllocationTooLarge(roc_ops: *RocOps) noreturn {
+    roc_ops.crash("Attempted to allocate a collection larger than the platform address space");
+    // Most hosts never return from `crash`: the compile-time host longjmps and
+    // a platform's handler terminates the process, so this is dead code there.
+    // Two return by design instead. The wasm host cannot longjmp across the VM
+    // boundary, and the LLVM backend on aarch64 Linux deliberately reports
+    // crashes by returning to its Zig caller, because longjmping through
+    // LLVM-generated frames is unreliable there (see `emitCrashBytes`, which
+    // emits `ret void` after the callback on that target, and
+    // `RuntimeHostEnv.longjmp_on_crash`).
+    //
+    // That contract covers Roc-level `crash` expressions, whose frames the
+    // backend emits and can return from. A Zig builtin has no such frame to
+    // unwind, so halting is the only remaining option -- the same one every
+    // other builtin crash site takes (see `str.repeatC`). `@trap()` makes it
+    // deterministic rather than leaving `unreachable` to fall through with the
+    // wrapped size and run off the buffer this guard exists to protect, and it
+    // costs nothing on the hot path because it sits behind the overflow branch
+    // in a cold function.
+    @trap();
+}
+
+/// Returns `count * element_width`, or crashes if the product overflows `usize`.
+/// See `crashAllocationTooLarge` for why the overflow must not be allowed to wrap.
+///
+/// The bound is a comparison rather than `@mulWithOverflow` because of how the
+/// builtins reach a compiled program: as unoptimized bitcode inlined into the
+/// caller's module. The intrinsic's `u1` flag is emitted as a `store i1` into
+/// its result tuple, and once SROA splits that tuple the flag lives in a
+/// byte-sized slot written by `store i1` and read by `load i8`. LLVM will not
+/// forward a one-bit store to an eight-bit load, so the slot is never promoted
+/// and the guard survives the whole pipeline as dead stores plus a branch on a
+/// constant, even where the sizes are known at compile time. A comparison keeps
+/// the check in SSA values, so it folds away entirely when the sizes are
+/// constant and costs a compare and a branch when they are not.
+pub inline fn checkedByteCount(count: usize, element_width: usize, roc_ops: *RocOps) usize {
+    if (byteCountOverflows(count, element_width)) crashAllocationTooLarge(roc_ops);
+    return count *% element_width;
+}
+
+/// Whether `count * element_width` would overflow `usize`.
+///
+/// Split out from `checkedByteCount` so the boundary itself can be tested: the
+/// crash path halts the process, so a test can reach this predicate but never
+/// the guard that acts on it.
+pub inline fn byteCountOverflows(count: usize, element_width: usize) bool {
+    // Monomorphization makes `element_width` a constant at nearly every call
+    // site, which folds this division to a constant bound. It only survives as
+    // a division where the width is genuinely dynamic, and there it sits on the
+    // allocation path, not per element.
+    return element_width != 0 and count > std.math.maxInt(usize) / element_width;
+}
+
+/// Returns `data_bytes + header_bytes`, or crashes if the sum overflows `usize`.
+/// See `crashAllocationTooLarge` for why the overflow must not be allowed to
+/// wrap, and `checkedByteCount` for why this is a comparison rather than
+/// `@addWithOverflow`. Here the comparison needs no division at all.
+pub inline fn checkedAllocLen(data_bytes: usize, header_bytes: usize, roc_ops: *RocOps) usize {
+    if (allocLenOverflows(data_bytes, header_bytes)) crashAllocationTooLarge(roc_ops);
+    return data_bytes +% header_bytes;
+}
+
+/// Whether `data_bytes + header_bytes` would overflow `usize`. Split out from
+/// `checkedAllocLen` for the same reason as `byteCountOverflows`.
+pub inline fn allocLenOverflows(data_bytes: usize, header_bytes: usize) bool {
+    return data_bytes > std.math.maxInt(usize) - header_bytes;
+}
+
 /// Allocates memory with space for a reference count, for C compatibility
 /// Thin wrapper around allocateWithRefcount that preserves the C calling convention
 pub fn allocateWithRefcountC(
@@ -901,7 +988,10 @@ pub fn allocateWithRefcount(
     const alignment = @max(ptr_width, element_alignment);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, element_alignment);
-    const length = extra_bytes + data_bytes;
+    // `data_bytes` is a Roc-controlled size; guard the header addition so an
+    // over-large request crashes deterministically instead of wrapping to a
+    // tiny allocation. See `crashAllocationTooLarge`.
+    const length = checkedAllocLen(data_bytes, extra_bytes, roc_ops);
 
     const new_bytes = @as([*]u8, @ptrCast(roc_ops.tryAlloc(length, alignment)));
 
@@ -939,8 +1029,17 @@ pub fn unsafeReallocate(
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, element_alignment);
 
+    // `new_length` is a Roc-controlled growth target, so guard its
+    // `count * width (+ header)`: a request that overflows `usize` must crash
+    // rather than wrap to a tiny allocation. See `crashAllocationTooLarge`.
+    const new_data_bytes = checkedByteCount(new_length, element_width, roc_ops);
+    const new_width = checkedAllocLen(new_data_bytes, extra_bytes, roc_ops);
+
+    // Every caller only ever grows, which is what lets `old_width` skip the
+    // same guard: it is bounded by the `new_width` just checked, so it cannot
+    // overflow either.
+    std.debug.assert(old_length <= new_length);
     const old_width = extra_bytes + old_length * element_width;
-    const new_width = extra_bytes + new_length * element_width;
 
     if (old_width >= new_width) {
         return source_ptr;
@@ -1378,6 +1477,60 @@ test "calculateCapacity with various inputs" {
 
     // Test growth logic when requesting exactly old_capacity + 1
     try std.testing.expectEqual(@as(usize, 8), calculateCapacity(4, 5, 1));
+}
+
+// The allocation size guards are written as comparisons rather than
+// `@mulWithOverflow`/`@addWithOverflow` so they fold away when the sizes are
+// known (see `checkedByteCount`). These tests hold the comparisons to exactly
+// the intrinsics' answer, because that equivalence is the whole safety claim:
+// a size that wraps `usize` must be rejected, not turned into a tiny
+// allocation the next write runs off the end of.
+test "byteCountOverflows agrees with the multiply overflow intrinsic" {
+    const max = std.math.maxInt(usize);
+    const widths = [_]usize{ 0, 1, 2, 3, 8, 16, 24, 4096, max / 2, max };
+    const counts = [_]usize{ 0, 1, 2, 3, 7, 8, 1000, max / 4096, max / 2, max - 1, max };
+    for (widths) |width| {
+        for (counts) |count| {
+            const expected = @mulWithOverflow(count, width)[1] != 0;
+            try std.testing.expectEqual(expected, byteCountOverflows(count, width));
+        }
+    }
+}
+
+test "allocLenOverflows agrees with the add overflow intrinsic" {
+    const max = std.math.maxInt(usize);
+    const headers = [_]usize{ 0, 1, 8, 16, 24, max / 2, max };
+    const sizes = [_]usize{ 0, 1, 8, 1000, max / 2, max - 24, max - 1, max };
+    for (headers) |header| {
+        for (sizes) |size| {
+            const expected = @addWithOverflow(size, header)[1] != 0;
+            try std.testing.expectEqual(expected, allocLenOverflows(size, header));
+        }
+    }
+}
+
+test "checked size helpers return exact values at the largest safe input" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+    const max = std.math.maxInt(usize);
+
+    // The largest count that still fits must be allowed through untouched: an
+    // off-by-one in the guard would crash here instead of returning.
+    for ([_]usize{ 1, 2, 3, 8, 4096 }) |width| {
+        const largest_safe = max / width;
+        try std.testing.expect(!byteCountOverflows(largest_safe, width));
+        try std.testing.expectEqual(largest_safe * width, checkedByteCount(largest_safe, width, ops));
+    }
+
+    // A zero element width can never overflow, whatever the count.
+    try std.testing.expectEqual(@as(usize, 0), checkedByteCount(max, 0, ops));
+
+    for ([_]usize{ 0, 8, 16, 24 }) |header| {
+        const largest_safe = max - header;
+        try std.testing.expect(!allocLenOverflows(largest_safe, header));
+        try std.testing.expectEqual(max, checkedAllocLen(largest_safe, header, ops));
+    }
 }
 
 test "allocateWithRefcount basic functionality" {
