@@ -12677,6 +12677,24 @@ outcome of emission order.
 
 ### In-Place List Transforms
 
+Loop append promotion carries a fill limit and, when needed, an ownership flag
+with each list. Every incoming definition of a promoted value must supply both
+the value and its metadata on the same control-flow edge. The pass classifies
+its existing value-flow edges once per candidate; validation and emission consume
+that classification. Tracked sources forward valid metadata, while sources
+entering the chain establish metadata for their actual allocation. A merged
+local's membership in the chain is not evidence about all of its definitions.
+
+An incoming alias or join argument transfers its ownership unit through the
+existing consuming `list_map_prepare_reuse` identity before querying uniqueness.
+ARC therefore preserves other live uses before the observation. Incoming
+operation results are measured after the operation, since it may replace the
+allocation or change its slice encoding. Measured ownership remains dynamic in
+loop versioning; it cannot authorize an unconditional jump to the unique body.
+Shared metadata locals are needed only for merged definitions, and tracked
+edges retain their existing hot path. Debug validation checks that every planned
+definition emitted its metadata.
+
 `List.map` may overwrite a uniquely owned input list's buffer instead of
 allocating an output list when the input and output item representations are
 interchangeable in one allocation. Fully concrete items require the same
