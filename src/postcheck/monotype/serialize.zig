@@ -28,6 +28,8 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 19: 128-bit type and evidence content hashes replace SHA-256,
+/// changing every serialized type digest byte and digest width.
 /// Version 18: callable-derived evidence belongs to its vector slot and no
 /// longer stores a parameter index from another scheme.
 /// Version 17: generated-codec specialization identities retain the explicit
@@ -49,8 +51,8 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Version 9: function metadata records whether a signature is independent
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
-/// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 18;
+/// content hash of exact compile-time evidence topology.
+pub const FORMAT_VERSION: u32 = 19;
 
 const SECTION_COUNT = 43;
 
@@ -1563,7 +1565,7 @@ fn writeConstData(hasher: *std.crypto.hash.sha2.Sha256, data: anytype) void {
     writeModuleId(hasher, @field(data, "arti" ++ "f" ++ "act"));
     writeConstOwner(hasher, data.owner);
     writeHashU32(hasher, @intFromEnum(data.template));
-    writeHashBytes32(hasher, data.source_scheme.bytes);
+    writeHashBytes16(hasher, data.source_scheme.bytes);
 }
 
 fn writeConstOwner(hasher: *std.crypto.hash.sha2.Sha256, owner: checked.ConstOwner) void {
@@ -1621,29 +1623,29 @@ fn writeOptionalProcedureUseTemplate(hasher: *std.crypto.hash.sha2.Sha256, use: 
 
 fn writeProcedureUseTemplate(hasher: *std.crypto.hash.sha2.Sha256, use: checked.ProcedureUseTemplate) void {
     writeProcedureBinding(hasher, use.binding);
-    writeHashBytes32(hasher, use.source_fn_ty_template.bytes);
+    writeHashBytes16(hasher, use.source_fn_ty_template.bytes);
     writeOptionalCheckedTypeId(hasher, use.source_fn_ty_payload);
 }
 
 fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) void {
     writeCallableIdentity(hasher, spec.identity.callable);
     writeHashBytes32(hasher, spec.identity.method_scope.bytes);
-    writeHashBytes32(hasher, spec.identity.source_fn_ty_digest.bytes);
-    writeHashBytes32(hasher, spec.identity.evidence_digest.bytes);
-    writeHashBytes32(hasher, spec.identity.codec_contract_digest.bytes);
+    writeHashBytes16(hasher, spec.identity.source_fn_ty_digest.bytes);
+    writeHashBytes16(hasher, spec.identity.evidence_digest.bytes);
+    writeHashBytes16(hasher, spec.identity.codec_contract_digest.bytes);
     if (spec.identity.codec_contract) |contract| {
         writeHashBool(hasher, true);
         writeHashBytes32(hasher, contract.module.bytes);
         writeHashU32(hasher, @intFromEnum(contract.derivation));
         writeHashU32(hasher, @intFromEnum(contract.kind));
-        writeHashBytes32(hasher, contract.constructor_ty_digest.bytes);
-        writeHashBytes32(hasher, contract.shape_ty_digest.bytes);
+        writeHashBytes16(hasher, contract.constructor_ty_digest.bytes);
+        writeHashBytes16(hasher, contract.shape_ty_digest.bytes);
     } else {
         writeHashBool(hasher, false);
     }
-    writeHashBytes32(hasher, spec.identity.request_fn_ty_digest.bytes);
-    writeHashBytes32(hasher, spec.request_fn_ty_digest.bytes);
-    writeHashBytes32(hasher, spec.solved_fn_ty_digest.bytes);
+    writeHashBytes16(hasher, spec.identity.request_fn_ty_digest.bytes);
+    writeHashBytes16(hasher, spec.request_fn_ty_digest.bytes);
+    writeHashBytes16(hasher, spec.solved_fn_ty_digest.bytes);
 }
 
 fn writeCallableIdentity(hasher: *std.crypto.hash.sha2.Sha256, callable: Ast.CallableIdentity) void {
@@ -1659,7 +1661,7 @@ fn writeCallableIdentity(hasher: *std.crypto.hash.sha2.Sha256, callable: Ast.Cal
             writeHashBytes32(hasher, site.module.bytes);
             writeHashU32(hasher, site.owner_proc_base);
             writeHashU32(hasher, site.owner_template);
-            writeHashBytes32(hasher, site.owner_fn_digest.bytes);
+            writeHashBytes16(hasher, site.owner_fn_digest.bytes);
             writeHashU32(hasher, site.site);
             if (site.default_root_module) |identity| {
                 writeHashBytes(hasher, "default_root");
@@ -1737,6 +1739,10 @@ fn writeHashOptionalBytes32(hasher: *std.crypto.hash.sha2.Sha256, bytes: ?[32]u8
     } else {
         writeHashBool(hasher, false);
     }
+}
+
+fn writeHashBytes16(hasher: *std.crypto.hash.sha2.Sha256, bytes: [16]u8) void {
+    hasher.update(&bytes);
 }
 
 fn writeHashBytes32(hasher: *std.crypto.hash.sha2.Sha256, bytes: [32]u8) void {

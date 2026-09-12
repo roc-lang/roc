@@ -3,6 +3,7 @@
 //! This is closed, monomorphic, and source-level dispatch-free.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const base = @import("base");
 const check = @import("check");
 const can = @import("can");
@@ -138,7 +139,7 @@ pub const NestedFn = struct {
 /// specialization. Equal callable/type requests with different evidence must
 /// remain distinct specializations.
 pub const EvidenceDigest = extern struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [16]u8 = [_]u8{0} ** 16,
 };
 
 /// The structural codec derivation whose checked call contract identifies a
@@ -282,7 +283,7 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
 /// Compute a digest for a Monotype function template. Takes the type store
 /// mutable because type digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
     writeBytes(&hasher, &template.evidence_digest.bytes);
@@ -298,8 +299,8 @@ pub fn fnEvidenceDigest(
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) EvidenceDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v4");
+    var hasher = TypeDigestHasher.init();
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v5");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
@@ -421,7 +422,7 @@ fn methodTargetIdentityEql(
 }
 
 fn writeMethodTarget(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *TypeDigestHasher,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
 ) void {
@@ -447,7 +448,7 @@ fn writeMethodTarget(
     writeBytes(hasher, &callable_key.bytes);
 }
 
-fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: static_dispatch.StructuralDerivation) void {
+fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispatch.StructuralDerivation) void {
     writeU8(hasher, @intFromEnum(derivation));
     switch (derivation) {
         .map, .map_effectful => |plan| {
@@ -458,7 +459,7 @@ fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: s
     }
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
     if (value) |actual| {
         writeU8(hasher, 1);
         writeU32(hasher, actual);
@@ -531,7 +532,7 @@ test "function evidence identity uses checked callable type keys" {
     ));
 }
 
-fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
+fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
     switch (fn_def) {
         .local_template => |template| {
             writeBytes(hasher, "local_template");
@@ -584,29 +585,29 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
     }
 }
 
-fn writeHostedFn(hasher: *std.crypto.hash.sha2.Sha256, hosted: HostedFn) void {
+fn writeHostedFn(hasher: *TypeDigestHasher, hosted: HostedFn) void {
     writeProcTemplate(hasher, hosted.template);
     writeU32(hasher, @intFromEnum(hosted.external_symbol_name));
     writeU32(hasher, hosted.dispatch_index);
 }
 
-fn writeProcTemplate(hasher: *std.crypto.hash.sha2.Sha256, template: names.ProcTemplate) void {
+fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     const module_digest = names.procTemplateModuleDigest(template);
     hasher.update(&module_digest.bytes);
     writeU32(hasher, @intFromEnum(template.proc_base));
     writeU32(hasher, @intFromEnum(template.template));
 }
 
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeU8(hasher: *std.crypto.hash.sha2.Sha256, value: u8) void {
+fn writeU8(hasher: *TypeDigestHasher, value: u8) void {
     hasher.update(&.{value});
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
@@ -2589,7 +2590,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     // Allocate distinct replay addresses with the same checked root key.
     var replay_types: [4]checked.CheckedTypeId = undefined;
     for (&replay_types) |*ty| {
-        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true);
+        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 16 }, true);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
     // Fill the proof table and its indices before building stored evidence.
