@@ -95,39 +95,81 @@ cd "$repo_root"
 # inside the one-time `List.repeat` setup -- a flag stored to the stack and a
 # branch on a constant zero -- plus the cold crash-helper call each branch
 # targets, none of which did any work.
+# x64musl then dropped from 98 to 97 when this check stopped counting the int3
+# padding between the entrypoint and the next symbol. That padding tracks the
+# procedure's size modulo its alignment rather than its code, so it could move
+# the count without any code changing and could equally hide a change that did.
+# No code changed with it. arm64musl has always been measured by symbol size
+# and so never included it.
 expectations=(
-    "x64musl:98"
+    "x64musl:97"
     "arm64musl:100"
 )
 
 failed=0
 
-count_objdump_instructions() {
-    objdump -d --no-show-raw-insn "$1" | awk '
-        /^[0-9a-f]+ <_?roc_main>/ { in_proc = 1; found = 1; next }
-        /^[0-9a-f]+ </           { in_proc = 0 }
-        in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
+# Prints the entrypoint symbol's start address and size, both hexadecimal.
+# Both counters work from this: the symbol's extent is what separates the
+# procedure's own code from the alignment padding that follows it.
+roc_main_extent() {
+    objdump -t "$1" | awk '
+        $NF ~ /^_?roc_main$/ {
+            matches++
+            start = $1
+            size = $(NF - 1)
+        }
         END {
-            if (!found) exit 1
-            print count + 0
+            if (matches != 1) exit 1
+            print start, size
+        }
+    '
+}
+
+count_objdump_instructions() {
+    local extent
+    local start_hex
+    local size_hex
+    local start_bytes
+    local stop_bytes
+
+    extent="$(roc_main_extent "$1")" || return 1
+    start_hex="${extent%% *}"
+    size_hex="${extent##* }"
+    start_hex="${start_hex#0x}"
+    size_hex="${size_hex#0x}"
+    if [[ ! "$start_hex" =~ ^[0-9a-fA-F]+$ ]] || [[ ! "$size_hex" =~ ^[0-9a-fA-F]+$ ]]; then
+        return 1
+    fi
+
+    start_bytes=$((16#$start_hex))
+    stop_bytes=$((start_bytes + 16#$size_hex))
+
+    # Disassembling the whole section runs past the procedure's last
+    # instruction into the int3 bytes that pad it out to the next symbol's
+    # alignment. Those disassemble as instructions, so counting them would tie
+    # this number to the procedure's size modulo that alignment rather than to
+    # its code: a one-instruction change that happens to cross an alignment
+    # boundary would move the count by far more, and a real change could hide
+    # by shifting the padding the other way. Bounding the disassembly by the
+    # symbol's own extent counts what the AArch64 counter below counts -- the
+    # procedure, and nothing after it.
+    objdump -d --no-show-raw-insn \
+        --start-address="$start_bytes" --stop-address="$stop_bytes" "$1" | awk '
+        /^[[:space:]]+[0-9a-f]+:/ { count++ }
+        END {
+            if (count == 0) exit 1
+            print count
         }
     '
 }
 
 count_aarch64_instructions() {
+    local extent
     local size_hex
     local size_bytes
 
-    size_hex="$(objdump -t "$1" | awk '
-        $NF ~ /^_?roc_main$/ {
-            matches++
-            size = $(NF - 1)
-        }
-        END {
-            if (matches != 1) exit 1
-            print size
-        }
-    ')"
+    extent="$(roc_main_extent "$1")" || return 1
+    size_hex="${extent##* }"
     size_hex="${size_hex#0x}"
     if [[ ! "$size_hex" =~ ^[0-9a-fA-F]+$ ]]; then
         return 1
