@@ -12714,9 +12714,11 @@ Builtin.roc first calls the consuming `list_map_prepare_reuse` primitive, then
 matches on `list_map_can_reuse` for the returned list. The prepare primitive is
 an ownership-only identity: its LIR `RcEffect` consumes the input list and
 declares that the result aliases that consumed ownership unit, while its runtime
-implementation only copies the list handle. This forces ARC to preserve every
-later use before the transfer. The subsequent reuse query can therefore observe
-the refcount only after all live ownership units are present; leaving the query
+implementation only copies the list handle. Range analysis preserves the input's
+value identity and proven length bounds across this ownership transfer. The
+consuming operation forces ARC to preserve every later use before the transfer.
+The subsequent reuse query can therefore observe the refcount only after all
+live ownership units are present; leaving the query
 on the original, unconsumed argument would allow ARC to move a preservation
 retain after that observation and incorrectly report a shared buffer as unique.
 
