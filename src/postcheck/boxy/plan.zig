@@ -247,6 +247,9 @@ pub const TypeRepresentation = struct {
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.
     inspect_opaque: bool = false,
+    /// Public source opacity boxes record backings that contain callables.
+    /// Selected while resolving checked ABI shapes, before layout commitment.
+    abi_boxed_backing: bool = false,
     /// Inspection is demanded at this representation, including when its
     /// concrete value is supplied through a generic worker boundary.
     inspect_demanded: bool = false,
@@ -793,6 +796,8 @@ pub const ProgramPlan = struct {
     type_reps: std.ArrayList(TypeRepBinding),
     stored_type_reps: std.ArrayList(StoredTypeRepBinding),
     representations: std.ArrayList(TypeRepresentation),
+    /// Checked-source ABI shapes, requested only at public boundaries.
+    host_reps: collections.DenseMap(TypeRepId, TypeRepId),
     children: std.ArrayList(RepChild),
     tag_variants: std.ArrayList(TagVariant),
     declared_fields: std.ArrayList(DeclaredField),
@@ -844,6 +849,7 @@ pub const ProgramPlan = struct {
             .type_reps = .empty,
             .stored_type_reps = .empty,
             .representations = .empty,
+            .host_reps = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .children = .empty,
             .tag_variants = .empty,
             .declared_fields = .empty,
@@ -863,6 +869,11 @@ pub const ProgramPlan = struct {
             .dictionary_method_slots = .empty,
             .static_fns = .empty,
         };
+    }
+
+    /// Exact ABI shape for an explicitly requested worker/source representation.
+    pub fn hostRepFor(self: *const ProgramPlan, rep: TypeRepId) TypeRepId {
+        return self.host_reps.get(rep) orelse boxyPlanInvariant("missing checked host ABI request");
     }
 
     pub fn deinit(self: *ProgramPlan) void {
@@ -885,6 +896,7 @@ pub const ProgramPlan = struct {
         self.tag_variants.deinit(self.allocator);
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
+        self.host_reps.deinit();
         self.type_reps.deinit(self.allocator);
         self.stored_type_reps.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
@@ -1343,9 +1355,29 @@ pub fn analyzeProgram(
     // Matching hidden call arguments against concrete use-site types can
     // analyze new dynamic representations; give any that were created a
     // descriptor requirement so their worker-mode layout is well defined.
-    try builder.materializeDescriptorRequirements();
+    try builder.materializeHostAbiRequests();
     builder.propagateDynamicRequirements();
+    try builder.materializeDescriptorRequirements();
 
+    const out = builder.plan;
+    builder.plan = ProgramPlan.init(allocator);
+    return out;
+}
+
+/// Resolve checked ABI requests without discovering workers or private types.
+/// Glue uses the same checked-source resolver as Boxy host ABI boundaries.
+pub fn analyzeHostAbi(allocator: Allocator, input: ProgramInput) Allocator.Error!ProgramPlan {
+    var builder = Builder.init(allocator, input);
+    defer builder.deinit();
+    builder.host_mode = true;
+    for (input.layout_requests) |ty| {
+        const rep = try builder.analyzeHostType(.{ .source = typeRef(builder.root_view, ty), .context = null });
+        try builder.plan.root_reps.append(allocator, rep);
+        try builder.plan.host_reps.put(rep, rep);
+    }
+    try builder.finalizeHostNominalStorage();
+    builder.propagateDynamicRequirements();
+    try builder.materializeDescriptorRequirements();
     const out = builder.plan;
     builder.plan = ProgramPlan.init(allocator);
     return out;
@@ -1415,6 +1447,38 @@ const Builder = struct {
     scheme_dictionary_uses: std.ArrayList(struct { worker: WorkerPlanId, param: HiddenDictionaryParam }),
     active_worker: ?WorkerPlanId,
     inspect_demand_count: usize = 0,
+    host_requests: std.ArrayList(TypeRepId) = .empty,
+    host_mode: bool = false,
+    host_context: ?u32 = null,
+    host_types: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
+    host_optional_slots: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
+    host_bindings: std.AutoHashMapUnmanaged(HostTypeKey, HostTypeKey) = .{},
+    host_nominals: std.HashMapUnmanaged(HostNominalKey, HostNominalEntry, HostNominalKey.Context, 80) = .{},
+
+    const HostTypeKey = struct {
+        source: CheckedTypeIdentity,
+        context: ?u32,
+    };
+    const HostNominalEntry = struct { context: u32, rep: TypeRepId };
+    const HostNominalKey = struct {
+        module: checked.ModuleId,
+        declaration: checked.CheckedNominalDeclarationId,
+        args: []const TypeRepId,
+
+        const Context = struct {
+            pub fn hash(_: @This(), key: HostNominalKey) u64 {
+                var hasher = std.hash.Wyhash.init(0);
+                std.hash.autoHash(&hasher, key.module);
+                std.hash.autoHash(&hasher, key.declaration);
+                hasher.update(std.mem.sliceAsBytes(key.args));
+                return hasher.final();
+            }
+            pub fn eql(_: @This(), a: HostNominalKey, b: HostNominalKey) bool {
+                return moduleKeyEqual(a.module, b.module) and a.declaration == b.declaration and
+                    std.mem.eql(TypeRepId, a.args, b.args);
+            }
+        };
+    };
 
     fn init(allocator: Allocator, input: ProgramInput) Builder {
         const root_view = if (input.root_view) |root_view|
@@ -1448,6 +1512,13 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        var host_nominal_keys = self.host_nominals.keyIterator();
+        while (host_nominal_keys.next()) |key| self.allocator.free(key.args);
+        self.host_nominals.deinit(self.allocator);
+        self.host_bindings.deinit(self.allocator);
+        self.host_types.deinit(self.allocator);
+        self.host_optional_slots.deinit(self.allocator);
+        self.host_requests.deinit(self.allocator);
         self.worker_dictionary_uses.deinit(self.allocator);
         var scheme_params = self.scheme_dictionary_params.valueIterator();
         while (scheme_params.next()) |params| self.allocator.free(params.*);
@@ -1617,6 +1688,9 @@ const Builder = struct {
         );
         const node = request.node orelse stored.node;
         const root_rep = self.plan.root_reps.items[self.plan.root_reps.items.len - 1];
+        // ConstStore already supplies an exact monomorphic source shape. Keep
+        // its callable identities and concrete arguments at the data boundary.
+        try self.plan.host_reps.put(root_rep, root_rep);
         var visited = std.AutoHashMap(StaticConstVisit, void).init(self.allocator);
         defer visited.deinit();
         try self.analyzeStaticConstNode(store_view, node, root_rep, stored.root_type, &visited);
@@ -4133,7 +4207,180 @@ const Builder = struct {
         };
     }
 
+    fn materializeHostAbiRequests(self: *Builder) Allocator.Error!void {
+        // All worker discovery is complete. This traversal is confined to public
+        // boundaries and reads checked types, never erased representation children.
+        for (self.plan.roots.items) |root| {
+            if (root.wrapper_kind == .host_shaped_wrapper) _ = try self.requestHostRep(root.host_rep);
+        }
+        const request_start = self.plan.roots.items.len;
+        for (self.plan.root_reps.items[request_start..]) |rep| _ = try self.requestHostRep(rep);
+        for (self.host_requests.items) |rep| _ = try self.requestHostRep(rep);
+        try self.finalizeHostNominalStorage();
+    }
+
+    fn requestHostRep(self: *Builder, worker_rep: TypeRepId) Allocator.Error!TypeRepId {
+        if (self.plan.host_reps.get(worker_rep)) |rep| return rep;
+        const source = self.plan.representations.items[@intFromEnum(worker_rep)].source_type;
+        const saved_mode = self.host_mode;
+        const saved_context = self.host_context;
+        self.host_mode = true;
+        self.host_context = null;
+        defer {
+            self.host_mode = saved_mode;
+            self.host_context = saved_context;
+        }
+        const rep = try self.analyzeHostType(.{ .source = source, .context = null });
+        try self.plan.host_reps.put(worker_rep, rep);
+        return rep;
+    }
+
+    fn resolveHostBinding(self: *Builder, source: HostTypeKey) HostTypeKey {
+        // Bindings point to already-resolved arguments in an outer context.
+        // They cannot form a cycle or refer to the context being constructed.
+        return self.host_bindings.get(source) orelse source;
+    }
+
+    fn analyzeHostType(self: *Builder, input: HostTypeKey) Allocator.Error!TypeRepId {
+        const key = self.resolveHostBinding(input);
+        if (self.host_types.get(key)) |rep| return rep;
+        const saved_context = self.host_context;
+        self.host_context = key.context;
+        defer self.host_context = saved_context;
+        const view = self.moduleForId(key.source.module);
+        const payload = view.checked_types.payload(key.source.ty);
+        // These checked leaves have no substitution-dependent children. Reuse
+        // their already committed representation identity when it is present.
+        const leaf = switch (payload) {
+            .empty_record, .empty_tag_union => true,
+            .nominal => |nominal| if (nominal.builtin) |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                .primitive, .bool_tag_union => true,
+                .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
+            } else false,
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .tag_union => false,
+        };
+        if (leaf) {
+            if (self.by_type.get(key.source)) |existing| {
+                try self.host_types.put(self.allocator, key, existing);
+                return existing;
+            }
+        }
+        if (payload == .nominal) {
+            const nominal = payload.nominal;
+            const opens_backing = if (nominal.builtin) |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                .primitive, .bool_tag_union, .list, .box, .field, .fields, .parse_tag_union_spec => false,
+                .try_nominal, .dict, .set, .iterator, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => true,
+            } else nominal.representation != .opaque_without_backing;
+            if (opens_backing) return try self.analyzeHostNominal(key, view, nominal);
+        }
+        const rep: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+        try self.host_types.put(self.allocator, key, rep);
+        try self.plan.representations.append(self.allocator, .{ .source_type = key.source, .kind = .in_progress });
+        const shape = switch (payload) {
+            .flex, .rigid => |variable| hostVariableRepresentation(key.source, variable),
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.buildRepresentation(view, key.source.ty),
+        };
+        self.plan.representations.items[@intFromEnum(rep)] = shape;
+        return rep;
+    }
+
+    fn hostVariableRepresentation(source: CheckedTypeIdentity, variable: checked.CheckedTypeVariable) TypeRepresentation {
+        if (variable.numeric_default_phase) |phase| {
+            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                boxyPlanInvariant("checking-finalized numeric variable reached checked ABI unresolved");
+            return .{ .source_type = source, .kind = .{ .primitive = switch (target) {
+                .dec => .dec,
+                .str => .str,
+            } } };
+        }
+        return .{ .source_type = source, .kind = if (variable.row_default == .empty_record) .empty_record else .empty_tag_union };
+    }
+
+    fn finalizeHostNominalStorage(self: *Builder) Allocator.Error!void {
+        var visited = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer visited.deinit();
+        var nominals = self.host_nominals.valueIterator();
+        while (nominals.next()) |entry| {
+            const rep = self.plan.representations.items[@intFromEnum(entry.rep)];
+            if (!rep.inspect_opaque) continue;
+            const backing = self.plan.childSlice(rep.children)[0].rep;
+            if (self.plan.representations.items[@intFromEnum(backing)].kind != .record) continue;
+            visited.clearRetainingCapacity();
+            self.plan.representations.items[@intFromEnum(entry.rep)].abi_boxed_backing = try self.hostShapeContainsCallable(backing, &visited);
+        }
+    }
+
+    fn hostShapeContainsCallable(self: *Builder, rep_id: TypeRepId, visited: *collections.DenseMap(TypeRepId, void)) Allocator.Error!bool {
+        if (visited.contains(rep_id)) return false;
+        try visited.put(rep_id, {});
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .erased_callable) return true;
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (childCarriesRuntimeDescriptor(child.role) and try self.hostShapeContainsCallable(child.rep, visited)) return true;
+        }
+        return false;
+    }
+
+    fn analyzeHostNominal(self: *Builder, key: HostTypeKey, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!TypeRepId {
+        const lookup: NominalDeclarationLookup = switch (nominal.representation) {
+            .builtin => .{
+                .view = view,
+                .declaration = view.checked_types.nominalDeclarationForPayload(nominal) orelse
+                    boxyPlanInvariant("checked builtin ABI nominal has no declaration"),
+                .padding_view = view,
+                .padding_types = &.{},
+            },
+            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => self.nominalDeclarationFor(view, nominal) orelse
+                boxyPlanInvariant("checked ABI nominal has no declaration"),
+        };
+        const formals = lookup.declaration.formalArgs(lookup.view.checked_types);
+        if (formals.len != nominal.args.len) boxyPlanInvariant("checked ABI nominal argument arity mismatch");
+        const args = try self.allocator.alloc(TypeRepId, nominal.args.len);
+        var args_owned = true;
+        defer if (args_owned) self.allocator.free(args);
+        const sources = try self.allocator.alloc(HostTypeKey, nominal.args.len);
+        defer self.allocator.free(sources);
+        for (nominal.args, args, sources) |arg, *rep, *source| {
+            source.* = self.resolveHostBinding(.{ .source = typeRef(view, arg), .context = key.context });
+            rep.* = try self.analyzeHostType(source.*);
+        }
+        const nominal_key: HostNominalKey = .{ .module = lookup.view.key, .declaration = lookup.declaration.id, .args = args };
+        if (self.host_nominals.get(nominal_key)) |existing| {
+            try self.host_types.put(self.allocator, key, existing.rep);
+            return existing.rep;
+        }
+        const context: u32 = @intCast(self.host_nominals.count());
+        const rep: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+        try self.host_nominals.put(self.allocator, nominal_key, .{ .context = context, .rep = rep });
+        args_owned = false;
+        try self.host_types.put(self.allocator, key, rep);
+        try self.plan.representations.append(self.allocator, .{ .source_type = key.source, .kind = .in_progress });
+        for (formals, sources) |formal, source| {
+            try self.host_bindings.put(self.allocator, .{ .source = typeRef(lookup.view, formal), .context = context }, source);
+        }
+        self.host_context = context;
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
+        const backing: TypeSource = .{ .view = lookup.view, .ty = lookup.declaration.backing };
+        try self.appendPendingChildFromSource(&children, .nominal_backing, backing);
+        for (args, sources, 0..) |arg, source, index| {
+            try children.append(self.allocator, .{ .role = .{ .nominal_arg = @intCast(index) }, .source_type = source.source, .rep = arg });
+        }
+        const declared_fields = try self.appendNominalDeclaredFields(view, nominal, backing);
+        const child_span = try self.commitPendingChildren(children.items);
+        self.plan.representations.items[@intFromEnum(rep)] = .{
+            .source_type = key.source,
+            .kind = .{ .nominal = if (nominal.builtin != null) .builtin_other else .transparent },
+            .children = child_span,
+            .declared_fields = declared_fields,
+            .record_field_order = if (self.nominalPaddingSource(view, nominal) != null) .declared else .structural,
+            .inspect_opaque = nominal.is_opaque,
+        };
+        return rep;
+    }
+
     fn analyzeType(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
+        if (self.host_mode) return self.analyzeHostType(.{ .source = typeRef(view, ty), .context = self.host_context });
         const source_type = typeRef(view, ty);
         const entry = try self.by_type.getOrPut(source_type);
         if (entry.found_existing) return entry.value_ptr.*;
@@ -4169,7 +4416,10 @@ const Builder = struct {
             .nominal => |nominal| try self.nominalRepresentation(view, source_type, nominal),
             .function => |function| try self.functionRepresentation(view, source_type, function),
             .empty_record => .{ .source_type = source_type, .kind = .empty_record },
-            .tag_union => |tag_union| try self.tagUnionRepresentation(view, source_type, tag_union),
+            .tag_union => |tag_union| if (self.host_mode)
+                try self.hostTagUnionRepresentation(view, source_type, tag_union)
+            else
+                try self.tagUnionRepresentation(view, source_type, tag_union),
             .empty_tag_union => .{ .source_type = source_type, .kind = .empty_tag_union },
         };
     }
@@ -4588,7 +4838,7 @@ const Builder = struct {
         constraints: []const checked.CheckedStaticDispatchConstraint,
         kind: DynamicKind,
     ) Allocator.Error!TypeRepresentation {
-        const dictionaries = try self.appendDictionaryRequirements(source_type, constraints);
+        const dictionaries = if (self.host_mode) Span.empty() else try self.appendDictionaryRequirements(source_type, constraints);
         return .{
             .source_type = source_type,
             .kind = .{ .dynamic = kind },
@@ -4633,7 +4883,17 @@ const Builder = struct {
         // backings, which the checker keeps in source-declared order, are
         // canonicalized here so a value pairs fields identically on both sides of
         // an erased structural/nominal boundary.
-        sortRecordFieldChildrenByName(view, children.items);
+        if (self.host_mode and view.canonical_names != null) {
+            std.mem.sort(RepChild, children.items, self, struct {
+                fn lessThan(builder: *Builder, a: RepChild, b: RepChild) bool {
+                    const a_names = builder.moduleForId(a.source_type.module).canonical_names.?;
+                    const b_names = builder.moduleForId(b.source_type.module).canonical_names.?;
+                    return std.mem.lessThan(u8, a_names.recordFieldLabelText(a.role.record_field), b_names.recordFieldLabelText(b.role.record_field));
+                }
+            }.lessThan);
+        } else {
+            sortRecordFieldChildrenByName(view, children.items);
+        }
         const child_span = try self.commitPendingChildren(children.items);
 
         if (!closed) {
@@ -4675,6 +4935,105 @@ const Builder = struct {
         std.mem.sort(RepChild, children, SortContext{ .names = names }, SortContext.lessThan);
     }
 
+    /// Flatten checked rows under their explicit ABI substitution context.
+    fn appendHostRecordRows(self: *Builder, children: *std.ArrayList(RepChild), view: ModuleView, fields: []const checked.CheckedRecordField, ext: ?checked.CheckedTypeId) Allocator.Error!bool {
+        const saved_context = self.host_context;
+        defer self.host_context = saved_context;
+        for (fields) |field| try self.appendRecordFieldChild(children, view, field);
+        var current: ?HostTypeKey = if (ext) |ty| .{ .source = typeRef(view, ty), .context = saved_context } else null;
+        var seen = std.AutoHashMap(HostTypeKey, void).init(self.allocator);
+        defer seen.deinit();
+        while (current) |input| {
+            const key = self.resolveHostBinding(input);
+            const entry = try seen.getOrPut(key);
+            if (entry.found_existing) boxyPlanInvariant("cyclic checked ABI record row");
+            self.host_context = key.context;
+            const row_view = self.moduleForId(key.source.module);
+            switch (row_view.checked_types.payload(key.source.ty)) {
+                .empty_record => return true,
+                .record => |row| {
+                    // The checked empty-row fixpoint is an empty record whose
+                    // extension is itself. It contributes no additional fields.
+                    if (row.fields.len == 0 and row.ext == key.source.ty) return true;
+                    for (row.fields) |field| try self.appendRecordFieldChild(children, row_view, field);
+                    current = .{ .source = typeRef(row_view, row.ext), .context = key.context };
+                },
+                .record_unbound => |row_fields| {
+                    for (row_fields) |field| try self.appendRecordFieldChild(children, row_view, field);
+                    return true;
+                },
+                .alias => |alias| current = .{ .source = typeRef(row_view, alias.backing), .context = key.context },
+                .flex, .rigid => |variable| return variable.row_default == .empty_record,
+                .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => boxyPlanInvariant("checked ABI record extension is not a record row"),
+            }
+        }
+        return true;
+    }
+
+    fn hostTagUnionRepresentation(self: *Builder, view: ModuleView, source_type: CheckedTypeIdentity, initial: checked.CheckedTagUnionType) Allocator.Error!TypeRepresentation {
+        const PendingTag = struct { view: ModuleView, context: ?u32, tag: checked.CheckedTag };
+        var tags = std.ArrayList(PendingTag).empty;
+        defer tags.deinit(self.allocator);
+        const saved_context = self.host_context;
+        defer self.host_context = saved_context;
+        for (initial.tags) |tag| try tags.append(self.allocator, .{ .view = view, .context = saved_context, .tag = tag });
+        var current: HostTypeKey = .{ .source = typeRef(view, initial.ext), .context = saved_context };
+        var seen = std.AutoHashMap(HostTypeKey, void).init(self.allocator);
+        defer seen.deinit();
+        var open_extension: ?HostTypeKey = null;
+        while (true) {
+            current = self.resolveHostBinding(current);
+            const entry = try seen.getOrPut(current);
+            if (entry.found_existing) boxyPlanInvariant("cyclic checked ABI tag row");
+            const row_view = self.moduleForId(current.source.module);
+            switch (row_view.checked_types.payload(current.source.ty)) {
+                .empty_tag_union => break,
+                .tag_union => |row| {
+                    for (row.tags) |tag| try tags.append(self.allocator, .{ .view = row_view, .context = current.context, .tag = tag });
+                    current.source = typeRef(row_view, row.ext);
+                },
+                .alias => |alias| current.source = typeRef(row_view, alias.backing),
+                .flex, .rigid => |variable| {
+                    if (variable.row_default != .empty_tag_union) open_extension = current;
+                    break;
+                },
+                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked ABI tag extension is not a tag row"),
+            }
+        }
+        if (view.canonical_names != null) std.mem.sort(PendingTag, tags.items, {}, struct {
+            fn lessThan(_: void, a: PendingTag, b: PendingTag) bool {
+                return std.mem.lessThan(u8, a.view.canonical_names.?.tagLabelText(a.tag.name), b.view.canonical_names.?.tagLabelText(b.tag.name));
+            }
+        }.lessThan);
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
+        var variants = std.ArrayList(TagVariant).empty;
+        defer variants.deinit(self.allocator);
+        for (tags.items) |entry| {
+            self.host_context = entry.context;
+            const start: u32 = @intCast(children.items.len);
+            for (entry.tag.argsSlice(entry.view.checked_types), 0..) |arg, index| {
+                try self.appendPendingChild(&children, entry.view, .{ .tag_payload = .{ .tag = entry.tag.name, .index = @intCast(index) } }, arg);
+            }
+            try variants.append(self.allocator, .{ .name = entry.tag.name, .name_module = entry.view.key, .payloads = .{ .start = start, .len = entry.tag.args_len } });
+        }
+        if (open_extension) |ext| {
+            self.host_context = ext.context;
+            try self.appendPendingChildFromSource(&children, .tag_ext, .{ .view = self.moduleForId(ext.source.module), .ty = ext.source.ty });
+        }
+        const child_span = try self.commitPendingChildren(children.items);
+        for (variants.items) |*variant| variant.payloads.start += child_span.start;
+        const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
+        try self.plan.tag_variants.appendSlice(self.allocator, variants.items);
+        return .{
+            .source_type = source_type,
+            .kind = if (open_extension != null) .{ .dynamic = .flex } else .tag_union,
+            .children = child_span,
+            .tag_variants = .{ .start = variant_start, .len = @intCast(variants.items.len) },
+            .contains_dynamic = open_extension != null,
+        };
+    }
+
     fn appendRecordRowChildren(
         self: *Builder,
         children: *std.ArrayList(RepChild),
@@ -4682,6 +5041,7 @@ const Builder = struct {
         fields: []const checked.CheckedRecordField,
         ext: ?checked.CheckedTypeId,
     ) Allocator.Error!bool {
+        if (self.host_mode) return self.appendHostRecordRows(children, view, fields, ext);
         for (fields) |field| {
             try self.appendRecordFieldChild(children, view, field);
         }
@@ -4762,7 +5122,13 @@ const Builder = struct {
         payload_ty: checked.CheckedTypeId,
     ) Allocator.Error!TypeRepId {
         const source_type = typeRef(view, payload_ty);
-        const entry = try self.optional_slots.getOrPut(source_type);
+        const entry: struct { found_existing: bool, value_ptr: *TypeRepId } = if (self.host_mode) blk: {
+            const slot = try self.host_optional_slots.getOrPut(self.allocator, .{ .source = source_type, .context = self.host_context });
+            break :blk .{ .found_existing = slot.found_existing, .value_ptr = slot.value_ptr };
+        } else blk: {
+            const slot = try self.optional_slots.getOrPut(source_type);
+            break :blk .{ .found_existing = slot.found_existing, .value_ptr = slot.value_ptr };
+        };
         if (entry.found_existing) return entry.value_ptr.*;
 
         const rep_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
@@ -9991,7 +10357,7 @@ const Builder = struct {
         if (host_function.args.len != worker_function.args.len) {
             boxyPlanInvariant("hosted host signature arity disagreed with worker signature");
         }
-        _ = try self.analyzeType(view, host_capability.host_checked_fn_root);
+        try self.host_requests.append(self.allocator, try self.analyzeType(view, host_capability.host_checked_fn_root));
         for (host_function.args) |arg| {
             _ = try self.analyzeType(view, arg);
         }
@@ -13907,6 +14273,8 @@ test "boxy planner propagates dynamic descriptor requirements through records" {
     try std.testing.expect(record.contains_dynamic);
     try std.testing.expect(record.descriptor != null);
     try std.testing.expectEqual(@as(usize, 2), plan.childSlice(record.children).len);
+    const host_record = plan.representations.items[@intFromEnum(plan.hostRepFor(plan.root_reps.items[0]))];
+    try std.testing.expect(host_record.descriptor == null);
     try std.testing.expectEqual(@as(usize, 2), plan.descriptors.items.len);
     try std.testing.expectEqual(DescriptorReason.aggregate_contains_dynamic, plan.descriptors.items[@intFromEnum(record.descriptor.?)].reason);
 }
@@ -14014,12 +14382,14 @@ test "boxy planner preserves undetermined record field kind identity in a presen
 test "boxy planner represents open record rows dynamically" {
     const gpa = std.testing.allocator;
 
+    // Open rows are explicit checked variables, not cyclic structural rows.
     const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .flex = .{} },
         .{ .record = .{ .fields = .{}, .ext = @enumFromInt(fixtureTableIndex(0)) } },
     };
     const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
 
-    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0)))}, .{});
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(1)))}, .{});
     defer plan.deinit();
 
     const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
@@ -14031,12 +14401,14 @@ test "boxy planner represents open record rows dynamically" {
 test "boxy planner represents open tag-union rows dynamically" {
     const gpa = std.testing.allocator;
 
+    // Open rows are explicit checked variables, not cyclic structural rows.
     const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .flex = .{} },
         .{ .tag_union = .{ .tags = .{}, .ext = @enumFromInt(fixtureTableIndex(0)) } },
     };
     const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
 
-    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0)))}, .{});
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(1)))}, .{});
     defer plan.deinit();
 
     const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];

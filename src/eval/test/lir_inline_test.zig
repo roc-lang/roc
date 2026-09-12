@@ -10233,7 +10233,7 @@ test "issue 11290: empty and nested containers retain distinct type arguments" {
     , 1);
 }
 
-fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) !void {
+fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
     const allocator = std.testing.allocator;
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{

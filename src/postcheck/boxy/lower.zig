@@ -1064,13 +1064,50 @@ const StaticDescInstantiationEntry = struct {
     worker_rep: Plan.TypeRepId,
     source_rep: ?Plan.TypeRepId,
     desc: LIR.BoxyTypeDescId,
+    env: u32,
 };
 
 const StaticDescInstantiationContext = struct {
     entries: std.ArrayList(StaticDescInstantiationEntry) = .empty,
+    environments: std.ArrayList(Environment) = .empty,
+    env: u32 = 0,
+
+    const Binding = struct {
+        formal: Plan.TypeRepId,
+        actual: Plan.TypeRepId,
+        source: ?Plan.TypeRepId,
+        env: u32,
+    };
+    const Environment = struct { parent: u32, binding: Binding };
+
+    fn bound(self: *const StaticDescInstantiationContext, rep: Plan.TypeRepId) ?Binding {
+        var env = self.env;
+        while (env != 0) {
+            const environment = self.environments.items[env - 1];
+            if (environment.binding.formal == rep) return environment.binding;
+            env = environment.parent;
+        }
+        return null;
+    }
+
+    fn bind(self: *StaticDescInstantiationContext, allocator: Allocator, binding: Binding) Allocator.Error!void {
+        if (self.bound(binding.formal)) |existing| {
+            if (std.meta.eql(existing, binding)) return;
+        }
+        const key = Environment{ .parent = self.env, .binding = binding };
+        for (self.environments.items, 0..) |environment, index| {
+            if (std.meta.eql(environment, key)) {
+                self.env = @intCast(index + 1);
+                return;
+            }
+        }
+        try self.environments.append(allocator, key);
+        self.env = @intCast(self.environments.items.len);
+    }
 
     fn deinit(self: *StaticDescInstantiationContext, allocator: Allocator) void {
         self.entries.deinit(allocator);
+        self.environments.deinit(allocator);
     }
 
     fn get(
@@ -1079,7 +1116,7 @@ const StaticDescInstantiationContext = struct {
         source_rep: ?Plan.TypeRepId,
     ) ?LIR.BoxyTypeDescId {
         for (self.entries.items) |entry| {
-            if (entry.worker_rep == worker_rep and entry.source_rep == source_rep) return entry.desc;
+            if (entry.worker_rep == worker_rep and entry.source_rep == source_rep and entry.env == self.env) return entry.desc;
         }
         return null;
     }
@@ -1095,6 +1132,7 @@ const StaticDescInstantiationContext = struct {
             .worker_rep = worker_rep,
             .source_rep = source_rep,
             .desc = desc,
+            .env = self.env,
         });
     }
 };
@@ -2810,12 +2848,24 @@ const ProcedureBuilder = struct {
         context: *StaticDescInstantiationContext,
     ) Allocator.Error!LIR.BoxyTypeDescId {
         const identity_worker = self.descriptorStorageRep(worker_rep_id);
+        if (context.bound(identity_worker)) |binding| {
+            const outer_env = context.env;
+            context.env = binding.env;
+            defer context.env = outer_env;
+            return try self.typeDescForWorkerRepWithSourceMap(binding.actual, binding.source, descriptor_sources, context);
+        }
         const effective_source = self.effectiveStaticDescriptorSource(identity_worker, source_rep_id, descriptor_sources);
         const identity_source = if (effective_source) |source| self.descriptorIdentityRep(source) else null;
 
         const worker_rep = self.plan.representations.items[@intFromEnum(identity_worker)];
         if (worker_rep.kind == .dynamic) {
             if (identity_source) |source| {
+                if (context.bound(source)) |binding| {
+                    const outer_env = context.env;
+                    context.env = binding.env;
+                    defer context.env = outer_env;
+                    return try self.typeDescForWorkerRepWithSourceMap(binding.actual, binding.source, descriptor_sources, context);
+                }
                 const source_rep = self.plan.representations.items[@intFromEnum(source)];
                 if (!source_rep.contains_dynamic or (worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0)) {
                     return try self.typeDescForRep(source);
@@ -2823,6 +2873,45 @@ const ProcedureBuilder = struct {
             } else if (worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0) {
                 return try self.typeDescForRep(identity_worker);
             }
+        }
+
+        const outer_env = context.env;
+        defer context.env = outer_env;
+        const substitutions = self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions);
+        if (substitutions.len != 0) {
+            var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
+            defer bindings.deinit(self.allocator);
+            for (substitutions) |substitution| {
+                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+                if (formal.descriptor == null) continue;
+                const actual_source = if (identity_source) |source| blk: {
+                    const source_rep = self.plan.representations.items[@intFromEnum(source)];
+                    for (self.plan.nominalBackingArgSubstitutionSlice(source_rep.nominal_backing_arg_substitutions)) |source_substitution| {
+                        if (source_substitution.arg_index == substitution.arg_index) break :blk source_substitution.actual_rep;
+                    }
+                    break :blk null;
+                } else null;
+                if (substitution.formal_rep == substitution.actual_rep and
+                    (actual_source == null or actual_source == substitution.formal_rep)) continue;
+                var binding = StaticDescInstantiationContext.Binding{
+                    .formal = substitution.formal_rep,
+                    .actual = substitution.actual_rep,
+                    .source = actual_source,
+                    .env = outer_env,
+                };
+                // A formal forwarded from an enclosing nominal retains that
+                // nominal's environment, rather than referring to this new scope.
+                while (context.bound(binding.actual)) |forwarded| {
+                    binding.actual = forwarded.actual;
+                    binding.source = forwarded.source;
+                    binding.env = forwarded.env;
+                    context.env = forwarded.env;
+                }
+                context.env = outer_env;
+                if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
+                try bindings.append(self.allocator, binding);
+            }
+            for (bindings.items) |binding| try context.bind(self.allocator, binding);
         }
 
         if (context.get(identity_worker, identity_source)) |existing| return existing;
@@ -4261,12 +4350,12 @@ const ProcedureBuilder = struct {
     /// payloads print positionally).
     fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        const view = procedureModuleById(self.modules, rep.source_type.module);
 
         var field_name_ids = std.ArrayList(LIR.BoxyNameId).empty;
         defer field_name_ids.deinit(self.allocator);
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .record_field) {
+                const view = procedureModuleById(self.modules, child.source_type.module);
                 try field_name_ids.append(
                     self.allocator,
                     try self.result.store.insertBoxyName(view.canonical_names.recordFieldLabelText(child.role.record_field)),
@@ -4912,24 +5001,22 @@ const ProcedureBuilder = struct {
         const template = resolved.template orelse
             boxyLowerInvariant("hosted worker had no checked procedure template");
         const host_capability = hostedRepresentationForTemplate(resolved.module, template_ref);
-        const host_function = checkedFunctionPayload(resolved.module, host_capability.host_checked_fn_root);
+        const source_fn_rep = self.plan.repForSourceType(.{ .module = resolved.module.key, .ty = host_capability.host_checked_fn_root }) orelse
+            boxyLowerInvariant("hosted checked signature has no representation");
+        const host_function = (Plan.RepQuery{ .plan = self.plan, .allocator = self.allocator }).functionChildren(self.plan.hostRepFor(source_fn_rep)) orelse
+            boxyLowerInvariant("hosted ABI signature is not a function");
         const worker_function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
-        if (host_function.args.len != worker_function.args.len) {
+        if (host_function.arg_count != worker_function.args.len) {
             boxyLowerInvariant("hosted host signature arity disagreed with worker signature");
         }
-
-        const arg_locals = try self.allocator.alloc(LIR.LocalId, host_function.args.len);
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(host_function.rep)].children);
+        const arg_locals = try self.allocator.alloc(LIR.LocalId, host_function.arg_count);
         defer self.allocator.free(arg_locals);
-        for (host_function.args, arg_locals) |arg_ty, *local| {
-            const rep = self.plan.repForSourceType(.{ .module = resolved.module.key, .ty = arg_ty }) orelse
-                boxyLowerInvariant("hosted host argument type was missing from the boxy representation plan");
-            const runtime = self.layout_plan.rep_layouts[@intFromEnum(rep)].host;
-            local.* = try self.addLocalWithBoxyDesc(runtime.layoutIdx(), try self.staticDescRefForRepIfNeeded(rep));
+        for (children[host_function.args_start..][0..host_function.arg_count], arg_locals) |child, *local| {
+            const runtime = self.layout_plan.rep_layouts[@intFromEnum(child.rep)].worker;
+            local.* = try self.addLocalWithBoxyDesc(runtime.layoutIdx(), try self.staticDescRefForRepIfNeeded(child.rep));
         }
-
-        const ret_rep = self.plan.repForSourceType(.{ .module = resolved.module.key, .ty = host_function.ret }) orelse
-            boxyLowerInvariant("hosted host return type was missing from the boxy representation plan");
-        const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(ret_rep)].host.layoutIdx();
+        const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(host_function.ret)].worker.layoutIdx();
 
         const args_span = try self.result.store.addLocalSpan(arg_locals);
         const proc_id = try self.result.store.addProcSpec(.{
@@ -11173,7 +11260,7 @@ const ProcedureBuilder = struct {
         const template_ref = resolved.template_ref orelse
             boxyLowerInvariant("hosted worker had no checked procedure template identity");
         const host_capability = hostedRepresentationForTemplate(resolved.module, template_ref);
-        const host_fn_rep = proc.repForModuleType(resolved.module, host_capability.host_checked_fn_root);
+        const host_fn_rep = self.plan.hostRepFor(proc.repForModuleType(resolved.module, host_capability.host_checked_fn_root));
         const host_function = proc.functionChildrenForRep(host_fn_rep) orelse
             boxyLowerInvariant("hosted host signature was not a function");
         const worker_plan = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
@@ -11197,15 +11284,7 @@ const ProcedureBuilder = struct {
 
         const host_ret_layout = proc.hostRuntimeLayoutForRep(host_function.ret);
         const host_result_desc = try proc.descriptorRefForRepIfNeeded(host_function.ret);
-        const worker_ret = self.result.store.getLocal(ret_local);
-        // Equal layouts can still describe different hosted and worker error
-        // rows. Reuse requires the same descriptor as well; otherwise the
-        // representation boundary must convert between distinct value locals.
-        const host_ret_local = if (host_ret_layout.layoutIdx() == worker_ret.layout_idx and
-            std.meta.eql(worker_ret.boxy_desc, host_result_desc))
-            ret_local
-        else
-            try proc.addFrameLocal(host_ret_layout.layoutIdx());
+        const host_ret_local = try proc.addFrameLocal(host_ret_layout.layoutIdx());
         // The hosted call produces this exact descriptor. Generic frame-local
         // allocation can reserve a runtime descriptor for nested dynamic data,
         // which would conflict with the call's descriptor even on a fresh local.
@@ -11252,71 +11331,77 @@ const ProcedureBuilder = struct {
         worker_proc: LIR.LirProcSpecId,
         worker_plan: Plan.WorkerPlan,
     ) Allocator.Error!LIR.LirProcSpecId {
+        const root_plan = self.plan.roots.items[@intFromEnum(root_layout.root)];
+        const resolved = self.resolved_workers.items[@intFromEnum(root_plan.worker)];
+        var proc = ProcBodyBuilder.initSyntheticAdapter(self, resolved.module, worker_layout);
+        defer proc.deinit();
+        const host_rep = self.plan.hostRepFor(root_plan.host_rep);
+        const host_function = proc.functionChildrenForRep(host_rep);
+        const worker_function = proc.functionChildrenForRep(worker_plan.rep);
         const host_args = self.layout_plan.rootLayoutSlice(root_layout.host_args);
-        const worker_proc_args = self.result.store.getLocalSpan(self.result.store.getProcSpec(worker_proc).args);
+        const host_ret = root_layout.host_ret orelse root_layout.host_value orelse
+            boxyLowerInvariant("boxy host wrapper had no host return layout");
+        const host_ret_rep = if (host_function) |function| function.ret else host_rep;
+        const worker_ret_rep = if (worker_function) |function| function.ret else worker_plan.rep;
         const hidden_desc_params = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs);
         const hidden_dict_params = self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts);
-        const root_plan = self.plan.roots.items[@intFromEnum(root_layout.root)];
         const hidden_dict_args = self.plan.directCallHiddenDictionaryArgSlice(root_plan.hidden_dict_args);
-        if (host_args.len + hidden_desc_params.len + hidden_dict_params.len != worker_proc_args.len) {
-            boxyLowerInvariant("boxy host wrapper needed argument adaptation before adapters were emitted");
-        }
         if (hidden_dict_args.len != hidden_dict_params.len) {
             boxyLowerInvariant("boxy host wrapper dictionary arguments disagreed with its worker parameters");
         }
 
-        const arg_locals = try self.allocator.alloc(LIR.LocalId, host_args.len);
-        defer self.allocator.free(arg_locals);
-        for (host_args, arg_locals, 0..) |host_arg, *local, arg_index| {
-            const worker_arg = GuardedList.at(worker_proc_args, arg_index);
-            if (host_arg.layoutIdx() != self.result.store.getLocal(worker_arg).layout_idx) {
-                boxyLowerInvariant("boxy host wrapper needed argument layout adaptation before adapters were emitted");
-            }
-            local.* = try self.addLocal(host_arg.layoutIdx());
-        }
-
-        const host_ret = root_layout.host_ret orelse root_layout.host_value orelse
-            boxyLowerInvariant("boxy host wrapper had no host return layout");
-        const worker_ret = worker_layout.ret orelse worker_layout.value;
-        if (host_ret.layoutIdx() != worker_ret.layoutIdx()) {
-            boxyLowerInvariant("boxy host wrapper needed return layout adaptation before adapters were emitted");
-        }
-
-        // Root plans map the worker's hidden parameters to the exact checked
-        // implementation type, so the wrapper materializes only static refs.
         var descriptor_sources = StaticDescriptorSourceMap{};
         defer descriptor_sources.deinit(self.allocator);
         try self.collectPlannedStaticDescriptorSources(root_plan.worker, root_plan.hidden_desc_args, &descriptor_sources);
         var desc_context = StaticDescInstantiationContext{};
         defer desc_context.deinit(self.allocator);
+        proc.static_descriptor_materialization_scope = .{ .sources = &descriptor_sources, .context = &desc_context };
 
         const call_arg_count = host_args.len + hidden_desc_params.len + hidden_dict_params.len;
         const call_locals = try self.allocator.alloc(LIR.LocalId, call_arg_count);
         defer self.allocator.free(call_locals);
-        @memcpy(call_locals[0..host_args.len], arg_locals);
-        for (hidden_desc_params, 0..) |_, index| {
-            call_locals[host_args.len + index] = try self.addLocal(.opaque_ptr);
+        if (host_function) |function| {
+            const host_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+            const worker_fn = worker_function orelse boxyLowerInvariant("host wrapper worker was not a function");
+            const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_fn.rep)].children);
+            if (function.arg_count != worker_fn.arg_count) boxyLowerInvariant("host wrapper argument arity mismatch");
+            for (host_children[function.args_start..][0..function.arg_count], worker_children[worker_fn.args_start..][0..worker_fn.arg_count], 0..) |host_arg, worker_arg, index| {
+                const arg = try proc.addArgLocalForRep(host_arg.rep);
+                call_locals[index] = if (proc.callableArgumentBoundaryIsDirect(worker_arg.rep, host_arg.rep)) arg else try proc.addFrameLocalForRep(worker_arg.rep);
+            }
         }
-        for (hidden_dict_params, 0..) |_, index| {
-            call_locals[host_args.len + hidden_desc_params.len + index] = try self.addLocal(.opaque_ptr);
-        }
-
-        const ret_local = try self.addLocal(host_ret.layoutIdx());
-        const ret_desc_local = if (self.result.store.getProcSpec(worker_proc).runtime_ret_desc != null)
-            try self.addLocal(.opaque_ptr)
+        for (call_locals[host_args.len..]) |*local| local.* = try proc.addFrameLocal(.opaque_ptr);
+        const worker_returns_desc = self.result.store.getProcSpec(worker_proc).runtime_ret_desc != null;
+        const raw_result = if (worker_returns_desc)
+            try proc.addFrameLocalForRepWithRequiredFreshDescriptor(worker_ret_rep)
+        else
+            try proc.addFrameLocalForRep(worker_ret_rep);
+        const ret_desc_local = if (worker_returns_desc)
+            proc.callResultOutputDescriptorLocal(raw_result) orelse boxyLowerInvariant("host wrapper worker result has no output descriptor")
         else
             null;
-        if (ret_desc_local) |local| {
-            self.result.store.setLocalBoxyDesc(ret_local, .{ .local = local });
-        }
+        const ret_local = if (!worker_returns_desc and proc.representationBoundaryIsDirect(host_ret_rep, worker_ret_rep)) raw_result else try proc.addFrameLocalForRep(host_ret_rep);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
-        var continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
-            .target = ret_local,
+        var continuation = if (ret_local == raw_result) ret_stmt else try proc.assignRepresentationBoundary(ret_local, raw_result, host_ret_rep, worker_ret_rep, ret_stmt);
+        continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
+            .target = raw_result,
             .proc = worker_proc,
             .args = try self.result.store.addLocalSpan(call_locals),
             .out_desc = ret_desc_local,
-            .next = ret_stmt,
+            .next = continuation,
         } });
+        if (host_function) |function| {
+            const host_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+            const worker_fn = worker_function.?;
+            const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_fn.rep)].children);
+            var index = function.arg_count;
+            while (index > 0) {
+                index -= 1;
+                if (call_locals[index] != proc.arg_locals.items[index]) {
+                    continuation = try proc.assignRepresentationBoundary(call_locals[index], proc.arg_locals.items[index], worker_children[worker_fn.args_start + index].rep, host_children[function.args_start + index].rep, continuation);
+                }
+            }
+        }
         var dict_index = hidden_dict_params.len;
         while (dict_index > 0) {
             dict_index -= 1;
@@ -11349,13 +11434,8 @@ const ProcedureBuilder = struct {
                 .next = continuation,
             } });
         }
-        const args_span = try self.result.store.addLocalSpan(arg_locals);
-        const frame_locals = try self.allocator.alloc(LIR.LocalId, call_arg_count + 1 + @intFromBool(ret_desc_local != null));
-        defer self.allocator.free(frame_locals);
-        @memcpy(frame_locals[0..call_arg_count], call_locals);
-        frame_locals[call_arg_count] = ret_local;
-        if (ret_desc_local) |local| frame_locals[call_arg_count + 1] = local;
-        const frame_span = try self.result.store.addLocalSpan(frame_locals);
+        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         return try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
             .args = args_span,
@@ -19103,6 +19183,10 @@ const ProcBodyBuilder = struct {
                             boxyLowerInvariant("boxy tag adapter target payload descriptor index exceeded variant payloads");
                         }
                         const payload_index = target_payload_desc.payload_index;
+                        // Payload storage belongs to this nominal application,
+                        // not to the declaration formal shared by other uses.
+                        const target_payload_rep = self.nominalBackingActualRep(target_rep, target_payloads[payload_index].rep);
+                        const source_payload_rep = self.nominalBackingActualRep(source_rep, source_payloads[payload_index].rep);
                         var source_payload_desc_info: ?ResultDescriptorSource = null;
                         for (source_descs) |source_payload_desc| {
                             if (source_payload_desc.payload_index == payload_index) {
@@ -19111,11 +19195,11 @@ const ProcBodyBuilder = struct {
                             }
                         }
                         const exact_source_desc_info = source_payload_desc_info orelse
-                            try self.adapterDescriptorForKnownRep(source_payloads[payload_index].rep);
+                            try self.adapterDescriptorForKnownRep(source_payload_rep);
                         try self.appendResultDescriptorInitializers(prerequisites, exact_source_desc_info);
                         const exact_source_payload_rep = self.descriptorSourceRep(
                             exact_source_desc_info,
-                            source_payloads[payload_index].rep,
+                            source_payload_rep,
                         );
 
                         const target_payload_layout = self.parent.tagVariantPayloadFieldLayout(
@@ -19125,19 +19209,19 @@ const ProcBodyBuilder = struct {
                         );
                         const target_payload_tag = self.parent.result.layouts.getLayout(target_payload_layout).tag;
                         const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst or target_payload_tag == .erased_box;
-                        const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payloads[payload_index].rep).layoutIdx();
+                        const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payload_rep).layoutIdx();
                         const adapted_payload_desc_info = if (self.representationBoundaryIsDirect(
-                            target_payloads[payload_index].rep,
+                            target_payload_rep,
                             exact_source_payload_rep,
                         ) or
                             (target_payload_is_box and
-                                self.repIsBareDynamic(self.descriptorStorageRep(target_payloads[payload_index].rep))))
+                                self.repIsBareDynamic(self.descriptorStorageRep(target_payload_rep))))
                             exact_source_desc_info
                         else if (target_payload_layout != target_standalone_layout)
                             ResultDescriptorSource{ .desc = target_payload_desc.desc }
                         else
                             try self.adapterDescriptorForCallBoundary(
-                                target_payloads[payload_index].rep,
+                                target_payload_rep,
                                 exact_source_payload_rep,
                                 exact_source_desc_info,
                                 prerequisites,
@@ -19303,8 +19387,6 @@ const ProcBodyBuilder = struct {
         var extra_captures = std.ArrayList(LIR.LocalId).empty;
         defer extra_captures.deinit(self.parent.allocator);
         var specialized = false;
-        const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
-        const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
         var target_field_index: u16 = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
@@ -19318,8 +19400,7 @@ const ProcBodyBuilder = struct {
                     }
                     const source_field = self.findRecordFieldByLabel(
                         source_record_rep,
-                        source_view,
-                        target_view,
+                        procedureModuleById(self.parent.modules, target_child.source_type.module),
                         target_label,
                     ) orelse {
                         switch (target_child.record_field_kind.tag) {
@@ -21457,8 +21538,29 @@ const ProcBodyBuilder = struct {
         };
         const read_target = if (self.representationBoundaryIsDirect(target_rep, access.field_rep))
             target
+        else if (nested_desc_index != null)
+            try self.addFrameLocal(self.workerRuntimeLayoutForRep(access.field_rep).layoutIdx())
         else
             try self.addFrameLocalForRep(access.field_rep);
+        // Record the descriptor supplied by the field read before lowering its
+        // adapter. Its initializer executes before the read and conversion; it
+        // must not become a type-wide slot initialized in the worker prologue.
+        const field_desc_local = if (nested_desc_index != null) blk: {
+            if (self.parent.result.store.getLocal(read_target).boxy_desc) |desc| {
+                if (desc.localOrNull() == null) break :blk null;
+            }
+            const local = try self.mutableDescriptorLocalForValue(read_target);
+            break :blk local;
+        } else null;
+        const descriptor_snapshot = if (read_target != target and field_desc_local != null)
+            try self.snapshotDescriptorBindings()
+        else
+            null;
+        defer if (descriptor_snapshot) |snapshot| {
+            self.restoreDescriptorBindings(snapshot);
+            snapshot.deinit(self.parent.allocator);
+        };
+        if (descriptor_snapshot != null) try self.bindDescriptorIdentityLocalForRep(access.field_rep, field_desc_local.?, false);
         const after_read = if (read_target == target)
             next
         else
@@ -21471,17 +21573,13 @@ const ProcBodyBuilder = struct {
             } },
             .next = after_read,
         } });
-        const before_read = if (nested_desc_index) |index| blk: {
-            if (self.parent.result.store.getLocal(read_target).boxy_desc) |desc| {
-                if (desc.localOrNull() == null) break :blk read;
-            }
-            const desc_local = try self.mutableDescriptorLocalForValue(read_target);
+        const before_read = if (field_desc_local) |desc_local| blk: {
             if (self.localIsReadOnlyDescriptorInput(desc_local)) break :blk read;
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = desc_local,
                 .desc = record_desc orelse
                     boxyLowerInvariant("record field descriptor bind had no source descriptor"),
-                .nested_index = index,
+                .nested_index = nested_desc_index.?,
                 .next = read,
             } });
         } else read;
@@ -21718,9 +21816,34 @@ const ProcBodyBuilder = struct {
                 .builtin_other,
                 => {
                     const backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing);
+                    var snapshot: ?DescriptorBindingsSnapshot = null;
+                    defer if (snapshot) |outer| {
+                        self.restoreDescriptorBindings(outer);
+                        outer.deinit(self.parent.allocator);
+                    };
+                    var initializers = std.ArrayList(DescriptorArgLocal).empty;
+                    defer initializers.deinit(self.parent.allocator);
+                    var bindings = std.ArrayList(DescriptorTemplateOverride).empty;
+                    defer bindings.deinit(self.parent.allocator);
+                    // Resolve all actuals in the enclosing scope before binding
+                    // this declaration's formals (including nested uses of the
+                    // same nominal at different arguments).
+                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                        if (substitution.formal_rep == substitution.actual_rep) continue;
+                        const formal = self.parent.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+                        if (formal.descriptor == null) continue;
+                        if (snapshot == null) snapshot = try self.snapshotDescriptorBindings();
+                        const materialization = try self.descriptorMaterializationForKnownRep(substitution.actual_rep);
+                        const local = try self.addFrameLocal(.opaque_ptr);
+                        try self.recordDescriptorLocalTemplate(local, materialization);
+                        try initializers.append(self.parent.allocator, .{ .local = local, .materialize = materialization.desc, .captures = materialization.captures });
+                        try bindings.append(self.parent.allocator, .{ .rep = substitution.formal_rep, .local = local });
+                    }
+                    for (bindings.items) |binding| try self.bindDescriptorIdentityLocalForRep(binding.rep, binding.local, false);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
+                    const body = try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
+                    return try self.prependDescriptorArgMaterializations(initializers.items, body);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -26879,7 +27002,11 @@ const ProcBodyBuilder = struct {
             // the target identity names the generic descriptor requirement those
             // bytes satisfy. Only the source descriptor must match the committed
             // field layout.
-            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.source_rep, field_layout, true) orelse
+            // The field local contains the result of adaptation. A concrete
+            // target has its own exact descriptor; the pre-conversion erased
+            // source descriptor describes different storage.
+            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed aggregate source field had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
             try self.bindDescriptorIdentityLocalForRep(target_desc_rep, desc_local, false);
@@ -26934,7 +27061,11 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.source_rep, field_layout, true) orelse
+            // The field local contains the result of adaptation. A concrete
+            // target has its own exact descriptor; the pre-conversion erased
+            // source descriptor describes different storage.
+            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed tag source payload had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
             try self.bindDescriptorIdentityLocalForRep(target_desc_rep, desc_local, false);
@@ -26978,7 +27109,8 @@ const ProcBodyBuilder = struct {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const force_field = self.parent.layoutIsBoxStorage(field_layout);
             if (!force_field and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.source_rep, field_layout, force_field) orelse continue;
+            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, force_field) orelse continue;
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, desc_rep, &field_initializers);
             try refs.append(self.parent.allocator, .{ .local = desc_local });
             try appendUniqueLocal(self.parent.allocator, &captures, desc_local);
@@ -27192,6 +27324,10 @@ const ProcBodyBuilder = struct {
         visited[rep_index] = true;
 
         const rep = self.parent.plan.representations.items[rep_index];
+        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+            if (substitution.actual_rep != substitution.formal_rep and
+                self.descriptorTemplateRefNeedsCaptures(substitution.actual_rep, rep.descriptor, visited)) return true;
+        }
         const current_desc = rep.descriptor;
         const rep_layout = self.parent.layout_plan.rep_layouts[rep_index];
         const payload_layout = rep_layout.descriptor_payload_layout orelse rep_layout.worker.layoutIdx();
@@ -27320,11 +27456,11 @@ const ProcBodyBuilder = struct {
     }
 
     fn descriptorTemplateExactRep(
-        _: *const ProcBodyBuilder,
+        self: *const ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
         context: *const DescriptorTemplateContext,
     ) Plan.TypeRepId {
-        if (!context.exact_storage) return rep_id;
+        if (!context.exact_storage and !self.repIsBareDynamic(rep_id)) return rep_id;
 
         var current = rep_id;
         var remaining = context.exact_reps.len;
@@ -27355,7 +27491,6 @@ const ProcBodyBuilder = struct {
             .bindings_start = context.bindings.items.len,
             .env = context.env,
         };
-        if (!context.exact_storage) return scope;
 
         var current = rep_id;
         for (0..self.parent.plan.representations.items.len) |_| {
@@ -32968,13 +33103,11 @@ const ProcBodyBuilder = struct {
         const source_field_indices = try self.parent.allocator.alloc(u16, target_field_count);
         defer self.parent.allocator.free(source_field_indices);
 
-        const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
-        const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
         var field_index: usize = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(source_record_rep, source_view, target_view, target_label) orelse
+                    const source_field = self.findRecordFieldByLabel(source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
                         boxyLowerInvariant("dynamic record boundary source was missing target field");
                     target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
                         try self.addFrameLocalForRep(target_child.rep)
@@ -33144,13 +33277,11 @@ const ProcBodyBuilder = struct {
         const source_field_indices = try self.parent.allocator.alloc(u16, target_field_count);
         defer self.parent.allocator.free(source_field_indices);
 
-        const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
-        const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
         var field_index: usize = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(source_record_rep, source_view, target_view, target_label) orelse
+                    const source_field = self.findRecordFieldByLabel(source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
                         boxyLowerInvariant("concrete record boundary source was missing target field");
                     target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
                         try self.addFrameLocalForRep(target_child.rep)
@@ -36049,7 +36180,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn hostRuntimeLayoutForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Layouts.RuntimeLayout {
-        return self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].host;
+        return .{ .concrete = self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx() };
     }
 
     fn descriptorStorageRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
@@ -36727,7 +36858,6 @@ const ProcBodyBuilder = struct {
     fn findRecordFieldByLabel(
         self: *const ProcBodyBuilder,
         record_rep_id: Plan.TypeRepId,
-        source_view: ProcedureModuleView,
         target_view: ProcedureModuleView,
         target_label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
     ) ?MatchedRecordField {
@@ -36736,7 +36866,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |source_label| {
-                    if (Plan.recordFieldNameMatches(viewNames(source_view), source_label, viewNames(target_view), target_label)) {
+                    if (Plan.recordFieldNameMatches(viewNames(procedureModuleById(self.parent.modules, child.source_type.module)), source_label, viewNames(target_view), target_label)) {
                         return .{
                             .index = index,
                             .rep = child.rep,
@@ -37449,11 +37579,11 @@ fn appendRequestedLayouts(
 
     const root_types = modules.root.module.checked_types.view();
     for (roots.layout_requests, 0..) |checked_type, index| {
-        const rep_id = plan.root_reps.items[root_rep_start + index];
+        const rep_id = plan.hostRepFor(plan.root_reps.items[root_rep_start + index]);
         try result.requested_layouts.append(allocator, .{
             .ty = root_types.rootKey(checked_type),
             .checked_type = checked_type,
-            .layout_idx = layout_plan.rep_layouts[@intFromEnum(rep_id)].host.layoutIdx(),
+            .layout_idx = layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx(),
             .plan = try const_plans.constPlanForRep(rep_id),
         });
     }
@@ -37463,7 +37593,7 @@ fn appendRequestedLayouts(
         try result.requested_layouts.append(allocator, .{
             .ty = root_types.rootKey(checked_type),
             .checked_type = checked_type,
-            .layout_idx = layout_plan.rep_layouts[@intFromEnum(rep_id)].host.layoutIdx(),
+            .layout_idx = layout_plan.rep_layouts[@intFromEnum(plan.hostRepFor(rep_id))].worker.layoutIdx(),
             .plan = try const_plans.constPlanForRep(rep_id),
         });
     }
@@ -37702,7 +37832,7 @@ const ConstPlanBuilder = struct {
         const owned_entries = try entries.toOwnedSlice(self.allocator);
         const id: LirProgram.ErasedFnsId = @enumFromInt(@as(u32, @intCast(self.result.erased_fns.items.len)));
         try self.result.erased_fns.append(self.allocator, .{
-            .layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].host.layoutIdx(),
+            .layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx(),
             .entries = owned_entries,
         });
         return id;
@@ -37770,8 +37900,8 @@ const ConstPlanBuilder = struct {
         variant: Plan.TagVariant,
         discriminant: usize,
     ) Allocator.Error!LirProgram.ConstTagVariant {
-        const root_names = &self.modules.root.module.canonical_names;
-        const name = try self.allocator.dupe(u8, root_names.tagLabelText(variant.name));
+        const variant_names = procedureModuleById(self.modules, variant.name_module).canonical_names;
+        const name = try self.allocator.dupe(u8, variant_names.tagLabelText(variant.name));
         errdefer self.allocator.free(name);
 
         const payload_children = self.plan.childSlice(variant.payloads);
@@ -46848,7 +46978,7 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     });
 
     var plan = try Plan.analyzeProgram(gpa, .{
-        .checked_types = checked_module.checked_types.view(),
+        .root_module = .{ .module = &checked_module, .roots = undefined },
         .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(2))},
     }, .{});
     defer plan.deinit();

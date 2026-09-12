@@ -18323,10 +18323,17 @@ const EvidencePass = struct {
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
-                    // Re-checks can record the same instantiation twice; keep
-                    // the first.
+                    // Re-checks can record the same binding use twice. A
+                    // different scheme at this site is a producer bug, not
+                    // another candidate from which publication may choose.
                     const entry = try self.value_use_by_node.getOrPut(record.node_idx);
-                    if (!entry.found_existing) entry.value_ptr.* = @intCast(i);
+                    if (entry.found_existing) {
+                        const previous = module_env.scheme_uses.items.items[entry.value_ptr.*];
+                        std.debug.assert(self.types.resolveVar(@enumFromInt(previous.scheme_root)).var_ ==
+                            self.types.resolveVar(@enumFromInt(record.scheme_root)).var_);
+                    } else {
+                        entry.value_ptr.* = @intCast(i);
+                    }
                 },
                 .dispatch_target, .recursive_dispatch_target => {
                     // `slot_data` is the raw constraint-function var: checking
@@ -31369,7 +31376,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 93 distinguishes rejected function values from callable templates.
     // Version 94 retains explicit equality guards and matched-value binders
     // for custom literal patterns.
-    const serialized_layout_version: u32 = 94;
+    // Version 95 makes stored callable-derived evidence own its vector slot
+    // instead of retaining a parameter index from a forwarding scheme.
+    const serialized_layout_version: u32 = 95;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37273,12 +37282,15 @@ test "ConstTemplateTable serialize/deserialize round-trip (ArrayList-backed)" {
 
 test "issue 11290: builtin backing declarations survive serialization with shared formals" {
     const gpa = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x90} ** 32));
     var store = CheckedTypeStore{};
     defer store.deinit(gpa);
 
     // Publish in a different order from the builtin enum, with unrelated
     // statement ids. Lookup must follow builtin identity, not either order.
-    const empty: CheckedTypeId = @enumFromInt(0);
+    const empty: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
     try store.roots.append(gpa, .{ .id = empty, .key = .{ .bytes = @splat(0) } });
     try store.payloads.append(gpa, .empty_record);
     for ([_]CheckedBuiltinNominal{ .set, .dict }) |owner| {
@@ -37286,8 +37298,8 @@ test "issue 11290: builtin backing declarations survive serialization with share
         const args = try gpa.alloc(CheckedTypeId, if (owner == .dict) 2 else 1);
         @memset(args, empty);
         const payload = try store.commitPayload(gpa, .{ .nominal = .{
-            .name = @enumFromInt(@intFromEnum(owner)),
-            .origin_module = @enumFromInt(0),
+            .name = try names.internTypeName(if (owner == .dict) "Dict" else "Set"),
+            .origin_module = module_identity,
             .owner_module = testCheckedArtifactKey(0x90),
             .source_decl = 100 + @as(u32, @intFromEnum(owner)),
             .builtin = owner,
@@ -37982,8 +37994,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD7, 0x46, 0xCF, 0x78, 0xBA, 0x30, 0x9B, 0x80, 0xAE, 0xC6, 0x91, 0x50, 0x5F, 0xB2, 0xD7, 0x53,
-        0xDC, 0x7B, 0xEF, 0x6D, 0x06, 0x6C, 0x66, 0x30, 0xD7, 0xF4, 0x5D, 0x5D, 0x06, 0x0C, 0x7F, 0x87,
+        0x17, 0xC0, 0xDF, 0xF1, 0xE9, 0xDA, 0x5A, 0x3F, 0xB8, 0x10, 0x4B, 0x58, 0x33, 0xBF, 0x14, 0xA2,
+        0xA5, 0xA6, 0x52, 0x90, 0x6E, 0x9B, 0xB6, 0x69, 0x6B, 0x9B, 0x96, 0x39, 0x07, 0x3C, 0xA4, 0x49,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
