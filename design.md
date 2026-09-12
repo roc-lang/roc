@@ -10051,6 +10051,18 @@ original call operand root plus the exact instantiated descendant; it never
 changes to a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
+Nominal construction consumes the same explicit backing parameter substitution.
+The shared backing representation fixes storage; its descriptor binds each
+formal to the exact actual descriptor supplied by this nominal use. Actuals are
+resolved in the enclosing scope before the declaration's bindings are entered,
+and nested construction restores that scope on exit. Construction and its
+representation adapters consume those descriptors before any field requests a
+static descriptor. No checked types or worker representation graphs are cloned
+or mutated to supply this construction context. Static descriptor construction
+resolves nominal parameters lazily in their enclosing substitution environment
+and caches by representation and environment. A record field read supplies the
+field's stored descriptor before lowering any representation adapter.
+
 The substitution is consumed to produce one exact source for every hidden
 descriptor, hidden dictionary, and erased-callable metadata capture. A source is
 one of static metadata, an argument descriptor, a nested descriptor read from an
