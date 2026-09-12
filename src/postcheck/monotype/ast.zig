@@ -625,9 +625,9 @@ pub const Local = struct {
     /// replaces every non-null value with the final local's program-global
     /// post-check identity.
     capture_id: ?checked.CaptureId = null,
-    /// Checked-stage identity used only when a compile-time result stores this
-    /// capture back into `ConstStore`. This provenance is never a runtime
-    /// capture join key.
+    /// Checked capture provenance for pre-lift target-key normalization and
+    /// `ConstStore` publication. Alternative binders use their arm's
+    /// representative key; durable runtime capture identity remains separate.
     checked_capture_id: ?checked.CaptureId = null,
 };
 
@@ -675,7 +675,7 @@ pub const CallValue = struct {
 /// One explicit capture operand supplied at a lifted function reference /
 /// direct call site. `id` is the `CaptureId` of the target function's capture
 /// slot this operand fills; `value` is the expression that supplies it. Operand
-/// spans are stored sorted by `id`, parallel to the target's canonically-sorted
+/// spans after lifting are sorted by `id`, parallel to the target's canonically-sorted
 /// capture slots, so every operand↔slot join is an exact keyed lookup with no
 /// load-bearing order. At the lift boundary, the id's namespace explicitly
 /// distinguishes a provisional checked key from an already-lifted key.
@@ -692,16 +692,10 @@ pub const LiftedFunctionValue = struct {
     captures: Span(CaptureOperand) = Span(CaptureOperand).empty(),
 };
 
-/// Explicit operand for one checked closure capture before lifting. The `local`
-/// identifies the checked capture in the closure creation context; `value` is
-/// the expression that supplies it there. At the lift boundary, both this local
-/// and the target slot use their checked capture identity when present and their
-/// generated capture identity otherwise. Lifting joins only on that explicit
-/// provisional key, then records the operand with the target's lifted key.
-pub const FnDefCapture = struct {
-    local: LocalId,
-    value: ExprId,
-};
+/// Explicit operand for one closure capture before lifting. The producer records
+/// the target slot's provisional key independently of the supplying expression.
+/// Lifting normalizes this key through the target slot's identity exactly once.
+pub const FnDefCapture = CaptureOperand;
 
 /// Reference to a Monotype function value before lifting. `captures` contains
 /// keyed explicit values recorded at the checked closure creation site.

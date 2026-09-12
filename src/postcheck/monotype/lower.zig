@@ -10892,7 +10892,7 @@ const Builder = struct {
 
         defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
-            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+            capture_values[index] = .{ .id = fn_ctx.captureKey(capture.local), .value = capture.value };
         }
 
         const expr = try fn_ctx.addExprWithTypeCell(
@@ -11993,7 +11993,7 @@ const DraftCallProc = struct {
 };
 
 const DraftFnDefCapture = struct {
-    local: DraftLocalId,
+    id: checked.CaptureId,
     value: DraftExprId,
 };
 
@@ -15049,21 +15049,6 @@ const BodyDraftStore = struct {
             });
         }
 
-        try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
-        for (self.fn_def_captures.items, 0..) |capture, index| {
-            if (!ids.retained(.fn_def_captures, index)) continue;
-            if (!ids.retained(.locals, @intFromEnum(capture.local))) {
-                std.debug.panic(
-                    "postcheck invariant violated: retained function capture owned by {any} referenced local owned by {any}",
-                    .{ self.ownerForCore(.fn_def_captures, index), self.ownerForCore(.locals, @intFromEnum(capture.local)) },
-                );
-            }
-            program.fn_def_captures.appendAssumeCapacity(.{
-                .local = ids.local(capture.local),
-                .value = ids.expr(capture.value),
-            });
-        }
-
         try program.record_destructs.ensureUnusedCapacity(program.allocator, self.record_destructs.items.len);
         for (self.record_destructs.items, 0..) |field, index| {
             if (!ids.retained(.record_destructs, index)) continue;
@@ -15132,6 +15117,20 @@ const BodyDraftStore = struct {
             });
             const local_name = self.sourceText(self.local_names.items[index]);
             program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
+        }
+
+        try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
+        for (self.fn_def_captures.items, 0..) |capture, index| {
+            if (!ids.retained(.fn_def_captures, index)) continue;
+            const id = if (capture.id.isLiftGenerated())
+                durable_capture_ids.get(capture.id) orelse
+                    Common.invariant("retained function capture names a missing target identity")
+            else
+                capture.id;
+            program.fn_def_captures.appendAssumeCapacity(.{
+                .id = id,
+                .value = ids.expr(capture.value),
+            });
         }
 
         try program.typed_locals.ensureUnusedCapacity(program.allocator, self.typed_locals.items.len);
@@ -18127,6 +18126,14 @@ const BodyContext = struct {
 
     fn addFieldExprSpan(self: *BodyContext, fields: []const DraftFieldExpr) Allocator.Error!DraftSpan(DraftFieldExpr) {
         return try self.draft.addFieldExprSpan(fields);
+    }
+
+    /// Record a declared capture slot's key while its binding context is known.
+    /// Supplying expressions never determine the target key during lifting.
+    fn captureKey(self: *const BodyContext, local: DraftLocalId) checked.CaptureId {
+        const target = self.draft.locals.items[@intFromEnum(local)];
+        return target.checked_capture_id orelse target.capture_id orelse
+            Common.invariant("declared capture slot has no capture identity");
     }
 
     fn addFnDefCaptureSpan(self: *BodyContext, captures: []const DraftFnDefCapture) Allocator.Error!DraftSpan(DraftFnDefCapture) {
@@ -32374,7 +32381,7 @@ const BodyContext = struct {
                 binding.ty,
                 .{ .local = binding.local },
             );
-            captures.appendAssumeCapacity(.{ .local = binding.local, .value = value });
+            captures.appendAssumeCapacity(.{ .id = self.captureKey(binding.local), .value = value });
         }
 
         return try self.addFnDefCaptureSpan(captures.items);
@@ -34737,7 +34744,7 @@ const BodyContext = struct {
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
         defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
-            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+            capture_values[index] = .{ .id = fn_ctx.captureKey(capture.local), .value = capture.value };
         }
 
         return try fn_ctx.addExprWithTypeCell(
@@ -34921,7 +34928,7 @@ const BodyContext = struct {
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
         defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
-            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+            capture_values[index] = .{ .id = fn_ctx.captureKey(capture.local), .value = capture.value };
         }
 
         return try fn_ctx.addExprWithTypeCell(
@@ -38518,7 +38525,7 @@ const BodyContext = struct {
                 cell,
                 .{ .local = local },
             );
-            try capture_values.append(self.allocator, .{ .local = local, .value = value });
+            try capture_values.append(self.allocator, .{ .id = capture.capture_id, .value = value });
         }
 
         return try self.addFnDefCaptureSpan(capture_values.items);
@@ -51212,6 +51219,10 @@ const BodyContext = struct {
         for (remaps) |remap| {
             const local = self.binders.get(remap.candidate_binder) orelse
                 Common.invariant("match alternative binder remap referenced an unbound candidate binder");
+            // All alternatives implement the arm's one checked capture slot.
+            // Preserve each local's separate runtime identity and lexical binder.
+            self.draft.locals.items[@intFromEnum(local)].checked_capture_id =
+                checked.CaptureId.fromBinder(remap.representative_binder);
             try self.binders.put(remap.representative_binder, local);
         }
     }
