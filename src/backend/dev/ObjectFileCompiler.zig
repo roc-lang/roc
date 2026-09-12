@@ -22,6 +22,7 @@ const LirStore = lir.LirStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
 const Dwarf = @import("Dwarf.zig");
+const coff = @import("object/coff.zig");
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
@@ -404,6 +405,57 @@ fn compileWithCodeGen(
             .epilogue_offset = helper.epilogue_offset,
             .uses_frame_pointer = helper.uses_frame_pointer,
         }) catch return CompilationError.OutOfMemory;
+    }
+
+    // Reference-count helpers compiled inline after a procedure body get
+    // local symbols and DWARF entries of their own, so a frame inside one is
+    // named rather than attributed to whichever procedure precedes it. The
+    // helpers static data already published above are skipped by offset.
+    {
+        var published_starts = std.AutoHashMapUnmanaged(u64, void).empty;
+        defer published_starts.deinit(allocator);
+        for (symbols.items) |definition| {
+            const sym = definition.symbol;
+            if (!sym.is_function or sym.is_external) continue;
+            published_starts.put(allocator, sym.offset, {}) catch return CompilationError.OutOfMemory;
+        }
+        var recorded_ranges = std.AutoHashMapUnmanaged(u32, coff.FunctionInfo).empty;
+        defer recorded_ranges.deinit(allocator);
+        for (codegen.getUnwindFunctions()) |function| {
+            recorded_ranges.put(allocator, function.start_offset, function) catch return CompilationError.OutOfMemory;
+        }
+        const rc_helpers = codegen.compiledRcHelpers(allocator) catch return CompilationError.OutOfMemory;
+        defer allocator.free(rc_helpers);
+        for (rc_helpers) |rc_helper| {
+            if (published_starts.contains(rc_helper.start_offset)) continue;
+            const info = recorded_ranges.get(@intCast(rc_helper.start_offset)) orelse continue;
+            const symbol_name = std.fmt.allocPrint(allocator, "roc__rc_helper_{x}", .{rc_helper.key}) catch return CompilationError.OutOfMemory;
+            owned_proc_symbol_names.append(allocator, symbol_name) catch {
+                allocator.free(symbol_name);
+                return CompilationError.OutOfMemory;
+            };
+            appendDefinition(allocator, &codegen.codegen.symbols, &symbols, .{
+                .name = symbol_name,
+                .offset = info.start_offset,
+                .size = info.end_offset - info.start_offset,
+                .is_global = false,
+                .is_function = true,
+                .is_external = false,
+                .section = .text,
+                .prologue_size = info.prologue_size,
+                .stack_alloc = info.stack_alloc,
+                .frame_size = info.frame_size,
+                .callee_saved_mask = info.callee_saved_mask,
+                .epilogue_offset = info.epilogue_offset,
+                .uses_frame_pointer = info.uses_frame_pointer,
+            }) catch return CompilationError.OutOfMemory;
+            dwarf_procs.append(allocator, .{
+                .name = symbol_name,
+                .code_start = info.start_offset,
+                .code_size = info.end_offset - info.start_offset,
+                .loc = .none,
+            }) catch return CompilationError.OutOfMemory;
+        }
     }
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
