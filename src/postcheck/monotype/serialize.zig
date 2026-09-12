@@ -28,6 +28,8 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 18: symbolic callable evidence is relative to its containing vector
+/// slot, without a source-scheme index in stored evidence or its digest.
 /// Version 17: generated-codec specialization identities retain the explicit
 /// public value shape separately from the constructor representation.
 /// Version 16: generated-codec specialization identities name their complete
@@ -48,7 +50,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 17;
+pub const FORMAT_VERSION: u32 = 18;
 
 const SECTION_COUNT = 43;
 

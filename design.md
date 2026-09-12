@@ -6811,11 +6811,16 @@ Other solved-graph mutations:
 - `finalizeFunctionEffectsAtBoundary`—policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.
-- `closeAbsentConstructedPayloadVars` / `closePayloadVarToEmpty`—policy:
-  absent-constructor payload closing. A constructed value's unconstrained,
-  ignorable payload vars for tags the expression provably never constructs
-  close to the empty tag union, so matches on constructed values are
-  exhaustive without wildcard arms.
+- `closeAbsentConstructedPayloadVars` /
+  `closeAbsentConstructedPayloadVarsForLambda` / `closePayloadVarToEmpty`—
+  policy: absent-constructor payload closing. A constructed value's
+  unconstrained, ignorable payload vars for tags the expression provably never
+  constructs close to the empty tag union, so matches on constructed values are
+  exhaustive without wildcard arms. A lambda result is constructed by its body
+  tail *or* by any of its early returns, so the lambda form reads the tags of
+  every recorded return operand as well; `?` desugars to one of those returns,
+  and its `Err` is what keeps an inferred error row open (see Try Return-Row
+  Composition above, whose contributions are composed only after this point).
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
@@ -7307,6 +7312,16 @@ planning, requires that slot to be present, and validates only the slot bounds
 and explicit call shape.
 
 ### Boxy Host ABI Adapters
+
+Host ABI planning resolves only requested public signatures and data layouts.
+It opens checked nominal declarations under their exact argument substitutions
+before committing layouts. Instantiation caches include declaration identity and
+resolved arguments; recursive applications reuse their reserved shape. The exact
+ABI shapes and private worker shapes have separate identities even when they
+share the representation table's structural vocabulary. ABI shapes are never
+reconstructed from erased worker children. Wrappers and adapters consume the
+planned pair, including its exact tag payload types and descriptor provenance.
+Equal storage layouts alone do not permit aliasing boundary result locals.
 
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
@@ -9044,8 +9059,12 @@ does not mutate checked data or create a second name registry.
 When an edge uses a procedure as data, an otherwise-unpinned requirement that
 is reachable through the procedure's own callable type is not
 `unreachable`. Checker output records `from_callable(k)` at that construction
-site, where `k` is the requirement's template evidence-param index and its
-evidence-param record owns the exact dispatcher path. If compile-time
+site, where `k` is the containing vector slot, whose evidence-param record owns
+the exact dispatcher path. Symbolic entries carry no separate index: forwarding
+into another scheme makes the destination slot authoritative, even when the two
+schemes enumerate requirements in different orders. Live and stored evidence,
+serialization, and specialization identity all preserve this slot-relative
+meaning and the independent-callable flag. If compile-time
 evaluation stores that function inside another value before the callable is
 concrete, `ConstStore` retains the same symbolic entry in the function's
 evidence vector. Restoring the function projects the recorded path over the
@@ -9054,7 +9073,9 @@ uses the resolved vector as the specialization identity. This work is linear
 only in the function's evidence vector at a specialization request; the
 existing specialization cache prevents duplicate function bodies. Aggregate
 restoration neither scans nested values nor reconstructs where a function came
-from.
+from. Resolution borrows immutable evidence until an entry resolves, then copies
+the vector once for that request. An unchanged vector is returned directly.
+Unresolved results are not memoized across instantiation-graph refinement.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
@@ -11856,12 +11877,22 @@ statically known `assign_tag` discriminant for the current binding of the
 returned local, and whose ownership-neutral
 control-flow graph can account mechanically for every ownership-moving
 statement on every path. The solver propagates one bit per represented owned
-entry parameter. A consuming call position, consuming low-level argument,
+entry parameter. A consuming call position, ownership-transferring low-level argument,
 aggregate operand, tag payload, store operand, moving Boxy operand, or returned
 same-value alias clears that entry bit. Borrowing reads leave it set. At each
 normal return, the bits still set are intersected with every other path that
 returns the same discriminant. A loop is the ordinary finite fixed point over
 the per-resource rows below.
+
+For a low-level operation, ownership-transferring positions are exactly
+`consume_args | retain_args` from its explicit ARC effect. A `retain_args`
+operand supplies a stored unit to the result, and emission may move its existing
+unit instead of retaining it. That entry unit is therefore spent on this path,
+just like an aggregate operand; it cannot also be promised back to the caller.
+Pure same-value aliases preserve this transfer identity. For a checked list
+replacement, success spends both the list and replacement item, while
+failure may restitute both untouched entry units. Ordinary borrowing reads
+continue to preserve the entry bit.
 
 Restitution consumes the structural lift's existing procedure statement
 inventory. Its reusable scratch arrays and statement-to-ordinal lookup contain
@@ -12111,6 +12142,16 @@ When one ownership place is read repeatedly by ownership-complete struct-field
 or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read
 and rewrites those later reads as explicit local aliases before ARC solving.
+That rewrite is materialized only when the representative commits a dismantle
+plan, and a canonicalized read is classified by that same plan: under a
+committed representative it is an occurrence of the representative (a whole
+use when its target is emitted owned, a transparent alias when it stays
+borrowed), and otherwise it stays an ordinary field read of its root. Candidates are solved
+representatives first; a representative is a complete field read whose layout
+is a proper part of its root's layout, so the order is acyclic and each
+deferred read is settled exactly once.
+A root therefore never commits a take on a read that is emitted as an alias of
+a container already holding the root's unit.
 Dominance is computed once from the explicit statement-successor graph with a
 synthetic entry for all procedure roots. Immediate dominators settle in reverse
 postorder, and dominator-tree intervals answer field-read and tag-payload-read
@@ -13630,6 +13671,25 @@ Hosted proc entries keep their exact checked hosted ABI in both strategies. A
 boxy caller adapts arguments before the hosted call and adapts the result after
 the hosted call. It must not change the hosted dispatch index, hosted symbol
 name, natural C ABI signature, ownership rule, or generated glue declaration.
+
+## Root Application Preparation
+
+The parser's header and declaration index determine an entry module's platform
+wiring: an explicit app platform, the default platform for a headerless root
+with a top-level `main!` definition or a platformless app, or no application.
+This syntactic classification does not establish entrypoint type correctness
+and never grants host effects to imported modules.
+
+CLI `run` and `build` consume this classification during their existing root
+preparation parse, before platform discovery or host linking. Parse failures
+produce source diagnostics directly; a non-app root produces the execution
+requires-app-or-default-app diagnostic. Neither case is staged as a synthetic
+app to obtain an error. Checking still accepts valid type modules, and explicit
+root requests such as `test` do not require an application entrypoint.
+
+Preparation uses only parser state and releases it before compilation. It does
+not allocate a type store, run an extra checking pass, or retain dependency ASTs.
+Checking remains responsible for validating implementations and entrypoint types.
 
 ## Build Outputs And The Targets Header
 

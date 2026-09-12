@@ -3436,34 +3436,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .execution_requires_app_or_default_app => |data| blk: {
-            const region_info = self.calcRegionInfo(data.region);
-
-            var report = try Report.init(allocator, "Execution Requires App Or Default App", "This file cannot be executed because it is not an app or default-app module.", .runtime_error);
-
-            try report.document.addReflowingText("Add either:");
-            try report.document.addLineBreak();
-            try report.document.addInlineCode("app");
-            try report.document.addReflowingText(" header at the top of the file");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("or:");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("a ");
-            try report.document.addInlineCode("main!");
-            try report.document.addReflowingText(" function with 1 argument (for default-app)");
-            try report.document.addLineBreak();
-
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
-
-            break :blk report;
-        },
+        .execution_requires_app_or_default_app => |data| CIR.Diagnostic.buildExecutionRequiresAppOrDefaultAppReport(
+            allocator,
+            self.calcRegionInfo(data.region),
+            filename,
+            self.getSourceAll(),
+            self.getLineStartsAll(),
+        ),
         .type_name_case_mismatch => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

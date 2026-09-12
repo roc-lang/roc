@@ -68,12 +68,16 @@ pub const Config = struct {
     /// Maximum decompressed size for any single package bundle, in bytes.
     /// Null means unlimited. Platform bundles are always exempt.
     max_package_expanded_bytes: ?u64 = default_max_package_expanded_bytes,
-    /// Maximum combined content size attributable to any single direct
-    /// dependency of the root, in bytes. Null means unlimited.
+    /// Maximum combined content size attributable to any single non-platform
+    /// direct dependency of the root, in bytes. Null means unlimited.
     max_transitive_expanded_bytes: ?u64 = default_max_transitive_expanded_bytes,
+    /// Maximum combined content size attributable to a direct platform
+    /// dependency of the root, in bytes. Null means unlimited.
+    max_platform_transitive_expanded_bytes: ?u64 = default_max_platform_transitive_expanded_bytes,
 
     pub const default_max_package_expanded_bytes: u64 = 10 * 1024 * 1024;
     pub const default_max_transitive_expanded_bytes: u64 = 100 * 1024 * 1024;
+    pub const default_max_platform_transitive_expanded_bytes: u64 = 512 * 1024 * 1024;
 };
 
 /// The kind of module header a package's root file has.
@@ -891,7 +895,7 @@ pub const Resolver = struct {
                     try self.addDiagnostic(
                         "Package Too Large",
                         "The package at\n\n    {s}\n\nexpands to more than the per-package limit of {d} bytes.\n\n" ++
-                            "You can raise the limit with the --max-package-bytes flag, or stop depending on this package.",
+                            "You can raise the limit with the --max-package-mb flag, or stop depending on this package.",
                         .{ task.missing.url, self.config.max_package_expanded_bytes orelse 0 },
                     );
                     continue;
@@ -919,9 +923,11 @@ pub const Resolver = struct {
     /// package any round has ever pulled into the graph (including retracted
     /// ones, and including already-cached ones).
     fn checkTransitiveLimits(self: *Resolver, root_node: FetchedPackage) Allocator.Error!void {
-        const limit = self.config.max_transitive_expanded_bytes orelse return;
-
         for (root_node.deps) |dep| {
+            const limit = (if (dep.is_platform)
+                self.config.max_platform_transitive_expanded_bytes
+            else
+                self.config.max_transitive_expanded_bytes) orelse continue;
             const start_group = (try self.groupKeyForDep(root_node.root_dir, dep)) orelse continue;
 
             var seen_groups: std.StringHashMapUnmanaged(void) = .{};
@@ -973,7 +979,7 @@ pub const Resolver = struct {
                 try self.addDiagnostic(
                     "Dependency Tree Too Large",
                     "Depending on\n\n    {s}\n\nhas pulled more than {d} bytes of packages into the build ({d} bytes so far).\n\n" ++
-                        "You can raise the limit with the --max-transitive-bytes flag, or stop depending on this package.",
+                        "You can raise the limit with the --max-transitive-mb flag, or stop depending on this package.",
                     .{ dep.spec, limit, total },
                 );
             }
@@ -2646,6 +2652,39 @@ test "transitive size limit counts each direct dependency's reachable packages" 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqualStrings("Dependency Tree Too Large", resolver.diagnostics.items[0].title);
     try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, a_url) != null);
+    try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, "--max-transitive-mb") != null);
+}
+
+test "platform dependencies have a larger transitive size limit" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const platform_url = "https://example.com/pf/1.0.0/hashPf.tar.zst";
+    const package_url = "https://example.com/pkg/1.0.0/hashPkg.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "pf", .spec = platform_url, .is_platform = true },
+            .{ .alias = "pkg", .spec = package_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(platform_url, .{ .kind = .platform, .content_bytes = 4500 });
+    try registry.urls.put(package_url, .{ .content_bytes = 4500 });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{
+        .max_package_expanded_bytes = null,
+        .max_transitive_expanded_bytes = 4000,
+        .max_platform_transitive_expanded_bytes = 5000,
+    });
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
+    const diagnostic = resolver.diagnostics.items[0];
+    try std.testing.expectEqualStrings("Dependency Tree Too Large", diagnostic.title);
+    try std.testing.expect(std.mem.find(u8, diagnostic.message, package_url) != null);
 }
 
 test "per-package size limit is enforced for packages but not platforms" {
@@ -2678,6 +2717,7 @@ test "per-package size limit is enforced for packages but not platforms" {
     const diagnostic = resolver.diagnostics.items[0];
     try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, a_url) != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.message, "--max-package-mb") != null);
 }
 
 test "platform targets must be marked and packages may not depend on apps" {

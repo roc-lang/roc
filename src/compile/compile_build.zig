@@ -703,12 +703,12 @@ pub const BuildEnv = struct {
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
         return switch (header) {
-            .app => |a| if (a.platform_idx == null) .default_app else .app,
+            .app => if (ast.rootAppKind() == .default_platform) .default_app else .app,
             .package => .package,
             .platform => .platform,
             .module => .module,
             .hosted => .hosted,
-            .type_module => if (ast.hasMainBangDecl()) .default_app else .type_module,
+            .type_module => if (ast.rootAppKind() == .default_platform) .default_app else .type_module,
             .default_app => .default_app,
             .malformed => null,
         };
@@ -1276,10 +1276,10 @@ pub const BuildEnv = struct {
         errdefer info.deinit(self.gpa);
 
         switch (header) {
-            .app => |a| {
+            .app => {
                 // An app that names no platform gets the built-in Echo
                 // platform, which is what a default app is.
-                info.kind = if (a.platform_idx == null) .default_app else .app;
+                info.kind = if (ast.rootAppKind() == .default_platform) .default_app else .app;
             },
             .package => |p| {
                 info.kind = .package;
@@ -1314,7 +1314,7 @@ pub const BuildEnv = struct {
             },
             .type_module => {
                 // Check if file has a main! function, making it a default app
-                info.kind = if (ast.hasMainBangDecl()) .default_app else .type_module;
+                info.kind = if (ast.rootAppKind() == .default_platform) .default_app else .type_module;
             },
             .default_app => {
                 info.kind = .default_app;

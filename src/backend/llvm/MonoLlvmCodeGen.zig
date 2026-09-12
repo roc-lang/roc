@@ -1667,11 +1667,15 @@ pub const MonoLlvmCodeGen = struct {
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        const inline_everywhere = self.inline_everywhere.items.len > @intFromEnum(proc_id) and self.inline_everywhere.items[@intFromEnum(proc_id)];
-        if (inline_everywhere) {
-            try attrs_wip.addFnAttr(.alwaysinline, builder);
+        if (self.enable_default_platform_diagnostics) {
+            try attrs_wip.addFnAttr(.@"noinline", builder);
         } else {
-            try attrs_wip.addFnAttr(.inlinehint, builder);
+            const inline_everywhere = self.inline_everywhere.items.len > @intFromEnum(proc_id) and self.inline_everywhere.items[@intFromEnum(proc_id)];
+            if (inline_everywhere) {
+                try attrs_wip.addFnAttr(.alwaysinline, builder);
+            } else {
+                try attrs_wip.addFnAttr(.inlinehint, builder);
+            }
         }
         // Every parameter except the return slot is a distinct object no
         // callee can reach another way: RocOps is host-provided and never
@@ -1705,7 +1709,6 @@ pub const MonoLlvmCodeGen = struct {
                 } }, builder);
             }
             if (self.enable_default_platform_diagnostics) {
-                try attrs_wip.addFnAttr(.@"noinline", builder);
                 try attrs_wip.addFnAttr(.{ .string = .{
                     .kind = builder.string("disable-tail-calls") catch return error.OutOfMemory,
                     .value = builder.string("true") catch return error.OutOfMemory,
@@ -3969,7 +3972,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("direct_call_desc")
         else
             null;
-        const inline_here = !is_cold and
+        const inline_here = !is_cold and !self.enable_default_platform_diagnostics and
             self.inline_at_loop_sites.items.len > @intFromEnum(proc_id) and
             self.inline_at_loop_sites.items[@intFromEnum(proc_id)] and
             if (self.current_source_stmt) |stmt| (self.stmts_in_loops.get(@intFromEnum(stmt)) orelse 0) >= min_inline_site_loop_depth else false;

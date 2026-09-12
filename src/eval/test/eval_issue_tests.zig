@@ -249,6 +249,34 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Err(Wrapped(B(\"propagated\")))" },
     },
     .{
+        .name = "issue 11301: stored record callables forward evidence through nested scopes independently",
+        .source_kind = .module,
+        .source =
+        \\stored = { invoke: outer }
+        \\outer = |hooks| {
+        \\    _ = hooks.get
+        \\    forward = |next| middle(next)
+        \\    forward(hooks)
+        \\}
+        \\middle = |hooks| {
+        \\    get = hooks.get
+        \\    _ = get("name")
+        \\    inner(hooks)
+        \\}
+        \\inner = |hooks| {
+        \\    run = hooks.run
+        \\    output = run()?
+        \\    _ = output.trim()
+        \\    Ok({})
+        \\}
+        \\main = (
+        \\    (stored.invoke)({ run: || Err(CommandNotFound), get: |_name| "x" }),
+        \\    (stored.invoke)({ run: || Ok("  found  "), get: |_name| "y" }),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(Err(CommandNotFound), Ok({}))" },
+    },
+    .{
         .name = "issue 11217: stored closures retain enclosing callable alias contexts",
         .source_kind = .module,
         .source =
@@ -1660,5 +1688,69 @@ pub const tests = [_]TestCase{
         \\main = Repro.problems({ graph: { edges: [] }, shared_ends: [] })
         ,
         .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11275
+        // A closure captures a record whose non-updated field is refcounted
+        // and returns that record either updated (`{ ..model, query }`) or
+        // untouched on the two branches of an `if`, while the caller builds a
+        // nominal value through a method of a type declared in another module
+        // on its error path. The captured record is the captures struct's only
+        // refcounted field, so its reads are ownership-complete and both
+        // branch reads canonicalize to the one dominating read before the
+        // comparison. Dismantle analysis must classify those branch reads by
+        // that representative's plan rather than commit a take of the
+        // captures struct on a read emitted as the representative's alias;
+        // the run produces one effect.
+        .name = "issue 11275: closure returning captured record updated or unchanged solves ARC",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Effect",
+            .source =
+            \\Effect := [Log].{
+            \\    log : Str -> Effect
+            \\    log = |_message| Log
+            \\}
+            \\
+            ,
+        }},
+        .source =
+        \\import Effect exposing [Effect]
+        \\
+        \\Model : { query : Str, items : List(Str) }
+        \\
+        \\update : Model -> (Model, List(Effect))
+        \\update = |model|
+        \\    run(
+        \\        |body| {
+        \\            decoded : Try({ query : Str }, [Bad])
+        \\            decoded = if body == "" { Err(Bad) } else { Ok({ query: body }) }
+        \\
+        \\            match decoded {
+        \\                Ok({ query }) =>
+        \\                    if query == model.query {
+        \\                        Ok(({ ..model, query }, []))
+        \\                    } else {
+        \\                        Ok((model, []))
+        \\                    }
+        \\
+        \\                Err(Bad) => Err(Bad)
+        \\            }
+        \\        },
+        \\    )
+        \\
+        \\run : (Str -> Try((Model, List(Effect)), [Bad])) -> (Model, List(Effect))
+        \\run = |f|
+        \\    match f("") {
+        \\        Ok(updated) => updated
+        \\        Err(Bad) => ({ query: "", items: [] }, [Effect.log("")])
+        \\    }
+        \\
+        \\main = {
+        \\    (_updated, effects) = update({ query: "q", items: [] })
+        \\    List.len(effects)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
     },
 };
