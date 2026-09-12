@@ -689,7 +689,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     const result1 = occurs(&types_store, &scratch, nominal_type);
     try std.testing.expectEqual(.valid, result1);
 
-    // assert that starting from the the tag union, it works
+    // assert that starting from the tag union, it works
 
     const result2 = occurs(&types_store, &scratch, backing_var);
     try std.testing.expectEqual(.valid, result2);
@@ -740,7 +740,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     const result2 = occurs(&types_store, &scratch, type_b_nominal);
     try std.testing.expectEqual(.valid, result2);
 
-    // assert that starting from the the tag union, it works
+    // assert that starting from the tag union, it works
 
     const result3 = occurs(&types_store, &scratch, type_b_backing);
     try std.testing.expectEqual(.valid, result3);

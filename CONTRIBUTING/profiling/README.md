@@ -47,7 +47,7 @@ It was search for `memmove` and shows that 25% of time is spent moving bytes.
 
 ### [Samply](https://github.com/mstange/samply)
 
-Samply is a sampling profiler that that uses the [Firefox profiler](https://profiler.firefox.com/) to give richer info and interactivity on top of a flamegraph.
+Samply is a sampling profiler that uses the [Firefox profiler](https://profiler.firefox.com/) to give richer info and interactivity on top of a flamegraph.
 I find it to be a richer and nicer default than simple flamegraphs, but it is also more complex.
 Not only do you get a flamegraph, but you get callstacks, can collapse recursive nodes, and are able to view source lines and assembly hit by the sampler.
 
