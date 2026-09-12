@@ -9849,7 +9849,21 @@ lowerer copies the checked literal bytes into the LIR string store and emits
 `str_from_quote` expression whose checked target is builtin `Str` follows the
 same path. A `str_from_quote` expression with a static-dispatch conversion plan
 is not a string literal assignment; it lowers through the checked dispatch plan
-for that conversion.
+for that conversion. Evidence-dependent quote conversions use the existing
+checked dispatch resolution to select runtime conversion without looking for a
+compile-time root. Direct custom conversions still require their checker-selected
+root. Quote constraints carry runtime dictionary evidence,
+including at procedure-value and closure boundaries; their literal origin does
+not make the callable descriptor-only. Checked evidence and Boxy dictionary
+planning use the same classification. Numeral defaulting retains its existing
+descriptor-guided scalar operation. No additional per-literal representation or
+root index is needed. Converted pattern guards evaluate conversion and equality
+only after preceding patterns have matched, through ordinary expression lowering.
+The checked quote callable takes concrete `Str`; its generic result and error
+leaves are supplied by the selected dictionary method's requirement descriptors.
+Boxy binds those exact leaf descriptors in the call's descriptor scope and builds
+constructor descriptors from them through ordinary call lowering. It never asks
+the caller to invent a static descriptor for the conversion's generic error type.
 
 Checked bytes literals follow the same byte-copying LIR literal path as string
 segments: the literal bytes are copied into the LIR string store and referenced

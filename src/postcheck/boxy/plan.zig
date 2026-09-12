@@ -5801,7 +5801,7 @@ const Builder = struct {
     ) Allocator.Error!Span {
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
         for (constraints, 0..) |constraint, index| {
-            if (constraint.origin.literalKind() != null) continue;
+            if (!static_dispatch.requiresRuntimeDictionary(constraint.origin)) continue;
             try self.plan.dictionaries.append(self.allocator, .{
                 .source_type = source_type,
                 .constraint_index = @intCast(index),
@@ -10543,6 +10543,12 @@ const Builder = struct {
         expr_id: checked.CheckedExprId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
     ) Allocator.Error!void {
+        const plan_id = maybe_plan orelse return;
+        switch (view.static_dispatch_plans.plans[@intFromEnum(plan_id)].resolution) {
+            .evidence_dependent, .checked_error, .@"unreachable" => return try self.analyzeDispatchCallTarget(view, expr_id, maybe_plan),
+            .direct_closed, .direct_parametric => {},
+            .direct_pending, .structural => boxyPlanInvariant("quote conversion had an invalid checked dispatch resolution"),
+        }
         const root = view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
             boxyPlanInvariant("checked from_quote expression had no compile-time conversion root");
         switch (root.payload) {
