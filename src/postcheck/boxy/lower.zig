@@ -2877,24 +2877,22 @@ const ProcedureBuilder = struct {
 
         const outer_env = context.env;
         defer context.env = outer_env;
-        const substitutions = self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions);
-        if (substitutions.len != 0) {
+        var substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        if (worker_rep.nominal_backing_arg_substitutions.len != 0) {
             var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
             defer bindings.deinit(self.allocator);
-            for (substitutions) |substitution| {
-                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+            while (substitutions.next()) |substitution| {
+                const formal_rep = substitution.formal_rep orelse continue;
+                const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
                 if (formal.descriptor == null) continue;
                 const actual_source = if (identity_source) |source| blk: {
                     const source_rep = self.plan.representations.items[@intFromEnum(source)];
-                    for (self.plan.nominalBackingArgSubstitutionSlice(source_rep.nominal_backing_arg_substitutions)) |source_substitution| {
-                        if (source_substitution.arg_index == substitution.arg_index) break :blk source_substitution.actual_rep;
-                    }
-                    break :blk null;
+                    break :blk self.plan.nominalBackingActual(source_rep.nominal_backing_arg_substitutions, substitution.arg_index);
                 } else null;
-                if (substitution.formal_rep == substitution.actual_rep and
-                    (actual_source == null or actual_source == substitution.formal_rep)) continue;
+                if (formal_rep == substitution.actual_rep and
+                    (actual_source == null or actual_source == formal_rep)) continue;
                 var binding = StaticDescInstantiationContext.Binding{
-                    .formal = substitution.formal_rep,
+                    .formal = formal_rep,
                     .actual = substitution.actual_rep,
                     .source = actual_source,
                     .env = outer_env,
@@ -3713,11 +3711,13 @@ const ProcedureBuilder = struct {
         var current = rep_id;
         for (0..self.plan.representations.items.len) |_| {
             const rep = self.plan.representations.items[@intFromEnum(current)];
-            for (self.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+            var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                const formal_rep = substitution.formal_rep orelse continue;
+                const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
                 const desc = formal.descriptor orelse continue;
                 const actual = self.effectiveStaticDescriptorSource(substitution.actual_rep, substitution.actual_rep, sources).?;
-                if (substitution.formal_rep != actual) {
+                if (formal_rep != actual) {
                     try sources.put(self.allocator, desc, actual);
                 }
             }
@@ -3735,10 +3735,7 @@ const ProcedureBuilder = struct {
         if (self.type_desc_ids[rep_index]) |existing| return existing;
 
         const source_rep = self.plan.representations.items[rep_index];
-        const nominal_substitutions = self.plan.nominalBackingArgSubstitutionSlice(
-            source_rep.nominal_backing_arg_substitutions,
-        );
-        if (nominal_substitutions.len != 0) {
+        if (source_rep.nominal_backing_arg_substitutions.len != 0) {
             var descriptor_sources = StaticDescriptorSourceMap{};
             defer descriptor_sources.deinit(self.allocator);
             try self.collectStaticNominalBackingDescriptorSources(rep_id, &descriptor_sources);
@@ -13417,6 +13414,11 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         if (quote.plan == null) return try self.assignStringLiteral(target, quote.literal, next);
 
+        switch (self.staticDispatchPlan(quote.plan).resolution) {
+            .evidence_dependent, .checked_error, .@"unreachable" => return try self.lowerRuntimeQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
+            .direct_closed, .direct_parametric => {},
+            .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
+        }
         const root = self.module.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
             boxyLowerInvariant("checked from_quote expression had no compile-time conversion root");
         return switch (root.payload) {
@@ -13428,7 +13430,7 @@ const ProcBodyBuilder = struct {
                 checked_ty,
                 next,
             ),
-            .pending => try self.lowerPendingQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
+            .pending => try self.lowerRuntimeQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
             .fn_value,
             .discarded,
             .expect,
@@ -13436,7 +13438,7 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn lowerPendingQuoteConversionInto(
+    fn lowerRuntimeQuoteConversionInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
@@ -17222,12 +17224,15 @@ const ProcBodyBuilder = struct {
         if (entry.found_existing) return;
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-            const put = try substitutions.getOrPut(substitution.formal_rep);
-            if (put.found_existing and put.value_ptr.* != substitution.actual_rep) {
-                boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+        var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitution_iter.next()) |substitution| {
+            if (substitution.formal_rep) |formal_rep| {
+                const put = try substitutions.getOrPut(formal_rep);
+                if (put.found_existing and put.value_ptr.* != substitution.actual_rep) {
+                    boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+                }
+                put.value_ptr.* = substitution.actual_rep;
             }
-            put.value_ptr.* = substitution.actual_rep;
             try self.collectNominalBackingRepActualSubstitutions(substitution.actual_rep, substitutions, seen);
         }
         for (self.parent.plan.childSlice(rep.children)) |child| {
@@ -18248,6 +18253,12 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
+        // A quote conversion's argument is concrete Str. Its remaining type
+        // parameters (including the conversion error) belong to the selected
+        // dictionary method, rather than to an explicit argument at this call.
+        if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
+            try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
+        }
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, lowered, arg_reps, null, null, &pre_arg_descriptor_initializers);
         defer self.parent.allocator.free(hidden_desc_locals);
 
@@ -18335,6 +18346,33 @@ const ProcBodyBuilder = struct {
             lowered,
             continuation,
         );
+    }
+
+    fn bindQuoteDictionaryDescriptorArgs(
+        self: *ProcBodyBuilder,
+        args: []const Plan.DirectCallHiddenDescriptorArg,
+        dict: LIR.LocalId,
+        method: names.MethodNameId,
+        slot: u32,
+        initializers: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!void {
+        for (args, 0..) |arg, index| {
+            // Constructor descriptors are built by ordinary call lowering from
+            // these exact leaf descriptors supplied by conversion evidence.
+            if (!self.repIsBareDynamic(arg.rep)) continue;
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try initializers.append(self.parent.allocator, .{
+                .local = local,
+                .materialize = .{ .dict_method_hidden = .{
+                    .dict = dict,
+                    .method = method,
+                    .method_slot = slot,
+                    .hidden_index = @intCast(index),
+                    .shape = .requirement,
+                } },
+            });
+            try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
+        }
     }
 
     fn dictionaryCallArgumentDescriptorLocals(
@@ -21476,7 +21514,8 @@ const ProcBodyBuilder = struct {
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => {
-                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                    var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                    while (substitution_iter.next()) |substitution| {
                         if (substitution.formal_rep == backing_rep) return substitution.actual_rep;
                     }
                     return backing_rep;
@@ -21828,16 +21867,18 @@ const ProcBodyBuilder = struct {
                     // Resolve all actuals in the enclosing scope before binding
                     // this declaration's formals (including nested uses of the
                     // same nominal at different arguments).
-                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-                        if (substitution.formal_rep == substitution.actual_rep) continue;
-                        const formal = self.parent.plan.representations.items[@intFromEnum(substitution.formal_rep)];
+                    var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                    while (substitutions.next()) |substitution| {
+                        const formal_rep = substitution.formal_rep orelse continue;
+                        if (formal_rep == substitution.actual_rep) continue;
+                        const formal = self.parent.plan.representations.items[@intFromEnum(formal_rep)];
                         if (formal.descriptor == null) continue;
                         if (snapshot == null) snapshot = try self.snapshotDescriptorBindings();
                         const materialization = try self.descriptorMaterializationForKnownRep(substitution.actual_rep);
                         const local = try self.addFrameLocal(.opaque_ptr);
                         try self.recordDescriptorLocalTemplate(local, materialization);
                         try initializers.append(self.parent.allocator, .{ .local = local, .materialize = materialization.desc, .captures = materialization.captures });
-                        try bindings.append(self.parent.allocator, .{ .rep = substitution.formal_rep, .local = local });
+                        try bindings.append(self.parent.allocator, .{ .rep = formal_rep, .local = local });
                     }
                     for (bindings.items) |binding| try self.bindDescriptorIdentityLocalForRep(binding.rep, binding.local, false);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
@@ -27324,8 +27365,10 @@ const ProcBodyBuilder = struct {
         visited[rep_index] = true;
 
         const rep = self.parent.plan.representations.items[rep_index];
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-            if (substitution.actual_rep != substitution.formal_rep and
+        var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitutions.next()) |substitution| {
+            const formal_rep = substitution.formal_rep orelse continue;
+            if (substitution.actual_rep != formal_rep and
                 self.descriptorTemplateRefNeedsCaptures(substitution.actual_rep, rep.descriptor, visited)) return true;
         }
         const current_desc = rep.descriptor;
@@ -27498,12 +27541,14 @@ const ProcBodyBuilder = struct {
             const bindings_start = context.bindings.items.len;
             // Resolve all arguments in the enclosing scope before binding this
             // declaration's formals. The next wrapper can reuse those formals.
-            for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+            var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                const formal_rep = substitution.formal_rep orelse continue;
                 const actual = self.descriptorTemplateExactRep(substitution.actual_rep, context);
-                const outer = context.exact_reps[@intFromEnum(substitution.formal_rep)];
-                if (substitution.formal_rep == actual or outer == actual) continue;
+                const outer = context.exact_reps[@intFromEnum(formal_rep)];
+                if (formal_rep == actual or outer == actual) continue;
                 try context.bindings.append(self.parent.allocator, .{
-                    .formal = substitution.formal_rep,
+                    .formal = formal_rep,
                     .outer = outer,
                     .actual = actual,
                 });
@@ -33133,7 +33178,11 @@ const ProcBodyBuilder = struct {
             field.* = .{
                 .local = field_local,
                 .target_rep = target_field_rep,
-                .source_rep = source_field_rep,
+                // This local is the boundary output, not the original field.
+                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                    source_field_rep
+                else
+                    target_field_rep,
             };
         }
         const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
@@ -33307,7 +33356,11 @@ const ProcBodyBuilder = struct {
             field.* = .{
                 .local = field_local,
                 .target_rep = target_field_rep,
-                .source_rep = self.exprTagPayloadStorageRep(field_local, target_field_rep, source_field_rep),
+                // This local is the boundary output, not the original field.
+                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                    source_field_rep
+                else
+                    target_field_rep,
             };
         }
         const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
@@ -36580,22 +36633,15 @@ const ProcBodyBuilder = struct {
         const call_rep = self.parent.plan.representations.items[@intFromEnum(call_rep_id)];
         if (call_rep.kind != .nominal) return;
 
-        const call_substitutions = self.parent.plan.nominalBackingArgSubstitutionSlice(
-            call_rep.nominal_backing_arg_substitutions,
-        );
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
-            var exact_call_arg_rep: ?Plan.TypeRepId = null;
-            for (call_substitutions) |call_substitution| {
-                if (call_substitution.arg_index != backing_substitution.arg_index) continue;
-                if (exact_call_arg_rep != null) {
-                    boxyLowerInvariant("boxy nominal backing substitution found duplicate call arguments");
-                }
-                exact_call_arg_rep = call_substitution.actual_rep;
-            }
-            const exact_rep = exact_call_arg_rep orelse
-                boxyLowerInvariant("boxy nominal backing substitution was missing a call argument");
-            if (backing_substitution.formal_rep == exact_rep) continue;
-            const put = try substitutions.getOrPut(backing_substitution.formal_rep);
+        var substitutions_iter = self.parent.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        while (substitutions_iter.next()) |backing_substitution| {
+            const exact_rep = self.parent.plan.nominalBackingActual(
+                call_rep.nominal_backing_arg_substitutions,
+                backing_substitution.arg_index,
+            ) orelse boxyLowerInvariant("boxy nominal backing substitution was missing a call argument");
+            const formal_rep = backing_substitution.formal_rep orelse continue;
+            if (formal_rep == exact_rep) continue;
+            const put = try substitutions.getOrPut(formal_rep);
             if (put.found_existing and put.value_ptr.* != exact_rep) {
                 boxyLowerInvariant("boxy nominal backing substitution assigned one backing formal to two call arguments");
             }

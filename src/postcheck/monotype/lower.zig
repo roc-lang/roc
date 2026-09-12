@@ -13905,10 +13905,15 @@ const BodyDraftStore = struct {
     /// Retains graph-to-program mappings across eager coordinator calls and the
     /// final ordered commit.
     committed_type_relocation: ?Type.Store.TypeRelocation,
+    /// Interface-replay memo shared by every template request lowered into
+    /// this draft's graph. Entries hold graph-owned provisional views, so the
+    /// memo is graph-qualified state and is discarded with the graph.
+    interface_replay: InterfaceReplayState,
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
             .allocator = allocator,
+            .interface_replay = InterfaceReplayState.init(allocator),
             .symbol_domain = .coordinator,
             .worker_local_symbol_count = 0,
             .fns = .empty,
@@ -14109,6 +14114,7 @@ const BodyDraftStore = struct {
     }
 
     fn deinit(self: *BodyDraftStore) void {
+        self.interface_replay.deinit(self.allocator);
         for (self.template_specs.items) |*spec| {
             if (spec.lexical) |lexical| {
                 self.allocator.free(lexical.binders);
@@ -14818,6 +14824,8 @@ const BodyDraftStore = struct {
     /// consumers have run. Retained core data and coordinator intents remain;
     /// no slice in those intents may continue to borrow the graph arena.
     fn discardGraphStateAfterSeal(self: *BodyDraftStore) void {
+        self.interface_replay.deinit(self.allocator);
+        self.interface_replay = InterfaceReplayState.init(self.allocator);
         for (self.deferred_const_uses.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
@@ -20591,8 +20599,7 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         root_node: NodeId,
     ) Allocator.Error!void {
-        var replay_state = InterfaceReplayState.init(self.allocator);
-        defer replay_state.deinit(self.allocator);
+        const replay_state = &self.draft.interface_replay;
         var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
         defer active_local_scopes.deinit();
         try self.applyCheckedTemplateInterfaceScopeRelations(
@@ -20600,7 +20607,7 @@ const BodyContext = struct {
             null,
             root_node,
             &active_local_scopes,
-            &replay_state,
+            replay_state,
         );
     }
 

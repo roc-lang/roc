@@ -10389,3 +10389,37 @@ test "tail-call transfers preserve owning cycles and duplicated sources" {
         }
     }
 }
+
+test "issue 11291 boxy imported nominal forwarding executes with exact backing descriptors" {
+    const allocator = std.testing.allocator;
+    const container_module =
+        \\Container(a) := { items: List(a) }.{
+        \\    to_list : Container(a) -> List(a)
+        \\    to_list = |value| to_list_help(value)
+        \\}
+        \\to_list_help : Container(a) -> List(a)
+        \\to_list_help = |{ items }| items
+    ;
+    const source =
+        \\import Container exposing [Container]
+        \\value : Container(U8)
+        \\value = { items: Str.to_utf8("xyz") }
+        \\main = Container.to_list(value)
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Container", .source = container_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("[120, 121, 122]", output);
+}

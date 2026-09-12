@@ -2826,6 +2826,16 @@ const Pass = struct {
                 // proof, so it does not request another range-analysis round.
                 try self.bindFresh(s.target);
             },
+            .list_map_prepare_reuse => {
+                // Ownership transfer preserves the list value, including its
+                // length. Keep the input's value identity across the transfer.
+                std.debug.assert(arg_count == 1);
+                if (try self.valueOf(GuardedList.at(args, 0))) |node| {
+                    try self.bind(s.target, .{ .node = node });
+                } else {
+                    try self.bindFresh(s.target);
+                }
+            },
             .list_len => {
                 if (arg_count == 1) {
                     const list_local = GuardedList.at(args, 0);
@@ -3071,7 +3081,6 @@ const Pass = struct {
             .list_release_excess_capacity,
             .list_split_first,
             .list_split_last,
-            .list_map_prepare_reuse,
             .list_map_can_reuse,
             .list_map_cast_unsafe,
             .list_map_extract_unsafe,
