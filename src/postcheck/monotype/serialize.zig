@@ -29,8 +29,8 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
 /// Version 19: pre-lift closure operands store explicit target capture keys.
-/// Version 18: symbolic callable evidence is relative to its containing vector
-/// slot, without a source-scheme index in stored evidence or its digest.
+/// Version 18: callable-derived evidence belongs to its vector slot and no
+/// longer stores a parameter index from another scheme.
 /// Version 17: generated-codec specialization identities retain the explicit
 /// public value shape separately from the constructor representation.
 /// Version 16: generated-codec specialization identities name their complete
@@ -2336,9 +2336,12 @@ test "monotype specialization cache maps fresh single-shard program view equival
     const call_args = try program.addExprSpan(&.{local_expr});
     const typed_args = try program.addTypedLocalSpan(&.{.{ .local = local, .ty = unit_ty }});
 
-    const fn_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .{ .derivation = .equality } }};
+    const fn_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{
+        .{ .structural = .{ .derivation = .equality } },
+        .{ .from_callable = .{ .independent_callable = true } },
+    };
     const fn_evidence_frame_nodes = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
     };
     const fn_evidence = try program.addConstFnEvidence(&fn_evidence_nodes);
     const fn_evidence_frames = try program.addConstFnEvidenceFrames(&fn_evidence_frame_nodes);

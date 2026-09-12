@@ -20,6 +20,79 @@ fn recordsWithSlot(env: *const ModuleEnv, slot: Slot) usize {
     return count;
 }
 
+test "issue 11311: forwarding evidence belongs to the value and not its annotation" {
+    const source =
+        \\Model(a) := { parse : Str -> Try(a, Str), render : a -> Str }
+        \\make : (Str -> Try(a, Str)), (a -> Str) -> Model(a)
+        \\make = |parse, render| Model.{ parse, render }
+        \\forward : (Str -> Try(a, Str)), (a -> Str) -> Model(a)
+        \\forward = make
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const env = test_env.module_env;
+    const idents = env.getIdentStoreConst();
+    var make_var: ?@import("types").Var = null;
+    var forward_node: ?u32 = null;
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        const name = idents.getText(pattern.assign.ident);
+        if (std.mem.eql(u8, name, "make")) make_var = ModuleEnv.varFrom(def_idx);
+        if (std.mem.eql(u8, name, "forward")) forward_node = @intFromEnum(def.expr);
+    }
+    try std.testing.expect(make_var != null);
+    try std.testing.expect(forward_node != null);
+
+    var count: usize = 0;
+    for (env.scheme_uses.items.items) |record| {
+        if (record.node_idx != forward_node.? or record.slot_kind != @intFromEnum(Slot.value_use)) continue;
+        count += 1;
+        try std.testing.expectEqual(
+            env.types.resolveVar(make_var.?).var_,
+            env.types.resolveVar(@enumFromInt(record.scheme_root)).var_,
+        );
+        try std.testing.expectEqual(@as(u32, 1), record.pairs_len);
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
+}
+
+const constrained_forwarding =
+    \\a.Stringable : where [a.to_str : a -> Str]
+    \\render : Try(a, Str) -> Str where [a.Stringable]
+    \\render = |result| match result {
+    \\    Ok(value) => value.to_str()
+    \\    Err(message) => message
+    \\}
+    \\forward : Try(a, Str) -> Str where [a.Stringable]
+    \\forward = render
+    \\
+;
+
+test "issue 11311: forwarding with type applications preserves where-alias requirements" {
+    var test_env = try TestEnv.init("Test", constrained_forwarding ++
+        \\Thing := [Thing].{
+        \\    to_str : Thing -> Str
+        \\    to_str = |_| "thing"
+        \\}
+        \\result = forward(Ok(Thing.Thing))
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("result", "Str");
+}
+
+test "issue 11311: forwarding with type applications rejects missing where-alias methods" {
+    var test_env = try TestEnv.init("Test", constrained_forwarding ++
+        \\Missing := [Missing]
+        \\result = forward(Ok(Missing.Missing))
+    );
+    defer test_env.deinit();
+    try test_env.assertHasTypeError("Missing Method");
+}
+
 test "concrete recursive dispatch records a shared method instance without copying requirements" {
     var test_env = try TestEnv.init("Test",
         \\Expr := [Leaf(Str), Next(Expr)].{
