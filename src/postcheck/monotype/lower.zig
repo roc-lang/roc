@@ -12737,7 +12737,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         }
 
         fn add(self: *Self, address: Address, raw_spec: u32) Allocator.Error!void {
-            // Reserve before publishing either index so allocation failure cannot
+            // Reserve before updating either index so allocation failure cannot
             // leave a registered candidate absent from the prefix inventory.
             const pairs: ?*std.ArrayList(OpenPair) = switch (address) {
                 .open => |key| &self.prefixes.values()[@intFromEnum(key.prefix)],
