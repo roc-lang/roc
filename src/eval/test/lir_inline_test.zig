@@ -239,6 +239,7 @@ const LowerMonotypeOptions = struct {
     loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     root_selection: enum { all, test_expects } = .all,
 };
 
@@ -290,6 +291,7 @@ fn lowerMonotypeModuleWithOptions(
             .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
+            .post_check_executor = options.post_check_executor,
         },
     );
     errdefer mono.deinit();
@@ -2384,6 +2386,74 @@ test "specialization scheduling is deterministic across repeat runs" {
             @field(first_diagnostics.body, field.name),
             @field(second_diagnostics.body, field.name),
         );
+    }
+}
+
+test "interface summaries relocate across bodies and executor lanes" {
+    const allocator = std.testing.allocator;
+    const TaskExecutor = base.post_check_task_executor;
+    const Executor = struct {
+        allocator: Allocator,
+        next_lane: usize,
+
+        fn run(context: *anyopaque, tasks: []const TaskExecutor.Task, completions: []TaskExecutor.Completion) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            for (tasks, 0..) |task, index| {
+                const lane = self.next_lane;
+                self.next_lane = (lane + 1) % 2;
+                completions[tasks.len - 1 - index] = .{
+                    .id = task.id,
+                    .worker_id = lane,
+                    .value = task.run(task.context, .{
+                        .id = lane,
+                        .allocator = self.allocator,
+                        .scratch = self.allocator,
+                    }),
+                };
+            }
+        }
+
+        fn executor(self: *@This()) TaskExecutor.Executor {
+            return .{ .context = self, .worker_count = 2, .runFn = run };
+        }
+    };
+    const source =
+        \\leaf : Str -> Str
+        \\leaf = |s| Str.concat(s, "!")
+        \\left : Str -> Str
+        \\left = |s| leaf(s)
+        \\right : Str -> Str
+        \\right = |s| leaf(s)
+        \\main : Str -> (Str, Str)
+        \\main = |s| (left(s), right(s))
+    ;
+    var first_executor = Executor{ .allocator = allocator, .next_lane = 0 };
+    var second_executor = Executor{ .allocator = allocator, .next_lane = 1 };
+    var first_diagnostics: MonoLower.Diagnostics = .{};
+    var second_diagnostics: MonoLower.Diagnostics = .{};
+    var first = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &first_diagnostics,
+        .post_check_executor = first_executor.executor(),
+    });
+    defer first.deinit(allocator);
+    var second = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &second_diagnostics,
+        .post_check_executor = second_executor.executor(),
+    });
+    defer second.deinit(allocator);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_hits > 0);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_expansions > 0);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expect(second_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expect(first.mono.types.digest_stats == null);
+    const first_specs = first.mono.specsView();
+    const second_specs = second.mono.specsView();
+    try std.testing.expectEqual(first_specs.len, second_specs.len);
+    for (first_specs, second_specs) |lhs, rhs| {
+        try std.testing.expectEqual(lhs.fn_id, rhs.fn_id);
+        try std.testing.expectEqual(lhs.status, rhs.status);
+        try std.testing.expectEqual(lhs.identity.request_fn_ty_digest, rhs.identity.request_fn_ty_digest);
+        try std.testing.expectEqual(lhs.solved_fn_ty_digest, rhs.solved_fn_ty_digest);
     }
 }
 

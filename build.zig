@@ -6078,6 +6078,7 @@ pub fn build(b: *std.Build) void {
         }),
         .filters = test_filters,
     });
+    lir_inline_test.stack_size = stack_budget.roc_stack_size;
     roc_modules.addAll(lir_inline_test);
     lir_inline_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
     lir_inline_test.step.dependOn(&write_compiled_builtins.step);

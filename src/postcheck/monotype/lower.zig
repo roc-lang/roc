@@ -674,6 +674,12 @@ pub fn run(
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     defer builder.recordParallelLaneMetrics();
+    var digest_stats: Type.Store.DigestStats = .{};
+    program.types.digest_stats = if (builder.counters != null) &digest_stats else null;
+    defer {
+        program.types.digest_stats = null;
+        builder.addDigestStats(digest_stats);
+    }
     try builder.initHostedCatalog();
     try builder.loadCandidateSpecializationShards();
     setup_timing_scope.end();
@@ -729,6 +735,7 @@ pub fn run(
         }
     }
 
+    program.types.digest_stats = null;
     return program;
 }
 
@@ -2423,6 +2430,8 @@ const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
     name_store: names.NameStore,
+    interface_summaries: InterfaceSummaryCache,
+    captured_interface_summaries: usize = 0,
     checked_type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
@@ -2441,6 +2450,7 @@ const SpecJobWorkspace = struct {
             .captured_names = name_store.epochBoundary(),
             .types = types,
             .name_store = name_store,
+            .interface_summaries = InterfaceSummaryCache.init(allocator),
             .checked_type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
         };
     }
@@ -2545,6 +2555,7 @@ const SpecJobWorkspace = struct {
         }
         if (self.workspace_to_program) |*relocation| relocation.deinit();
         if (self.program_to_workspace) |*relocation| relocation.deinit();
+        self.interface_summaries.deinit();
         self.checked_type_cache.deinit();
         self.types.deinit();
         self.name_store.deinit();
@@ -2651,6 +2662,7 @@ const CompletedSpecJobShard = struct {
     dispatch_index: u64,
     worker_local_symbol_count: u32,
     specialization_counter_delta: ?SpecializationCounters = null,
+    interface_summaries: []const InterfaceSummaryEntry = &.{},
     store_epoch: SpecJobStoreEpoch,
     body_draft: BodyDraftStore,
     pending: SealedPendingTemplateBody,
@@ -2661,6 +2673,7 @@ const CompletedSpecJobShard = struct {
     fn deinit(self: *CompletedSpecJobShard) void {
         const allocator = self.body_draft.allocator;
         self.body_draft.deinit();
+        allocator.free(self.interface_summaries);
         self.store_epoch.deinit();
         if (self.diagnostics) |diagnostics| {
             allocator.destroy(diagnostics);
@@ -2675,6 +2688,7 @@ const CompletedProcedureRootShard = struct {
     worker_id: SpecJobWorkerId,
     worker_local_symbol_count: u32,
     specialization_counter_delta: ?SpecializationCounters = null,
+    interface_summaries: []const InterfaceSummaryEntry = &.{},
     store_epoch: SpecJobStoreEpoch,
     body_draft: BodyDraftStore,
     root_ty: Type.TypeId,
@@ -2686,6 +2700,7 @@ const CompletedProcedureRootShard = struct {
     fn deinit(self: *CompletedProcedureRootShard) void {
         const allocator = self.body_draft.allocator;
         self.body_draft.deinit();
+        allocator.free(self.interface_summaries);
         self.store_epoch.deinit();
         if (self.diagnostics) |diagnostics| allocator.destroy(diagnostics);
         self.* = undefined;
@@ -2699,6 +2714,7 @@ const SpecJobWorkerInputs = struct {
     proc_debug_names: bool,
     specialization_cache: SpecializationCacheControl,
     loaded_specialization_shards: []const LoadedSpecializationShard,
+    interface_summaries: *const InterfaceSummaryCache,
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
@@ -3098,6 +3114,9 @@ const Builder = struct {
     spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
     spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
     spec_job_task_buffers: SpecJobTaskBuffers = .{},
+    interface_summaries: InterfaceSummaryCache,
+    coordinator_interface_summaries: ?*const InterfaceSummaryCache = null,
+    interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -3224,6 +3243,7 @@ const Builder = struct {
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
+            .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
@@ -3243,7 +3263,10 @@ const Builder = struct {
         worker: *SpecJobWorkerState,
         inputs: *const SpecJobWorkerInputs,
     ) Allocator.Error!*Builder {
-        if (worker.builder) |builder| return builder;
+        if (worker.builder) |builder| {
+            builder.coordinator_interface_summaries = inputs.interface_summaries;
+            return builder;
+        }
 
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
@@ -3263,6 +3286,7 @@ const Builder = struct {
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
         builder.current_region = inputs.current_region;
+        builder.coordinator_interface_summaries = inputs.interface_summaries;
         worker.builder = builder;
         return builder;
     }
@@ -3357,6 +3381,7 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
+        self.interface_summaries.deinit();
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
         self.type_cache.deinit();
@@ -3461,6 +3486,36 @@ const Builder = struct {
         };
     }
 
+    fn commitInterfaceSummaries(self: *Builder, entries: []const InterfaceSummaryEntry, committed_types: *CommittedGraphTypes) Allocator.Error!void {
+        for (entries) |entry| {
+            const provisional_ty = try committed_types.commitType(entry.provisional_ty);
+            const summary_ty = try committed_types.commitType(entry.summary_ty);
+            try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
+                .address = entry.address,
+                .evidence = entry.evidence,
+                .provisional_ty = provisional_ty,
+                .summary_ty = summary_ty,
+            });
+        }
+    }
+
+    fn addDigestStats(self: *Builder, stats: Type.Store.DigestStats) void {
+        self.countBy("all_digest_root_requests", @intCast(stats.root_requests));
+        self.countBy("all_digest_node_misses", @intCast(stats.cache_misses));
+        self.countBy("commit_digest_root_requests", @intCast(stats.commit_root_requests));
+        self.countBy("commit_digest_node_misses", @intCast(stats.commit_node_misses));
+    }
+
+    fn interfaceReplayDigest(self: *Builder, types_: *Type.Store, name_store: *const names.NameStore, ty: Type.TypeId) names.TypeDigest {
+        if (self.counters == null) return types_.specializationDigestCached(name_store, ty, null);
+        var stats: Type.Store.DigestStats = .{};
+        const digest = types_.specializationDigestCached(name_store, ty, &stats);
+        self.countBy("interface_replay_digest_root_requests", @intCast(stats.root_requests));
+        self.countBy("interface_replay_digest_node_misses", @intCast(stats.cache_misses));
+        self.addDigestStats(stats);
+        return digest;
+    }
+
     fn specializationTypeDigestIn(
         self: *Builder,
         types_: *Type.Store,
@@ -3471,6 +3526,7 @@ const Builder = struct {
             self.count("specialization_type_digest_requests");
             var stats: Type.Store.DigestStats = .{};
             const digest = types_.specializationDigestCached(name_store, ty, &stats);
+            self.addDigestStats(stats);
             self.countBy("specialization_type_digest_cache_hits", @intCast(stats.cache_hits));
             self.countBy("specialization_type_digest_cache_misses", @intCast(stats.cache_misses));
             self.countBy("specialization_type_digest_nodes_visited", @intCast(stats.nodes_visited));
@@ -3873,6 +3929,7 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .specialization_cache = self.specialization_cache,
             .loaded_specialization_shards = self.loaded_specialization_shards,
+            .interface_summaries = &self.interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -4106,6 +4163,12 @@ const Builder = struct {
         self.symbols.active = .worker_local;
         defer self.symbols.active = .coordinator;
         const workspace = &worker.workspace;
+        var digest_stats: Type.Store.DigestStats = .{};
+        workspace.types.digest_stats = if (self.counters != null) &digest_stats else null;
+        defer {
+            workspace.types.digest_stats = null;
+            self.addDigestStats(digest_stats);
+        }
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
         const program_types_before = self.program.types.epochBoundary();
@@ -4258,13 +4321,17 @@ const Builder = struct {
                 Common.compilerBug("parallel root lowering mutated coordinator source scratch");
             }
         }
+        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.captured_interface_summaries..]);
+        errdefer self.allocator.free(summaries);
         var store_epoch = try workspace.captureStoreEpoch(epoch);
+        workspace.captured_interface_summaries = workspace.interface_summaries.entries.items.len;
         errdefer store_epoch.deinit();
         graph.destroy();
         workspace.finishEpoch(epoch);
         return .{
             .worker_id = worker.worker_id,
             .worker_local_symbol_count = body_draft.worker_local_symbol_count,
+            .interface_summaries = summaries,
             .store_epoch = store_epoch,
             .body_draft = body_draft,
             .root_ty = root_ty,
@@ -5067,6 +5134,7 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .specialization_cache = self.specialization_cache,
             .loaded_specialization_shards = self.loaded_specialization_shards,
+            .interface_summaries = &self.interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -5205,6 +5273,14 @@ const Builder = struct {
                             const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
                             try commit_domain.absorb(&shard.store_epoch);
                             shard.store_epoch_absorbed = true;
+                            var committed_types = CommittedGraphTypes.relocatedStore(
+                                &commit_domain.types,
+                                &commit_domain.name_store,
+                                &self.program.types,
+                                &self.program.names,
+                                commit_domain.committedTypeRelocation(self.program),
+                            );
+                            try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
                             shard.deinit();
                             if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
                         }
@@ -5575,6 +5651,12 @@ const Builder = struct {
         defer self.symbols.active = .coordinator;
 
         const workspace = &worker.workspace;
+        var digest_stats: Type.Store.DigestStats = .{};
+        workspace.types.digest_stats = if (self.counters != null) &digest_stats else null;
+        defer {
+            workspace.types.digest_stats = null;
+            self.addDigestStats(digest_stats);
+        }
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
         const program_types_before = self.program.types.epochBoundary();
@@ -5640,7 +5722,10 @@ const Builder = struct {
                 Common.compilerBug("parallel specialization lowering mutated coordinator source scratch");
             }
         }
+        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.captured_interface_summaries..]);
+        errdefer self.allocator.free(summaries);
         var store_epoch = try workspace.captureStoreEpoch(epoch);
+        workspace.captured_interface_summaries = workspace.interface_summaries.entries.items.len;
         errdefer store_epoch.deinit();
         self.countBodyDiagnostic("spec_job_shards_lowered");
         graph.destroy();
@@ -5649,6 +5734,7 @@ const Builder = struct {
             .worker_id = worker.worker_id,
             .dispatch_index = job.dispatch_index,
             .worker_local_symbol_count = body_draft.worker_local_symbol_count,
+            .interface_summaries = summaries,
             .store_epoch = store_epoch,
             .body_draft = body_draft,
             .pending = sealed_pending,
@@ -5688,6 +5774,7 @@ const Builder = struct {
             &self.program.names,
             committed_type_relocation,
         );
+        try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
         if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
             Common.compilerBug("Monotype specialization shard symbol count disagreed with its sealed draft");
         }
@@ -5737,6 +5824,7 @@ const Builder = struct {
             &self.program.names,
             commit_domain.committedTypeRelocation(self.program),
         );
+        try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
         if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
             Common.compilerBug("procedure root shard symbol count disagreed with its sealed draft");
         }
@@ -16247,6 +16335,59 @@ const InterfaceReplayAddress = struct {
     provisional_digest: [32]u8,
 };
 
+/// Both type ids are interned immutable content in the cache owner's store.
+/// Evidence is checked content, with no graph nodes or body-local captures.
+const InterfaceSummaryEntry = struct {
+    address: InterfaceReplayAddress,
+    evidence: StoredConstFnEvidence,
+    provisional_ty: Type.TypeId,
+    summary_ty: Type.TypeId,
+};
+
+const InterfaceSummaryCache = struct {
+    allocator: Allocator,
+    evidence_arena: std.heap.ArenaAllocator,
+    entries: std.ArrayList(InterfaceSummaryEntry) = .empty,
+    buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
+
+    fn init(allocator: Allocator) InterfaceSummaryCache {
+        return .{
+            .allocator = allocator,
+            .evidence_arena = std.heap.ArenaAllocator.init(allocator),
+            .buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(allocator),
+        };
+    }
+
+    fn deinit(self: *InterfaceSummaryCache) void {
+        var buckets = self.buckets.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.buckets.deinit();
+        self.entries.deinit(self.allocator);
+        self.evidence_arena.deinit();
+    }
+
+    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!void {
+        const bucket = try self.buckets.getOrPut(entry.address);
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |index| {
+            const existing = self.entries.items[index];
+            if (storedConstFnEvidenceEql(existing.evidence, entry.evidence) and
+                try types_.typeEql(name_store, existing.provisional_ty, entry.provisional_ty)) return;
+        }
+        try bucket.value_ptr.ensureUnusedCapacity(self.allocator, 1);
+        try self.entries.ensureUnusedCapacity(self.allocator, 1);
+        var owned = entry;
+        const arena = self.evidence_arena.allocator();
+        owned.evidence = .{
+            .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, entry.evidence.nodes),
+            .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, entry.evidence.frames),
+            .head = entry.evidence.head,
+        };
+        bucket.value_ptr.appendAssumeCapacity(@intCast(self.entries.items.len));
+        self.entries.appendAssumeCapacity(owned);
+    }
+};
+
 const InterfaceReplayEntry = struct {
     evidence: StoredConstFnEvidence,
     provisional_ty: Type.TypeId,
@@ -16259,6 +16400,7 @@ const InterfaceReplayEntry = struct {
 };
 
 const InterfaceReplayState = struct {
+    use_finished_summaries: bool = true,
     entries: std.ArrayList(InterfaceReplayEntry),
     buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
 
@@ -20809,6 +20951,41 @@ const BodyContext = struct {
         return try self.instNode(scheme_root);
     }
 
+    fn interfaceSummaryCache(self: *BodyContext) *InterfaceSummaryCache {
+        if (self.typeStore() == &self.builder.program.types) return &self.builder.interface_summaries;
+        const workspace = self.draft.spec_job_workspace orelse
+            Common.compilerBug("interface summary graph has no owning workspace");
+        std.debug.assert(self.typeStore() == &workspace.types);
+        return &workspace.interface_summaries;
+    }
+
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool } {
+        const local = self.interfaceSummaryCache();
+        if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
+            const entry = local.entries.items[index];
+            if (storedConstFnEvidenceEql(entry.evidence, evidence) and
+                try self.typeStore().typeEql(self.nameStore(), entry.provisional_ty, provisional_ty))
+                return .{ .ty = entry.summary_ty, .coordinator = false };
+        };
+        const coordinator = self.builder.coordinator_interface_summaries orelse &self.builder.interface_summaries;
+        if (coordinator == local) return null;
+        if (coordinator.buckets.get(address)) |candidates| for (candidates.items) |index| {
+            const entry = coordinator.entries.items[index];
+            if (!storedConstFnEvidenceEql(entry.evidence, evidence)) continue;
+            const request = try self.importProgramType(entry.provisional_ty);
+            if (!try self.typeStore().typeEql(self.nameStore(), request, provisional_ty)) continue;
+            const summary = try self.importProgramType(entry.summary_ty);
+            try local.insert(self.typeStore(), self.nameStore(), .{
+                .address = address,
+                .evidence = evidence,
+                .provisional_ty = request,
+                .summary_ty = summary,
+            });
+            return .{ .ty = summary, .coordinator = true };
+        };
+        return null;
+    }
+
     fn applyDirectCalleeInterfaceRelations(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -20867,7 +21044,7 @@ const BodyContext = struct {
             stored_evidence.head,
         );
         const source_fn_key = self.view.types.rootKey(source_fn_ty);
-        const provisional_digest = self.typeStore().specializationDigestCached(self.nameStore(), provisional_ty, null);
+        const provisional_digest = self.builder.interfaceReplayDigest(self.typeStore(), self.nameStore(), provisional_ty);
         const address = InterfaceReplayAddress{
             .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, source_fn_key),
             .evidence_digest = evidence_digest.bytes,
@@ -20907,6 +21084,28 @@ const BodyContext = struct {
             return;
         };
 
+        var verify_summary: ?Type.TypeId = null;
+        const saved_use_summaries = replay_state.use_finished_summaries;
+        defer replay_state.use_finished_summaries = saved_use_summaries;
+        if (replay_state.use_finished_summaries) {
+            if (try self.findInterfaceSummary(address, stored_evidence, provisional_ty)) |hit| {
+                self.builder.count("interface_summary_hits");
+                // Detailed diagnostics in safety builds audit the first 16
+                // cross-lane hits by independently expanding checked relations.
+                if (std.debug.runtime_safety and self.builder.diagnostics != null and
+                    hit.coordinator and self.builder.interface_summary_checks < 16)
+                {
+                    self.builder.interface_summary_checks += 1;
+                    self.builder.count("interface_summary_verifications");
+                    verify_summary = hit.ty;
+                    replay_state.use_finished_summaries = false;
+                } else {
+                    try relateFunctionRequestInterface(self.graph, try self.graph.instantiateProvisionalTypeView(hit.ty), request_fn_node);
+                    return;
+                }
+            }
+        }
+        self.builder.count("interface_summary_expansions");
         const replay_index = replay_state.entries.items.len;
         try replay_state.entries.append(self.allocator, .{
             .evidence = stored_evidence,
@@ -20956,6 +21155,27 @@ const BodyContext = struct {
         const entry = &replay_state.entries.items[replay_index];
         entry.summary_ty = try self.graph.provisionalTypeViewForNode(entry.representative);
         entry.status = .ready;
+        const summary_ty = entry.summary_ty.?;
+        if (verify_summary) |cached| {
+            const instantiated = try self.graph.instantiateProvisionalTypeView(cached);
+            const instantiated_ty = try self.graph.provisionalTypeViewForNode(instantiated);
+            if (!try self.typeStore().typeEql(self.nameStore(), instantiated_ty, summary_ty)) {
+                Common.compilerBug("cached interface summary disagreed with fresh checked relation expansion");
+            }
+        }
+        if (saved_use_summaries) {
+            var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
+            defer sealer.deinit();
+            const durable_request = try sealer.sealType(provisional_ty);
+            const durable_summary = try sealer.sealType(summary_ty);
+            const cache = self.interfaceSummaryCache();
+            try cache.insert(self.typeStore(), self.nameStore(), .{
+                .address = address,
+                .evidence = stored_evidence,
+                .provisional_ty = durable_request,
+                .summary_ty = durable_summary,
+            });
+        }
     }
 
     fn lowerEntryWrapperAtCell(
