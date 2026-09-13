@@ -239,6 +239,7 @@ const LowerMonotypeOptions = struct {
     loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     root_selection: enum { all, test_expects } = .all,
 };
 
@@ -290,6 +291,7 @@ fn lowerMonotypeModuleWithOptions(
             .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
+            .post_check_executor = options.post_check_executor,
         },
     );
     errdefer mono.deinit();
@@ -2384,6 +2386,74 @@ test "specialization scheduling is deterministic across repeat runs" {
             @field(first_diagnostics.body, field.name),
             @field(second_diagnostics.body, field.name),
         );
+    }
+}
+
+test "interface summaries relocate across bodies and executor lanes" {
+    const allocator = std.testing.allocator;
+    const TaskExecutor = base.post_check_task_executor;
+    const Executor = struct {
+        allocator: Allocator,
+        next_lane: usize,
+
+        fn run(context: *anyopaque, tasks: []const TaskExecutor.Task, completions: []TaskExecutor.Completion) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            for (tasks, 0..) |task, index| {
+                const lane = self.next_lane;
+                self.next_lane = (lane + 1) % 2;
+                completions[tasks.len - 1 - index] = .{
+                    .id = task.id,
+                    .worker_id = lane,
+                    .value = task.run(task.context, .{
+                        .id = lane,
+                        .allocator = self.allocator,
+                        .scratch = self.allocator,
+                    }),
+                };
+            }
+        }
+
+        fn executor(self: *@This()) TaskExecutor.Executor {
+            return .{ .context = self, .worker_count = 2, .runFn = run };
+        }
+    };
+    const source =
+        \\leaf : Str -> Str
+        \\leaf = |s| Str.concat(s, "!")
+        \\left : Str -> Str
+        \\left = |s| leaf(s)
+        \\right : Str -> Str
+        \\right = |s| leaf(s)
+        \\main : Str -> (Str, Str)
+        \\main = |s| (left(s), right(s))
+    ;
+    var first_executor = Executor{ .allocator = allocator, .next_lane = 0 };
+    var second_executor = Executor{ .allocator = allocator, .next_lane = 1 };
+    var first_diagnostics: MonoLower.Diagnostics = .{};
+    var second_diagnostics: MonoLower.Diagnostics = .{};
+    var first = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &first_diagnostics,
+        .post_check_executor = first_executor.executor(),
+    });
+    defer first.deinit(allocator);
+    var second = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &second_diagnostics,
+        .post_check_executor = second_executor.executor(),
+    });
+    defer second.deinit(allocator);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_hits > 0);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_expansions > 0);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expect(second_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expect(first.mono.types.digest_stats == null);
+    const first_specs = first.mono.specsView();
+    const second_specs = second.mono.specsView();
+    try std.testing.expectEqual(first_specs.len, second_specs.len);
+    for (first_specs, second_specs) |lhs, rhs| {
+        try std.testing.expectEqual(lhs.fn_id, rhs.fn_id);
+        try std.testing.expectEqual(lhs.status, rhs.status);
+        try std.testing.expectEqual(lhs.identity.request_fn_ty_digest, rhs.identity.request_fn_ty_digest);
+        try std.testing.expectEqual(lhs.solved_fn_ty_digest, rhs.solved_fn_ty_digest);
     }
 }
 
@@ -10210,6 +10280,95 @@ test "tail-call lowering preserves a failure after a recursive call" {
         var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
         defer interpreter.deinit();
         try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) }));
+    }
+}
+
+test "issue 11290: keyed containers preserve runtime contents and shared ownership" {
+    const source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    original = Dict.single(key, [key])
+        \\    updated = Dict.insert(original, "other", [key])
+        \\    set = Set.single(key)
+        \\    more = Set.insert(set, "other")
+        \\    if Dict.contains(original, "other") { crash "mutated shared dictionary" }
+        \\    if Set.contains(set, "other") { crash "mutated shared set" }
+        \\    if !Set.contains(more, key) { crash "lost set item" }
+        \\    values = match Dict.get(updated, key) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost dictionary entry"
+        \\    }
+        \\    if values != [key] { crash "changed dictionary value" }
+        \\    Dict.len(updated) + Set.len(more) + List.len(values)
+        \\}
+    ;
+    try expectKeyedContainersEvaluate(source, 5);
+}
+
+test "issue 11290: builtin container membership executes in both strategies" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    set = Set.single(key)
+        \\    dict = Dict.single(key, n)
+        \\    if Set.contains(set, key) and Dict.contains(dict, key) { 1 } else { 0 }
+        \\}
+    , 1);
+}
+
+test "issue 11290: empty and nested containers retain distinct type arguments" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    strings = Set.single(key)
+        \\    numbers = Set.single(n)
+        \\    dictionary = Dict.single(n, strings)
+        \\    empty_dict : Dict(U64, Set(Str))
+        \\    empty_dict = Dict.empty()
+        \\    empty_set : Set(U64)
+        \\    empty_set = Set.empty()
+        \\    if Dict.len(empty_dict) != 0 or Set.len(empty_set) != 0 { crash "nonempty container" }
+        \\    nested = match Dict.get(dictionary, n) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost nested container"
+        \\    }
+        \\    if Set.contains(nested, key) and Set.contains(numbers, n) { 1 } else { 0 }
+        \\}
+    , 1);
+}
+
+fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
+            .specialization_strategy = strategy,
+        });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                runtime_env.get_ops(),
+                .preserve,
+            );
+            defer interpreter.deinit();
+            var count: u64 = 40;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&count),
+            });
+            try std.testing.expectEqual(expected, evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
     }
 }
 

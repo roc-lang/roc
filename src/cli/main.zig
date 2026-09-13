@@ -16133,7 +16133,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -16148,6 +16148,12 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Type digest node cache hits", .count = counters.specialization_type_digest_cache_hits },
         .{ .name = "Type digest node cache misses", .count = counters.specialization_type_digest_cache_misses },
         .{ .name = "Type digest nodes visited", .count = counters.specialization_type_digest_nodes_visited },
+        .{ .name = "All digest root requests", .count = counters.all_digest_root_requests },
+        .{ .name = "All digest node misses", .count = counters.all_digest_node_misses },
+        .{ .name = "Commit digest root requests", .count = counters.commit_digest_root_requests },
+        .{ .name = "Commit digest node misses", .count = counters.commit_digest_node_misses },
+        .{ .name = "Interface replay digest root requests", .count = counters.interface_replay_digest_root_requests },
+        .{ .name = "Interface replay digest node misses", .count = counters.interface_replay_digest_node_misses },
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
@@ -16156,7 +16162,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -16168,6 +16174,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]
         .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },
         .{ .name = "Active snapshot misses", .count = graph.active_snapshot_cache_misses },
         .{ .name = "Snapshot nodes materialized", .count = graph.active_snapshot_nodes_materialized },
+        .{ .name = "Provisional view nodes materialized", .count = graph.provisional_snapshot_nodes_materialized },
         .{ .name = "Snapshot invalidation requests", .count = graph.active_snapshot_invalidations },
         .{ .name = "Snapshot entries invalidated", .count = graph.active_snapshot_entries_invalidated },
         .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
@@ -16187,9 +16194,11 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
     const body = diagnostics.body;
     return .{
+        .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
+        .{ .name = "Interface summary expansions", .count = diagnostics.specialization.interface_summary_expansions },
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
         .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },
         .{ .name = "Checked node requests", .count = body.checked_node_requests },
@@ -16334,20 +16343,20 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     const graph = monotypeGraphCounters(diagnostics);
     try std.testing.expectEqualStrings("Nodes created", graph[1].name);
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
-    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[16].name);
-    try std.testing.expectEqual(@as(u64, 202), graph[16].count);
-    try std.testing.expectEqualStrings("Nominal backing tombstone deletions", graph[21].name);
-    try std.testing.expectEqual(@as(u64, 203), graph[21].count);
+    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[17].name);
+    try std.testing.expectEqual(@as(u64, 202), graph[17].count);
+    try std.testing.expectEqualStrings("Nominal backing tombstone deletions", graph[22].name);
+    try std.testing.expectEqual(@as(u64, 203), graph[22].count);
 
     const body = monotypeBodyCounters(diagnostics);
-    try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);
-    try std.testing.expectEqual(@as(u64, 303), body[1].count);
-    try std.testing.expectEqualStrings("Checked node cache hits", body[3].name);
-    try std.testing.expectEqual(@as(u64, 301), body[3].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[10].name);
-    try std.testing.expectEqual(@as(u64, 305), body[10].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[19].name);
-    try std.testing.expectEqual(@as(u64, 302), body[19].count);
+    try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);
+    try std.testing.expectEqual(@as(u64, 303), body[3].count);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
+    try std.testing.expectEqual(@as(u64, 301), body[5].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[12].name);
+    try std.testing.expectEqual(@as(u64, 305), body[12].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[21].name);
+    try std.testing.expectEqual(@as(u64, 302), body[21].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,

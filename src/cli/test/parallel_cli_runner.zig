@@ -6750,7 +6750,7 @@ fn countCheckedModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []
 }
 
 fn customIssue11344Diagnostics(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    const fixture = "test/cli/issue_11344_shared_ctfe/diagnostics.roc";
+    const fixture = "test/cli/issue_11344_shared_ctfe/diagnostics_main.roc";
     const captured = captureRocRun(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "check", "--no-color", "--no-cache", "--jobs=1" },
         .roc_file = fixture,

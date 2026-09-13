@@ -139,7 +139,7 @@ pub const NestedFn = struct {
 /// specialization. Equal callable/type requests with different evidence must
 /// remain distinct specializations.
 pub const EvidenceDigest = extern struct {
-    bytes: [16]u8 = [_]u8{0} ** 16,
+    bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
 /// The structural codec derivation whose checked call contract identifies a
@@ -166,8 +166,9 @@ pub const FnTemplate = struct {
     /// Identity in the common frozen Monotype owner, stamped by lifting.
     /// Consumer-specific symbols and layout specializations never replace it.
     frozen_fn: ?FnId = null,
-    /// Exact callable worker specialization key, emitted by SpecConstr.
-    frozen_worker: ?[48]u8 = null,
+    /// Exact callable worker specialization key, emitted by SpecConstr:
+    /// SHA-256 template, callable-ABI, and capture-ABI digests in that order.
+    frozen_worker: ?[96]u8 = null,
     fn_def: FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -2654,7 +2655,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     // Allocate distinct replay addresses with the same checked root key.
     var replay_types: [4]checked.CheckedTypeId = undefined;
     for (&replay_types) |*ty| {
-        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 16 }, true);
+        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
     // Fill the proof table and its indices before building stored evidence.

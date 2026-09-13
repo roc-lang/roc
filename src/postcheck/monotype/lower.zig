@@ -689,6 +689,12 @@ pub fn run(
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     defer builder.recordParallelLaneMetrics();
+    var digest_stats: Type.Store.DigestStats = .{};
+    program.types.digest_stats = if (builder.counters != null) &digest_stats else null;
+    defer {
+        program.types.digest_stats = null;
+        builder.addDigestStats(digest_stats);
+    }
     try builder.initHostedCatalog();
     try builder.loadCandidateSpecializationShards();
     setup_timing_scope.end();
@@ -744,6 +750,7 @@ pub fn run(
         }
     }
 
+    program.types.digest_stats = null;
     return program;
 }
 
@@ -2438,6 +2445,8 @@ const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
     name_store: names.NameStore,
+    interface_summaries: InterfaceSummaryCache,
+    captured_interface_summaries: usize = 0,
     checked_type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
@@ -2456,6 +2465,7 @@ const SpecJobWorkspace = struct {
             .captured_names = name_store.epochBoundary(),
             .types = types,
             .name_store = name_store,
+            .interface_summaries = InterfaceSummaryCache.init(allocator),
             .checked_type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
         };
     }
@@ -2560,6 +2570,7 @@ const SpecJobWorkspace = struct {
         }
         if (self.workspace_to_program) |*relocation| relocation.deinit();
         if (self.program_to_workspace) |*relocation| relocation.deinit();
+        self.interface_summaries.deinit();
         self.checked_type_cache.deinit();
         self.types.deinit();
         self.name_store.deinit();
@@ -2666,6 +2677,7 @@ const CompletedSpecJobShard = struct {
     dispatch_index: u64,
     worker_local_symbol_count: u32,
     specialization_counter_delta: ?SpecializationCounters = null,
+    interface_summaries: []const InterfaceSummaryEntry = &.{},
     store_epoch: SpecJobStoreEpoch,
     body_draft: BodyDraftStore,
     pending: SealedPendingTemplateBody,
@@ -2676,6 +2688,7 @@ const CompletedSpecJobShard = struct {
     fn deinit(self: *CompletedSpecJobShard) void {
         const allocator = self.body_draft.allocator;
         self.body_draft.deinit();
+        allocator.free(self.interface_summaries);
         self.store_epoch.deinit();
         if (self.diagnostics) |diagnostics| {
             allocator.destroy(diagnostics);
@@ -2690,6 +2703,7 @@ const CompletedProcedureRootShard = struct {
     worker_id: SpecJobWorkerId,
     worker_local_symbol_count: u32,
     specialization_counter_delta: ?SpecializationCounters = null,
+    interface_summaries: []const InterfaceSummaryEntry = &.{},
     store_epoch: SpecJobStoreEpoch,
     body_draft: BodyDraftStore,
     root_ty: Type.TypeId,
@@ -2701,6 +2715,7 @@ const CompletedProcedureRootShard = struct {
     fn deinit(self: *CompletedProcedureRootShard) void {
         const allocator = self.body_draft.allocator;
         self.body_draft.deinit();
+        allocator.free(self.interface_summaries);
         self.store_epoch.deinit();
         if (self.diagnostics) |diagnostics| allocator.destroy(diagnostics);
         self.* = undefined;
@@ -2714,6 +2729,7 @@ const SpecJobWorkerInputs = struct {
     proc_debug_names: bool,
     specialization_cache: SpecializationCacheControl,
     loaded_specialization_shards: []const LoadedSpecializationShard,
+    interface_summaries: *const InterfaceSummaryCache,
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
@@ -3132,6 +3148,9 @@ const Builder = struct {
     spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
     spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
     spec_job_task_buffers: SpecJobTaskBuffers = .{},
+    interface_summaries: InterfaceSummaryCache,
+    coordinator_interface_summaries: ?*const InterfaceSummaryCache = null,
+    interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -3259,6 +3278,7 @@ const Builder = struct {
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
+            .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
@@ -3278,7 +3298,10 @@ const Builder = struct {
         worker: *SpecJobWorkerState,
         inputs: *const SpecJobWorkerInputs,
     ) Allocator.Error!*Builder {
-        if (worker.builder) |builder| return builder;
+        if (worker.builder) |builder| {
+            builder.coordinator_interface_summaries = inputs.interface_summaries;
+            return builder;
+        }
 
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
@@ -3299,6 +3322,7 @@ const Builder = struct {
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
         builder.current_region = inputs.current_region;
+        builder.coordinator_interface_summaries = inputs.interface_summaries;
         worker.builder = builder;
         return builder;
     }
@@ -3394,6 +3418,7 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
+        self.interface_summaries.deinit();
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
         self.type_cache.deinit();
@@ -3498,6 +3523,36 @@ const Builder = struct {
         };
     }
 
+    fn commitInterfaceSummaries(self: *Builder, entries: []const InterfaceSummaryEntry, committed_types: *CommittedGraphTypes) Allocator.Error!void {
+        for (entries) |entry| {
+            const provisional_ty = try committed_types.commitType(entry.provisional_ty);
+            const summary_ty = try committed_types.commitType(entry.summary_ty);
+            try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
+                .address = entry.address,
+                .evidence = entry.evidence,
+                .provisional_ty = provisional_ty,
+                .summary_ty = summary_ty,
+            });
+        }
+    }
+
+    fn addDigestStats(self: *Builder, stats: Type.Store.DigestStats) void {
+        self.countBy("all_digest_root_requests", @intCast(stats.root_requests));
+        self.countBy("all_digest_node_misses", @intCast(stats.cache_misses));
+        self.countBy("commit_digest_root_requests", @intCast(stats.commit_root_requests));
+        self.countBy("commit_digest_node_misses", @intCast(stats.commit_node_misses));
+    }
+
+    fn interfaceReplayDigest(self: *Builder, types_: *Type.Store, name_store: *const names.NameStore, ty: Type.TypeId) names.TypeDigest {
+        if (self.counters == null) return types_.specializationDigestCached(name_store, ty, null);
+        var stats: Type.Store.DigestStats = .{};
+        const digest = types_.specializationDigestCached(name_store, ty, &stats);
+        self.countBy("interface_replay_digest_root_requests", @intCast(stats.root_requests));
+        self.countBy("interface_replay_digest_node_misses", @intCast(stats.cache_misses));
+        self.addDigestStats(stats);
+        return digest;
+    }
+
     fn specializationTypeDigestIn(
         self: *Builder,
         types_: *Type.Store,
@@ -3508,6 +3563,7 @@ const Builder = struct {
             self.count("specialization_type_digest_requests");
             var stats: Type.Store.DigestStats = .{};
             const digest = types_.specializationDigestCached(name_store, ty, &stats);
+            self.addDigestStats(stats);
             self.countBy("specialization_type_digest_cache_hits", @intCast(stats.cache_hits));
             self.countBy("specialization_type_digest_cache_misses", @intCast(stats.cache_misses));
             self.countBy("specialization_type_digest_nodes_visited", @intCast(stats.nodes_visited));
@@ -3949,6 +4005,7 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .specialization_cache = self.specialization_cache,
             .loaded_specialization_shards = self.loaded_specialization_shards,
+            .interface_summaries = &self.interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -4215,6 +4272,12 @@ const Builder = struct {
         self.symbols.active = .worker_local;
         defer self.symbols.active = .coordinator;
         const workspace = &worker.workspace;
+        var digest_stats: Type.Store.DigestStats = .{};
+        workspace.types.digest_stats = if (self.counters != null) &digest_stats else null;
+        defer {
+            workspace.types.digest_stats = null;
+            self.addDigestStats(digest_stats);
+        }
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
         const program_types_before = self.program.types.epochBoundary();
@@ -4367,13 +4430,17 @@ const Builder = struct {
                 Common.compilerBug("parallel root lowering mutated coordinator source scratch");
             }
         }
+        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.captured_interface_summaries..]);
+        errdefer self.allocator.free(summaries);
         var store_epoch = try workspace.captureStoreEpoch(epoch);
+        workspace.captured_interface_summaries = workspace.interface_summaries.entries.items.len;
         errdefer store_epoch.deinit();
         graph.destroy();
         workspace.finishEpoch(epoch);
         return .{
             .worker_id = worker.worker_id,
             .worker_local_symbol_count = body_draft.worker_local_symbol_count,
+            .interface_summaries = summaries,
             .store_epoch = store_epoch,
             .body_draft = body_draft,
             .root_ty = root_ty,
@@ -5193,6 +5260,7 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .specialization_cache = self.specialization_cache,
             .loaded_specialization_shards = self.loaded_specialization_shards,
+            .interface_summaries = &self.interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -5332,6 +5400,14 @@ const Builder = struct {
                             const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
                             try commit_domain.absorb(&shard.store_epoch);
                             shard.store_epoch_absorbed = true;
+                            var committed_types = CommittedGraphTypes.relocatedStore(
+                                &commit_domain.types,
+                                &commit_domain.name_store,
+                                &self.program.types,
+                                &self.program.names,
+                                commit_domain.committedTypeRelocation(self.program),
+                            );
+                            try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
                             shard.deinit();
                             if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
                         }
@@ -5703,6 +5779,12 @@ const Builder = struct {
         defer self.symbols.active = .coordinator;
 
         const workspace = &worker.workspace;
+        var digest_stats: Type.Store.DigestStats = .{};
+        workspace.types.digest_stats = if (self.counters != null) &digest_stats else null;
+        defer {
+            workspace.types.digest_stats = null;
+            self.addDigestStats(digest_stats);
+        }
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
         const program_types_before = self.program.types.epochBoundary();
@@ -5768,7 +5850,10 @@ const Builder = struct {
                 Common.compilerBug("parallel specialization lowering mutated coordinator source scratch");
             }
         }
+        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.captured_interface_summaries..]);
+        errdefer self.allocator.free(summaries);
         var store_epoch = try workspace.captureStoreEpoch(epoch);
+        workspace.captured_interface_summaries = workspace.interface_summaries.entries.items.len;
         errdefer store_epoch.deinit();
         self.countBodyDiagnostic("spec_job_shards_lowered");
         graph.destroy();
@@ -5777,6 +5862,7 @@ const Builder = struct {
             .worker_id = worker.worker_id,
             .dispatch_index = job.dispatch_index,
             .worker_local_symbol_count = body_draft.worker_local_symbol_count,
+            .interface_summaries = summaries,
             .store_epoch = store_epoch,
             .body_draft = body_draft,
             .pending = sealed_pending,
@@ -5816,6 +5902,7 @@ const Builder = struct {
             &self.program.names,
             committed_type_relocation,
         );
+        try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
         if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
             Common.compilerBug("Monotype specialization shard symbol count disagreed with its sealed draft");
         }
@@ -5865,6 +5952,7 @@ const Builder = struct {
             &self.program.names,
             commit_domain.committedTypeRelocation(self.program),
         );
+        try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
         if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
             Common.compilerBug("procedure root shard symbol count disagreed with its sealed draft");
         }
@@ -6174,49 +6262,48 @@ const Builder = struct {
             }
         }
         if (selection.selected() == null) {
-            var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
-            defer seen_specs.deinit();
-            var interface = try source_ctx.graph.functionInterfaceClassIterator(request_fn_node);
-            defer interface.deinit();
-            while (try interface.next()) |interface_class| {
-                var aliases = source_ctx.graph.classMemberIterator(interface_class);
-                while (aliases.next()) |member| {
-                    const lookup_address = DraftTemplateLookupAddress{
-                        .open = .{
-                            .prefix = lookup_prefix,
-                            .node = member,
-                        },
-                    };
-                    if (source_ctx.draft.template_spec_lookup.get(lookup_address)) |candidate_iterator| {
-                        var candidates = candidate_iterator;
-                        while (candidates.next()) |raw_spec| {
-                            const seen = try seen_specs.getOrPut(raw_spec);
-                            if (seen.found_existing) continue;
-                            const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                            if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
-                            if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                            if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                            const exact_interface = source_ctx.graph.sameFunctionInterface(
-                                draftTemplateSpecLookupRequestNode(spec),
-                                request_fn_node,
-                            );
-                            const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
-                                spec.fn_id,
-                            );
-                            const partial_recursive_allowed = active_recursive_edge and
-                                request_edge == .recursive_reference and
-                                substitutionsShareClasses(source_ctx.graph, spec.subst, edge.subst);
-                            if (!draftOpenCandidateQualifies(
-                                spec.state,
-                                exact_interface,
-                                active_recursive_edge,
-                                partial_recursive_allowed,
-                            )) continue;
-                            if (!selection.add(raw_spec, exact_interface)) {
-                                Common.invariant("draft template request matched more than one partial active recursive specialization");
-                            }
-                        }
+            const open_pairs = source_ctx.draft.template_spec_lookup.openPairs(lookup_prefix);
+            // A fresh prefix has no registrations. Avoid even collecting its
+            // interface: no open candidate can exist for this exact family.
+            if (open_pairs.len != 0) {
+                var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
+                defer seen_specs.deinit();
+                var interface_roots: std.ArrayList(NodeId) = .empty;
+                defer interface_roots.deinit(self.allocator);
+                var interface = try source_ctx.graph.functionInterfaceClassIterator(request_fn_node);
+                defer interface.deinit();
+                while (try interface.next()) |root| try interface_roots.append(self.allocator, root);
+                var candidates = DraftTemplateSpecLookup.OpenIterator{
+                    .pairs = open_pairs,
+                    .graph = source_ctx.graph,
+                    .interface_roots = interface_roots.items,
+                };
+                while (candidates.next()) |raw_spec| {
+                    const seen = try seen_specs.getOrPut(raw_spec);
+                    if (seen.found_existing) continue;
+                    const spec = &source_ctx.draft.template_specs.items[raw_spec];
+                    if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                    if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    const exact_interface = source_ctx.graph.sameFunctionInterface(
+                        draftTemplateSpecLookupRequestNode(spec),
+                        request_fn_node,
+                    );
+                    const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
+                        source_ctx.draft.current_owner,
+                        spec.fn_id,
+                    );
+                    const partial_recursive_allowed = active_recursive_edge and
+                        request_edge == .recursive_reference and
+                        substitutionsShareClasses(source_ctx.graph, spec.subst, edge.subst);
+                    if (!draftOpenCandidateQualifies(
+                        spec.state,
+                        exact_interface,
+                        active_recursive_edge,
+                        partial_recursive_allowed,
+                    )) continue;
+                    if (!selection.add(raw_spec, exact_interface)) {
+                        Common.invariant("draft template request matched more than one partial active recursive specialization");
                     }
                 }
             }
@@ -6228,9 +6315,9 @@ const Builder = struct {
             // interface identity for active recursive and partially overlapping
             // requests.
             if (resolved_request_ty) |request_fn_ty| {
-                for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
-                    const raw_spec: u32 = @intCast(raw_spec_usize);
-                    if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
+                const template_candidates = source_ctx.draft.template_specs_by_template.get(template_ref);
+                for (if (template_candidates) |list| list.items else &.{}) |raw_spec| {
+                    const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     // The checked source root selects the template body, but it is
                     // not part of a resolved specialization's identity. Recursive
                     // calls can reach the same template through a different checked
@@ -6375,8 +6462,11 @@ const Builder = struct {
             .codec_contract = codec_contract,
             .fn_id = fn_id,
         });
-        try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
+        const template_bucket = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
+        if (!template_bucket.found_existing) template_bucket.value_ptr.* = .empty;
+        try template_bucket.value_ptr.append(self.allocator, @intCast(spec_index));
+        try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         try updateTemplateSpecInterfaceLookups(
             source_ctx.draft,
             self.allocator,
@@ -7404,14 +7494,10 @@ const Builder = struct {
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
                 break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
             },
-            .builtin => blk: {
+            .builtin => |builtin_nominal| blk: {
                 const source_view = self.moduleForId(nominal.owner_module);
-                const source_decl = nominal.source_decl orelse break :blk null;
-                for (source_view.types.nominal_declarations) |decl| {
-                    if (decl.source_statement != source_decl) continue;
-                    break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
-                }
-                break :blk null;
+                const decl = source_view.types.builtinNominalDeclaration(builtin_nominal) orelse break :blk null;
+                break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
             },
             .opaque_without_backing => null,
         };
@@ -12672,7 +12758,7 @@ const DraftTemplateFamilyAddress = struct {
     proc_base: u32,
     template: u32,
     method_scope: [32]u8,
-    source_fn_key: [16]u8,
+    source_fn_key: [32]u8,
 
     fn init(template_ref: names.ProcTemplate, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
         return .{
@@ -12715,7 +12801,7 @@ const DraftNestedFamilyAddress = struct {
     module: [32]u8,
     owner_proc_base: u32,
     owner_template: u32,
-    owner_fn_key: [16]u8,
+    owner_fn_key: [32]u8,
     site: u32,
     /// Explicitly tagged default-root qualifier: the site id is relative to
     /// the declaring module's site table, so a default-root site's family
@@ -12723,7 +12809,7 @@ const DraftNestedFamilyAddress = struct {
     default_root: bool,
     default_root_module: [32]u8,
     method_scope: [32]u8,
-    source_fn_key: [16]u8,
+    source_fn_key: [32]u8,
 
     fn init(nested: Ast.NestedFn, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
         return .{
@@ -12755,9 +12841,26 @@ fn DraftSpecLookup(comptime Family: type) type {
         const Self = @This();
         const Prefix = struct {
             family: Family,
-            evidence_digest: [16]u8,
+            evidence_digest: [32]u8,
         };
         const PrefixId = enum(u32) { _ };
+        const OpenPair = struct { node: NodeId, spec: u32 };
+        const OpenIterator = struct {
+            pairs: []const OpenPair,
+            graph: *InstGraph,
+            interface_roots: []const NodeId,
+
+            fn next(self: *OpenIterator) ?u32 {
+                while (self.pairs.len != 0) {
+                    const pair = self.pairs[0];
+                    self.pairs = self.pairs[1..];
+                    for (self.interface_roots) |root| {
+                        if (self.graph.sameClass(pair.node, root)) return pair.spec;
+                    }
+                }
+                return null;
+            }
+        };
         const OpenAddress = struct {
             prefix: PrefixId,
             node: NodeId,
@@ -12765,7 +12868,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         const DigestAddress = struct {
             prefix: PrefixId,
             kind: enum { closed, open_shape },
-            digest: [16]u8,
+            digest: [32]u8,
         };
         const Address = union(enum) {
             open: OpenAddress,
@@ -12797,7 +12900,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         };
 
         allocator: Allocator,
-        prefixes: std.array_hash_map.Auto(Prefix, void),
+        prefixes: std.array_hash_map.Auto(Prefix, std.ArrayList(OpenPair)),
         open_requests: std.AutoHashMap(OpenAddress, Candidates),
         digest_requests: std.AutoHashMap(DigestAddress, Candidates),
         /// Only buckets with multiple candidates own an overflow list. Its
@@ -12819,6 +12922,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             self.digest_requests.deinit();
             for (self.overflow_lists.items) |*list| list.deinit(self.allocator);
             self.overflow_lists.deinit(self.allocator);
+            for (self.prefixes.values()) |*pairs| pairs.deinit(self.allocator);
             self.prefixes.deinit(self.allocator);
         }
 
@@ -12848,9 +12952,17 @@ fn DraftSpecLookup(comptime Family: type) type {
         }
 
         fn add(self: *Self, address: Address, raw_spec: u32) Allocator.Error!void {
+            // Reserve before updating either index so allocation failure cannot
+            // leave a registered candidate absent from the prefix inventory.
+            const pairs: ?*std.ArrayList(OpenPair) = switch (address) {
+                .open => |key| &self.prefixes.values()[@intFromEnum(key.prefix)],
+                .digest => null,
+            };
+            if (pairs) |list| try list.ensureUnusedCapacity(self.allocator, 1);
             const entry = try self.getOrPut(address);
             if (!entry.found_existing) {
                 entry.value_ptr.* = .{ .first = raw_spec };
+                if (pairs) |list| list.appendAssumeCapacity(.{ .node = address.open.node, .spec = raw_spec });
                 return;
             }
             if (entry.value_ptr.first == raw_spec) return;
@@ -12867,14 +12979,20 @@ fn DraftSpecLookup(comptime Family: type) type {
                 try self.overflow_lists.append(self.allocator, list);
                 entry.value_ptr.overflow = overflow;
             }
+            if (pairs) |list| list.appendAssumeCapacity(.{ .node = address.open.node, .spec = raw_spec });
         }
 
-        fn internPrefix(self: *Self, family: Family, evidence_digest: [16]u8) Allocator.Error!PrefixId {
+        fn internPrefix(self: *Self, family: Family, evidence_digest: [32]u8) Allocator.Error!PrefixId {
             const entry = try self.prefixes.getOrPut(self.allocator, .{
                 .family = family,
                 .evidence_digest = evidence_digest,
             });
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
             return @enumFromInt(entry.index);
+        }
+
+        fn openPairs(self: *const Self, prefix: PrefixId) []const OpenPair {
+            return self.prefixes.values()[@intFromEnum(prefix)].items;
         }
     };
 }
@@ -13312,8 +13430,11 @@ const CustomCodecCallAddress = struct {
 /// Exact Phase-B address installed from the checker role Phase A selected.
 /// A subject-free role is reusable for every shape and therefore carries no
 /// shape identity. A subject-bearing role carries the full Monotype digest of
-/// Phase A's related shape; exact equality inside one digest bucket protects
-/// correctness from digest collisions without scanning unrelated calls.
+/// Phase A's related shape. The Wyhash below only selects a bucket; `eql`
+/// compares the method name and the whole digest, so a Wyhash collision costs
+/// a probe. The digest comparison itself is trusted as shape identity, which
+/// is sound because `TypeDigest` is cryptographic SHA-256 (see
+/// `base.TypeDigestHasher`).
 const FormatCodecCallAddress = struct {
     kind: CodecKind,
     method_name: []const u8,
@@ -13938,6 +14059,7 @@ const BodyDraftStore = struct {
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
     template_specs: std.ArrayList(DraftTemplateSpec),
+    template_specs_by_template: std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)),
     sealed_template_specs: std.ArrayList(SealedTemplateSpec),
     template_spec_by_fn: collections.DenseMap(DraftFnId, u32),
     template_spec_lookup: DraftTemplateSpecLookup,
@@ -14059,6 +14181,7 @@ const BodyDraftStore = struct {
             .nested_defs = .empty,
             .template_specs = .empty,
             .sealed_template_specs = .empty,
+            .template_specs_by_template = std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)).init(allocator),
             .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_spec_lookup = DraftTemplateSpecLookup.init(allocator),
             .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
@@ -14283,6 +14406,9 @@ const BodyDraftStore = struct {
         self.local_proc_contexts.deinit(self.allocator);
         self.template_spec_lookup.deinit();
         self.closed_direct_specializations.deinit();
+        var template_lists = self.template_specs_by_template.valueIterator();
+        while (template_lists.next()) |list| list.deinit(self.allocator);
+        self.template_specs_by_template.deinit();
         self.template_spec_by_fn.deinit();
         self.nested_spec_lookup.deinit();
         self.nested_spec_families.deinit();
@@ -15042,7 +15168,11 @@ const BodyDraftStore = struct {
         self.nested_spec_families.deinit();
         self.nested_spec_lookup = DraftNestedSpecLookup.init(self.allocator);
         self.nested_spec_families = std.AutoHashMap(DraftNestedFamilyAddress, void).init(self.allocator);
+        var template_lists = self.template_specs_by_template.valueIterator();
+        while (template_lists.next()) |list| list.deinit(self.allocator);
+        self.template_specs_by_template.deinit();
         self.template_spec_by_fn.deinit();
+        self.template_specs_by_template = std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)).init(self.allocator);
         self.template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(self.allocator);
         self.closed_direct_specializations.deinit();
         self.closed_direct_specializations = std.AutoHashMap(
@@ -15073,6 +15203,7 @@ const BodyDraftStore = struct {
             !self.nested_spec_lookup.isEmpty() or
             self.nested_spec_families.count() != 0 or
             self.template_specs.items.len != 0 or
+            self.template_specs_by_template.count() != 0 or
             self.nested_specs.items.len != 0 or
             self.spec_job_workspace != null or
             self.mutable_graph_names != null or
@@ -16340,8 +16471,61 @@ const InterfaceReplayStatus = enum { expanding, ready };
 
 const InterfaceReplayAddress = struct {
     family: DraftTemplateFamilyAddress,
-    evidence_digest: [16]u8,
-    provisional_digest: [16]u8,
+    evidence_digest: [32]u8,
+    provisional_digest: [32]u8,
+};
+
+/// Both type ids are interned immutable content in the cache owner's store.
+/// Evidence is checked content, with no graph nodes or body-local captures.
+const InterfaceSummaryEntry = struct {
+    address: InterfaceReplayAddress,
+    evidence: StoredConstFnEvidence,
+    provisional_ty: Type.TypeId,
+    summary_ty: Type.TypeId,
+};
+
+const InterfaceSummaryCache = struct {
+    allocator: Allocator,
+    evidence_arena: std.heap.ArenaAllocator,
+    entries: std.ArrayList(InterfaceSummaryEntry) = .empty,
+    buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
+
+    fn init(allocator: Allocator) InterfaceSummaryCache {
+        return .{
+            .allocator = allocator,
+            .evidence_arena = std.heap.ArenaAllocator.init(allocator),
+            .buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(allocator),
+        };
+    }
+
+    fn deinit(self: *InterfaceSummaryCache) void {
+        var buckets = self.buckets.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.buckets.deinit();
+        self.entries.deinit(self.allocator);
+        self.evidence_arena.deinit();
+    }
+
+    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!void {
+        const bucket = try self.buckets.getOrPut(entry.address);
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |index| {
+            const existing = self.entries.items[index];
+            if (storedConstFnEvidenceEql(existing.evidence, entry.evidence) and
+                try types_.typeEql(name_store, existing.provisional_ty, entry.provisional_ty)) return;
+        }
+        try bucket.value_ptr.ensureUnusedCapacity(self.allocator, 1);
+        try self.entries.ensureUnusedCapacity(self.allocator, 1);
+        var owned = entry;
+        const arena = self.evidence_arena.allocator();
+        owned.evidence = .{
+            .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, entry.evidence.nodes),
+            .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, entry.evidence.frames),
+            .head = entry.evidence.head,
+        };
+        bucket.value_ptr.appendAssumeCapacity(@intCast(self.entries.items.len));
+        self.entries.appendAssumeCapacity(owned);
+    }
 };
 
 const InterfaceReplayEntry = struct {
@@ -16356,6 +16540,7 @@ const InterfaceReplayEntry = struct {
 };
 
 const InterfaceReplayState = struct {
+    use_finished_summaries: bool = true,
     entries: std.ArrayList(InterfaceReplayEntry),
     buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
 
@@ -19366,7 +19551,7 @@ const BodyContext = struct {
                 .kind = 0,
                 .binder = @intFromEnum(entry.binder),
                 .local = @intFromEnum(entry.local),
-                .type_digest = .{ .bytes = [_]u8{0} ** 16 },
+                .type_digest = .{ .bytes = [_]u8{0} ** 32 },
             };
             index += 1;
         }
@@ -20913,6 +21098,41 @@ const BodyContext = struct {
         return try self.instNode(scheme_root);
     }
 
+    fn interfaceSummaryCache(self: *BodyContext) *InterfaceSummaryCache {
+        if (self.typeStore() == &self.builder.program.types) return &self.builder.interface_summaries;
+        const workspace = self.draft.spec_job_workspace orelse
+            Common.compilerBug("interface summary graph has no owning workspace");
+        std.debug.assert(self.typeStore() == &workspace.types);
+        return &workspace.interface_summaries;
+    }
+
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool } {
+        const local = self.interfaceSummaryCache();
+        if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
+            const entry = local.entries.items[index];
+            if (storedConstFnEvidenceEql(entry.evidence, evidence) and
+                try self.typeStore().typeEql(self.nameStore(), entry.provisional_ty, provisional_ty))
+                return .{ .ty = entry.summary_ty, .coordinator = false };
+        };
+        const coordinator = self.builder.coordinator_interface_summaries orelse &self.builder.interface_summaries;
+        if (coordinator == local) return null;
+        if (coordinator.buckets.get(address)) |candidates| for (candidates.items) |index| {
+            const entry = coordinator.entries.items[index];
+            if (!storedConstFnEvidenceEql(entry.evidence, evidence)) continue;
+            const request = try self.importProgramType(entry.provisional_ty);
+            if (!try self.typeStore().typeEql(self.nameStore(), request, provisional_ty)) continue;
+            const summary = try self.importProgramType(entry.summary_ty);
+            try local.insert(self.typeStore(), self.nameStore(), .{
+                .address = address,
+                .evidence = evidence,
+                .provisional_ty = request,
+                .summary_ty = summary,
+            });
+            return .{ .ty = summary, .coordinator = true };
+        };
+        return null;
+    }
+
     fn applyDirectCalleeInterfaceRelations(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -20971,7 +21191,7 @@ const BodyContext = struct {
             stored_evidence.head,
         );
         const source_fn_key = self.view.types.rootKey(source_fn_ty);
-        const provisional_digest = self.typeStore().specializationDigestCached(self.nameStore(), provisional_ty, null);
+        const provisional_digest = self.builder.interfaceReplayDigest(self.typeStore(), self.nameStore(), provisional_ty);
         const address = InterfaceReplayAddress{
             .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, source_fn_key),
             .evidence_digest = evidence_digest.bytes,
@@ -21011,6 +21231,28 @@ const BodyContext = struct {
             return;
         };
 
+        var verify_summary: ?Type.TypeId = null;
+        const saved_use_summaries = replay_state.use_finished_summaries;
+        defer replay_state.use_finished_summaries = saved_use_summaries;
+        if (replay_state.use_finished_summaries) {
+            if (try self.findInterfaceSummary(address, stored_evidence, provisional_ty)) |hit| {
+                self.builder.count("interface_summary_hits");
+                // Detailed diagnostics in safety builds audit the first 16
+                // cross-lane hits by independently expanding checked relations.
+                if (std.debug.runtime_safety and self.builder.diagnostics != null and
+                    hit.coordinator and self.builder.interface_summary_checks < 16)
+                {
+                    self.builder.interface_summary_checks += 1;
+                    self.builder.count("interface_summary_verifications");
+                    verify_summary = hit.ty;
+                    replay_state.use_finished_summaries = false;
+                } else {
+                    try relateFunctionRequestInterface(self.graph, try self.graph.instantiateProvisionalTypeView(hit.ty), request_fn_node);
+                    return;
+                }
+            }
+        }
+        self.builder.count("interface_summary_expansions");
         const replay_index = replay_state.entries.items.len;
         try replay_state.entries.append(self.allocator, .{
             .evidence = stored_evidence,
@@ -21060,6 +21302,27 @@ const BodyContext = struct {
         const entry = &replay_state.entries.items[replay_index];
         entry.summary_ty = try self.graph.provisionalTypeViewForNode(entry.representative);
         entry.status = .ready;
+        const summary_ty = entry.summary_ty.?;
+        if (verify_summary) |cached| {
+            const instantiated = try self.graph.instantiateProvisionalTypeView(cached);
+            const instantiated_ty = try self.graph.provisionalTypeViewForNode(instantiated);
+            if (!try self.typeStore().typeEql(self.nameStore(), instantiated_ty, summary_ty)) {
+                Common.compilerBug("cached interface summary disagreed with fresh checked relation expansion");
+            }
+        }
+        if (saved_use_summaries) {
+            var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
+            defer sealer.deinit();
+            const durable_request = try sealer.sealType(provisional_ty);
+            const durable_summary = try sealer.sealType(summary_ty);
+            const cache = self.interfaceSummaryCache();
+            try cache.insert(self.typeStore(), self.nameStore(), .{
+                .address = address,
+                .evidence = stored_evidence,
+                .provisional_ty = durable_request,
+                .summary_ty = durable_summary,
+            });
+        }
     }
 
     fn lowerEntryWrapperAtCell(
@@ -55923,7 +56186,7 @@ test "draft specialization lookup preserves family evidence and request identity
         var lookup = Lookup.init(allocator);
         defer lookup.deinit();
         const family = std.mem.zeroes(Family);
-        const evidence = [_]u8{0} ** 16;
+        const evidence = [_]u8{0} ** 32;
         const prefix = try lookup.internPrefix(family, evidence);
         try std.testing.expectEqual(prefix, try lookup.internPrefix(family, evidence));
 
@@ -56030,6 +56293,7 @@ test "draft specialization candidates retain insertion order across overflow gro
                         try lookup.add(other, raw_spec);
                         try lookup.add(other, std.math.maxInt(u32));
                     }
+                    try std.testing.expect(lookup.openPairs(prefix).len == 61);
                     var candidates = lookup.get(address).?;
                     try std.testing.expect(candidates.next().? == std.math.maxInt(u32));
                     for (0..20) |i| try std.testing.expect(candidates.next().? == i);
@@ -56049,6 +56313,55 @@ test "draft specialization candidates retain insertion order across overflow gro
     };
     try Scenario.run(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+}
+
+test "draft specialization open lookup follows unions within its prefix" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var lookup = DraftTemplateSpecLookup.init(gpa);
+    defer lookup.deinit();
+    const family = std.mem.zeroes(DraftTemplateFamilyAddress);
+    const prefix = try lookup.internPrefix(family, @splat(0));
+    const other_prefix = try lookup.internPrefix(family, @splat(1));
+    try std.testing.expectEqual(@as(usize, 0), lookup.openPairs(prefix).len);
+    const arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const ret = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const registered = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const unrelated = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = registered } }, 7);
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = registered } }, 8);
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = registered } }, 7);
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = unrelated } }, 9);
+    try lookup.add(.{ .open = .{ .prefix = other_prefix, .node = arg } }, 10);
+    const roots = [_]NodeId{ arg, ret };
+    var before = DraftTemplateSpecLookup.OpenIterator{ .pairs = lookup.openPairs(prefix), .graph = graph, .interface_roots = &roots };
+    try std.testing.expectEqual(null, before.next());
+    // The registered permanent node becomes an alias only after registration.
+    // Thousands of unrelated registrations join the same live class, but do
+    // not enlarge this prefix's candidate inventory.
+    try graph.unify(arg, registered);
+    for (0..2000) |i| {
+        const node = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+        try lookup.add(.{ .open = .{ .prefix = other_prefix, .node = node } }, @intCast(i + 11));
+        try graph.unify(arg, node);
+    }
+    try std.testing.expectEqual(@as(usize, 3), lookup.openPairs(prefix).len);
+    var after = DraftTemplateSpecLookup.OpenIterator{ .pairs = lookup.openPairs(prefix), .graph = graph, .interface_roots = &roots };
+    try std.testing.expectEqual(@as(?u32, 7), after.next());
+    try std.testing.expectEqual(@as(?u32, 8), after.next());
+    try std.testing.expectEqual(null, after.next());
+    // Return-only overlap must also retain candidates for recursive checks.
+    try graph.unify(ret, unrelated);
+    var returned = DraftTemplateSpecLookup.OpenIterator{ .pairs = lookup.openPairs(prefix), .graph = graph, .interface_roots = &roots };
+    try std.testing.expectEqual(@as(?u32, 7), returned.next());
+    try std.testing.expectEqual(@as(?u32, 8), returned.next());
+    try std.testing.expectEqual(@as(?u32, 9), returned.next());
+    try std.testing.expectEqual(null, returned.next());
 }
 
 test "open draft recursive provenance joins fresh interface cells only while lowering" {
@@ -57728,25 +58041,7 @@ fn instRecordFieldLessThan(
 fn nominalHasDeclarationBacking(nominal: checked.CheckedNominalType) bool {
     return switch (nominal.representation) {
         .opaque_without_backing => false,
-        .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-            .primitive,
-            .list,
-            .box,
-            .dict,
-            .set,
-            .parse_tag_union_spec,
-            .fields,
-            .field,
-            => false,
-            .bool_tag_union,
-            .try_nominal,
-            .iterator,
-            .crypto_sha256_digest,
-            .crypto_sha256_hasher,
-            .crypto_blake3_digest,
-            .crypto_blake3_hasher,
-            => true,
-        },
+        .builtin => |builtin| checked.builtinNominalHasDeclarationBacking(builtin),
         .local_declaration,
         .imported_declaration,
         .local_box_payload_capability,
@@ -59332,7 +59627,7 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
         // capture, then destroy the workspace before coordinator absorption.
         var index: u32 = 0;
         while (index < 256) : (index += 1) {
-            var digest = [_]u8{0} ** 16;
+            var digest = [_]u8{0} ** 32;
             std.mem.writeInt(u32, digest[0..4], index, .little);
             _ = try workspace.types.internErased(
                 &workspace.name_store,
@@ -59938,8 +60233,8 @@ test "specialization shard diagnostics remain private until coordinator commit" 
 }
 
 test "function context identity excludes draft local allocation ids" {
-    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 16 };
-    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 16 };
+    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 32 };
+    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 32 };
     const original = [_]LexicalBinderEntry{.{
         .kind = 1,
         .binder = 17,

@@ -199,7 +199,7 @@ pub const ProcedureCallableRef = struct {
 
 /// Public `CanonicalExecValueTypeKey` declaration.
 pub const CanonicalExecValueTypeKey = struct {
-    bytes: [16]u8 = [_]u8{0} ** 16,
+    bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
 /// Public `procedureCallableRefEql` function.
@@ -226,17 +226,17 @@ pub fn liftedProcedureTemplateRefEql(a: LiftedProcedureTemplateRef, b: LiftedPro
 
 /// Public `CanonicalTypeKey` declaration.
 pub const CanonicalTypeKey = struct {
-    bytes: [16]u8 = [_]u8{0} ** 16,
+    bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
 /// Public `CanonicalTypeTemplateKey` declaration.
 pub const CanonicalTypeTemplateKey = struct {
-    bytes: [16]u8 = [_]u8{0} ** 16,
+    bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
 /// Public `CanonicalTypeSchemeKey` declaration.
 pub const CanonicalTypeSchemeKey = struct {
-    bytes: [16]u8 = [_]u8{0} ** 16,
+    bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
 /// Public `ProcBaseKind` declaration.

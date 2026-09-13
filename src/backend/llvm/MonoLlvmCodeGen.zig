@@ -1668,7 +1668,11 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
-        func.setLinkage(if (self.procNeedsExternalLinkage(proc_id)) .external else .internal, builder);
+        const externally_referenced = self.procNeedsExternalLinkage(proc_id);
+        func.setLinkage(if (externally_referenced) .external else .internal, builder);
+        if (externally_referenced and self.target.os.tag == .windows) {
+            func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
+        }
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
@@ -11177,6 +11181,9 @@ pub const MonoLlvmCodeGen = struct {
             }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         func.setLinkage(if (is_static_data_helper) .external else .internal, builder);
+        if (is_static_data_helper and self.target.os.tag == .windows) {
+            func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
+        }
         var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs);
@@ -13427,4 +13434,44 @@ test "issue 11132: installed and propagated deferred captures are counted and cl
     try codegen.installDeferredStrCapture(second, capture);
     try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
     codegen.clearDeferredStrCaptures();
+}
+
+test "frozen callable procedures and explicit drop helpers are DLL exports on Windows" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .args = .empty(), .ret_layout = .bool });
+    const private_proc = try store.addProcSpec(.{ .name = .fromRaw(2), .args = .empty(), .ret_layout = .bool });
+    const helper: layout.RcHelperKey = .{ .op = .decref, .layout_idx = .str };
+    inline for (.{ std.Target.Os.Tag.windows, .linux }) |os| {
+        const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = os });
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        codegen.proc_symbol_mode = .lir_symbol;
+        codegen.static_data_procs = &.{proc};
+        codegen.static_data_rc_helpers = &.{helper};
+        var builder = try codegen.createBuilder("frozen_exports");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+        try codegen.declareProcSpec(proc, store.getProcSpec(proc));
+        try codegen.declareProcSpec(private_proc, store.getProcSpec(private_proc));
+        const exported_proc = codegen.proc_registry.get(@intFromEnum(proc)).?;
+        const internal_proc = codegen.proc_registry.get(@intFromEnum(private_proc)).?;
+        const exported_helper = (try codegen.declareRcHelper(helper, .atomic)).?;
+        const internal_helper = (try codegen.declareRcHelper(.{ .op = .incref, .layout_idx = .str }, .atomic)).?;
+        for ([_]LlvmBuilder.Function.Index{ exported_proc, exported_helper }) |function| {
+            const global = function.ptrConst(&builder).global.ptrConst(&builder);
+            try std.testing.expectEqual(.external, global.linkage);
+            try std.testing.expectEqual(if (os == .windows) .dllexport else .default, global.dll_storage_class);
+        }
+        for ([_]LlvmBuilder.Function.Index{ internal_proc, internal_helper }) |function| {
+            const global = function.ptrConst(&builder).global.ptrConst(&builder);
+            try std.testing.expectEqual(.internal, global.linkage);
+            try std.testing.expectEqual(.default, global.dll_storage_class);
+        }
+    }
 }

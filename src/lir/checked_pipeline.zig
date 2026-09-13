@@ -1342,14 +1342,17 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
         const layouts = &result.layouts;
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
-            const name = store.procDebugName(proc_id) orelse continue;
-            if (name_filter.len != 0 and std.mem.find(u8, name, name_filter) == null) continue;
+            const name = store.procDebugName(proc_id);
+            if (name_filter.len != 0) {
+                const named = name orelse continue;
+                if (std.mem.find(u8, named, name_filter) == null) continue;
+            }
             var buffer: std.Io.Writer.Allocating = .init(store.allocator);
             defer buffer.deinit();
             DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
                 error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
             };
-            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name, index, buffer.written() });
+            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name orelse "<unnamed>", index, buffer.written() });
         }
     }
 };
