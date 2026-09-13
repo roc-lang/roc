@@ -995,7 +995,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// (the program crashes after the first). Sharing one slot across all
         /// debug crash sites in a proc keeps the frame from growing linearly
         /// with the number of debug asserts. Lazily allocated on first use.
-        proc_debug_msg_slot: ?i32 = null,
+        /// Bytes of every static message the image reports through the host
+        /// (crash, expect, dbg and invariant checks). `finishImage` places
+        /// them after the last instruction; code reaches a message through the
+        /// PC-relative address sequence, patched once its bytes are placed.
+        message_pool: std.ArrayList(u8) = .empty,
+        /// Pool offset and length of each distinct message by content hash,
+        /// so equal messages share their bytes.
+        message_pool_index: std.AutoHashMapUnmanaged(u64, MessageSpan) = .empty,
+        /// Pool bytes already placed in the code, as (first pool offset, code offset) runs.
+        message_pool_runs: std.ArrayList(MessagePoolRun) = .empty,
+        /// Address sequences awaiting their message's placement.
+        pending_message_addrs: std.ArrayList(PendingMessageAddr) = .empty,
+        /// Pool bytes already placed in the code.
+        message_pool_placed_len: u32 = 0,
 
         /// Generation mode determines whether to use direct function pointers or symbol references.
         /// - native_execution: Code runs in-process (dev evaluator), direct function pointers work
@@ -1109,6 +1122,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         };
 
         /// A pending ADR/LEA proc-address literal that needs to be patched once the target proc is compiled.
+        pub const MessageSpan = struct { offset: u32, len: u32 };
+        pub const MessagePoolRun = struct { pool_from: u32, code_start: usize };
+        pub const PendingMessageAddr = struct {
+            /// Offset where the ADR/LEA instruction starts
+            instr_offset: usize,
+            /// The message's offset in `message_pool`
+            message_offset: u32,
+        };
+
         pub const PendingProcAddr = struct {
             /// Offset where the ADR/LEA instruction starts
             instr_offset: usize,
@@ -1430,6 +1452,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.pending_rc_calls.deinit(self.allocator);
             self.pending_calls.deinit(self.allocator);
             self.pending_proc_addrs.deinit(self.allocator);
+            self.pending_message_addrs.deinit(self.allocator);
+            self.message_pool_runs.deinit(self.allocator);
+            self.message_pool_index.deinit(self.allocator);
+            self.message_pool.deinit(self.allocator);
             // Clean up the nested ArrayLists in join_point_jumps
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
@@ -1469,6 +1495,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.compiling_rc_helpers = false;
             self.pending_calls.clearRetainingCapacity();
             self.pending_proc_addrs.clearRetainingCapacity();
+            self.pending_message_addrs.clearRetainingCapacity();
+            self.message_pool_runs.clearRetainingCapacity();
+            self.message_pool_index.clearRetainingCapacity();
+            self.message_pool.clearRetainingCapacity();
+            self.message_pool_placed_len = 0;
             // Clear nested ArrayLists
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
@@ -1598,7 +1629,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcSpecs
             self.clearLocalLocationsRetainingCapacity();
-            self.proc_debug_msg_slot = null;
             self.codegen.callee_saved_used = 0;
             self.uses_caller_stack_arg_base = false;
 
@@ -1734,6 +1764,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
             self.shiftPendingCalls(body_start, body_end, prologue_size);
             self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
+            self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
             self.shiftPendingRcRefs(body_start, body_end, prologue_size);
             if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
             self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -1755,6 +1786,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 true,
             );
             try self.maybeDrainRcHelpers();
+            try self.finishImage();
 
             const all_code = self.codegen.getCode();
             const code_copy = self.allocator.dupe(u8, all_code) catch return error.OutOfMemory;
@@ -20640,7 +20672,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
-            const saved_proc_debug_msg_slot = self.proc_debug_msg_slot;
             const saved_vector_local_by_reg = self.vector_local_by_reg;
             const saved_vector_local_mask = self.vector_local_mask;
             var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
@@ -20663,7 +20694,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear state for procedure's scope
             self.clearLocalLocationsRetainingCapacity();
             self.clearFunctionControlFlowState();
-            self.proc_debug_msg_slot = null;
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
             self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
@@ -20742,7 +20772,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
-                self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
                 self.vector_local_by_reg = saved_vector_local_by_reg;
                 self.vector_local_mask = saved_vector_local_mask;
                 // Restore the saved maps by swapping them back into place. This
@@ -20846,6 +20875,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
                 if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
 
@@ -20921,6 +20951,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
                 if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
 
@@ -20976,7 +21007,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
-            self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
             self.local_locations.deinit();
             self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
             self.vector_local_by_reg = saved_vector_local_by_reg;
@@ -23930,71 +23960,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Max size of any debug-assertion crash message (in bytes, aligned to 8).
-        /// Used to size the per-proc shared msg slot. Generous to cover any
-        /// future debug messages without re-tuning. Sharing this single slot
-        /// across all debug crashes in a proc keeps the proc's frame from
-        /// growing linearly with the number of debug asserts.
-        const debug_msg_slot_size: u32 = 256;
-
+        /// Report a static message through a host callback: `roc_crashed`,
+        /// `roc_expect_failed` or `roc_dbg`, selected by its RocOps field
+        /// offset. The message bytes live in the image's message pool.
         fn emitRocStaticMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
-            return self.emitRocStaticMessageCallShared(field_offset, msg, false);
-        }
-
-        /// Like `emitRocStaticMessageCall`, but reuses a single per-proc stack
-        /// slot for the message and args. Safe because only one debug crash
-        /// can fire per program run—the program exits after the first.
-        fn emitRocStaticDebugMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
-            return self.emitRocStaticMessageCallShared(field_offset, msg, true);
-        }
-
-        fn emitRocStaticMessageCallShared(self: *Self, field_offset: i32, msg: []const u8, shared: bool) Allocator.Error!void {
             try self.spillAllVectorLocals();
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
 
-            const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
-            const effective_size: u32 = if (msg_aligned_size == 0) 8 else msg_aligned_size;
-            // If the message is unexpectedly larger than the shared slot we
-            // fall back to a fresh per-call allocation. Keeps the safety
-            // invariant even if a future caller passes a long string.
-            const can_share = shared and effective_size <= debug_msg_slot_size;
-            const msg_slot = if (can_share) blk: {
-                if (self.proc_debug_msg_slot) |existing| break :blk existing;
-                const slot = self.codegen.allocStackSlot(debug_msg_slot_size);
-                self.proc_debug_msg_slot = slot;
-                break :blk slot;
-            } else self.codegen.allocStackSlot(effective_size);
-
-            const base_reg = frame_ptr;
-            const tmp = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(tmp);
-
-            var offset: u32 = 0;
-            while (offset < msg.len) : (offset += 8) {
-                const remaining = msg.len - offset;
-                if (remaining >= 8) {
-                    const chunk: u64 = @bitCast(msg[offset..][0..8].*);
-                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
-                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
-                } else {
-                    var padded: [8]u8 = .{0} ** 8;
-                    @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
-                    const chunk: u64 = @bitCast(padded);
-                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
-                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
-                }
+            // The message register must survive the callback pointer load below.
+            var msg_reg = try self.allocTempGeneral();
+            var displaced: ?GeneralReg = null;
+            if (msg_reg == fn_ptr_reg) {
+                displaced = msg_reg;
+                msg_reg = try self.allocTempGeneral();
             }
-
+            defer {
+                self.codegen.freeGeneral(msg_reg);
+                if (displaced) |reg| self.codegen.freeGeneral(reg);
+            }
+            try self.emitPendingMessageAddress(msg, msg_reg);
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
 
             if (self.generation_mode.threadsRocOps()) {
                 // RocOps-threaded modes reach host callbacks through RocOps:
                 // callback(ops: *RocOps, bytes: [*]const u8, len: usize).
-                const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
                 try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addRegArg(roc_ops_reg);
-                try builder.addLeaArg(base_reg, msg_slot);
+                try builder.addRegArg(msg_reg);
                 try builder.addImmArg(msg_len_val);
                 try builder.callReg(fn_ptr_reg);
             } else {
@@ -24008,10 +24003,74 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     builtins.shim_symbols.roc_dbg;
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, msg_slot);
+                try builder.addRegArg(msg_reg);
                 try builder.addImmArg(msg_len_val);
                 try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol_name), &self.codegen);
             }
+        }
+
+        /// Pool offset of `msg`, appending it when the pool has no equal message.
+        fn internMessage(self: *Self, msg: []const u8) Allocator.Error!u32 {
+            const hash = std.hash.Wyhash.hash(0, msg);
+            if (self.message_pool_index.get(hash)) |span| {
+                if (span.len == msg.len and std.mem.eql(u8, self.message_pool.items[span.offset..][0..span.len], msg)) return span.offset;
+            }
+            const offset: u32 = @intCast(self.message_pool.items.len);
+            try self.message_pool.appendSlice(self.allocator, msg);
+            try self.message_pool_index.put(self.allocator, hash, .{ .offset = offset, .len = @intCast(msg.len) });
+            return offset;
+        }
+
+        /// Load the address of `msg` into `dst_reg`, patched once the pool is placed.
+        fn emitPendingMessageAddress(self: *Self, msg: []const u8, dst_reg: GeneralReg) Allocator.Error!void {
+            const message_offset = try self.internMessage(msg);
+            if (comptime target.toCpuArch() == .aarch64) {
+                // Reserve the 4-instruction PC-relative address sequence. The
+                // scratch register is allocated before the anchor offset is
+                // read because allocation may emit spill code.
+                const scratch = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(scratch);
+                const current = self.codegen.currentOffset();
+                try self.codegen.emit.pcRelAddrSequence(dst_reg, scratch, 0, 0, false);
+                try self.pending_message_addrs.append(self.allocator, .{ .instr_offset = current, .message_offset = message_offset });
+            } else {
+                const current = self.codegen.currentOffset();
+                try self.codegen.emit.leaRegRipRel(dst_reg, 0);
+                try self.pending_message_addrs.append(self.allocator, .{ .instr_offset = current, .message_offset = message_offset });
+            }
+            self.image_finished = false;
+        }
+
+        /// After a deferred-prologue body shifts forward, message address
+        /// sequences emitted inside it move with it.
+        fn shiftPendingMessageAddrs(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
+            for (self.pending_message_addrs.items) |*pending| {
+                if (pending.instr_offset >= body_start and pending.instr_offset < body_end) {
+                    pending.instr_offset += prologue_size;
+                }
+            }
+        }
+
+        /// Append the pool bytes not yet in the code and resolve every pending
+        /// message address. Instructions may follow on aarch64, so the run is
+        /// padded to an instruction boundary.
+        fn placeMessagePool(self: *Self) Allocator.Error!void {
+            const pool_len: u32 = @intCast(self.message_pool.items.len);
+            if (self.message_pool_placed_len < pool_len) {
+                const code_start = self.codegen.currentOffset();
+                try self.message_pool_runs.append(self.allocator, .{ .pool_from = self.message_pool_placed_len, .code_start = code_start });
+                try self.codegen.emit.buf.appendSlice(self.allocator, self.message_pool.items[self.message_pool_placed_len..]);
+                while (self.codegen.currentOffset() % 4 != 0) try self.codegen.emit.buf.append(self.allocator, 0);
+                self.message_pool_placed_len = pool_len;
+            }
+            for (self.pending_message_addrs.items) |pending| {
+                var run = self.message_pool_runs.items[0];
+                for (self.message_pool_runs.items) |candidate| {
+                    if (candidate.pool_from <= pending.message_offset) run = candidate;
+                }
+                self.patchInternalCodeAddress(pending.instr_offset, run.code_start + (pending.message_offset - run.pool_from));
+            }
+            self.pending_message_addrs.clearRetainingCapacity();
         }
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
@@ -24136,7 +24195,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// run (the program exits immediately after).
         fn emitRocCrashShared(self: *Self, msg: []const u8) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
         }
 
         fn emitTrap(self: *Self) Allocator.Error!void {
@@ -24253,6 +24312,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_val);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_val);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_val);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size_val);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
@@ -24343,6 +24403,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_x86);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_x86);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size_x86);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
@@ -24453,6 +24514,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_val);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_val);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_val);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
 
@@ -24513,6 +24575,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_x86);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_x86);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
 
@@ -25346,6 +25409,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// emitted, before the code and relocations are read out.
         pub fn finishImage(self: *Self) Allocator.Error!void {
             if (self.image_finished) return;
+            try self.placeMessagePool();
             if (comptime target.toCpuArch() == .aarch64) try self.codegen.finishImage();
             self.image_finished = true;
         }
