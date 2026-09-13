@@ -24,6 +24,7 @@ pub const CallableResolution = struct {
     capture_ptr: [*]u8,
 };
 
+/// Evaluator callback supplying exact callable procedure and capture identities.
 pub const CallableResolver = struct {
     context: ?*anyopaque = null,
     resolve: *const fn (?*anyopaque, [*]u8) CallableResolution = missingCallableResolver,
@@ -200,7 +201,7 @@ const Builder = struct {
                 .box_of_zst => self.writeWord(job.dest, 0),
                 .box => try self.boxed(job, element, physical.getIdx()),
                 .erased_callable => try self.enqueue(element, job.layout_idx, job.source, job.dest, .value),
-                else => invariant("box export plan had incompatible layout"),
+                .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("box export plan had incompatible layout"),
             },
             .tuple, .record => |child_plans| {
                 if (physical.tag == .box) return self.boxed(job, job.plan, physical.getIdx());

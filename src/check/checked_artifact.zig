@@ -30899,7 +30899,6 @@ pub const DispatchEvidenceFailure = struct {
     method: ?canonical.MethodNameId = null,
 };
 
-/// Public `CheckedModuleArtifact` declaration.
 /// Ordered compile-time debug observations owned by checked publication and
 /// replayed from cache without executing their roots again.
 pub const CompileTimeDebugStore = struct {
@@ -30949,6 +30948,7 @@ pub const CompileTimeDebugStore = struct {
     }
 };
 
+/// Checked module publication, including typed stores and compile-time observations.
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
     canonical_names: canonical.CanonicalNameStore,

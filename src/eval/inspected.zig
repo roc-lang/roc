@@ -398,12 +398,13 @@ pub const BoolRoot = struct {
     ret_layout: LayoutIdx,
 };
 
-/// A group of bool-returning test roots that share one lowered LIR module.
+/// Frozen value exports and slot count required by an inspected runtime.
 pub const RuntimeStaticData = struct {
     exports: []const backend.StaticDataExport = &.{},
     value_count: usize = 0,
 };
 
+/// A group of bool-returning test roots that share one lowered LIR module.
 pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,

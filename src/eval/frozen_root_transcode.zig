@@ -12,10 +12,12 @@ const SymbolId = static_data.StaticDataSymbolId;
 
 const PlanView = struct { plan: Program.ConstPlanId, layout_idx: layout.Idx };
 
+/// Re-encode a frozen graph from explicit source and destination root plans.
 pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result, source_root: Program.ConstRootPlan, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_root: Program.ConstRootPlan, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     return transcodePlans(allocator, source_program, .{ .plan = source_root.plan, .layout_idx = source_root.ret_layout }, source_exports, source_symbol, target_program, .{ .plan = target_root.plan, .layout_idx = target_root.ret_layout }, target_slot);
 }
 
+/// Re-encode the same checked root value for the destination slot representation.
 pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
@@ -35,6 +37,7 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
     return builder.finish(allocator);
 }
 
+/// Re-encode failure status and message using the paired slots' explicit fields.
 pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
@@ -174,7 +177,7 @@ const Builder = struct {
                 .box_of_zst => self.writeWord(job.dest, 0),
                 .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
                 .erased_callable => try self.enqueue(source_plan.box, job.source_layout, element, job.layout_idx, job.source, job.dest, .value, .value),
-                else => invariant("invalid box layout"),
+                .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("invalid box layout"),
             },
             .tuple, .record => |children_| {
                 if (physical.tag == .box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());

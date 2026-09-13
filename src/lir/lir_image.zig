@@ -1003,6 +1003,7 @@ pub fn referenceProgramWithStaticDataInBuffer(
     };
 }
 
+/// Copy a lowered program and its explicit frozen graph into an image buffer.
 pub fn copyProgramWithStaticDataIntoBuffer(
     allocator: std.mem.Allocator,
     base_ptr: [*]align(1) const u8,
@@ -1105,6 +1106,7 @@ fn deinitViewedLayouts(layouts: *layout_mod.Store, allocator: std.mem.Allocator)
     layouts.interned_layouts.deinit();
 }
 
+/// Encode a slice already inside the image as a checked relative reference.
 pub fn arrayRef(base_ptr: [*]align(1) const u8, image_size: usize, slice: anytype) ImageError!ArrayRef {
     if (slice.len == 0) return ArrayRef.empty();
 
@@ -1123,6 +1125,7 @@ pub fn arrayRef(base_ptr: [*]align(1) const u8, image_size: usize, slice: anytyp
     };
 }
 
+/// Copy a slice with the image allocator and encode its relative reference.
 pub fn copyArrayRef(
     allocator: std.mem.Allocator,
     base_ptr: [*]align(1) const u8,
@@ -1135,6 +1138,7 @@ pub fn copyArrayRef(
     return try arrayRef(base_ptr, image_capacity, copied);
 }
 
+/// Validate and resolve a typed slice reference within the mapped image.
 pub fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError![]T {
     if (ref.len == 0) return &.{};
     const len = try checkSliceRef(T, image_size, ref);

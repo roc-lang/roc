@@ -6,6 +6,7 @@ const Program = core.Program;
 const LIR = core.LIR;
 const missing = std.math.maxInt(u32);
 
+/// Offset-based frozen export schema parameterized by the containing image API.
 pub fn Schema(comptime Image: type) type {
     return struct {
         const ArrayRef = Image.ArrayRef;
@@ -90,12 +91,15 @@ pub fn Schema(comptime Image: type) type {
                     if (reloc.offset > bytes.len or pointer_bytes > bytes.len - reloc.offset or reloc.function_pointer > 1 or (reloc.data_symbol != missing and reloc.data_symbol >= rows.len) or (reloc.procedure != missing and reloc.procedure >= proc_count) or ((reloc.rc_layout == missing) != (reloc.rc_op == missing))) return error.InvalidLirImage;
                     if (reloc.rc_layout != missing and (reloc.rc_layout >= layout_count or reloc.rc_layout > std.math.maxInt(@typeInfo(layout.Idx).@"enum".tag_type))) return error.InvalidLirImage;
                     if (reloc.capture_offset != missing and (reloc.capture_offset > bytes.len - reloc.offset or reloc.procedure == missing)) return error.InvalidLirImage;
-                    const rc_op: layout.RcOp = switch (reloc.rc_op) {
-                        missing, @intFromEnum(layout.RcOp.incref) => .incref,
-                        @intFromEnum(layout.RcOp.decref) => .decref,
-                        @intFromEnum(layout.RcOp.free) => .free,
-                        else => return error.InvalidLirImage,
-                    };
+                    const rc_op: layout.RcOp = if (reloc.rc_op == missing or reloc.rc_op == @intFromEnum(layout.RcOp.incref))
+                        .incref
+                    else if (reloc.rc_op == @intFromEnum(layout.RcOp.decref))
+                        .decref
+                    else if (reloc.rc_op == @intFromEnum(layout.RcOp.free))
+                        .free
+                    else
+                        return error.InvalidLirImage;
+
                     out.* = .{
                         .offset = reloc.offset,
                         .addend = reloc.addend,

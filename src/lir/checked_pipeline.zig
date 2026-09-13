@@ -104,13 +104,13 @@ pub const RootRequestSet = struct {
 /// Deterministic task counts for parallel solved-LIR body lowering.
 pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
 
-/// Target settings and checked module state for the checked-to-LIR pipeline.
 /// Producer-side work counts, independent of elapsed time and output size.
 pub const WorkMetrics = struct {
     monotype_runs: u32 = 0,
     lir_continuations: u32 = 0,
 };
 
+/// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     work_metrics: ?*WorkMetrics = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,

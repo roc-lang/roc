@@ -4,6 +4,7 @@ const backend = @import("backend");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const Allocator = std.mem.Allocator;
 
+/// Owns relocated frozen values and callable metadata borrowed by an interpreter.
 pub const InterpreterStaticData = struct {
     allocator: Allocator,
     image: backend.StaticDataImage,
@@ -44,12 +45,14 @@ pub const InterpreterStaticData = struct {
     }
 };
 
+/// Resolve explicit callable and drop-helper relocations to interpreter trampolines.
 pub fn resolveFunction(_: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
     if (relocation.rc_helper != null) return Interpreter.staticErasedCallableOnDropAddress();
     if (relocation.callable_capture_offset == null or relocation.procedure == null) return null;
     return Interpreter.staticErasedCallableTrampolineAddress();
 }
 
+/// Register each frozen callable using its declared capture offset and procedure.
 pub fn appendCallableMetadata(allocator: Allocator, exports: []const backend.StaticDataExport, image: *const backend.StaticDataImage, callables: *std.ArrayList(Interpreter.StaticErasedCallable)) Allocator.Error!void {
     for (exports) |export_| {
         const symbol = image.symbolAddress(export_.symbol_name) orelse invariant("interpreter image omitted a committed export");

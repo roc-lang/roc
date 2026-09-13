@@ -11,6 +11,7 @@ const builtins = @import("builtins");
 const lir = @import("lir");
 const FinalizeError = @import("check").CheckedArtifact.CompileTimeFinalizer.Error;
 
+/// Exact producer-completion callback for a compile-time static slot read.
 pub const SlotDemand = struct {
     pub const Error = FinalizeError || error{CompileTimeDependencyCycle};
     context: *anyopaque,
@@ -238,10 +239,12 @@ pub fn crashMessage(self: *const CompileTimeHost) ?[]const u8 {
     return null;
 }
 
+/// Start measuring time spent suspended while another root completes.
 pub fn startDemandTiming(self: *CompileTimeHost) i128 {
     return if (self.timing_io) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
 }
 
+/// Accumulate nested demand time for exclusive root timing.
 pub fn finishDemandTiming(self: *CompileTimeHost, started: i128) void {
     if (self.timing_io) |io| self.suspended_ns += @intCast(@max(0, std.Io.Timestamp.now(io, .awake).nanoseconds - started));
 }

@@ -435,12 +435,13 @@ pub fn finalizeProgram(
     var evaluation_options = options;
     evaluation_options.debug_events = &debug_events;
     if (compile_time_root_count != 0) {
-        if (compilerHostMustUseInterpreterForCtfe()) {
+        if (comptime compilerHostMustUseInterpreterForCtfe()) {
             const interpreted = try InterpreterProgram.init(allocator, lowering_modules, &host, evaluation_options);
             defer interpreted.deinit();
             try finalizeLoweredProgram(allocator, modules, &host, compile_time_root_count, interpreted, evaluation_options);
             host.frozen_static_data = try interpreted.slots.freezeCompleted();
         } else {
+            if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
             var native = try DevProgram.init(allocator, lowering_modules, &host, options);
             defer native.deinit();
             native.codegen.static_strings = native.static_strings.view();
@@ -1164,7 +1165,7 @@ fn lowerEvalAndFinishRoots(
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
     }
 
-    if (!compilerHostMustUseInterpreterForCtfe()) {
+    if (comptime !compilerHostMustUseInterpreterForCtfe()) {
         if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
         return lowerDevEvalAndFinishRoots(
             allocator,

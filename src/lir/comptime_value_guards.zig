@@ -1,6 +1,7 @@
 //! Final post-ARC guards borrow the immutable compile-time failure image.
 const std = @import("std");
 const core = @import("lir_core");
+const DenseMap = @import("collections").DenseMap;
 const LIR = core.LIR;
 const Program = core.Program;
 const Body = @import("body_clone.zig");
@@ -9,6 +10,7 @@ const GuardedList = core.LirStore.GuardedList;
 const Use = struct { proc: LIR.LirProcSpecId, stmt: LIR.CFStmtId, slot: LIR.StaticDataId };
 const Guard = struct { locals: [3]LIR.LocalId };
 
+/// Insert explicit failure checks before each compile-time value slot read.
 pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Allocator.Error!void {
     std.debug.assert(program.comptime_value_guards.items.len == 0);
     const has_value_slots = for (program.static_data_values.items) |slot| {
@@ -21,7 +23,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Al
     defer uses.deinit(allocator);
     var work: std.ArrayList(LIR.CFStmtId) = .empty;
     defer work.deinit(allocator);
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
     const store = &program.store;
     for (0..store.procSpecCount()) |proc_index| {
@@ -35,18 +37,18 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Al
             try Body.appendSuccessors(store, &work, stmt_id);
             const assign = switch (store.getCFStmt(stmt_id)) {
                 .assign_literal => |a| a,
-                else => continue,
+                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => continue,
             };
             const slot = switch (assign.value) {
                 .static_data => |id| id,
-                else => continue,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => continue,
             };
             const root = program.static_data_values.items[@intFromEnum(slot)].compile_time_root orelse continue;
             if (root.role != .value) continue;
             try uses.append(allocator, .{ .proc = proc_id, .stmt = stmt_id, .slot = slot });
         }
     }
-    var guards = std.AutoHashMap(LIR.CFStmtId, Guard).init(allocator);
+    var guards = DenseMap(LIR.CFStmtId, Guard).init(allocator);
     defer guards.deinit();
     for (uses.items) |use| {
         if (guards.contains(use.stmt)) continue;

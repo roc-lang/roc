@@ -5,12 +5,15 @@ const std = @import("std");
 const base = @import("base");
 const core = @import("lir_core");
 const GuardedList = @import("collections").GuardedList;
+const DenseMap = @import("collections").DenseMap;
 const LIR = core.LIR;
 const Allocator = std.mem.Allocator;
 
+/// Collect exact string backings referenced by the declared procedure bodies.
 pub fn collect(allocator: Allocator, store: *const core.LirStore) Allocator.Error![]base.StringLiteral.Idx {
-    var collector: Collector = .{ .allocator = allocator, .store = store };
-    defer collector.visited.deinit(allocator);
+    var collector: Collector = .{ .allocator = allocator, .store = store, .visited = .init(allocator), .backing_set = .init(allocator) };
+    defer collector.visited.deinit();
+    defer collector.backing_set.deinit();
     defer collector.backings.deinit(allocator);
     defer collector.stack.deinit(allocator);
     for (store.getProcSpecs()) |proc| {
@@ -19,25 +22,27 @@ pub fn collect(allocator: Allocator, store: *const core.LirStore) Allocator.Erro
         for (0..joins.len) |index| try collector.pushStmt(GuardedList.at(joins, index).body);
     }
     try collector.run();
-    return allocator.dupe(base.StringLiteral.Idx, collector.backings.keys());
+    return collector.backings.toOwnedSlice(allocator);
 }
 
 const Collector = struct {
     allocator: Allocator,
     store: *const core.LirStore,
-    visited: std.AutoHashMapUnmanaged(LIR.CFStmtId, void) = .empty,
-    backings: std.AutoArrayHashMapUnmanaged(base.StringLiteral.Idx, void) = .empty,
+    visited: DenseMap(LIR.CFStmtId, void),
+    backing_set: DenseMap(base.StringLiteral.Idx, void),
+    backings: std.ArrayList(base.StringLiteral.Idx) = .empty,
     stack: std.ArrayList(LIR.CFStmtId) = .empty,
 
     fn mark(self: *Collector, backing: base.StringLiteral.Idx) Allocator.Error!void {
-        try self.backings.put(self.allocator, backing, {});
+        if (!(try self.backing_set.getOrPut(backing)).found_existing)
+            try self.backings.append(self.allocator, backing);
     }
     fn markSteps(self: *Collector, span: LIR.StrMatchStepSpan) Allocator.Error!void {
         const steps = self.store.getStrMatchSteps(span);
         for (0..steps.len) |index| try self.mark(GuardedList.at(steps, index).delimiter.backing);
     }
     fn pushStmt(self: *Collector, stmt: LIR.CFStmtId) Allocator.Error!void {
-        const entry = try self.visited.getOrPut(self.allocator, stmt);
+        const entry = try self.visited.getOrPut(stmt);
         if (!entry.found_existing) try self.stack.append(self.allocator, stmt);
     }
     fn run(self: *Collector) Allocator.Error!void {
@@ -50,7 +55,7 @@ const Collector = struct {
                     switch (s.value) {
                         .str_literal => |literal| try self.mark(literal.backing),
                         .bytes_literal => |literal| try self.mark(literal.bytes.backing),
-                        else => {},
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .null_ptr, .proc_ref => {},
                     }
                     try self.pushStmt(s.next);
                 },
