@@ -152,6 +152,7 @@ fn runEmbeddingSequence(
     }
 
     // 7. Fill the LIR image header in the contiguous buffer.
+    try std.testing.expectEqual(@as(usize, 0), lowered.lir_result.static_data_values.items.len);
     const image_header = try runtime_alloc.create(lir.LirImage.Header);
     try lir.LirImage.fillHeaderInBuffer(
         image_header,

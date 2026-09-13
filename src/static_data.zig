@@ -948,6 +948,18 @@ pub fn buildStaticData(
     target: roc_target.RocTarget,
     options: BuildOptions,
 ) MaterializationError![]StaticDataExport {
+    return buildStaticDataForWidth(allocator, modules, lowered, @import("base").target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()), options);
+}
+
+/// Image materialization depends on the declared pointer width, without
+/// inventing an architecture for a portable interpreter image.
+pub fn buildStaticDataForWidth(
+    allocator: Allocator,
+    modules: ModuleViews,
+    lowered: ?*const lir.CheckedPipeline.LoweredProgram,
+    target_usize: @import("base").target.TargetUsize,
+    options: BuildOptions,
+) MaterializationError![]StaticDataExport {
     const root = modules.root orelse {
         if (hasProvidedData(modules)) staticDataInvariant("provided data exports require a root checked module");
         if (lowered) |lowered_program| {
@@ -962,7 +974,7 @@ pub fn buildStaticData(
         return try allocator.alloc(StaticDataExport, 0);
     };
 
-    var builder = (try StaticDataBuilder.init(allocator, root, lowered_program, target, options)) orelse
+    var builder = (try StaticDataBuilder.init(allocator, root, lowered_program, target_usize, options)) orelse
         return error.UnsupportedTarget;
     defer builder.deinitScratch();
     return try builder.build();
@@ -1043,10 +1055,9 @@ const StaticDataBuilder = struct {
         allocator: Allocator,
         root: Checked.LoweringModuleView,
         lowered: *const lir.CheckedPipeline.LoweredProgram,
-        target: roc_target.RocTarget,
+        target_usize: @import("base").target.TargetUsize,
         options: BuildOptions,
     ) MaterializationError!?StaticDataBuilder {
-        const target_usize = @import("base").target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
         return .{
             .allocator = allocator,
             .root = root,
@@ -1079,6 +1090,12 @@ const StaticDataBuilder = struct {
         if (self.lowered.frozen_static_data) |frozen| {
             const cloned = try cloneStaticData(self.allocator, frozen.exports);
             errdefer deinitStaticData(self.allocator, cloned);
+            // LIR value slots are referenced from the independently emitted
+            // code object. Their symbols have global linker binding even when
+            // the value is private to the Roc program's host ABI.
+            for (cloned) |*item| if (item.value_id != null) {
+                item.is_global = true;
+            };
             try self.nodes.appendSlice(self.allocator, cloned);
             self.allocator.free(cloned);
         }

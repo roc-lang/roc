@@ -368,6 +368,7 @@ const CustomCase = enum {
     pipeline_parity_shared_cache,
     issue_11344_diagnostics,
     issue_11344_shared_helper,
+    issue_11344_lir_image,
     cli_cache_roots_distinct,
     watch_inputs_reject_absolute_import,
     watch_completed_run_refresh_reruns,
@@ -1417,6 +1418,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10419: roc test keeps independent parser expect roots while reporting diagnostics", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_10419_parser_expect_isolation/Blub.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "parse_tag_union" }, .{ .stream = .stdout, .text = "All (1) tests passed" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "expect \"hi\" == Blub.parse(\"hi\")?" }, .{ .stream = .stderr, .text = "Roc application crashed" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: imported compile-time diagnostics are deterministic across workers and cache", .body = .{ .custom = .issue_11344_diagnostics } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: hoisted and runtime calls share an imported helper across workers and cache", .backend = .dev, .body = .{ .custom = .issue_11344_shared_helper } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11344: an empty test plan completes without runtime roots", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/Helper.roc", .contains = &.{.{ .stream = .stdout, .text = "All (0) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11344: interpreter run and embedded images retain frozen constants", .backend = .interpreter, .body = .{ .custom = .issue_11344_lir_image } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
@@ -3044,6 +3047,7 @@ fn runCustomCase(
         .pipeline_parity_shared_cache => customPipelineParitySharedCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_diagnostics => customIssue11344Diagnostics(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_shared_helper => customIssue11344SharedHelper(io, allocator, &env, &timer, timeout_ms),
+        .issue_11344_lir_image => customIssue11344LirImage(io, allocator, &env, &timer, timeout_ms),
         .cli_cache_roots_distinct => customCliCacheRootsDistinct(io, allocator, &timer),
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
@@ -6817,6 +6821,43 @@ fn customIssue11344SharedHelper(io: std.Io, allocator: Allocator, env: *const Ca
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
             .args = &.{ "build", "--opt=dev", "--jobs=4", target_arg, archive_out_arg },
             .roc_file = "test/cli/issue_11344_shared_ctfe/archive.roc",
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customIssue11344LirImage(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const fixture = "test/cli/issue_11344_shared_ctfe/main.roc";
+    for ([_][]const []const u8{
+        &.{ "--opt=interpreter", "--no-cache" },
+        &.{"--opt=interpreter"},
+        &.{"--opt=interpreter"},
+    }) |args| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = fixture,
+            .app_args = &.{"runtime"},
+            .stdout_exact = "shared:constantshared:runtime",
+        })) |failure| return failure;
+    }
+    const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "shared-interpreter" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate interpreter output: {}", .{err});
+    const output_arg = outputArg(allocator, output) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate interpreter output argument: {}", .{err});
+    for ([_][]const []const u8{
+        &.{ "build", "--opt=interpreter", "--no-cache", output_arg },
+        &.{ "build", "--opt=interpreter", output_arg },
+    }) |args| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = fixture,
+        })) |failure| return failure;
+        const executable = runnableOutputPath(io, allocator, output) catch |err|
+            return customInfraFailure(allocator, timer, "failed to find embedded interpreter executable: {}", .{err});
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ executable, "runtime" }, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = "shared:constantshared:runtime",
+            .stderr_exact = "",
         })) |failure| return failure;
     }
     return null;

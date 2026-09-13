@@ -731,6 +731,13 @@ slots in checked dependency order; runtime static-data materialization consumes
 the completed root payloads. Neither consumer executes the initializer at a
 slot read or reconstructs a callable identity from its layout.
 
+A provided static export requested during shared preparation aliases that same
+canonical slot. Its const locator's checked owner identifies the root, and the
+explicit evaluation request manifest determines slot membership. The export's
+closed initializer reads the slot after evaluation; it does not restore a
+pending ConstStore entry or run the value computation again. Requests for an
+explicit stored subnode continue to consume that exact stored node.
+
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
 `expect` behavior is reported, but successfully evaluated unreachable data does
@@ -768,6 +775,13 @@ time evaluation or `.omit` for optimized execution. Those differing semantics
 require separate target-LIR continuations from the shared Monotype; they do not
 repeat specialization. A program lowered originally with a non-shared expect
 mode cannot change that mode at the continuation boundary.
+
+Shared value slots are declared by the compile-time `RootRequest` manifest,
+not by root type eligibility alone. Eligible procedure aliases and roots with
+unbound platform requirements can be intentionally absent from that manifest.
+The initial reservation pass records exactly its module/root identities and
+canonical functions; lowering uses that declaration table to select slot reads.
+Unrequested callable bindings retain their ordinary checked body computation.
 
 Every shared compile-time value slot names an explicit failure-record slot with
 separate internal `failed: U8` (zero means success, one means failure) and
@@ -13855,6 +13869,17 @@ their original error identity instead of becoming language crashes.
 
 
 ## LirImage And Hosted Functions
+
+A mapped interpreter image transports the complete materialized static graph
+alongside LIR. Its explicit export rows carry slot IDs, byte spans, symbol
+offsets, and alignment; relocation rows retain data-symbol IDs, procedure IDs,
+callable capture offsets, and RC helper identities. All spans are image-relative
+offsets. Frozen bytes record their pointer width and mapped consumers reject a
+width mismatch. Cross-width production converts completed values before image
+publication. The loader owns relocated bytes and callable metadata for as long
+as any interpreter or escaping callable can reference them. It never reruns a
+compile-time initializer or reconstructs identity from symbol names.
+
 
 Platform-hosted functions called through `RocOps.hosted_fns` receive ownership
 of every refcounted argument. LIR ARC insertion transfers that ownership at the

@@ -6673,6 +6673,9 @@ fn evaluateLirImageEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) Allocator.Error!void {
+    var static_data = try eval.InterpreterStaticData.init(allocator, view.static_data, view.static_data_value_count);
+    defer static_data.deinit();
+
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
@@ -6682,6 +6685,7 @@ fn evaluateLirImageEntrypoint(
         .preserve,
     );
     defer interpreter.deinit();
+    static_data.install(&interpreter);
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
         error.EntrypointNotFound => {
@@ -6864,19 +6868,16 @@ fn lowerLirWithBuildEnv(
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
 
-    const internal_static_data: ?[]backend.StaticDataExport = switch (artifact) {
-        .lir_image => null,
-        .dev_run_image => |target| try compile.static_data_exports.buildStaticData(
-            ctx.gpa,
-            .{
-                .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-                .imports = imported_artifacts,
-            },
-            &lowered,
-            target,
-            .{},
-        ),
-    };
+    const internal_static_data: ?[]backend.StaticDataExport = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        &lowered,
+        switch (artifact) {
+            .lir_image => roc_target.RocTarget.detectNative(),
+            .dev_run_image => |target| target,
+        },
+        .{},
+    );
     errdefer if (internal_static_data) |static_data| {
         compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     };
@@ -6954,18 +6955,18 @@ pub fn buildLirImageWithBuildEnv(
         enable_checked_cache,
         reporter,
     );
-    defer lowered_result.deinitWatchInputs();
-    defer lowered_result.lowered.deinit();
+    defer lowered_result.deinit();
 
     const lowered = &lowered_result.lowered;
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
     defer ctx.gpa.free(platform_entrypoints);
-    const copied = try lir.LirImage.copyProgramIntoBuffer(
+    const copied = try lir.LirImage.copyProgramWithStaticDataIntoBuffer(
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         platform_entrypoints,
+        lowered_result.internal_static_data.?,
     );
     try copied.fillHeader(image_header, shm.getUsedSize());
 
@@ -10607,7 +10608,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         .{ .platform_entrypoints = .lir_image },
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.native,
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
         false,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
@@ -10655,7 +10656,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         .{ .platform_entrypoints = .lir_image },
         args.opt,
         specialization_strategy,
-        base.target.TargetUsize.native,
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
         false,
         build_env.postCheckExecutor(),
         &spec_timing,
@@ -10667,12 +10668,21 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
     defer ctx.gpa.free(platform_entrypoints);
-    const copied = try lir.LirImage.copyProgramIntoBuffer(
+    const image_static_data = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        &lowered,
+        target,
+        .{},
+    );
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, image_static_data);
+    const copied = try lir.LirImage.copyProgramWithStaticDataIntoBuffer(
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         platform_entrypoints,
+        image_static_data,
     );
     try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
@@ -14516,8 +14526,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         false,
     );
     runtime_config.explicit_roots = runtime_roots;
-    runtime_config.root_module = if (test_plan.modules.len > 0) test_plan.modules[0].artifact else null;
-    build_env.setRuntimeLowering(runtime_config);
+    if (runtime_requests.items.len != 0) {
+        runtime_config.root_module = test_plan.modules[0].artifact;
+        build_env.setRuntimeLowering(runtime_config);
+    }
     build_env.finishCheckedProgram() catch |err| {
         _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         return err;
@@ -14549,24 +14561,27 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var total = CliTestRunSummary{};
     runtime_config.target.post_check_executor = build_env.postCheckExecutor();
     runtime_config.target.timing = &spec_timing;
-    var shared_test_program = try build_env.runtimeProgramSession().?.takeRuntime(ctx.gpa, runtime_roots, runtime_config.target);
-    defer shared_test_program.deinit();
-    const session_modules = build_env.runtimeProgramSession().?.modules;
-    const test_static_data = compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{ .root = session_modules.root, .imports = session_modules.imports },
-        &shared_test_program,
-        roc_target.RocTarget.detectNative(),
-        .{ .include_provided_exports = false },
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.UnsupportedTarget => return error.UnsupportedPlatform,
-    };
-    if (shared_test_program.frozen_static_data) |*previous| previous.deinit();
-    shared_test_program.frozen_static_data = .{ .allocator = ctx.gpa, .exports = test_static_data };
+    var shared_test_program: ?lir.CheckedPipeline.LoweredProgram = null;
+    defer if (shared_test_program) |*program| program.deinit();
+    if (runtime_requests.items.len != 0) {
+        shared_test_program = try build_env.runtimeProgramSession().?.takeRuntime(ctx.gpa, runtime_roots, runtime_config.target);
+        const session_modules = build_env.runtimeProgramSession().?.modules;
+        const test_static_data = compile.static_data_exports.buildStaticData(
+            ctx.gpa,
+            .{ .root = session_modules.root, .imports = session_modules.imports },
+            &shared_test_program.?,
+            roc_target.RocTarget.detectNative(),
+            .{ .include_provided_exports = false },
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnsupportedTarget => return error.UnsupportedPlatform,
+        };
+        if (shared_test_program.?.frozen_static_data) |*previous| previous.deinit();
+        shared_test_program.?.frozen_static_data = .{ .allocator = ctx.gpa, .exports = test_static_data };
+    }
 
     const test_mode = cliTestExecutionMode(args.opt);
-    const use_live_optimized_output = switch (test_mode) {
+    const use_live_optimized_output = runtime_requests.items.len != 0 and switch (test_mode) {
         .llvm_size, .llvm_speed => true,
         .interpreter, .dev => false,
     };
@@ -14630,10 +14645,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // execution. The completed timing rows recorded below split out the
     // expensive subsets without pretending their durations are extra work.
     reporter.begin("Compile + Run Tests (wall)");
-    switch (test_mode) {
+    if (shared_test_program) |*program| switch (test_mode) {
         .llvm_size, .llvm_speed, .dev => try runCompiledTestPlan(
             ctx,
-            &shared_test_program,
+            program,
             &test_plan,
             args.opt,
             specialization_strategy,
@@ -14653,7 +14668,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     break :cached planned.cached_summary;
                 } else try runCheckedArtifactTests(
                     ctx,
-                    &shared_test_program,
+                    program,
                     planned,
                     test_plan.entries,
                     args.opt,
@@ -14671,7 +14686,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                 total.cached_modules += summary.cached_modules;
             }
         },
-    }
+    };
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
     reporter.end();
     recordPostCheckLowering(&reporter, &spec_timing, specialization_strategy);

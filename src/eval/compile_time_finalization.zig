@@ -3532,9 +3532,17 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const expected_float_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_float, .value = .{ .f64_literal = 13.25 }, .next = int_compare } });
     const expected_int_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_int, .value = .{ .i64_literal = .{ .value = 12345, .layout_idx = .u64 } }, .next = expected_float_stmt } });
     const consumer_load = try result.store.addCFStmt(.{ .assign_literal = .{ .target = consumer_local, .value = .{ .static_data = @enumFromInt(1) }, .next = expected_int_stmt } });
-    const live_float_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = live_float, .value = .{ .f64_literal = 13.25 }, .next = consumer_load } });
-    const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = live_int, .value = .{ .i64_literal = .{ .value = 12345, .layout_idx = .u64 } }, .next = live_float_stmt } });
-    const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float }), .body = consumer_body, .ret_layout = .str });
+    const input_int = try result.store.addLocal(.{ .layout_idx = .u64 });
+    const addend_int = try result.store.addLocal(.{ .layout_idx = .u64 });
+    const input_float = try result.store.addLocal(.{ .layout_idx = .f64 });
+    const addend_float = try result.store.addLocal(.{ .layout_idx = .f64 });
+    const live_float_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_float, .op = .num_float_add, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_float, addend_float }), .next = consumer_load } });
+    const live_int_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_int, .op = .num_int_add_wrap, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_int, addend_int }), .next = live_float_stmt } });
+    const float_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_float, .value = .{ .f64_literal = 3.25 }, .next = live_int_stmt } });
+    const float_input_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_float, .value = .{ .f64_literal = 10.0 }, .next = float_addend_stmt } });
+    const int_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_int, .value = .{ .i64_literal = .{ .value = 345, .layout_idx = .u64 } }, .next = float_input_stmt } });
+    const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_int, .value = .{ .i64_literal = .{ .value = 12000, .layout_idx = .u64 } }, .next = int_addend_stmt } });
+    const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = consumer_body, .ret_layout = .str });
     try lir.ComptimeValueGuards.insert(allocator, result);
 
     const failure_size = result.layouts.layoutSize(result.layouts.getLayout(failure_layout));
@@ -3624,6 +3632,8 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
             }
         }
         try std.testing.expectEqual(@as(usize, 1), demand.evaluations);
+        if (failure_message == null and comptime backend.host_lir_codegen_available)
+            try testNativeSlotDemand(&lowered, &owner.slots, source_proc, consumer_proc, text);
         return;
     }
     if (failure_message) |message| {
@@ -3652,6 +3662,73 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         const bytes: [*]const u8 = @ptrFromInt(addresses[0]);
         try std.testing.expectEqual(@as(u8, 0), bytes[failed_offset]);
     }
+}
+
+fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8) !void {
+    if (comptime !backend.host_lir_codegen_available) return;
+    const allocator = std.testing.allocator;
+    var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+    defer strings.deinit();
+    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, strings.view(), &.{}, &.{}, &.{}, .normalize, roc_target.host_cpu.level());
+    defer codegen.deinit();
+    codegen.setNativeStaticData(slots.addresses);
+    codegen.setComptimeHooks(.{
+        .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
+        .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
+        .failure_region = CompileTimeHost.rocComptimeFailureRegion,
+        .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
+        .call_enter = CompileTimeHost.rocComptimeCallEnter,
+        .call_exit = CompileTimeHost.rocComptimeCallExit,
+    });
+    try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    const source_entry = try codegen.generateEntrypointWrapper("native_slot_source", producer, &.{}, .str);
+    const consumer_entry = try codegen.generateEntrypointWrapper("native_slot_consumer", consumer, &.{}, .str);
+    var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
+    defer executable.deinit();
+    const Demand = struct {
+        executable: *backend.ExecutableMemory,
+        lowered: *lir.CheckedPipeline.LoweredProgram,
+        slots: *StaticSlotEnvironment,
+        source_offset: usize,
+        producer: lir.LIR.LirProcSpecId,
+        evaluations: usize = 0,
+
+        fn ensure(raw: *anyopaque, _: lir.LIR.StaticDataId) SlotDemand.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            if (self.evaluations != 0) return;
+            self.evaluations += 1;
+            var child = CompileTimeHost.init(std.testing.allocator);
+            defer child.deinit();
+            var bytes: [@sizeOf(builtins.str.RocStr)]u8 align(16) = @splat(0);
+            var boundary = child.enterCrashBoundary();
+            if (boundary.set() == 0) self.executable.callRocABIAt(self.source_offset, @ptrCast(child.ops()), @ptrCast(&bytes), null);
+            boundary.deinit();
+            if (child.termination != .returned) return error.Unexpected;
+            try self.slots.publishRoot(self.lowered, .{}, @enumFromInt(0), .{
+                .root_order = 0,
+                .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
+                .proc = self.producer,
+                .ret_layout = .str,
+                .ret_type = undefined,
+                .plan = @enumFromInt(0),
+            }, .{ .ptr = &bytes }, .{}, .{ .resolve = InterpreterProgram.resolveFunction });
+        }
+    };
+    var demand = Demand{ .executable = &executable, .lowered = lowered, .slots = slots, .source_offset = source_entry.offset, .producer = producer };
+    var host = CompileTimeHost.init(allocator);
+    defer host.deinit();
+    host.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };
+    for (0..2) |_| {
+        host.resetForRun();
+        var bytes: [@sizeOf(builtins.str.RocStr)]u8 align(16) = @splat(0);
+        var boundary = host.enterCrashBoundary();
+        if (boundary.set() == 0) executable.callRocABIAt(consumer_entry.offset, @ptrCast(host.ops()), @ptrCast(&bytes), null);
+        boundary.deinit();
+        try std.testing.expectEqual(CompileTimeHost.Termination.returned, host.termination);
+        const str: *const builtins.str.RocStr = @ptrCast(&bytes);
+        try std.testing.expectEqualStrings(text, str.asSlice());
+    }
+    try std.testing.expectEqual(@as(usize, 1), demand.evaluations);
 }
 
 test "shared frozen erased callables execute on interpreter dev and LLVM" {
@@ -3747,6 +3824,25 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     copied_data.install(&interpreter);
     const second = try interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool });
     try std.testing.expectEqual(@as(u8, 1), second.value.read(u8));
+    // Execute only the mapped graph and its image-local procedure identities.
+    // This is the same installation boundary used by interpreter shims.
+    const image_bytes = try allocator.alignedAlloc(u8, collections.max_roc_alignment, 1024 * 1024);
+    defer allocator.free(image_bytes);
+    var fba = std.heap.FixedBufferAllocator.init(image_bytes);
+    const header = try fba.allocator().create(lir.LirImage.Header);
+    const image_program = try lir.LirImage.copyProgramWithStaticDataIntoBuffer(fba.allocator(), image_bytes.ptr, image_bytes.len, &program, &.{.{ .ordinal = 0, .root_proc = caller }}, copied);
+    try image_program.fillHeader(header, fba.end_index);
+    var view = try lir.LirImage.viewMappedImageWithAllocator(header, image_bytes.ptr, fba.end_index, .native, allocator);
+    defer view.deinit();
+    var mapped_data = try StaticInterpreterData.init(allocator, view.static_data, view.static_data_value_count);
+    defer mapped_data.deinit();
+    var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), host.ops(), .normalize);
+    defer mapped_interpreter.deinit();
+    mapped_data.install(&mapped_interpreter);
+    var mapped_answer: u8 = 0;
+    _ = try mapped_interpreter.runEntrypoint(&view, 0, null, @ptrCast(&mapped_answer));
+    try std.testing.expectEqual(@as(u8, 1), mapped_answer);
+
     const Inspected = @import("inspected.zig");
     const roots = [_]Inspected.BoolRoot{.{ .symbol_name = "test_frozen_erased", .proc = caller, .arg_layouts = &.{}, .ret_layout = .bool }};
     const module = Inspected.BoolRootModule{ .store = &program.store, .layouts = &program.layouts, .tables = Interpreter.BoxyTables.fromResult(&program), .roots = &roots, .static_data = .{ .exports = copied, .value_count = 1 } };
@@ -3759,5 +3855,63 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         const llvm_result = try Inspected.llvmEvalBoolRootModules(allocator, &.{module}, .speed);
         defer Inspected.deinitBoolRootEvalResults(allocator, llvm_result);
         try std.testing.expect(llvm_result[0].outcome.passed);
+    }
+    // Exercise the inspected-run ownership path with procedure and drop-helper
+    // relocations, then return a separate frozen string through its Str ABI.
+    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
+    const inspected_closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
+    const inspected_bool = try program.store.addLocal(.{ .layout_idx = .bool });
+    const inspected_str = try program.store.addLocal(.{ .layout_idx = .str });
+    const inspected_ret = try program.store.addCFStmt(.{ .ret = .{ .value = inspected_str } });
+    const inspected_load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_str, .value = .{ .static_data = @enumFromInt(1) }, .next = inspected_ret } });
+    const inspected_call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = inspected_bool, .closure = inspected_closure, .args = .empty(), .arg_plan = arg_plan, .next = inspected_load } });
+    const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = @enumFromInt(0) }, .next = inspected_call } });
+    const inspected_root = try program.store.addProcSpec(.{ .name = .fromRaw(57), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ inspected_closure, inspected_bool, inspected_str }), .body = inspected_body, .ret_layout = .str });
+    const result_name = try LirProgram.staticDataSymbolName(allocator, @enumFromInt(1));
+    defer allocator.free(result_name);
+    const result_str = builtins.str.RocStr.fromSliceSmall("relocated");
+    const inspected_exports = try allocator.alloc(LirProgram.StaticDataExport, copied.len + 1);
+    defer allocator.free(inspected_exports);
+    @memcpy(inspected_exports[0..copied.len], copied);
+    inspected_exports[copied.len] = .{ .symbol_name = result_name, .value_id = @enumFromInt(1), .bytes = std.mem.asBytes(&result_str), .alignment = @alignOf(usize), .relocations = &.{} };
+    const InspectedRun = @import("inspected_run.zig");
+    inline for (.{ InspectedRun.Backend.interpreter, .dev, .llvm }) |kind| {
+        if (comptime kind == .dev and !backend.host_lir_codegen_available) continue;
+        if (comptime kind != .interpreter and builtin.os.tag == .freestanding) continue;
+        const result = try InspectedRun.run(allocator, kind, .{ .store = &program.store, .layouts = &program.layouts, .main_proc = inspected_root, .static_data = inspected_exports, .static_data_value_count = 2 }, if (kind == .interpreter) .reject else {});
+        defer result.deinit(allocator);
+        try std.testing.expect(result.outcome == .returned);
+        try std.testing.expectEqualStrings("relocated", result.outcome.returned);
+    }
+}
+
+// Each backend receives bytes encoded for its explicit pointer width. The root
+// has no initializer: execution must consume the supplied frozen slot.
+test "inspected runners consume frozen string slots on every backend" {
+    const InspectedRun = @import("inspected_run.zig");
+    const allocator = std.testing.allocator;
+    inline for (.{ InspectedRun.Backend.interpreter, .dev, .wasm, .llvm }) |kind| {
+        if (comptime kind == .dev and !backend.host_lir_codegen_available) continue;
+        if (comptime kind != .interpreter and builtin.os.tag == .freestanding) continue;
+        const width: base.target.TargetUsize = if (kind == .wasm) .u32 else .native;
+        var program = try LirProgram.Result.init(allocator, width);
+        defer program.deinit();
+        try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
+        const value = try program.store.addLocal(.{ .layout_idx = .str });
+        const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } });
+        const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @enumFromInt(0) }, .next = ret } });
+        const root = try program.store.addProcSpec(.{ .name = .fromRaw(101), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{value}), .body = body, .ret_layout = .str });
+        const name = try LirProgram.staticDataSymbolName(allocator, @enumFromInt(0));
+        defer allocator.free(name);
+        const bytes = try allocator.alloc(u8, 3 * width.size());
+        defer allocator.free(bytes);
+        @memset(bytes, 0);
+        @memcpy(bytes[0..6], "frozen");
+        bytes[bytes.len - 1] = 0x80 | 6;
+        const exports = [_]LirProgram.StaticDataExport{.{ .symbol_name = name, .value_id = @enumFromInt(0), .bytes = bytes, .alignment = width.size(), .relocations = &.{} }};
+        const result = try InspectedRun.run(allocator, kind, .{ .store = &program.store, .layouts = &program.layouts, .main_proc = root, .static_data = &exports, .static_data_value_count = 1 }, if (kind == .interpreter) .reject else {});
+        defer result.deinit(allocator);
+        try std.testing.expect(result.outcome == .returned);
+        try std.testing.expectEqualStrings("frozen", result.outcome.returned);
     }
 }

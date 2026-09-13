@@ -1982,12 +1982,19 @@ fn lowerCheckedRootWithViews(
     );
     defer lowered.deinit();
 
-    const copied = try LirImage.copyProgramIntoBuffer(
+    const image_data = try @import("static_data").buildStaticDataForWidth(allocator, .{
+        .root = check.CheckedArtifact.loweringView(root_module),
+        .imports = import_views,
+    }, &lowered, target_usize, .{});
+    defer @import("static_data").deinitStaticData(allocator, image_data);
+
+    const copied = try LirImage.copyProgramWithStaticDataIntoBuffer(
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         &.{},
+        image_data,
     );
     try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
@@ -3639,6 +3646,8 @@ fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.
         .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
         .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
+        .static_data = lowered.view.static_data,
+        .static_data_value_count = lowered.view.static_data_value_count,
     }, switch (backend_kind) {
         .interpreter => .reject,
         .dev, .wasm, .llvm => {},
@@ -3708,6 +3717,9 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_data = try @import("interpreter_static_data.zig").InterpreterStaticData.init(allocator, lowered.view.static_data, lowered.view.static_data_value_count);
+    defer static_data.deinit();
+
     var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
@@ -3717,6 +3729,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         .preserve,
     );
     defer interp.deinit();
+    static_data.install(&interp);
 
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);

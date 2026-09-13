@@ -4026,8 +4026,37 @@ const Builder = struct {
     fn lowerStaticDataRequest(self: *Builder, request: Common.StaticDataRequest) Allocator.Error!void {
         const type_view = moduleView(self.root_view);
         const ret_ty = try self.lowerType(type_view, request.checked_type);
-        const const_node = self.constNode(request.const_locator, request.node);
-        const body = try self.restoreConstNodeAtTypeWithStaticRoot(const_node.module, type_view, const_node.id, ret_ty, request.const_locator);
+        const body = body: {
+            // Provided exports request the whole checked constant before its
+            // evaluation completes. Their initializer aliases the declared
+            // canonical slot; it must not restore the still-pending ConstStore.
+            if (request.node == null and self.comptime_value_reads) {
+                const view = self.moduleForId(checked.constModuleId(request.const_locator));
+                const root_id = switch (request.const_locator.owner) {
+                    .top_level_binding => |owner| view.compile_time_roots.lookupIdByPattern(owner.pattern),
+                    .hoisted_expr => |owner| if (view.hoisted_constants.lookupByExpr(owner.expr)) |entry| entry.root else null,
+                };
+                if (root_id) |root| {
+                    if (self.comptimeValueReadDeclared(view, root)) {
+                        const owners = self.canonical_comptime_root_owner orelse &self.canonical_comptime_roots;
+                        const fn_id = owners.get(.{ .module = view.key, .root = root }).?;
+                        const initializer = try self.program.addExpr(.{
+                            .ty = ret_ty,
+                            .data = .{ .call_proc = .{ .callee = Ast.localProcCallee(fn_id), .args = .empty() } },
+                        });
+                        break :body try self.program.addExpr(.{
+                            .ty = ret_ty,
+                            .data = .{ .comptime_value = .{
+                                .root = .{ .module = view.key, .root = root, .const_locator = request.const_locator },
+                                .initializer = initializer,
+                            } },
+                        });
+                    }
+                }
+            }
+            const const_node = self.constNode(request.const_locator, request.node);
+            break :body try self.restoreConstNodeAtTypeWithStaticRoot(const_node.module, type_view, const_node.id, ret_ty, request.const_locator);
+        };
         const def = try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
@@ -7440,13 +7469,14 @@ const Builder = struct {
         return try self.activeTypeStore().addDeclaredFields(entries);
     }
 
-    fn comptimeValueReadEligible(self: *Builder, view: ModuleView, root_id: checked.ComptimeRootId) bool {
+    /// Slot membership is the explicit compile-time request manifest, reserved
+    /// before any root bodies are lowered. Type eligibility alone does not
+    /// select a root: the checker omits procedure aliases and roots that depend
+    /// on unbound platform requirements from that manifest.
+    fn comptimeValueReadDeclared(self: *Builder, view: ModuleView, root_id: checked.ComptimeRootId) bool {
         if (!self.comptime_value_reads) return false;
-        return switch (view.compile_time_roots.root(root_id).request_eligibility) {
-            .eligible => true,
-            .ineligible => false,
-            .pending => Common.invariant("shared lowering reached unresolved compile-time root eligibility"),
-        };
+        const declarations = self.canonical_comptime_root_owner orelse &self.canonical_comptime_roots;
+        return declarations.contains(.{ .module = view.key, .root = root_id });
     }
 
     fn constNode(self: *Builder, const_locator: checked.ConstLocator, node: ?checked.ConstNodeId) ConstNode {
@@ -23680,7 +23710,7 @@ const BodyContext = struct {
         if (try self.activeCallableEvalBindingExpr(view, root_id, request_fn_node)) |active| return active;
 
         const request_cell = DraftTypeCell.fromGraphNode(request_fn_node);
-        if (self.builder.comptimeValueReadEligible(view, root_id)) {
+        if (self.builder.comptimeValueReadDeclared(view, root_id)) {
             return self.canonicalComptimeValue(view, root_id, request_cell, null);
         }
         const local = try self.reserveCallableEvalBinding(view, root_id, request_fn_node);
@@ -33817,7 +33847,7 @@ const BodyContext = struct {
         current_entry_root: ?EntryRoot,
     ) Allocator.Error!DraftExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
-        if (self.builder.comptimeValueReadEligible(store_view, body.root)) {
+        if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
             return self.canonicalComptimeValue(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
         const entry_template = store_view.templates.get(eval.entry_template.template);

@@ -44,6 +44,8 @@ pub const NativeRootExport = @import("native_root_export.zig");
 pub const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 /// Owned relocated immutable graph and callable registry for runtime interpretation.
 pub const InterpreterStaticData = @import("interpreter_static_data.zig").InterpreterStaticData;
+pub const buildStaticDataForWidth = @import("static_data").buildStaticDataForWidth;
+pub const deinitStaticData = @import("static_data").deinitStaticData;
 /// Builtin types for type checking
 pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 /// Crash context for host crash handling
