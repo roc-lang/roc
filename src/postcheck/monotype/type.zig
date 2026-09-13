@@ -2837,8 +2837,8 @@ pub const Store = struct {
         mode: NamedDigestMode,
         link_start: u32 = 0,
         link_len: u32 = 0,
-        scalar_start: u32 = 0,
-        scalar_len: u32 = 0,
+        scalar_start: usize = 0,
+        scalar_len: usize = 0,
         digest: names.TypeDigest = undefined,
         resolved: bool = false,
     };
@@ -2880,7 +2880,7 @@ pub const Store = struct {
         nodes: std.ArrayList(DigestNode),
         node_lookup: std.AutoHashMap(u64, u32),
         link_pool: std.ArrayList(ChildLink),
-        child_offsets: std.ArrayList(u32),
+        child_offsets: std.ArrayList(usize),
         scalar_bytes: std.ArrayList(u8),
         render_buf: std.ArrayList(u8),
 
@@ -2956,14 +2956,14 @@ pub const Store = struct {
             const ty = self.nodes.items[index].ty;
             const mode = self.nodes.items[index].mode;
             const link_start: u32 = @intCast(self.link_pool.items.len);
-            const scalar_start: u32 = @intCast(self.scalar_bytes.items.len);
+            const scalar_start = self.scalar_bytes.items.len;
             const sink = CollectSink{ .engine = self };
             try self.store.encodeTypeNode(self.name_store, sink, ty, mode);
             const node = &self.nodes.items[index];
             node.link_start = link_start;
             node.link_len = @intCast(self.link_pool.items.len - link_start);
             node.scalar_start = scalar_start;
-            node.scalar_len = @intCast(self.scalar_bytes.items.len - scalar_start);
+            node.scalar_len = self.scalar_bytes.items.len - scalar_start;
         }
 
         fn linksOf(self: *const DigestEngine, index: u32) []const ChildLink {
@@ -3004,7 +3004,7 @@ pub const Store = struct {
                     if (self.engine.stats) |stats| stats.cache_hits += 1;
                 }
                 try self.engine.link_pool.append(self.engine.gpa, ref);
-                try self.engine.child_offsets.append(self.engine.gpa, @intCast(self.engine.scalar_bytes.items.len));
+                try self.engine.child_offsets.append(self.engine.gpa, self.engine.scalar_bytes.items.len);
             }
         };
 
