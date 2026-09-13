@@ -14552,13 +14552,16 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var shared_test_program = try build_env.runtimeProgramSession().?.takeRuntime(ctx.gpa, runtime_roots, runtime_config.target);
     defer shared_test_program.deinit();
     const session_modules = build_env.runtimeProgramSession().?.modules;
-    const test_static_data = try compile.static_data_exports.buildStaticData(
+    const test_static_data = compile.static_data_exports.buildStaticData(
         ctx.gpa,
         .{ .root = session_modules.root, .imports = session_modules.imports },
         &shared_test_program,
         roc_target.RocTarget.detectNative(),
         .{ .include_provided_exports = false },
-    );
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.UnsupportedPlatform,
+    };
     if (shared_test_program.frozen_static_data) |*previous| previous.deinit();
     shared_test_program.frozen_static_data = .{ .allocator = ctx.gpa, .exports = test_static_data };
 

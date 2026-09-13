@@ -166,7 +166,21 @@ pub const ProgramSession = struct {
                 std.mem.eql(u8, field.name, "post_check_executor") or
                 std.mem.eql(u8, field.name, "debug_materialized_out") or
                 std.mem.eql(u8, field.name, "solved_lir_parallel_metrics_out") or
-                std.mem.eql(u8, field.name, "lifted_expr_count_out")) continue;
+                std.mem.eql(u8, field.name, "lifted_expr_count_out"))
+            {
+                // A completed host program has already published its outputs.
+                // Reusing it cannot silently redirect those results or count
+                // its producer work again in another metrics destination.
+                if (comptime !std.mem.eql(u8, field.name, "timing") and
+                    !std.mem.eql(u8, field.name, "post_check_executor"))
+                {
+                    const reuses_completed_host = target.specialization_strategy == .lss and
+                        self.compile_time_root_count != 0 and self.runtime_prepared == null;
+                    if (reuses_completed_host and !std.meta.eql(@field(configured, field.name), @field(target, field.name)))
+                        finalizationInvariant("completed runtime program cannot redirect previously published lowering outputs");
+                }
+                continue;
+            }
             if (!std.meta.eql(@field(configured, field.name), @field(target, field.name)))
                 finalizationInvariant("runtime policy differs from the compilation's declared consumer");
         }
@@ -188,7 +202,12 @@ pub const ProgramSession = struct {
         var lowered = if (self.runtime_prepared) |owned_prepared| block: {
             self.runtime_prepared = null;
             var prepared = owned_prepared;
-            prepared.target.timing = target.timing;
+            // Consumer-local observers and workers may change between the
+            // prepared phase and the continuation. Semantic options above are
+            // fixed, while these live destinations belong to this invocation.
+            inline for (.{ "timing", "work_metrics", "post_check_executor", "debug_materialized_out", "solved_lir_parallel_metrics_out", "lifted_expr_count_out" }) |field| {
+                @field(prepared.target, field) = @field(target, field);
+            }
             break :block try lir.CheckedPipeline.lowerPreparedMonotypeToLir(prepared);
         } else block: {
             const host = self.host orelse finalizationInvariant("runtime program was already consumed");
