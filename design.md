@@ -14157,6 +14157,9 @@ archive test cross-builds all shipped native architectures and object formats.
 Compiler-private cache synchronization and stack probing are local to the
 shim; exported builtins payloads and the interpreter's assembly trampoline
 are not machine-code run-shim inputs.
+Compiler profiling is not a machine-code run-shim dependency either: the shim
+root disables Tracy instrumentation and its build never attaches the Tracy
+client, including when the compiler itself is built with profiling enabled.
 
 Every object-format address embedded in compiler-owned code or data remains a
 relocation through this boundary. In particular, Wasm function pointers are
