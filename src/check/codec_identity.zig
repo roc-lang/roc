@@ -21,6 +21,9 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     defer comparer.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
         const raw: u32 = @intCast(index);
+        // Bucket selector only: the derivation's own types and method names
+        // are package-controlled, but a Wyhash collision just adds a chain
+        // step, because a candidate is accepted solely by `comparer.equal`.
         var hash = std.hash.Wyhash.init(@intFromEnum(derivation.kind));
         inline for (type_roles) |role| hash.update(&types.rootKey(@field(derivation, role)).bytes);
         hash.update(std.mem.asBytes(&derivation.calls.len));
@@ -167,7 +170,7 @@ test "codec identity preserves cross-root sharing, conditional calls, and recurs
     defer types.deinit(gpa);
     var variables: [3]TypeId = undefined;
     for (&variables) |*variable| {
-        variable.* = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = [_]u8{7} ** 16 }, true);
+        variable.* = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = [_]u8{7} ** 32 }, true);
         try types.fillSyntheticTypeRoot(gpa, variable.*, .{ .flex = .{} });
     }
     var names = @import("canonical_names.zig").CanonicalNameStore.init(gpa);

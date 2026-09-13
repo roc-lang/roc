@@ -265,6 +265,7 @@ pub const GraphDiagnostics = struct {
     active_snapshot_cache_hits: u64 = 0,
     active_snapshot_cache_misses: u64 = 0,
     active_snapshot_nodes_materialized: u64 = 0,
+    provisional_snapshot_nodes_materialized: u64 = 0,
     active_snapshot_invalidations: u64 = 0,
     active_snapshot_entries_invalidated: u64 = 0,
     mono_import_requests: u64 = 0,
@@ -351,6 +352,8 @@ const NominalBackingKey = struct {
     args: []const NodeId,
 };
 
+/// Bucket selector only: `NominalBackingKeyContext.eql` compares the
+/// declaration bytes and every argument, so a collision costs a probe.
 fn hashNominalBackingKey(declaration: NominalBackingDeclaration, args: []const NodeId) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(&declaration.module_bytes);
@@ -5646,6 +5649,7 @@ pub const InstGraph = struct {
         if (try self.settledTypeViewForNode(node)) |settled| return settled;
         var snapshot = GraphTypeFinals.initProvisionalSnapshot(self);
         defer snapshot.deinit();
+        defer self.countDiagnosticBy("provisional_snapshot_nodes_materialized", snapshot.sealed.count());
         return try snapshot.sealNode(self.find(node));
     }
 
@@ -5865,6 +5869,7 @@ pub const GraphTypeFinals = struct {
         active_snapshot,
         provisional_snapshot,
         specialization_snapshot,
+        retained_type_view,
     };
 
     graph: *InstGraph,
@@ -5882,6 +5887,13 @@ pub const GraphTypeFinals = struct {
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
         return initUnchecked(graph, .final);
+    }
+
+    /// Intern immutable view content without consulting its former live graph
+    /// cells. This preserves provisional field kinds and unresolved leaves.
+    pub fn initRetainedTypeView(graph: *InstGraph) GraphTypeFinals {
+        graph.requireRelationProduction();
+        return initUnchecked(graph, .retained_type_view);
     }
 
     fn initActiveSnapshot(graph: *InstGraph) GraphTypeFinals {
@@ -5919,6 +5931,11 @@ pub const GraphTypeFinals = struct {
     }
 
     pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        if (self.mode == .retained_type_view) {
+            if (self.sealed_types.get(ty)) |existing| return existing;
+            if (try self.graph.types.isInterned(self.graph.name_store, ty)) return ty;
+            return try self.sealStoreType(ty);
+        }
         if (self.graph.active_snapshot_nodes.get(ty)) |raw_node| {
             if (self.graph.node_snapshots.get(raw_node)) |views| {
                 for (views.items) |view| {
@@ -5932,6 +5949,7 @@ pub const GraphTypeFinals = struct {
     }
 
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
+        std.debug.assert(self.mode != .retained_type_view);
         const node = self.graph.find(raw_node);
         if (self.sealed.get(node)) |existing| return existing;
         self.graph.refreshActiveSnapshots();
@@ -5939,6 +5957,10 @@ pub const GraphTypeFinals = struct {
             // A class with a current active snapshot has not changed since
             // that view was taken, so a snapshot reaching it reads that view.
             if (self.graph.current_snapshots.get(node)) |current| return current;
+            if (self.mode == .provisional_snapshot or self.mode == .specialization_snapshot) {
+                std.debug.assert(self.graph.types.active_transaction == null);
+                if (try self.graph.typeIsResolved(node)) return try self.graph.monoFor(node);
+            }
             return try self.sealNodeSpeculative(node);
         }
         // A class sealed to an interned type since its last observable
@@ -6062,7 +6084,7 @@ pub const GraphTypeFinals = struct {
 
     fn sealStoreType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.sealed_types.get(ty)) |existing| return existing;
-        if (self.mode != .final) return try self.sealStoreTypeSpeculative(ty);
+        if (self.mode != .final and self.mode != .retained_type_view) return try self.sealStoreTypeSpeculative(ty);
         if (self.active_transaction != null) return try self.sealStoreTypeSpeculative(ty);
         if (self.graph.types.hasSpeculativeConstruction()) return try self.sealStoreTypeSpeculative(ty);
 
@@ -6160,6 +6182,7 @@ pub const GraphTypeFinals = struct {
                     Common.invariant("undetermined graph field carried no source value type");
                 const source_ty = try self.sealNode(source_node);
                 fields[index] = switch (self.mode) {
+                    .retained_type_view => unreachable,
                     .provisional_snapshot => .{
                         .name = field.name,
                         // No runtime slot exists yet. The explicit kind state
@@ -7373,6 +7396,77 @@ test "provisional Monotype view preserves an undetermined record field" {
     try std.testing.expectEqual(@as(usize, 1), provisional_fields.len);
     const provisional_value_ty = GuardedList.at(provisional_fields, 0).value_ty orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(provisional_value_ty));
+}
+
+test "provisional Monotype views share resolved argument subtrees" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+    const value = try graph.newNode(.{ .primitive = .u64 });
+    const record = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{
+            .name = try name_store.internRecordFieldLabel("value"),
+            .ty = value,
+            .default = null,
+        }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const function = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{record}),
+        .ret = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }),
+    } });
+    const first = try graph.provisionalTypeViewForNode(function);
+    const second = try graph.provisionalTypeViewForNode(function);
+    try std.testing.expect(first != second);
+    const first_arg = GuardedList.at(type_store.span(type_store.get(first).func.args), 0);
+    const second_arg = GuardedList.at(type_store.span(type_store.get(second).func.args), 0);
+    try std.testing.expectEqual(first_arg, second_arg);
+    try std.testing.expectEqual(try graph.monoFor(record), first_arg);
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.provisional_snapshot_nodes_materialized);
+}
+
+test "retained provisional view preserves content across later graph refinement" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    const value = try graph.newNode(.{ .primitive = .u64 });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const kind = try graph.newUndeterminedFieldKind();
+    graph.registerUndeterminedFieldKindCells(kind, slot, value);
+    const record = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{
+            .name = try name_store.internRecordFieldLabel("value"),
+            .ty = slot,
+            .value_ty = value,
+            .kind = .{ .undetermined = kind },
+            .default = null,
+        }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const view = try graph.provisionalTypeViewForNode(record);
+    var sealer = GraphTypeFinals.initRetainedTypeView(graph);
+    defer sealer.deinit();
+    const retained = try sealer.sealType(view);
+    try std.testing.expect(try type_store.isInterned(&name_store, retained));
+    try std.testing.expect(try type_store.typeEql(&name_store, view, retained));
+    const first = try graph.instantiateProvisionalTypeView(retained);
+    const second = try graph.instantiateProvisionalTypeView(retained);
+    try std.testing.expect(!graph.sameClass(first, second));
+    try std.testing.expect(graph.resolvedFieldKind(.{ .undetermined = kind }) == null);
+    try graph.freezeRelations();
+    const final = try graph.sealNode(record);
+    try std.testing.expect(!try type_store.typeEql(&name_store, retained, final));
+    try std.testing.expect(try type_store.typeEql(&name_store, view, retained));
 }
 
 test "issue 11303: reading a field value preserves its undetermined storage until freeze" {
@@ -8901,7 +8995,7 @@ test "opaque iterator relation resolves unresolved public variable to imported g
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x72} ** 16 },
+            .generated = .{ .bytes = [_]u8{0x72} ** 32 },
             .iterator_representation = .minted,
             .iterator_kind = .list,
             .iterator_depth = 1,
@@ -8949,7 +9043,7 @@ test "opaque interface relation delegates nested private iterator requests to un
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x74} ** 16 },
+            .generated = .{ .bytes = [_]u8{0x74} ** 32 },
             .iterator_representation = .minted,
             .iterator_kind = .concat,
             .iterator_depth = 2,
@@ -8968,7 +9062,7 @@ test "opaque interface relation delegates nested private iterator requests to un
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x75} ** 16 },
+            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
             .iterator_representation = .minted,
             .iterator_kind = .concat,
             .iterator_depth = 2,
@@ -9194,7 +9288,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
     };
 
     var finished_def = public_def;
-    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 16 };
+    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 32 };
     finished_def.iterator_representation = .minted;
     finished_def.iterator_kind = .list;
     finished_def.iterator_depth = 1;

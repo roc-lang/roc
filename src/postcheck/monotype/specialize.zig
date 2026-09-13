@@ -47,6 +47,15 @@ pub const Counters = struct {
     specialization_type_digest_cache_hits: u64 = 0,
     specialization_type_digest_cache_misses: u64 = 0,
     specialization_type_digest_nodes_visited: u64 = 0,
+    all_digest_root_requests: u64 = 0,
+    all_digest_node_misses: u64 = 0,
+    commit_digest_root_requests: u64 = 0,
+    commit_digest_node_misses: u64 = 0,
+    interface_replay_digest_root_requests: u64 = 0,
+    interface_replay_digest_node_misses: u64 = 0,
+    interface_summary_hits: u64 = 0,
+    interface_summary_expansions: u64 = 0,
+    interface_summary_verifications: u64 = 0,
     exact_type_checks: u64 = 0,
     /// Declaration-backed nominal backings served from the per-graph
     /// instantiation cache. Reuse compares argument cells by union-find root,
@@ -159,16 +168,16 @@ pub const SpecLookupAddress = struct {
     index_a: u32,
     index_b: u32,
     index_c: u32,
-    owner_fn_digest: [16]u8,
+    owner_fn_digest: [32]u8,
     /// Explicitly tagged default-root qualifier: `default_root` distinguishes
     /// a default-root nested site (whose declaring module content identity
     /// fills `default_root_module`) from a template-owned one (zeros).
     default_root: bool,
     default_root_module: [32]u8,
-    source_digest: [16]u8,
-    evidence_digest: [16]u8,
-    codec_contract_digest: [16]u8,
-    type_digest: [16]u8,
+    source_digest: [32]u8,
+    evidence_digest: [32]u8,
+    codec_contract_digest: [32]u8,
+    type_digest: [32]u8,
 
     /// Share the durable identity bucket between reservation and draft commit.
     /// Exact type and evidence equality remain the caller's collision checks.

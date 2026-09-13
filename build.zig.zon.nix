@@ -133,11 +133,11 @@ linkFarm name (map unpackZig [
     };
   }
   {
-    name = "bytebox-0.0.1-SXc2saRyDwDEw8AkDhp4Hfmd9ZhRmMnIzS7FfzDCmc8r.tar.gz";
+    name = "bytebox-0.0.1-SXc2sTB9DwDob3McsuMCelmt_O2h3mKZAnX2kVO1Hw5l.tar.gz";
     path = fetchZig {
       name = "bytebox";
-      url = "git+https://github.com/lukewilliamboswell/bytebox.git?ref=zig-0.16.0#88a4b79230eece88030e6779f69ed9683906c02a";
-      hash = "sha256-Cbkw9Q7JFEQGRS12IjBw581fgth+HJIAo3Ppvd2XvuM=";
+      url = "https://github.com/rtfeldman/bytebox/archive/6565220e5d16eb230b05a85fd9609f280dc249c6.tar.gz";
+      hash = "sha256-BswVN0BQFm/+7Y8JC3OSXIpqGb7q6Rb9cXeTlMo6S60=";
     };
   }
   {
