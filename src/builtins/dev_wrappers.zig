@@ -648,6 +648,70 @@ pub fn roc_builtins_roc_crashed(msg_bytes: [*]const u8, msg_len: usize, roc_ops:
     roc_ops.crash(msg_bytes[0..msg_len]);
 }
 
+/// Which local a dev-backend Debug invariant check found invalid.
+pub const InvalidLocalKind = enum(u8) {
+    str,
+    box,
+};
+
+/// Why a dev-backend Debug invariant check failed.
+pub const InvalidLocalReason = enum(u8) {
+    null_bytes_pointer,
+    null_allocation_pointer,
+    misaligned_allocation_pointer,
+    misaligned_bytes_pointer,
+    length_exceeds_capacity,
+    non_aligned_pointer,
+
+    fn describe(self: InvalidLocalReason) []const u8 {
+        return switch (self) {
+            .null_bytes_pointer => "an invalid RocStr (null bytes pointer)",
+            .null_allocation_pointer => "an invalid RocStr (null allocation pointer)",
+            .misaligned_allocation_pointer => "an invalid RocStr (misaligned allocation pointer)",
+            .misaligned_bytes_pointer => "an invalid RocStr (misaligned bytes pointer)",
+            .length_exceeds_capacity => "an invalid RocStr (length exceeds capacity)",
+            .non_aligned_pointer => "a non-aligned pointer",
+        };
+    }
+};
+
+/// Render the message for a failed invariant check into `buffer`. The
+/// values arrive as integers from generated code; one outside its enum
+/// is reported as such rather than trusted.
+pub fn formatInvalidLocal(buffer: []u8, kind: u8, reason: u8, local: u32, proc: u64, stmt: u32) []const u8 {
+    const kind_name: []const u8 = if (std.enums.fromInt(InvalidLocalKind, kind)) |k| @tagName(k) else "unknown";
+    const received: []const u8 = if (std.enums.fromInt(InvalidLocalReason, reason)) |r| r.describe() else "an invalid value (unknown reason)";
+    return std.fmt.bufPrint(
+        buffer,
+        "LIR/codegen invariant violated: {s} local {d} received {s} at proc {d} stmt {d}",
+        .{ kind_name, local, received, proc, stmt },
+    ) catch buffer;
+}
+
+/// Report a failed dev-backend Debug invariant check on a local. Generated
+/// code passes the check's identity as integers and this formats the
+/// message, so a check site carries no message bytes of its own.
+pub fn roc_builtins_debug_invalid_local(kind: u8, reason: u8, local: u32, proc: u64, stmt: u32, roc_ops: *RocOps) callconv(.c) void {
+    var buffer: [192]u8 = undefined;
+    roc_ops.crash(formatInvalidLocal(&buffer, kind, reason, local, proc, stmt));
+}
+
+test "formatInvalidLocal renders the check identity and reason" {
+    var buffer: [192]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "LIR/codegen invariant violated: str local 7004 received an invalid RocStr (null bytes pointer) at proc 4066 stmt 1357",
+        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 7004, 4066, 1357),
+    );
+    try std.testing.expectEqualStrings(
+        "LIR/codegen invariant violated: box local 3 received a non-aligned pointer at proc 9 stmt 2",
+        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.box), @intFromEnum(InvalidLocalReason.non_aligned_pointer), 3, 9, 2),
+    );
+    try std.testing.expectEqualStrings(
+        "LIR/codegen invariant violated: unknown local 1 received an invalid value (unknown reason) at proc 2 stmt 3",
+        formatInvalidLocal(&buffer, 200, 200, 1, 2, 3),
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // List Wrappers
 // ═══════════════════════════════════════════════════════════════════════════

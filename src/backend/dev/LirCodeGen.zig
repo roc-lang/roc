@@ -9463,18 +9463,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpImm(masked_reg, 0);
             const aligned_patch = try self.emitJumpIfEqual();
 
-            const msg = try std.fmt.allocPrint(
-                self.allocator,
-                "LIR/codegen invariant violated: box local {d} received a non-aligned pointer at proc {d} stmt {d}",
-                .{
-                    @intFromEnum(local),
-                    if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
-                    if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
-                },
-            );
-            defer self.allocator.free(msg);
-            try self.emitRocCrashShared(msg);
-            try self.emitTrap();
+            try self.emitDebugCrashInvalidLocal(.box, .non_aligned_pointer, local);
 
             const done = self.codegen.currentOffset();
             try self.codegen.patchJump(aligned_patch, done);
@@ -9532,7 +9521,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Non-small RocStrs must have a non-null bytes pointer.
             try self.emitCmpImm(ptr_reg, 0);
             const ptr_non_null_patch = try self.emitJumpIfNotEqual();
-            try self.emitDebugCrashInvalidStrLocal(local, "null bytes pointer");
+            try self.emitDebugCrashInvalidLocal(.str, .null_bytes_pointer, local);
             const after_null = self.codegen.currentOffset();
             try self.codegen.patchJump(ptr_non_null_patch, after_null);
 
@@ -9549,7 +9538,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitAndRegs(.w64, tmp_reg, tmp_reg, cap_reg);
             try self.emitCmpImm(tmp_reg, 0);
             const alloc_non_null_patch = try self.emitJumpIfNotEqual();
-            try self.emitDebugCrashInvalidStrLocal(local, "null allocation pointer");
+            try self.emitDebugCrashInvalidLocal(.str, .null_allocation_pointer, local);
             const after_alloc_null = self.codegen.currentOffset();
             try self.codegen.patchJump(alloc_non_null_patch, after_alloc_null);
 
@@ -9557,7 +9546,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitAndRegs(.w64, ptr_reg, ptr_reg, tmp_reg);
             try self.emitCmpImm(ptr_reg, 0);
             const alloc_aligned_patch = try self.emitJumpIfEqual();
-            try self.emitDebugCrashInvalidStrLocal(local, "misaligned allocation pointer");
+            try self.emitDebugCrashInvalidLocal(.str, .misaligned_allocation_pointer, local);
             const after_alloc_align = self.codegen.currentOffset();
             try self.codegen.patchJump(alloc_aligned_patch, after_alloc_align);
 
@@ -9570,33 +9559,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitAndRegs(.w64, tmp_reg, tmp_reg, ptr_reg);
             try self.emitCmpImm(tmp_reg, 0);
             const ptr_aligned_patch = try self.emitJumpIfEqual();
-            try self.emitDebugCrashInvalidStrLocal(local, "misaligned bytes pointer");
+            try self.emitDebugCrashInvalidLocal(.str, .misaligned_bytes_pointer, local);
             const after_ptr_align = self.codegen.currentOffset();
             try self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
 
             try self.emitLsrImm(.w64, tmp_reg, cap_reg, 1);
             try self.emitCmpReg(len_reg, tmp_reg);
             const len_ok_patch = try self.codegen.emitCondJump(condBelowOrEqual());
-            try self.emitDebugCrashInvalidStrLocal(local, "length exceeds capacity");
+            try self.emitDebugCrashInvalidLocal(.str, .length_exceeds_capacity, local);
             const done = self.codegen.currentOffset();
             try self.codegen.patchJump(len_ok_patch, done);
             try self.codegen.patchJump(seamless_done_patch, done);
             try self.codegen.patchJump(small_patch, done);
         }
 
-        fn emitDebugCrashInvalidStrLocal(self: *Self, local: LocalId, reason: []const u8) Allocator.Error!void {
-            const msg = try std.fmt.allocPrint(
-                self.allocator,
-                "LIR/codegen invariant violated: str local {d} received an invalid RocStr ({s}) at proc {d} stmt {d}",
-                .{
-                    @intFromEnum(local),
-                    reason,
-                    if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
-                    if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
-                },
-            );
-            defer self.allocator.free(msg);
-            try self.emitRocCrashShared(msg);
+        /// Report a failed Debug invariant check on `local` through the
+        /// `debug_invalid_local` builtin, which formats the message from the
+        /// check's identity, so the site carries five immediates rather than
+        /// message bytes.
+        fn emitDebugCrashInvalidLocal(
+            self: *Self,
+            kind: builtins.dev_wrappers.InvalidLocalKind,
+            reason: builtins.dev_wrappers.InvalidLocalReason,
+            local: LocalId,
+        ) Allocator.Error!void {
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
+            const proc: u64 = if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64);
+            const stmt: u32 = if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addImmArg(@intFromEnum(kind));
+            try builder.addImmArg(@intFromEnum(reason));
+            try builder.addImmArg(@intFromEnum(local));
+            try builder.addImmArg(@bitCast(proc));
+            try builder.addImmArg(stmt);
+            try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+            try self.callBuiltin(&builder, .debug_invalid_local);
             try self.emitTrap();
         }
 
