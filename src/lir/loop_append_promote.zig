@@ -1758,13 +1758,28 @@ const Pass = struct {
             while (try stmts.next()) |_| size += 1;
             try candidates.append(allocator, .{ .stmt = entry.key_ptr.*, .size = size });
         }
-        // A loop nested in another's body has the smaller body.
-        std.mem.sort(Candidate, candidates.items, {}, struct {
-            fn lessThan(_: void, a: Candidate, b: Candidate) bool {
-                return a.size < b.size;
-            }
-        }.lessThan);
+        // Only innermost promoted loops are versioned. Versioning exists to
+        // take the per-set flag branch out of a loop the backend could
+        // otherwise vectorize; a loop that contains another promoted loop is
+        // not such a loop, and cloning it would duplicate every nested
+        // version again, doubling the emitted body per nesting level. An
+        // enclosing loop keeps its flag-dispatched sets, one predictable
+        // branch per site.
+        var innermost = std.ArrayList(Candidate).empty;
+        defer innermost.deinit(allocator);
         for (candidates.items) |candidate| {
+            var contains_other = false;
+            var stmts = try body_clone.ReachableStmts.init(self.store, self.store.getCFStmt(candidate.stmt).join.body);
+            defer stmts.deinit();
+            while (try stmts.next()) |stmt_id| {
+                for (candidates.items) |other| {
+                    if (other.stmt != candidate.stmt and other.stmt == stmt_id) contains_other = true;
+                }
+                if (contains_other) break;
+            }
+            if (!contains_other) try innermost.append(allocator, candidate);
+        }
+        for (innermost.items) |candidate| {
             try self.versionLoop(proc_body, candidate.stmt, max_join_id, new_locals);
         }
     }
