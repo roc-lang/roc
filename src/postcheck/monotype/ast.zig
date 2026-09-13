@@ -139,7 +139,7 @@ pub const NestedFn = struct {
 /// specialization. Equal callable/type requests with different evidence must
 /// remain distinct specializations.
 pub const EvidenceDigest = extern struct {
-    bytes: [16]u8 = [_]u8{0} ** 16,
+    bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
 /// The structural codec derivation whose checked call contract identifies a
@@ -2584,7 +2584,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     // Allocate distinct replay addresses with the same checked root key.
     var replay_types: [4]checked.CheckedTypeId = undefined;
     for (&replay_types) |*ty| {
-        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 16 }, true);
+        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
     // Fill the proof table and its indices before building stored evidence.

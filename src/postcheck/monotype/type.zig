@@ -326,7 +326,7 @@ pub const Store = struct {
     /// independent of how deeply a recursive knot is tied—including across
     /// separate digest calls. Keys and values are content-addressed, so
     /// entries stay valid across `restore` truncations and need no rollback.
-    recursive_digest_unfoldings: std.AutoHashMap([16]u8, names.TypeDigest),
+    recursive_digest_unfoldings: std.AutoHashMap([32]u8, names.TypeDigest),
     /// Full-content-identity buckets for store-level acyclic interning: full
     /// digest bytes to every committed candidate that hashed to them,
     /// resolved to exact equality with `typeEql`. Keys and stored ids are
@@ -357,7 +357,7 @@ pub const Store = struct {
             .iterator_interface_visited = .empty,
             .iterator_interface_visit_epochs = .empty,
             .iterator_interface_visit_epoch = 0,
-            .recursive_digest_unfoldings = std.AutoHashMap([16]u8, names.TypeDigest).init(allocator),
+            .recursive_digest_unfoldings = std.AutoHashMap([32]u8, names.TypeDigest).init(allocator),
             .full_digest_interned = std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)).init(allocator),
             .spans = .empty,
             .fields = .empty,
@@ -2123,7 +2123,7 @@ pub const Store = struct {
     }
 
     const DigestBucketKey = struct {
-        bytes: [16]u8,
+        bytes: [32]u8,
 
         fn from(digest: names.TypeDigest) DigestBucketKey {
             return .{ .bytes = digest.bytes };
@@ -3206,11 +3206,11 @@ pub const Store = struct {
             // themselves are identical for bisimilar positions of any two
             // knots regardless of how many store nodes either knot uses or
             // in what order those nodes were allocated.
-            var labels = try self.gpa.alloc([16]u8, member_count);
+            var labels = try self.gpa.alloc([32]u8, member_count);
             defer self.gpa.free(labels);
-            var next_labels = try self.gpa.alloc([16]u8, member_count);
+            var next_labels = try self.gpa.alloc([32]u8, member_count);
             defer self.gpa.free(next_labels);
-            var distinct_labels = std.AutoHashMap([16]u8, u32).init(self.gpa);
+            var distinct_labels = std.AutoHashMap([32]u8, u32).init(self.gpa);
             defer distinct_labels.deinit();
             for (members, 0..) |node_index, pos| {
                 var hasher = TypeDigestHasher.init();
@@ -3245,7 +3245,7 @@ pub const Store = struct {
                 }
                 const next_count: u32 = distinct_labels.count();
                 const stable = next_count == label_count;
-                std.mem.swap([][16]u8, &labels, &next_labels);
+                std.mem.swap([][32]u8, &labels, &next_labels);
                 label_count = next_count;
                 if (stable) break;
             }
@@ -3254,7 +3254,7 @@ pub const Store = struct {
             // intrinsic to the infinite type, so the order is too, and no two
             // reduced positions share a label.
             const block_count = label_count;
-            const sorted_labels = try self.gpa.alloc([16]u8, block_count);
+            const sorted_labels = try self.gpa.alloc([32]u8, block_count);
             defer self.gpa.free(sorted_labels);
             {
                 var it = distinct_labels.keyIterator();
@@ -3264,8 +3264,8 @@ pub const Store = struct {
                 }
                 std.debug.assert(next == block_count);
             }
-            std.mem.sort([16]u8, sorted_labels, {}, struct {
-                fn lessThan(_: void, lhs: [16]u8, rhs: [16]u8) bool {
+            std.mem.sort([32]u8, sorted_labels, {}, struct {
+                fn lessThan(_: void, lhs: [32]u8, rhs: [32]u8) bool {
                     return std.mem.order(u8, &lhs, &rhs) == .lt;
                 }
             }.lessThan);
@@ -3923,7 +3923,7 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
 const hashBytes = writeBytes;
 const hashU32 = writeU32;
 
-fn typeHashOf(bytes: []const u8) [16]u8 {
+fn typeHashOf(bytes: []const u8) [32]u8 {
     var hasher = TypeDigestHasher.init();
     hasher.update(bytes);
     return hasher.finalResult();
@@ -4075,7 +4075,7 @@ test "monotype type epoch deltas own consecutive suffixes" {
     // segments must continue to own both their main nodes and side pools.
     var iteration: u32 = 0;
     while (iteration < 512) : (iteration += 1) {
-        var digest_bytes = [_]u8{0} ** 16;
+        var digest_bytes = [_]u8{0} ** 32;
         digest_bytes[0] = @truncate(iteration);
         digest_bytes[1] = @truncate(iteration >> 8);
         _ = try source.internErased(&name_store, .{ .bytes = digest_bytes });
@@ -4334,7 +4334,7 @@ test "monotype cross-store import preserves every acyclic content form" {
     defer destination.deinit();
 
     const primitive = try source.internPrimitive(&source_names, .u64);
-    const erased_digest = names.TypeDigest{ .bytes = [_]u8{42} ** 16 };
+    const erased_digest = names.TypeDigest{ .bytes = [_]u8{42} ** 32 };
     const erased = try source.internErased(&source_names, erased_digest);
     const unit = try source.internZst(&source_names);
     const list = try source.internList(&source_names, primitive);
@@ -6046,7 +6046,7 @@ test "monotype recursive group digest work is linear in the group's distinct mem
     const list_ty = try store.reserveSlot();
     store.fillReservedSlot(list_ty, .{ .list = union_ty });
     var tags: [member_count]Tag = undefined;
-    var label_buf: [16]u8 = undefined;
+    var label_buf: [32]u8 = undefined;
     for (&tags, 0..) |*tag, index| {
         const field_label = try std.fmt.bufPrint(&label_buf, "f{d}", .{index});
         const field_name = try name_store.internRecordFieldLabel(field_label);
@@ -6069,7 +6069,7 @@ test "monotype recursive group digest work is linear in the group's distinct mem
     // Every position digests apart, and the digest is stable on repeat.
     const again = store.typeDigestCached(&name_store, union_ty, &stats);
     try std.testing.expectEqualSlices(u8, digest.bytes[0..], again.bytes[0..]);
-    var seen_digests = std.AutoHashMap([16]u8, void).init(std.testing.allocator);
+    var seen_digests = std.AutoHashMap([32]u8, void).init(std.testing.allocator);
     defer seen_digests.deinit();
     for (tags) |tag| {
         const payload = store.span(tag.payloads);

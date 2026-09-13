@@ -330,9 +330,48 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
             // RCPC) instructions, which crashed with SIGILL on older phones and
             // Raspberry Pis. On macOS, baseline is apple_m1, i.e. all Apple Silicon.
         }
+        addSha256Floor(&query);
     }
 
     return query;
+}
+
+/// `addSha256Floor` applied to an already-resolved target, unless the query
+/// named a CPU model explicitly (`-Dcpu`), in which case the caller's choice
+/// stands and `TypeDigestHasher` reports a missing feature at compile time.
+fn withSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
+    var query = target.query;
+    switch (query.cpu_model) {
+        .determined_by_arch_os, .baseline => {},
+        .native, .explicit => return target,
+    }
+    addSha256Floor(&query);
+    return b.resolveTargetQuery(query);
+}
+
+/// Raise a 64-bit compiler target's CPU floor to include the SHA-256
+/// instructions. Type digests are cryptographic SHA-256 (see
+/// `src/base/TypeDigestHasher.zig` for why) and every 64-bit target computes
+/// them in hardware with no software rounds, so a 64-bit CPU without these
+/// instructions is not a supported host for the compiler. This is the only
+/// feature added above the architecture baseline: on x86_64 it is the SHA
+/// extension (every SHA CPU already has the SSSE3 the rounds also use), which
+/// AMD Zen and Intel Ice Lake and later carry but Intel's 2015-2020 Skylake
+/// through Comet Lake cores do not; on aarch64 it is the `sha2` crypto
+/// extension, present on all Apple Silicon, Graviton, Ampere and Raspberry
+/// Pi 5, absent on the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A
+/// `-Dcpu` that omits the feature fails to compile `TypeDigestHasher` rather
+/// than silently getting a slower binary.
+fn addSha256Floor(query: *std.Target.Query) void {
+    const arch = query.cpu_arch orelse builtin.target.cpu.arch;
+    switch (roc_target.classifyCpuArch(arch)) {
+        .x86_64 => {
+            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
+            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
+        },
+        .aarch64 => query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2)),
+        .aarch64_be, .arm, .wasm32, .other => {},
+    }
 }
 
 const TestsSummaryStep = struct {
@@ -2994,7 +3033,7 @@ pub fn build(b: *std.Build) void {
             default_target_query.cpu_model = .baseline;
         }
 
-        break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
+        break :blk withSha256Floor(b, b.standardTargetOptions(.{ .default_target = default_target_query }));
     };
     const optimize = b.standardOptimizeOption(.{});
     const strip_flag = b.option(bool, "strip", "Omit debug information");
@@ -3327,6 +3366,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     minici_exe.root_module.addImport("build_options", roc_modules.build_options);
+    minici_exe.root_module.addImport("roc_target", roc_modules.roc_target);
 
     const install_zig_lints = b.addInstallArtifact(zig_lints_exe, .{});
     const install_tidy = b.addInstallArtifact(tidy_exe, .{});
@@ -6264,6 +6304,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = .Debug,
                 .imports = &.{
                     .{ .name = "build_options", .module = roc_modules.build_options },
+                    .{ .name = "roc_target", .module = roc_modules.roc_target },
                 },
             }),
             .filters = test_filters,

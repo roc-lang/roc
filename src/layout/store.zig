@@ -777,7 +777,7 @@ pub const Store = struct {
         /// Identity per node; null for acyclic and nominal nodes.
         keys: []?RecursiveKey,
 
-        pub const RecursiveKey = [16]u8;
+        pub const RecursiveKey = [32]u8;
 
         const no_component = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);

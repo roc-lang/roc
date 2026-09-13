@@ -3720,6 +3720,8 @@ pub const OrderedSink = struct {
     };
 
     const ModuleKeyContext = struct {
+        // Bucket selector only; `eql` compares both names, so a collision on
+        // these package-controlled names costs a probe.
         pub fn hash(_: @This(), key: ModuleKey) u64 {
             var h = std.hash.Wyhash.init(0);
             h.update(key.pkg);

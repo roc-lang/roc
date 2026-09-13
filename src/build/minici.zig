@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const target = @import("roc_target");
 
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
@@ -209,6 +210,74 @@ fn setSelectionOnly(selection: *Selection, value: []const u8, arg: []const u8) !
     }
     selection.from = value;
     selection.to = value;
+}
+
+/// Fail before doing anything else when this 64-bit machine lacks SHA-256
+/// instructions. Every 64-bit roc compiler target has them in its CPU
+/// baseline and `src/base/TypeDigestHasher.zig` has no software rounds for
+/// those targets, so on such a machine every artifact minici builds would die
+/// of SIGILL the first time it digests a type. The message says so instead.
+fn requireSha256Hardware() void {
+    const arch_class = target.classifyCpuArch(builtin.cpu.arch);
+    const supported = switch (arch_class) {
+        .x86_64 => x86HasShaExtension(),
+        .aarch64 => aarch64HasSha2(),
+        .aarch64_be, .arm, .wasm32, .other => true,
+    };
+    if (supported) return;
+    std.debug.print(
+        \\MiniCI: this CPU has no SHA-256 instructions ({s}).
+        \\roc requires them on every 64-bit target: type digests are computed with the
+        \\CPU's SHA-256 instructions and there are no software rounds for 64-bit
+        \\targets (see src/base/TypeDigestHasher.zig and addSha256Floor in build.zig).
+        \\A 64-bit CPU without them is not a supported machine for building or running
+        \\the roc compiler, so this run stops here rather than failing later with SIGILL.
+        \\
+    , .{switch (arch_class) {
+        .x86_64 => "the x86 `sha` extension: AMD Zen or Intel Ice Lake / Goldmont and later",
+        .aarch64 => "the ARMv8 `sha2` crypto extension",
+        .aarch64_be, .arm, .wasm32, .other => unreachable,
+    }});
+    std.process.exit(1);
+}
+
+fn x86HasShaExtension() bool {
+    if (builtin.cpu.arch != .x86_64) return false;
+    // CPUID leaf 7, sub-leaf 0, EBX bit 29 reports the SHA extension; leaf 0
+    // reports the highest supported leaf.
+    const max_leaf = cpuid(0, 0).eax;
+    if (max_leaf < 7) return false;
+    return (cpuid(7, 0).ebx & (1 << 29)) != 0;
+}
+
+const CpuidRegisters = struct { eax: u32, ebx: u32, ecx: u32, edx: u32 };
+
+fn cpuid(leaf: u32, sub_leaf: u32) CpuidRegisters {
+    var eax: u32 = undefined;
+    var ebx: u32 = undefined;
+    var ecx: u32 = undefined;
+    var edx: u32 = undefined;
+    asm volatile ("cpuid"
+        : [_] "={eax}" (eax),
+          [_] "={ebx}" (ebx),
+          [_] "={ecx}" (ecx),
+          [_] "={edx}" (edx),
+        : [_] "{eax}" (leaf),
+          [_] "{ecx}" (sub_leaf),
+    );
+    return .{ .eax = eax, .ebx = ebx, .ecx = ecx, .edx = edx };
+}
+
+fn aarch64HasSha2() bool {
+    if (builtin.cpu.arch != .aarch64) return false;
+    return switch (target.classifyOs(builtin.os.tag)) {
+        // HWCAP_SHA2 is bit 6 of AT_HWCAP on aarch64 Linux.
+        .linux => (std.os.linux.getauxval(std.elf.AT_HWCAP) & (1 << 6)) != 0,
+        // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
+        // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
+        // trust the build target, which also requires `sha2`.
+        .macos, .windows, .freebsd, .openbsd, .netbsd, .other => true,
+    };
 }
 
 fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
@@ -1434,6 +1503,7 @@ fn memoryAwareBuildJobs(_: std.Io, _: std.mem.Allocator, env: *const std.process
 /// streaming heartbeats and a machine-readable report. Limits only build graph
 /// parallelism on memory-constrained hosts (see `memoryAwareBuildJobs`).
 pub fn main(init: std.process.Init) !void {
+    requireSha256Hardware();
     const io = init.io;
     var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer _ = build_options.debugGpaOk(gpa_impl.deinit());
