@@ -153,6 +153,8 @@ pub const Store = struct {
     interner: SmallStringInterner,
     attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
+    /// Derived, lazy text order; excluded from both serialized forms.
+    text_rank: @import("TextRankCache.zig") = .{},
 
     /// Debug-only: verify `idx` was produced by this store. An Idx is a byte
     /// offset into this store's interner, so an Idx from a different store points
@@ -210,6 +212,7 @@ pub const Store = struct {
 
     /// Deinitialize the memory for an `Ident.Store`.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
+        self.text_rank.deinit(gpa);
         self.interner.deinit(gpa);
         self.attributes.deinit(gpa);
     }
@@ -321,8 +324,37 @@ pub const Store = struct {
         return textEql(self.getText(a), self.getText(b));
     }
 
-    /// Compare the texts behind two identifiers from this store.
+    /// Prepare transient ranks with the store's owning allocator. Inserts
+    /// invalidate the generation automatically by growing the byte buffer.
+    pub fn ensureTextRanks(self: *const Store, gpa: Allocator) Allocator.Error!void {
+        try self.text_rank.ensure(gpa, self.interner.bytes.len(), self.interner.entry_count, self, fillTextRankIds, textRankLessThan);
+    }
+
+    fn fillTextRankIds(self: *const Store, ids: []u32) void {
+        var next: usize = 0;
+        for (self.interner.index.items.items) |id| {
+            if (id == .unused) continue;
+            ids[next] = @intFromEnum(id);
+            next += 1;
+        }
+        std.debug.assert(next == ids.len);
+    }
+
+    fn textRankLessThan(self: *const Store, a: u32, b: u32) bool {
+        return textLessThan(self.interner.getText(@enumFromInt(a)), self.interner.getText(@enumFromInt(b)));
+    }
+
+    /// Read a rank after `ensureTextRanks`, with no intervening insertion.
+    pub fn idxTextRank(self: *const Store, idx: Idx) u32 {
+        std.debug.assert(self.text_rank.isCurrent(self.interner.bytes.len()));
+        return self.text_rank.rank(idx.idx);
+    }
+
+    /// Compare identifiers using ranks when prepared for this generation.
     pub fn idxTextLessThan(self: *const Store, a: Idx, b: Idx) bool {
+        if (self.text_rank.isCurrent(self.interner.bytes.len())) {
+            return self.idxTextRank(a) < self.idxTextRank(b);
+        }
         return textLessThan(self.getText(a), self.getText(b));
     }
 
@@ -816,4 +848,53 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
 
     // Verify next_unique_name
     try std.testing.expectEqual(@as(u32, 2), deserialized.next_unique_name);
+}
+
+test "identifier text ranks preserve byte order and rebuild after inserts" {
+    const gpa = std.testing.allocator;
+    var store = try Store.initCapacity(gpa, 16);
+    defer store.deinit(gpa);
+    const texts = [_][]const u8{ "z", "a", "aa", "a!", "_a", "é", "\xff", "\x80", "a_long_name" };
+    var ids: [texts.len]Idx = undefined;
+    for (texts, &ids) |text, *id| id.* = try store.insert(gpa, for_text(text));
+    try store.ensureTextRanks(gpa);
+    for (ids) |a| for (ids) |b| {
+        const expected = textLessThan(store.getText(a), store.getText(b));
+        try std.testing.expectEqual(expected, store.idxTextRank(a) < store.idxTextRank(b));
+        try std.testing.expectEqual(expected, store.idxTextLessThan(a, b));
+    };
+    const ranks = store.text_rank.ranks.ptr;
+    _ = try store.insert(gpa, for_text("a"));
+    try store.ensureTextRanks(gpa);
+    try std.testing.expectEqual(ranks, store.text_rank.ranks.ptr);
+    const first = try store.insert(gpa, for_text("A"));
+    try std.testing.expect(!store.text_rank.isCurrent(store.interner.bytes.len()));
+    // Comparisons before preparing the new generation still use exact text order.
+    try std.testing.expect(store.idxTextLessThan(first, ids[0]));
+    try store.ensureTextRanks(gpa);
+    try std.testing.expectEqual(@as(u32, 0), store.idxTextRank(first));
+    for (ids) |a| for (ids) |b| {
+        try std.testing.expectEqual(textLessThan(store.getText(a), store.getText(b)), store.idxTextRank(a) < store.idxTextRank(b));
+    };
+    var cloned = try store.clone(gpa);
+    defer cloned.deinit(gpa);
+    try cloned.ensureTextRanks(gpa);
+    for (ids) |id| try std.testing.expectEqual(store.idxTextRank(id), cloned.idxTextRank(id));
+}
+
+test "identifier text ranks recover from allocation failures" {
+    const gpa = std.testing.allocator;
+    for (0..2) |fail_at| {
+        var failing = std.testing.FailingAllocator.init(gpa, .{});
+        const allocator = failing.allocator();
+        var store = try Store.initCapacity(allocator, 8);
+        defer store.deinit(allocator);
+        const z = try store.insert(allocator, for_text("z"));
+        const a = try store.insert(allocator, for_text("a"));
+        failing.fail_index = failing.alloc_index + fail_at;
+        try std.testing.expectError(error.OutOfMemory, store.ensureTextRanks(allocator));
+        failing.fail_index = std.math.maxInt(usize);
+        try store.ensureTextRanks(allocator);
+        try std.testing.expect(store.idxTextRank(a) < store.idxTextRank(z));
+    }
 }

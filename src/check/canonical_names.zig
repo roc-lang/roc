@@ -312,6 +312,9 @@ pub const CanonicalNameStore = struct {
     proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
     /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
     scratch_key: std.ArrayList(u8) = .empty,
+    /// Transient text-order columns, built lazily for the current label counts.
+    record_field_text_rank: base.TextRankCache = .{},
+    tag_text_rank: base.TextRankCache = .{},
     /// True for a store reconstructed from a serialized buffer: its interners
     /// and `proc_bases` point into buffer-owned memory and must not be freed.
     serialized: bool = false,
@@ -320,7 +323,7 @@ pub const CanonicalNameStore = struct {
     /// frozen store, so the mixin's `deserialize` resets them (`proc_base_by_key`
     /// via `init(allocator)`, `scratch_key` to its default). Declared so a *data*
     /// field accidentally omitted from `Serialized` is a compile error.
-    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key" };
+    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank" };
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
@@ -348,6 +351,8 @@ pub const CanonicalNameStore = struct {
         freeStringHashMapKeys(ProcBaseKeyRef, &self.proc_base_by_key, self.allocator);
         self.proc_base_by_key.deinit();
         self.scratch_key.deinit(self.allocator);
+        self.record_field_text_rank.deinit(self.allocator);
+        self.tag_text_rank.deinit(self.allocator);
         self.* = CanonicalNameStore.init(self.allocator);
     }
 
@@ -751,8 +756,40 @@ pub const CanonicalNameStore = struct {
         return Ident.textEql(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
     }
 
+    fn fillTextRankIds(interner: *const NameInterner, ids: []u32) void {
+        std.debug.assert(ids.len == interner.count());
+        for (ids, 0..) |*id, i| id.* = @intCast(i);
+    }
+
+    fn textRankLessThan(interner: *const NameInterner, a: u32, b: u32) bool {
+        return Ident.textLessThan(interner.getText(a), interner.getText(b));
+    }
+
+    pub fn ensureRecordFieldTextRanks(self: *const CanonicalNameStore) Allocator.Error!void {
+        const count = self.record_field_labels.count();
+        try self.record_field_text_rank.ensure(self.allocator, count, count, &self.record_field_labels, fillTextRankIds, textRankLessThan);
+    }
+
+    pub fn recordFieldLabelTextRank(self: *const CanonicalNameStore, id: RecordFieldLabelId) u32 {
+        std.debug.assert(self.record_field_text_rank.isCurrent(self.record_field_labels.count()));
+        return self.record_field_text_rank.rank(@intFromEnum(id));
+    }
+
+    pub fn ensureTagTextRanks(self: *const CanonicalNameStore) Allocator.Error!void {
+        const count = self.tag_labels.count();
+        try self.tag_text_rank.ensure(self.allocator, count, count, &self.tag_labels, fillTextRankIds, textRankLessThan);
+    }
+
+    pub fn tagLabelTextRank(self: *const CanonicalNameStore, id: TagLabelId) u32 {
+        std.debug.assert(self.tag_text_rank.isCurrent(self.tag_labels.count()));
+        return self.tag_text_rank.rank(@intFromEnum(id));
+    }
+
     /// Order record field labels by their canonical text.
     pub fn recordFieldLabelTextLessThan(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
+        if (self.record_field_text_rank.isCurrent(self.record_field_labels.count())) {
+            return self.recordFieldLabelTextRank(a) < self.recordFieldLabelTextRank(b);
+        }
         return Ident.textLessThan(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
     }
 
@@ -771,6 +808,9 @@ pub const CanonicalNameStore = struct {
 
     /// Order tag labels by their canonical text.
     pub fn tagLabelTextLessThan(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
+        if (self.tag_text_rank.isCurrent(self.tag_labels.count())) {
+            return self.tagLabelTextRank(a) < self.tagLabelTextRank(b);
+        }
         return Ident.textLessThan(self.tagLabelText(a), self.tagLabelText(b));
     }
 
@@ -1269,4 +1309,45 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     try std.testing.expectEqual(m, loaded_pb.module_name);
     try std.testing.expectEqual(@as(?ExportNameId, exp), loaded_pb.export_name);
     try std.testing.expectEqual(@as(u32, 7), loaded_pb.ordinal);
+}
+
+test "canonical label text ranks preserve byte order across insertion and serialization" {
+    const gpa = std.testing.allocator;
+    var names = CanonicalNameStore.init(gpa);
+    defer names.deinit();
+    const texts = [_][]const u8{ "z", "a", "aa", "a!", "_a", "é", "\xff", "\x80" };
+    for (texts) |text| {
+        _ = try names.internRecordFieldLabel(text);
+        _ = try names.internTagLabel(text);
+    }
+    try names.ensureRecordFieldTextRanks();
+    try names.ensureTagTextRanks();
+    _ = try names.internRecordFieldLabel("A");
+    _ = try names.internTagLabel("A");
+    try names.ensureRecordFieldTextRanks();
+    try names.ensureTagTextRanks();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var writer = CompactWriter.init();
+    var hdr: CanonicalNameStore.Serialized = undefined;
+    try hdr.serialize(&names, aa, &writer);
+    const buffer = try aa.alignedAlloc(u8, .@"16", writer.total_bytes);
+    _ = try writer.writeToBuffer(buffer);
+    var loaded = hdr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+    try loaded.ensureRecordFieldTextRanks();
+    try loaded.ensureTagTextRanks();
+    for (0..names.recordFieldLabelCount()) |a| for (0..names.recordFieldLabelCount()) |b| {
+        const fa: RecordFieldLabelId = @enumFromInt(a);
+        const fb: RecordFieldLabelId = @enumFromInt(b);
+        const ta: TagLabelId = @enumFromInt(a);
+        const tb: TagLabelId = @enumFromInt(b);
+        const expected = Ident.textLessThan(names.recordFieldLabelText(fa), names.recordFieldLabelText(fb));
+        try std.testing.expectEqual(expected, names.recordFieldLabelTextRank(fa) < names.recordFieldLabelTextRank(fb));
+        try std.testing.expectEqual(expected, names.tagLabelTextRank(ta) < names.tagLabelTextRank(tb));
+        try std.testing.expectEqual(expected, loaded.recordFieldLabelTextLessThan(fa, fb));
+        try std.testing.expectEqual(expected, loaded.tagLabelTextLessThan(ta, tb));
+    };
 }

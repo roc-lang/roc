@@ -157,7 +157,15 @@ and is released after its last consumer, before compile-time evaluation; error
 exits also release it. Scheme hashing may reuse traversal
 capacity, but every complete digest starts fresh identity and cycle numbering,
 including after allocation failure. Neither this index nor hashing scratch is
-added to the serialized checked module or reused across source-store mutations.
+added to the serialized checked module. The index never survives source-store
+mutations. Digest writers may retain allocation capacity across mutations, but
+clear all traversal state before each request and read the current source graph.
+
+Rows in structural key digests use transient byte-lexicographic name ranks. Each
+append-only interner rebuilds its ranks lazily when its length grows; frozen
+name data stays unchanged, and the runtime store owns the rank allocation.
+Cycle and identity indexes preserve traversal order and slot numbering, so
+these optimizations change neither structural keys nor serialized formats.
 
 Instantiation substitutions, generalization visitation, and per-query function
 effect memos retain sparse storage while clearing and iterating only live

@@ -135,6 +135,7 @@ pub const ModuleEnvStorage = union(enum) {
                 env_alloc.destroy(module_env);
             },
             .static_builtin => |module_env| {
+                module_env.common.idents.text_rank.deinit(module_env.gpa);
                 module_env.gpa.destroy(module_env);
             },
             .cached_buffer => |cached| {
@@ -7705,7 +7706,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             }
         }
 
-        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        if (fields.items.len > 1) {
+            try self.names.ensureRecordFieldTextRanks();
+            canonical_type_keys.sortRow(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        }
         self.writeU32(@intCast(fields.items.len));
         for (fields.items, 0..) |field, index| {
             if (index > 0 and self.names.recordFieldLabelTextEql(fields.items[index - 1].name, field.name)) {
@@ -7769,7 +7773,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             }
         }
 
-        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        if (fields.items.len > 1) {
+            try self.names.ensureRecordFieldTextRanks();
+            canonical_type_keys.sortRow(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        }
         if (tail == null and fields.items.len == 0) {
             self.writeTag("empty_record");
             return;
@@ -7860,7 +7867,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             }
         }
 
-        std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
+        if (tags.items.len > 1) {
+            try self.names.ensureTagTextRanks();
+            canonical_type_keys.sortRow(TagForKey, tags.items, self, tagForKeyLessThan);
+        }
         if (tail == null and tags.items.len == 0) {
             self.writeTag("[]");
             return;
@@ -7912,11 +7922,11 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     }
 
     fn recordFieldForKeyLessThan(self: *SubstitutedCheckedTypeKeyBuilder, lhs: RecordFieldForKey, rhs: RecordFieldForKey) bool {
-        return self.names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
+        return self.names.recordFieldLabelTextRank(lhs.name) < self.names.recordFieldLabelTextRank(rhs.name);
     }
 
     fn tagForKeyLessThan(self: *SubstitutedCheckedTypeKeyBuilder, lhs: TagForKey, rhs: TagForKey) bool {
-        return self.names.tagLabelTextLessThan(lhs.name, rhs.name);
+        return self.names.tagLabelTextRank(lhs.name) < self.names.tagLabelTextRank(rhs.name);
     }
 
     fn writeConstraints(
@@ -8380,6 +8390,9 @@ const SourceTypeGraphAnalysis = struct {
 const CheckedSourceTypeRoots = struct {
     roots: std.AutoHashMap(Var, CheckedTypeId),
     graph_analysis: SourceTypeGraphAnalysis,
+    /// One module's publication hashes many roots. Retain traversal pages and
+    /// buffers while starting fresh numbering and hashing for every request.
+    key_writer: ?canonical_type_keys.KeyWriter = null,
 
     fn init(allocator: Allocator) CheckedSourceTypeRoots {
         return .{
@@ -8389,6 +8402,7 @@ const CheckedSourceTypeRoots = struct {
     }
 
     fn deinit(self: *CheckedSourceTypeRoots) void {
+        if (self.key_writer) |*writer| writer.deinit();
         self.graph_analysis.deinit();
         self.roots.deinit();
     }
@@ -8407,6 +8421,13 @@ const CheckedSourceTypeRoots = struct {
 
     fn remove(self: *CheckedSourceTypeRoots, var_: Var) bool {
         return self.roots.remove(var_);
+    }
+
+    fn keyInfo(self: *CheckedSourceTypeRoots, module: TypedCIR.Module, var_: Var) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+        if (self.key_writer == null) {
+            self.key_writer = canonical_type_keys.KeyWriter.init(self.roots.allocator, module.typeStoreConst(), module.moduleEnvConst());
+        }
+        return self.key_writer.?.fromVarInfo(var_);
     }
 
     fn analyze(self: *CheckedSourceTypeRoots, module: TypedCIR.Module, var_: Var) Allocator.Error!SourceTypeGraphFacts {
@@ -8449,12 +8470,7 @@ fn appendCheckedTypeRootWithRowDefault(
             return id;
         }
 
-        const key_info = try canonical_type_keys.fromVarInfo(
-            allocator,
-            module.typeStoreConst(),
-            module.moduleEnvConst(),
-            resolved_var,
-        );
+        const key_info = try active.keyInfo(module, resolved_var);
         const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.roots.items.len)));
         const root = CheckedTypeRoot{
             .id = id,
@@ -8509,12 +8525,7 @@ fn appendCheckedTypeRootWithRowDefault(
             return existing;
         }
 
-        const key_info = try canonical_type_keys.fromVarInfo(
-            allocator,
-            module.typeStoreConst(),
-            module.moduleEnvConst(),
-            resolved_var,
-        );
+        const key_info = try active.keyInfo(module, resolved_var);
         std.debug.assert(!key_info.contains_identity_variables);
         if (store.rootForKey(key_info.key)) |existing| {
             deinitCheckedTypePayloadBuild(allocator, &build_payload);
@@ -8543,12 +8554,7 @@ fn appendCheckedTypeRootWithRowDefault(
         return id;
     }
 
-    const key_info = try canonical_type_keys.fromVarInfo(
-        allocator,
-        module.typeStoreConst(),
-        module.moduleEnvConst(),
-        resolved_var,
-    );
+    const key_info = try active.keyInfo(module, resolved_var);
     if (!key_info.contains_identity_variables) {
         if (store.rootForKey(key_info.key)) |id| {
             applyCheckedTypeRowDefault(store, id, row_default);
@@ -16187,6 +16193,8 @@ pub const ResolvedValueRefTable = struct {
         synthetic_expr_origins: []const SyntheticExprOriginRecord,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
+        var key_writer = canonical_type_keys.KeyWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
+        defer key_writer.deinit();
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
         var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
@@ -16236,12 +16244,7 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_type_key = try canonical_type_keys.fromVar(
-                allocator,
-                module.typeStoreConst(),
-                module.moduleEnvConst(),
-                module.exprType(expr_idx),
-            );
+            const checked_type_key = (try key_writer.fromVarInfo(module.exprType(expr_idx))).key;
             const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type root was not published", .{});
@@ -17766,6 +17769,7 @@ const EvidencePass = struct {
     };
 
     allocator: Allocator,
+    key_writer: canonical_type_keys.KeyWriter,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
@@ -17878,6 +17882,7 @@ const EvidencePass = struct {
         }
         return .{
             .allocator = allocator,
+            .key_writer = canonical_type_keys.KeyWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
             .module = module,
             .names = names,
             .checked_types = checked_types,
@@ -17921,6 +17926,7 @@ const EvidencePass = struct {
     }
 
     fn deinit(self: *EvidencePass) void {
+        self.key_writer.deinit();
         self.allocator.free(self.plan_resolved);
         self.allocator.free(self.iterator_plan_resolved);
         self.deferred_use_sites.deinit(self.allocator);
@@ -18688,7 +18694,7 @@ const EvidencePass = struct {
         try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
         for (params.items) |*param| param.path = try arena.dupe(static_dispatch.EvidencePathStep, param.path);
-        const identity_vars = try canonical_type_keys.identityVarsFromScheme(self.allocator, self.types, env, root, relation_roots.items);
+        const identity_vars = try self.key_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
         const schema = SchemeSchema{
             .params = try arena.dupe(EvidenceParam, params.items),
@@ -38228,4 +38234,52 @@ test "issue 11128 source scheme publication hashes each source root once" {
     }
     try std.testing.expectEqual(digests, writer.test_digests);
     try std.testing.expectEqual(allocations, counter.allocated_bytes);
+}
+
+test "canonical keys agree for unsorted small and wide record and tag rows" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var source = try types.Store.initCapacity(gpa, 128, 128);
+    defer source.deinit();
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
+    var checked = CheckedTypeStore{};
+    defer checked.deinit(gpa);
+    const source_empty = try source.freshFromContent(.{ .structure = .empty_record });
+    const source_empty_tags = try source.freshFromContent(.{ .structure = .empty_tag_union });
+    const checked_empty = try appendExplicitCheckedTypePayload(gpa, &names, &checked, .empty_record);
+    const checked_empty_tags = try appendExplicitCheckedTypePayload(gpa, &names, &checked, .empty_tag_union);
+
+    for ([_]usize{ 0, 1, 5, 16, 17, 40 }) |width| {
+        var source_fields: [40]types.RecordField = undefined;
+        var source_tags: [40]types.Tag = undefined;
+        const checked_fields = try gpa.alloc(CheckedRecordField, width);
+        const checked_tags = try gpa.alloc(CheckedTagBuild, width);
+        for (0..width) |i| {
+            var buf: [32]u8 = undefined;
+            const text = try std.fmt.bufPrint(&buf, "Label{d:0>3}", .{i});
+            const ident = try env.insertIdent(Ident.for_text(text));
+            source_fields[width - i - 1] = .{ .name = ident, .presence = .required(source_empty) };
+            source_tags[width - i - 1] = .{ .name = ident, .args = try source.appendVars(&.{}) };
+            // Rotate two sorted runs on the payload side, and reverse on the
+            // solver side. This also grows both rank generations between walks.
+            const rotated = (i + width / 2) % width;
+            checked_fields[rotated] = .{ .name = try names.internRecordFieldLabel(text), .ty = checked_empty };
+            checked_tags[rotated] = .{ .name = try names.internTagLabel(text) };
+        }
+        const source_fields_range = try source.appendRecordFields(source_fields[0..width]);
+        const source_record = try source.freshFromContent(.{ .structure = .{ .record = .{ .fields = source_fields_range, .ext = source_empty } } });
+        const source_unbound = try source.freshFromContent(.{ .structure = .{ .record_unbound = source_fields_range } });
+        const source_union = try source.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = try source.appendTags(source_tags[0..width]), .ext = source_empty_tags } } });
+        const checked_unbound_fields = try gpa.dupe(CheckedRecordField, checked_fields);
+        const checked_record = try appendExplicitCheckedTypePayload(gpa, &names, &checked, .{ .record = .{ .fields = checked_fields, .ext = checked_empty } });
+        const checked_unbound = try appendExplicitCheckedTypePayload(gpa, &names, &checked, .{ .record_unbound = checked_unbound_fields });
+        const checked_union = try appendExplicitCheckedTypePayload(gpa, &names, &checked, .{ .tag_union = .{ .tags = checked_tags, .ext = checked_empty_tags } });
+        for ([_]Var{ source_record, source_unbound, source_union }, [_]CheckedTypeId{ checked_record, checked_unbound, checked_union }) |source_root, checked_root| {
+            const source_key = try canonical_type_keys.fromVar(gpa, &source, &env, source_root);
+            const checked_key = checked.roots.items[@intFromEnum(checked_root)].key;
+            try std.testing.expectEqualSlices(u8, &source_key.bytes, &checked_key.bytes);
+        }
+    }
 }

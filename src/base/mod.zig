@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const SExprTree = @import("SExprTree.zig");
+pub const TextRankCache = @import("TextRankCache.zig");
 pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");

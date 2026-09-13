@@ -9,6 +9,7 @@ const std = @import("std");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const builtin = @import("builtin");
 const base = @import("base");
+const collections = @import("collections");
 const can = @import("can");
 const types = @import("types");
 const canonical = @import("canonical_names.zig");
@@ -205,30 +206,68 @@ pub fn schemeFromVar(
     return .{ .bytes = builder.hasher.finalResult() };
 }
 
-/// Reusable scratch for complete source-scheme digests within one module.
+/// Reusable scratch for complete type and source-scheme digests within one module.
 /// Every request starts a new digest and new identity/cycle numbering; only
 /// allocation capacity survives. No type information is memoized here.
-pub const SchemeWriter = struct {
+pub const KeyWriter = struct {
     builder: Builder,
     /// Count complete digest requests in tests; no storage in compiler builds.
     test_digests: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
 
     /// Bind scratch to the source store and its module-local names.
-    pub fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) SchemeWriter {
+    pub fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) KeyWriter {
         return .{ .builder = Builder.init(allocator, store, env) };
     }
 
     /// Release all retained traversal storage.
-    pub fn deinit(self: *SchemeWriter) void {
+    pub fn deinit(self: *KeyWriter) void {
         self.builder.deinit();
     }
 
     /// Digest a whole source scheme, including after a failed earlier request.
-    pub fn fromVar(self: *SchemeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeSchemeKey {
+    pub fn fromVar(self: *KeyWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeSchemeKey {
         if (builtin.is_test) self.test_digests += 1;
+        const builder = &self.builder;
+        self.reset();
+        builder.writeTag("canonical_type_scheme");
+        try builder.writeVar(var_);
+        return .{ .bytes = builder.hasher.finalResult() };
+    }
+
+    /// Digest a complete type, reusing storage but never previous key data.
+    pub fn fromVarInfo(self: *KeyWriter, var_: Var) Allocator.Error!TypeKeyInfo {
+        self.reset();
+        try self.builder.writeVar(var_);
+        return .{
+            .key = .{ .bytes = self.builder.hasher.finalResult() },
+            .contains_identity_variables = self.builder.contains_identity_variables,
+        };
+    }
+
+    /// Enumerate the callable and explicit relation roots under one fresh
+    /// identity numbering. The caller owns the returned slice.
+    pub fn identityVarsFromScheme(self: *KeyWriter, root: Var, relation_roots: []const Var) Allocator.Error![]Var {
+        self.reset();
+        try self.builder.writeVar(root);
+        for (relation_roots) |relation_root| try self.builder.writeVar(relation_root);
+        return try self.builder.allocator.dupe(Var, self.builder.identity_variables.items);
+    }
+
+    /// Enumerate the scheme interface without walking attached requirements.
+    /// The caller owns the returned slice.
+    pub fn identityVarsIgnoringConstraints(self: *KeyWriter, root: Var) Allocator.Error![]Var {
+        self.reset();
+        self.builder.walk_identity_constraints = false;
+        try self.builder.writeVar(root);
+        return try self.builder.allocator.dupe(Var, self.builder.identity_variables.items);
+    }
+
+    fn reset(self: *KeyWriter) void {
         const builder = &self.builder;
         builder.hasher = TypeDigestHasher.init();
         builder.active.clearRetainingCapacity();
+        builder.active_slots.clearRetainingCapacity();
+        builder.identity_slots.clearRetainingCapacity();
         builder.identity_variables.clearRetainingCapacity();
         builder.frames.clearRetainingCapacity();
         builder.pending_fields.clearRetainingCapacity();
@@ -236,11 +275,12 @@ pub const SchemeWriter = struct {
         builder.ext_seen.clearRetainingCapacity();
         builder.contains_identity_variables = false;
         builder.contains_error = false;
-        builder.writeTag("canonical_type_scheme");
-        try builder.writeVar(var_);
-        return .{ .bytes = builder.hasher.finalResult() };
+        builder.walk_identity_constraints = true;
     }
 };
+
+/// Source-scheme writer compatibility name.
+pub const SchemeWriter = KeyWriter;
 
 /// Whether the canonical-key traversal for `var_` reaches erroneous checked
 /// type content. This uses the key builder itself in detection mode, so guards
@@ -339,6 +379,17 @@ const ConstraintsFrame = struct {
     stage: enum { head, origin } = .head,
 };
 
+/// Normalized rows have unique names, so sorting need not be stable.
+/// Most rows are already ordered; small disordered rows favor insertion sort.
+pub fn sortRow(comptime T: type, items: []T, context: anytype, comptime lessThan: fn (@TypeOf(context), T, T) bool) void {
+    if (std.sort.isSorted(T, items, context, lessThan)) return;
+    if (items.len <= 16) {
+        std.sort.insertion(T, items, context, lessThan);
+    } else {
+        std.sort.pdq(T, items, context, lessThan);
+    }
+}
+
 const Builder = struct {
     allocator: Allocator,
     store: *const TypeStore,
@@ -346,7 +397,9 @@ const Builder = struct {
     idents: *const Ident.Store,
     hasher: TypeDigestHasher,
     active: std.ArrayList(Var),
+    active_slots: collections.DenseMap(Var, u32),
     identity_variables: std.ArrayList(Var),
+    identity_slots: collections.DenseMap(Var, u32),
     /// Suspended steps of the walk, innermost last. The walk descends on this
     /// heap stack rather than the native one, so digest depth is bounded only
     /// by available memory.
@@ -385,6 +438,8 @@ const Builder = struct {
             .idents = env.getIdentStoreConst(),
             .hasher = TypeDigestHasher.init(),
             .active = .empty,
+            .active_slots = .init(allocator),
+            .identity_slots = .init(allocator),
             .identity_variables = .empty,
             .frames = .empty,
             .pending_fields = .empty,
@@ -400,6 +455,8 @@ const Builder = struct {
         self.frames.deinit(self.allocator);
         self.identity_variables.deinit(self.allocator);
         self.active.deinit(self.allocator);
+        self.active_slots.deinit();
+        self.identity_slots.deinit();
     }
 
     /// Digest the type reachable from `var_`, driving the walk to completion on
@@ -407,6 +464,7 @@ const Builder = struct {
     fn writeVar(self: *Builder, var_: Var) Allocator.Error!void {
         const frames_base = self.frames.items.len;
         const active_base = self.active.items.len;
+        const identities_base = self.identity_variables.items.len;
         const fields_base = self.pending_fields.items.len;
         const tags_base = self.pending_tags.items.len;
         // A completed walk drains every buffer back to its entry length. An
@@ -414,7 +472,11 @@ const Builder = struct {
         // here and keep the builder's buffers consistent on both exit paths.
         errdefer {
             self.frames.items.len = frames_base;
-            self.active.items.len = active_base;
+            while (self.active.items.len > active_base) self.popActive();
+            while (self.identity_variables.items.len > identities_base) {
+                _ = self.identity_slots.remove(self.identity_variables.pop().?);
+            }
+            self.ext_seen.clearRetainingCapacity();
             self.pending_fields.items.len = fields_base;
             self.pending_tags.items.len = tags_base;
         }
@@ -488,15 +550,36 @@ const Builder = struct {
             return try self.writeIdentityVariable(root, "rigid", rigid.name, rigid.constraints);
         }
 
-        if (varSlot(self.active.items, root)) |slot| {
-            self.writeTag("cycle");
-            self.writeU32(slot);
+        // These encodings have neither a child frame nor a row collection.
+        // They cannot lead back to an ancestor, so no cycle slot is needed.
+        const is_leaf = switch (resolved.desc.content) {
+            .err, .field_presence => true,
+            .flex, .rigid => unreachable, // handled above
+            .alias => false,
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => true,
+                .nominal_type => |nominal| self.store.sliceNominalArgs(nominal).len == 0,
+                .tuple => |tuple| tuple.elems.count == 0,
+                .record, .record_unbound, .tag_union, .fn_pure, .fn_effectful, .fn_unbound => false,
+            },
+        };
+        if (is_leaf) {
+            const suspended = try self.writeContent(resolved.desc.content);
+            std.debug.assert(!suspended);
             return true;
         }
 
-        try self.active.append(self.allocator, root);
+        try self.active.ensureUnusedCapacity(self.allocator, 1);
+        const entry = try self.active_slots.getOrPut(root);
+        if (entry.found_existing) {
+            self.writeTag("cycle");
+            self.writeU32(entry.value_ptr.*);
+            return true;
+        }
+        entry.value_ptr.* = @intCast(self.active.items.len);
+        self.active.appendAssumeCapacity(root);
         if (try self.writeContent(resolved.desc.content)) return false;
-        _ = self.active.pop();
+        self.popActive();
         return true;
     }
 
@@ -517,14 +600,17 @@ const Builder = struct {
                 return true;
             }
         }
-        if (varSlot(self.identity_variables.items, root)) |slot| {
+        try self.identity_variables.ensureUnusedCapacity(self.allocator, 1);
+        const entry = try self.identity_slots.getOrPut(root);
+        if (entry.found_existing) {
             self.writeTag("identity_var_ref");
-            self.writeU32(slot);
+            self.writeU32(entry.value_ptr.*);
             return true;
         }
 
         const slot: u32 = @intCast(self.identity_variables.items.len);
-        try self.identity_variables.append(self.allocator, root);
+        entry.value_ptr.* = slot;
+        self.identity_variables.appendAssumeCapacity(root);
         self.writeTag(tag);
         self.writeU32(slot);
         if (self.write_identity_names) {
@@ -537,6 +623,12 @@ const Builder = struct {
         if (items.len == 0) return true;
         try self.frames.append(self.allocator, .{ .constraints = .{ .constraints = items } });
         return false;
+    }
+
+    fn popActive(self: *Builder) void {
+        const root = self.active.pop().?;
+        const removed = self.active_slots.remove(root);
+        std.debug.assert(removed);
     }
 
     fn varSlot(vars: []const Var, var_: Var) ?u32 {
@@ -733,7 +825,7 @@ const Builder = struct {
                         if (!try self.request(arg)) return false;
                         continue;
                     }
-                    _ = self.active.pop();
+                    self.popActive();
                     return true;
                 },
             }
@@ -748,7 +840,7 @@ const Builder = struct {
                 if (!try self.request(child)) return false;
                 continue;
             }
-            _ = self.active.pop();
+            self.popActive();
             return true;
         }
     }
@@ -770,7 +862,7 @@ const Builder = struct {
                     if (!try self.request(frame.ret)) return false;
                 },
                 .done => {
-                    _ = self.active.pop();
+                    self.popActive();
                     return true;
                 },
             }
@@ -807,7 +899,7 @@ const Builder = struct {
         while (tail) |tail_var| {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
-            if (varSlot(self.active.items, root) != null) break;
+            if (self.active_slots.get(root) != null) break;
             if (varSlot(self.ext_seen.items, root) != null) break;
             try self.ext_seen.append(self.allocator, root);
             const content = resolved.desc.content;
@@ -840,7 +932,10 @@ const Builder = struct {
         const tail = try self.collectRecordRow(head, null);
 
         const fields = self.pending_fields.items[fields_base..];
-        std.mem.sort(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
+        if (fields.len > 1) {
+            try self.idents.ensureTextRanks(self.env.gpa);
+            sortRow(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
+        }
         self.writeU32(@intCast(fields.len));
         try self.frames.append(self.allocator, .{ .record = .{
             .fields_base = fields_base,
@@ -859,7 +954,10 @@ const Builder = struct {
         const tail = try self.collectRecordRow(head, ext);
 
         const fields = self.pending_fields.items[fields_base..];
-        std.mem.sort(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
+        if (fields.len > 1) {
+            try self.idents.ensureTextRanks(self.env.gpa);
+            sortRow(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
+        }
         if (tail == null and fields.len == 0) {
             self.pending_fields.items.len = fields_base;
             self.writeTag("empty_record");
@@ -945,7 +1043,7 @@ const Builder = struct {
                     }
                 },
                 .done => {
-                    _ = self.active.pop();
+                    self.popActive();
                     return true;
                 },
             }
@@ -980,7 +1078,7 @@ const Builder = struct {
         while (tail) |tail_var| {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
-            if (varSlot(self.active.items, root) != null) break;
+            if (self.active_slots.get(root) != null) break;
             if (varSlot(self.ext_seen.items, root) != null) break;
             try self.ext_seen.append(self.allocator, root);
             const content = resolved.desc.content;
@@ -1000,7 +1098,10 @@ const Builder = struct {
         }
 
         const tags = self.pending_tags.items[tags_base..];
-        std.mem.sort(TagForKey, tags, self, tagForKeyLessThan);
+        if (tags.len > 1) {
+            try self.idents.ensureTextRanks(self.env.gpa);
+            sortRow(TagForKey, tags, self, tagForKeyLessThan);
+        }
         if (tail == null and tags.len == 0) {
             self.pending_tags.items.len = tags_base;
             self.writeTag("[]");
@@ -1056,7 +1157,7 @@ const Builder = struct {
                     }
                 },
                 .done => {
-                    _ = self.active.pop();
+                    self.popActive();
                     return true;
                 },
             }
@@ -1064,11 +1165,11 @@ const Builder = struct {
     }
 
     fn recordFieldForKeyLessThan(self: *Builder, lhs: RecordFieldForKey, rhs: RecordFieldForKey) bool {
-        return self.idents.idxTextLessThan(lhs.name, rhs.name);
+        return self.idents.idxTextRank(lhs.name) < self.idents.idxTextRank(rhs.name);
     }
 
     fn tagForKeyLessThan(self: *Builder, lhs: TagForKey, rhs: TagForKey) bool {
-        return self.idents.idxTextLessThan(lhs.name, rhs.name);
+        return self.idents.idxTextRank(lhs.name) < self.idents.idxTextRank(rhs.name);
     }
 
     fn stepConstraints(self: *Builder, frame: *ConstraintsFrame) Allocator.Error!bool {
@@ -1537,5 +1638,69 @@ test "issue 11128 scheme writer recovers from every allocation failure" {
         failing.fail_index = std.math.maxInt(usize);
         try std.testing.expectEqualDeep(expected, try writer.fromVar(root));
         try std.testing.expectEqualDeep(small_expected, try writer.fromVar(args[0]));
+    }
+}
+
+test "canonical key writer reuses storage with fresh type and scheme domains" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(gpa, 1024, 16);
+    defer store.deinit();
+    const identity = try store.fresh();
+    const closed = try store.freshFromContent(.{ .structure = .empty_record });
+    const repeated = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ identity, closed, identity }) } } });
+    const roots = [_]Var{ repeated, closed, identity };
+    var expected_types: [roots.len]TypeKeyInfo = undefined;
+    var expected_schemes: [roots.len]canonical.CanonicalTypeSchemeKey = undefined;
+    for (roots, &expected_types, &expected_schemes) |root, *ty, *scheme| {
+        ty.* = try fromVarInfo(gpa, &store, &env, root);
+        scheme.* = try schemeFromVar(gpa, &store, &env, root);
+    }
+    var counter = std.testing.FailingAllocator.init(gpa, .{});
+    var writer = KeyWriter.init(counter.allocator(), &store, &env);
+    defer writer.deinit();
+    for (roots) |root| _ = try writer.fromVarInfo(root);
+    const allocated = counter.allocated_bytes;
+    for (0..128) |_| {
+        for (roots, expected_types, expected_schemes) |root, ty, scheme| {
+            try std.testing.expectEqualDeep(scheme, try writer.fromVar(root));
+            try std.testing.expectEqualDeep(ty, try writer.fromVarInfo(root));
+        }
+    }
+    try std.testing.expectEqual(allocated, counter.allocated_bytes);
+}
+
+test "canonical key writer resets constraint traversal and preserves relation identity order" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(gpa, 32, 16);
+    defer store.deinit();
+    const arg = try store.fresh();
+    const relation = try store.fresh();
+    const callable = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{arg}),
+        .ret = arg,
+    } } });
+    const root = try store.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = try store.appendStaticDispatchConstraints(&.{.{
+            .fn_name = try env.insertIdent(Ident.for_text("method")),
+            .fn_var = callable,
+            .origin = .method_call,
+        }}),
+    } });
+    const expected = try fromVarInfo(gpa, &store, &env, root);
+    var writer = KeyWriter.init(gpa, &store, &env);
+    defer writer.deinit();
+    for (0..8) |_| {
+        const interface = try writer.identityVarsIgnoringConstraints(root);
+        defer gpa.free(interface);
+        try std.testing.expectEqualSlices(Var, &.{root}, interface);
+        try std.testing.expectEqualDeep(expected, try writer.fromVarInfo(root));
+        const complete = try writer.identityVarsFromScheme(root, &.{ relation, arg });
+        defer gpa.free(complete);
+        try std.testing.expectEqualSlices(Var, &.{ root, arg, relation }, complete);
     }
 }

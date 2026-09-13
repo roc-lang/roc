@@ -15,6 +15,7 @@ pub const BuiltinModuleView = struct {
 
     /// Destroy the wrapper ModuleEnv without freeing the static builtin backing bytes.
     pub fn deinit(self: *BuiltinModuleView) void {
+        self.env.common.idents.text_rank.deinit(self.gpa);
         self.gpa.destroy(self.env);
         self.* = undefined;
     }

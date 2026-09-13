@@ -140,6 +140,8 @@ const InstantiatedRequirement = struct {
 gpa: std.mem.Allocator,
 // This module's types store
 types: *types_mod.Store,
+/// Traversal capacity only; identity enumeration starts fresh for each scheme.
+identity_key_writer: ?canonical_type_keys.KeyWriter = null,
 /// This module's env
 cir: *ModuleEnv,
 /// A list of regions. Owned copy, cloned from NodeStore at init time.
@@ -2704,6 +2706,7 @@ pub fn fixupTypeWriter(self: *Self) void {
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
+    if (self.identity_key_writer) |*writer| writer.deinit();
     self.owner_envs_by_identity.deinit(self.gpa);
     self.regions.deinit(self.gpa);
     self.problems.deinit(self.gpa);
@@ -27776,12 +27779,10 @@ fn deduplicateGeneralizedDispatchRequirements(
     scheme_var: Var,
     env: *Env,
 ) Allocator.Error!void {
-    const identity_vars = try canonical_type_keys.identityVarsFromVarIgnoringConstraints(
-        self.gpa,
-        self.types,
-        self.cir,
-        scheme_var,
-    );
+    if (self.identity_key_writer == null) {
+        self.identity_key_writer = canonical_type_keys.KeyWriter.init(self.gpa, self.types, self.cir);
+    }
+    const identity_vars = try self.identity_key_writer.?.identityVarsIgnoringConstraints(scheme_var);
     defer self.gpa.free(identity_vars);
 
     var anchors = std.AutoHashMap(Var, void).init(self.gpa);
