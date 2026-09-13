@@ -10145,6 +10145,10 @@ the aggregate descriptor consumes those adapted field values. Each field's
 descriptor source therefore names the boundary's output representation; a
 proven direct transfer retains the source representation. The pre-conversion
 representation cannot describe a field whose storage the adapter changed.
+A bare type parameter has no storage shape of its own. Constructing a tag or
+record payload at that destination preserves the supplying expression's exact
+payload descriptor; an adapted destination with a declared storage shape uses
+the destination descriptor.
 
 Nominal construction consumes the same explicit backing parameter substitution.
 The shared backing representation fixes storage; its descriptor binds each

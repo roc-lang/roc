@@ -20664,6 +20664,10 @@ const ProcBodyBuilder = struct {
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
     ) Plan.TypeRepId {
+        // A bare type parameter has no storage shape of its own. Boxing the
+        // operand preserves its exact payload descriptor.
+        if (self.repIsBareDynamic(target_rep)) return source_rep;
+
         if (self.parent.result.store.getLocal(target).layout_idx == self.workerRuntimeLayoutForRep(source_rep).layoutIdx() and
             self.repsUseSameDynamicBoxStorage(target_rep, source_rep))
         {
