@@ -327,7 +327,7 @@ pub const Store = struct {
     /// Prepare transient ranks with the store's owning allocator. Inserts
     /// invalidate the generation automatically by growing the byte buffer.
     pub fn ensureTextRanks(self: *const Store, gpa: Allocator) Allocator.Error!void {
-        try self.text_rank.ensure(gpa, self.interner.bytes.len(), self.interner.entry_count, self, fillTextRankIds, textRankLessThan);
+        try self.text_rank.ensure(gpa, @intCast(self.interner.bytes.len()), self.interner.entry_count, self, fillTextRankIds, textRankLessThan);
     }
 
     fn fillTextRankIds(self: *const Store, ids: []u32) void {
@@ -346,13 +346,13 @@ pub const Store = struct {
 
     /// Read a rank after `ensureTextRanks`, with no intervening insertion.
     pub fn idxTextRank(self: *const Store, idx: Idx) u32 {
-        std.debug.assert(self.text_rank.isCurrent(self.interner.bytes.len()));
+        std.debug.assert(self.text_rank.isCurrent(@intCast(self.interner.bytes.len())));
         return self.text_rank.rank(idx.idx);
     }
 
     /// Compare identifiers using ranks when prepared for this generation.
     pub fn idxTextLessThan(self: *const Store, a: Idx, b: Idx) bool {
-        if (self.text_rank.isCurrent(self.interner.bytes.len())) {
+        if (self.text_rank.isCurrent(@intCast(self.interner.bytes.len()))) {
             return self.idxTextRank(a) < self.idxTextRank(b);
         }
         return textLessThan(self.getText(a), self.getText(b));
@@ -868,7 +868,7 @@ test "identifier text ranks preserve byte order and rebuild after inserts" {
     try store.ensureTextRanks(gpa);
     try std.testing.expectEqual(ranks, store.text_rank.ranks.ptr);
     const first = try store.insert(gpa, for_text("A"));
-    try std.testing.expect(!store.text_rank.isCurrent(store.interner.bytes.len()));
+    try std.testing.expect(!store.text_rank.isCurrent(@intCast(store.interner.bytes.len())));
     // Comparisons before preparing the new generation still use exact text order.
     try std.testing.expect(store.idxTextLessThan(first, ids[0]));
     try store.ensureTextRanks(gpa);
