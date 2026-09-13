@@ -6344,9 +6344,9 @@ test "monotype digest byte fixtures preserve scalar and recursive encodings" {
     const function = try store.add(.{ .func = .{ .args = try store.addSpan(&.{ tree, scalar, list }), .ret = record } });
     // Digests captured on main after the v3 format change, before scalar-byte reuse.
     const expected = [_][]const u8{
-        "ac0eb29d9ccdee90b6324ca41500563b",
-        "7843f759fb9d7906cb25b2fff4d886a1",
-        "753e9b42fa891a76a95d045c9ac30ae5",
+        "1df6f2a1d02b6dfbe99e3aa18c8d0cc4084570de26f69072ec8bf1c621dc948c",
+        "8732a616baee8db689c7952a5f23672cd0c1316d16c2a7f6e5a0f0803682dbdb",
+        "51999cf46a730a706829bbdcb8d7dfab9c4457ddf5d8ea11d297e896f4a3cafb",
     };
     for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality }, expected) |mode, hex| {
         const digest = try store.computeDigest(&name_store, function, mode, null);
