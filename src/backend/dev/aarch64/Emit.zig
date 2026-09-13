@@ -860,6 +860,19 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(encodeAddSubRegRegReg64(dst, dst, scratch, subtract));
         }
 
+        /// BR Xn (branch to the address in a register)
+        pub fn brReg(self: *Self, reg: GeneralReg) Allocator.Error!void {
+            // BR <Xn>
+            // 1101011 0000 11111 000000 Rn[4:0] 00000
+            const inst: u32 = (0b1101011 << 25) |
+                (0b0000 << 21) |
+                (0b11111 << 16) |
+                (0b000000 << 10) |
+                (@as(u32, reg.enc()) << 5) |
+                0b00000;
+            try self.emit32(inst);
+        }
+
         /// BLR Xn (branch with link to register - call to address in register)
         pub fn blrReg(self: *Self, reg: GeneralReg) Allocator.Error!void {
             // BLR <Xn>
