@@ -995,12 +995,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// (the program crashes after the first). Sharing one slot across all
         /// debug crash sites in a proc keeps the frame from growing linearly
         /// with the number of debug asserts. Lazily allocated on first use.
-        proc_debug_msg_slot: ?i32 = null,
+        /// Bytes of every static message the image reports through the host
+        /// (crash, expect, dbg and invariant checks). `finishImage` places
+        /// them after the last instruction; code reaches a message through the
+        /// PC-relative address sequence, patched once its bytes are placed.
+        message_pool: std.ArrayList(u8) = .empty,
+        /// Pool offset and length of each distinct message by content hash,
+        /// so equal messages share their bytes.
+        message_pool_index: std.AutoHashMapUnmanaged(u64, MessageSpan) = .empty,
+        /// Pool bytes already placed in the code, as (first pool offset, code offset) runs.
+        message_pool_runs: std.ArrayList(MessagePoolRun) = .empty,
+        /// Address sequences awaiting their message's placement.
+        pending_message_addrs: std.ArrayList(PendingMessageAddr) = .empty,
+        /// Pool bytes already placed in the code.
+        message_pool_placed_len: u32 = 0,
 
         /// Generation mode determines whether to use direct function pointers or symbol references.
         /// - native_execution: Code runs in-process (dev evaluator), direct function pointers work
         /// - object_file: Generating relocatable object files, use symbol references for builtins
         generation_mode: GenerationMode = .native_execution,
+        /// Set by `finishImage`; the code and relocations are complete only after it.
+        image_finished: bool = false,
 
         /// Whether shim-executed host-callable functions and boxed callbacks
         /// participate in the hot-reload code reference protocol.
@@ -1107,6 +1122,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         };
 
         /// A pending ADR/LEA proc-address literal that needs to be patched once the target proc is compiled.
+        pub const MessageSpan = struct { offset: u32, len: u32 };
+        pub const MessagePoolRun = struct { pool_from: u32, code_start: usize };
+        pub const PendingMessageAddr = struct {
+            /// Offset where the ADR/LEA instruction starts
+            instr_offset: usize,
+            /// The message's offset in `message_pool`
+            message_offset: u32,
+        };
+
         pub const PendingProcAddr = struct {
             /// Offset where the ADR/LEA instruction starts
             instr_offset: usize,
@@ -1428,6 +1452,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.pending_rc_calls.deinit(self.allocator);
             self.pending_calls.deinit(self.allocator);
             self.pending_proc_addrs.deinit(self.allocator);
+            self.pending_message_addrs.deinit(self.allocator);
+            self.message_pool_runs.deinit(self.allocator);
+            self.message_pool_index.deinit(self.allocator);
+            self.message_pool.deinit(self.allocator);
             // Clean up the nested ArrayLists in join_point_jumps
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
@@ -1467,6 +1495,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.compiling_rc_helpers = false;
             self.pending_calls.clearRetainingCapacity();
             self.pending_proc_addrs.clearRetainingCapacity();
+            self.pending_message_addrs.clearRetainingCapacity();
+            self.message_pool_runs.clearRetainingCapacity();
+            self.message_pool_index.clearRetainingCapacity();
+            self.message_pool.clearRetainingCapacity();
+            self.message_pool_placed_len = 0;
             // Clear nested ArrayLists
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
@@ -1596,7 +1629,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcSpecs
             self.clearLocalLocationsRetainingCapacity();
-            self.proc_debug_msg_slot = null;
             self.codegen.callee_saved_used = 0;
             self.uses_caller_stack_arg_base = false;
 
@@ -1732,14 +1764,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
             self.shiftPendingCalls(body_start, body_end, prologue_size);
             self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
+            self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
             self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+            if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
             self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
             self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
 
             // Patch early return jumps (if any) to the epilogue
             const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
             for (self.early_return_patches.items) |patch| {
-                self.codegen.patchJump(patch + prologue_size, final_epilogue);
+                try self.codegen.patchJump(patch + prologue_size, final_epilogue);
             }
             try self.recordUnwindFunction(
                 prologue_start,
@@ -1752,6 +1786,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 true,
             );
             try self.maybeDrainRcHelpers();
+            try self.finishImage();
 
             const all_code = self.codegen.getCode();
             const code_copy = self.allocator.dupe(u8, all_code) catch return error.OutOfMemory;
@@ -3227,7 +3262,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const done_patch = try self.codegen.emitJump();
 
                         // .large:
-                        self.codegen.patchJump(large_patch, self.codegen.currentOffset());
+                        try self.codegen.patchJump(large_patch, self.codegen.currentOffset());
                         const tmp_reg = try self.allocTempGeneral();
                         try self.codegen.emit.movRegReg(.w64, tmp_reg, src_reg);
                         // shr tmp, 1
@@ -3247,7 +3282,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(tmp_reg);
 
                         // .done:
-                        self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+                        try self.codegen.patchJump(done_patch, self.codegen.currentOffset());
                     }
                     self.codegen.freeGeneral(src_reg);
                     return .{ .float_reg = .{ .reg = freg, .width = if (is_f32) .f32 else .f64 } };
@@ -6039,7 +6074,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var done_patches: [16]usize = undefined;
             const default_done = try self.codegen.emitJump();
             for (0..16) |shift| {
-                self.codegen.patchJump(case_patches[shift], self.codegen.currentOffset());
+                try self.codegen.patchJump(case_patches[shift], self.codegen.currentOffset());
                 if (shift == 0) {
                     try self.codegen.emitMoveV128(result, lhs.reg);
                 } else if (comptime target.toCpuArch() == .x86_64) {
@@ -6050,8 +6085,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 done_patches[shift] = try self.codegen.emitJump();
             }
             const done = self.codegen.currentOffset();
-            self.codegen.patchJump(default_done, done);
-            for (done_patches) |patch| self.codegen.patchJump(patch, done);
+            try self.codegen.patchJump(default_done, done);
+            for (done_patches) |patch| try self.codegen.patchJump(patch, done);
             return .{ .vector_reg = .{ .reg = result, .kind = .u8x16 } };
         }
 
@@ -6719,7 +6754,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeFloat(high);
             const normal_done = try self.codegen.emitJump();
 
-            self.codegen.patchJump(out_of_range_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(out_of_range_patch, self.codegen.currentOffset());
             if (comptime target.toCpuArch() == .x86_64) {
                 try self.emitX86PackedBinary(.map_0f, 0xEF, result, result, result);
             } else {
@@ -6727,11 +6762,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             const range_done = try self.codegen.emitJump();
 
-            self.codegen.patchJump(zero_count_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(zero_count_patch, self.codegen.currentOffset());
             try self.codegen.emitMoveV128(result, vector.reg);
             const done = self.codegen.currentOffset();
-            self.codegen.patchJump(normal_done, done);
-            self.codegen.patchJump(range_done, done);
+            try self.codegen.patchJump(normal_done, done);
+            try self.codegen.patchJump(range_done, done);
             return .{ .vector_reg = .{ .reg = result, .kind = kind } };
         }
 
@@ -9336,7 +9371,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpReg(masked_reg, infinity_reg);
             const not_nan_patch = try self.codegen.emitCondJump(condBelowOrEqual());
             try self.codegen.emitLoadImm(bits_reg, @bitCast(normalized_nan_bits));
-            self.codegen.patchJump(not_nan_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(not_nan_patch, self.codegen.currentOffset());
         }
 
         fn emitNormalizeFloatNanInStableLocation(
@@ -9442,8 +9477,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitTrap();
 
             const done = self.codegen.currentOffset();
-            self.codegen.patchJump(aligned_patch, done);
-            self.codegen.patchJump(null_patch, done);
+            try self.codegen.patchJump(aligned_patch, done);
+            try self.codegen.patchJump(null_patch, done);
         }
 
         fn emitDebugAssertValidStrLocal(
@@ -9499,7 +9534,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ptr_non_null_patch = try self.emitJumpIfNotEqual();
             try self.emitDebugCrashInvalidStrLocal(local, "null bytes pointer");
             const after_null = self.codegen.currentOffset();
-            self.codegen.patchJump(ptr_non_null_patch, after_null);
+            try self.codegen.patchJump(ptr_non_null_patch, after_null);
 
             // Seamless slices store an interior bytes pointer plus the original
             // allocation pointer in capacity_or_alloc_ptr. Their bytes pointer
@@ -9516,7 +9551,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const alloc_non_null_patch = try self.emitJumpIfNotEqual();
             try self.emitDebugCrashInvalidStrLocal(local, "null allocation pointer");
             const after_alloc_null = self.codegen.currentOffset();
-            self.codegen.patchJump(alloc_non_null_patch, after_alloc_null);
+            try self.codegen.patchJump(alloc_non_null_patch, after_alloc_null);
 
             try self.codegen.emitLoadImm(ptr_reg, @alignOf(usize) - 1);
             try self.emitAndRegs(.w64, ptr_reg, ptr_reg, tmp_reg);
@@ -9524,11 +9559,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const alloc_aligned_patch = try self.emitJumpIfEqual();
             try self.emitDebugCrashInvalidStrLocal(local, "misaligned allocation pointer");
             const after_alloc_align = self.codegen.currentOffset();
-            self.codegen.patchJump(alloc_aligned_patch, after_alloc_align);
+            try self.codegen.patchJump(alloc_aligned_patch, after_alloc_align);
 
             const seamless_done_patch = try self.codegen.emitJump();
             const after_seamless = self.codegen.currentOffset();
-            self.codegen.patchJump(non_seamless_patch, after_seamless);
+            try self.codegen.patchJump(non_seamless_patch, after_seamless);
 
             // Non-slice RocStrs must satisfy len <= decoded capacity.
             try self.codegen.emitLoadImm(tmp_reg, @alignOf(usize) - 1);
@@ -9537,16 +9572,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ptr_aligned_patch = try self.emitJumpIfEqual();
             try self.emitDebugCrashInvalidStrLocal(local, "misaligned bytes pointer");
             const after_ptr_align = self.codegen.currentOffset();
-            self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
+            try self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
 
             try self.emitLsrImm(.w64, tmp_reg, cap_reg, 1);
             try self.emitCmpReg(len_reg, tmp_reg);
             const len_ok_patch = try self.codegen.emitCondJump(condBelowOrEqual());
             try self.emitDebugCrashInvalidStrLocal(local, "length exceeds capacity");
             const done = self.codegen.currentOffset();
-            self.codegen.patchJump(len_ok_patch, done);
-            self.codegen.patchJump(seamless_done_patch, done);
-            self.codegen.patchJump(small_patch, done);
+            try self.codegen.patchJump(len_ok_patch, done);
+            try self.codegen.patchJump(seamless_done_patch, done);
+            try self.codegen.patchJump(small_patch, done);
         }
 
         fn emitDebugCrashInvalidStrLocal(self: *Self, local: LocalId, reason: []const u8) Allocator.Error!void {
@@ -10772,7 +10807,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else {
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                     }
-                    if (rem_done_patch) |patch| self.codegen.patchJump(patch, self.codegen.currentOffset());
+                    if (rem_done_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
                 },
                 .num_mod_by => {
                     var mod_done_patch: ?usize = null;
@@ -10807,13 +10842,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const done_patch = try self.codegen.emitJump();
 
                         const skip_adjust_offset = self.codegen.currentOffset();
-                        self.codegen.patchJump(same_sign_patch, skip_adjust_offset);
-                        self.codegen.patchJump(zero_patch, skip_adjust_offset);
-                        self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+                        try self.codegen.patchJump(same_sign_patch, skip_adjust_offset);
+                        try self.codegen.patchJump(zero_patch, skip_adjust_offset);
+                        try self.codegen.patchJump(done_patch, self.codegen.currentOffset());
                         self.codegen.freeGeneral(sign_check_reg);
                         self.codegen.freeGeneral(divisor_reg);
                     }
-                    if (mod_done_patch) |patch| self.codegen.patchJump(patch, self.codegen.currentOffset());
+                    if (mod_done_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
                 },
                 .num_shift_left_by => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
                 // Signed types shift arithmetically (sign-filling); unsigned types
@@ -11008,10 +11043,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitCrashOnCond(self: *Self, cond: Condition, message: []const u8) Allocator.Error!void {
             const crash_patch = try self.codegen.emitCondJump(cond);
             const done_patch = try self.codegen.emitJump();
-            self.codegen.patchJump(crash_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(crash_patch, self.codegen.currentOffset());
             try self.emitRocCrash(message);
             try self.emitTrap();
-            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(done_patch, self.codegen.currentOffset());
         }
 
         fn emitCheckedZeroDenominator(self: *Self, op: lir.LowLevel, rhs_reg: GeneralReg, operand_layout: layout.Idx) Allocator.Error!void {
@@ -11026,7 +11061,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const lhs_not_lowest = try self.emitJumpIfNotEqual();
             try self.emitCmpRegImm64(rhs_reg, -1);
             try self.emitCrashOnCond(condEqual(), checkedOverflowMessage(op));
-            self.codegen.patchJump(lhs_not_lowest, self.codegen.currentOffset());
+            try self.codegen.patchJump(lhs_not_lowest, self.codegen.currentOffset());
         }
 
         fn emitCheckedSignedMinRemainderZero(
@@ -11044,8 +11079,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadImm(result_reg, 0);
             const done_patch = try self.codegen.emitJump();
             const normal_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(lhs_not_lowest, normal_offset);
-            self.codegen.patchJump(rhs_not_neg_one, normal_offset);
+            try self.codegen.patchJump(lhs_not_lowest, normal_offset);
+            try self.codegen.patchJump(rhs_not_neg_one, normal_offset);
             return done_patch;
         }
 
@@ -11487,7 +11522,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     // 128-bit truncated remainder (sign of dividend): call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
-                    if (done_patch) |patch| self.codegen.patchJump(patch, self.codegen.currentOffset());
+                    if (done_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
                 },
                 .num_mod_by => {
                     var done_patch: ?usize = null;
@@ -11506,7 +11541,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // i128 representation is what the adjustment operates on.
                         try self.callI128Mod(lhs_parts, rhs_parts, result_low, result_high);
                     }
-                    if (done_patch) |patch| self.codegen.patchJump(patch, self.codegen.currentOffset());
+                    if (done_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
                 },
                 // Bitwise operations: apply independently to each 64-bit word.
                 .num_bitwise_and => {
@@ -12191,7 +12226,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const low_not_zero = try self.emitJumpIfNotEqual();
             try self.emitCmpImm(rhs_parts.high, 0);
             try self.emitCrashOnCond(condEqual(), checkedZeroDenominatorMessage(op, operand_layout));
-            self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
+            try self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
         }
 
         fn emitCheckedI128SignedMinDivOverflow(
@@ -12213,9 +12248,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCrashOnCond(condEqual(), checkedOverflowMessage(op));
 
             const normal_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(lhs_low_not_zero, normal_offset);
-            self.codegen.patchJump(lhs_high_not_min, normal_offset);
-            self.codegen.patchJump(rhs_low_not_neg_one, normal_offset);
+            try self.codegen.patchJump(lhs_low_not_zero, normal_offset);
+            try self.codegen.patchJump(lhs_high_not_min, normal_offset);
+            try self.codegen.patchJump(rhs_low_not_neg_one, normal_offset);
         }
 
         fn emitCheckedI128SignedMinRemainderZero(
@@ -12242,10 +12277,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const done_patch = try self.codegen.emitJump();
 
             const normal_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(lhs_low_not_zero, normal_offset);
-            self.codegen.patchJump(lhs_high_not_min, normal_offset);
-            self.codegen.patchJump(rhs_low_not_neg_one, normal_offset);
-            self.codegen.patchJump(rhs_high_not_neg_one, normal_offset);
+            try self.codegen.patchJump(lhs_low_not_zero, normal_offset);
+            try self.codegen.patchJump(lhs_high_not_min, normal_offset);
+            try self.codegen.patchJump(rhs_low_not_neg_one, normal_offset);
+            try self.codegen.patchJump(rhs_high_not_neg_one, normal_offset);
             return done_patch;
         }
 
@@ -13150,7 +13185,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node_field = .{ .lhs_off = lhs_base, .rhs_off = rhs_base, .layout_idx = payload_layout_idx, .size = payload_size, .result_reg = rr } });
                         } else {
                             try self.codegen.emitLoadImm(rr, 1);
-                            self.codegen.patchJump(disc_ne_patch, self.codegen.currentOffset());
+                            try self.codegen.patchJump(disc_ne_patch, self.codegen.currentOffset());
                         }
                     } else {
                         try self.codegen.emitLoadImm(rr, 1);
@@ -13193,21 +13228,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag_after => |ta| {
                     const st = ta.state;
                     try st.end_patches.append(self.allocator, try self.codegen.emitJump());
-                    self.codegen.patchJump(ta.skip_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(ta.skip_patch, self.codegen.currentOffset());
                 },
 
                 .tag_finish => |st| {
                     const current = self.codegen.currentOffset();
                     for (st.end_patches.items) |patch| {
-                        self.codegen.patchJump(patch, current);
+                        try self.codegen.patchJump(patch, current);
                     }
-                    self.codegen.patchJump(st.disc_ne_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(st.disc_ne_patch, self.codegen.currentOffset());
                     st.end_patches.deinit(self.allocator);
                     self.allocator.destroy(st);
                 },
 
                 .tag_finish1 => |tf| {
-                    self.codegen.patchJump(tf.disc_ne_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(tf.disc_ne_patch, self.codegen.currentOffset());
                 },
 
                 .node_list => |l| {
@@ -13283,8 +13318,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const empty_patch = try self.codegen.emitCondJump(condEqual());
                     if (elem_size == 0) {
                         const done_offset = self.codegen.currentOffset();
-                        self.codegen.patchJump(len_ne_patch, done_offset);
-                        self.codegen.patchJump(empty_patch, done_offset);
+                        try self.codegen.patchJump(len_ne_patch, done_offset);
+                        try self.codegen.patchJump(empty_patch, done_offset);
                         continue;
                     }
                     const lhs_ptr_slot = self.codegen.allocStackSlot(8);
@@ -13377,14 +13412,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(off_reg);
                     }
                     const back_patch = try self.codegen.emitJump();
-                    self.codegen.patchJump(back_patch, st.loop_start);
-                    self.codegen.patchJump(ne_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(back_patch, st.loop_start);
+                    try self.codegen.patchJump(ne_patch, self.codegen.currentOffset());
                     try self.codegen.emitLoadImm(st.result_reg, 0);
                     const ne_done_patch = try self.codegen.emitJump();
-                    self.codegen.patchJump(st.exit_patch, self.codegen.currentOffset());
-                    self.codegen.patchJump(ne_done_patch, self.codegen.currentOffset());
-                    self.codegen.patchJump(st.len_ne_patch, self.codegen.currentOffset());
-                    self.codegen.patchJump(st.empty_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(st.exit_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(ne_done_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(st.len_ne_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(st.empty_patch, self.codegen.currentOffset());
                     self.allocator.destroy(st);
                 },
             };
@@ -13629,7 +13664,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emitLoadImm(high_lowest, std.math.minInt(i64));
                 try self.emitCmpReg(parts.high, high_lowest);
                 try self.emitCrashOnCond(condEqual(), message);
-                self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
+                try self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
                 self.codegen.freeGeneral(high_lowest);
                 self.codegen.freeGeneral(parts.low);
                 self.codegen.freeGeneral(parts.high);
@@ -14509,15 +14544,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .target_offset = target_offset,
             });
 
-            // Calculate relative byte offset (can be negative for backward call)
-            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)));
-
             if (comptime target.toCpuArch() == .aarch64) {
-                // BL instruction expects byte offset (it divides by 4 internally)
-                try self.codegen.emit.bl(rel_offset);
+                try self.codegen.emitDirectCall(target_offset);
             } else {
                 // x86_64: CALL rel32
                 // Offset is relative to instruction after the call (current + 5)
+                const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)));
                 const call_rel = rel_offset - 5;
                 try self.codegen.emit.call(@bitCast(call_rel));
             }
@@ -14555,22 +14587,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // For targets outside the shifted body, or the current body's entry point,
                     // re-patch because only the call site moved.
-                    {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        self.codegen.patchDirectCall(patch.call_offset, patch.target_offset);
+                    } else {
+                        // Patch CALL rel32 instruction (5 bytes: 0xE8 + 4-byte offset)
+                        // The offset is relative to the instruction AFTER the call (call_offset + 5)
                         const new_rel: i32 = @intCast(@as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.call_offset)));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // Patch BL instruction (4 bytes at call_offset)
-                            // BL encoding: imm26 = offset / 4
-                            const imm26: u26 = @bitCast(@as(i26, @intCast(@divExact(new_rel, 4))));
-                            const bl_opcode: u32 = (0b100101 << 26) | @as(u32, imm26);
-                            const bytes: [4]u8 = @bitCast(bl_opcode);
-                            @memcpy(buf[patch.call_offset..][0..4], &bytes);
-                        } else {
-                            // Patch CALL rel32 instruction (5 bytes: 0xE8 + 4-byte offset)
-                            // The offset is relative to the instruction AFTER the call (call_offset + 5)
-                            const call_rel: i32 = new_rel - 5;
-                            const bytes: [4]u8 = @bitCast(call_rel);
-                            @memcpy(buf[patch.call_offset + 1 ..][0..4], &bytes);
-                        }
+                        const call_rel: i32 = new_rel - 5;
+                        const bytes: [4]u8 = @bitCast(call_rel);
+                        @memcpy(buf[patch.call_offset + 1 ..][0..4], &bytes);
                     }
                 }
             }
@@ -14698,27 +14723,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// a page-based ADRP form, nothing depends on the runtime base being
         /// page-aligned, which linked output does not provide.
         fn emitAarch64PcRelAddress(self: *Self, dst: GeneralReg, scratch: GeneralReg, anchor: usize, target_off: usize) Allocator.Error!void {
-            const parts = aarch64PcRelParts(anchor, target_off);
+            const parts = CodeGen.pcRelParts(anchor, target_off);
             try self.codegen.emit.pcRelAddrSequence(dst, scratch, parts.lo16, parts.hi16, parts.subtract);
-        }
-
-        /// How to reach `target_off` from an anchor at `anchor`, as the
-        /// immediates of the PC-relative address sequence. Shared by the emitter
-        /// and the patcher so a rewritten sequence is encoded exactly as a
-        /// freshly emitted one.
-        fn aarch64PcRelParts(anchor: usize, target_off: usize) struct { lo16: u16, hi16: u16, subtract: bool } {
-            const rel: i64 = @as(i64, @intCast(target_off)) - @as(i64, @intCast(anchor));
-            const subtract = rel < 0;
-            const abs_rel: u64 = if (subtract) @intCast(-rel) else @intCast(rel);
-            // The sequence carries a 32-bit delta; a single emit buffer past 4 GiB
-            // is far beyond any real image, so trap rather than silently encoding
-            // the wrong address.
-            std.debug.assert(abs_rel < (1 << 32));
-            return .{
-                .lo16 = @truncate(abs_rel),
-                .hi16 = @truncate(abs_rel >> 16),
-                .subtract = subtract,
-            };
         }
 
         fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) Allocator.Error!void {
@@ -14761,7 +14767,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const call_site = self.codegen.currentOffset();
             try self.pending_rc_calls.append(self.allocator, .{ .instr_offset = call_site, .target_key = helper.encode() });
             if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.bl(0);
+                _ = try self.codegen.emitCallPlaceholder();
             } else {
                 try self.codegen.emit.call(@bitCast(@as(i32, 0)));
             }
@@ -14806,12 +14812,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.compiling_rc_helpers = false;
 
             while (self.rc_helper_worklist.pop()) |helper| {
+                if (comptime target.toCpuArch() == .aarch64) try self.codegen.maybeEmitBranchIsland();
                 _ = try self.compileSingleRcHelper(helper);
             }
 
             for (self.pending_rc_calls.items) |ref| {
                 const offset = self.compiled_rc_helpers.get(ref.target_key) orelse unreachable;
-                self.patchCallTarget(ref.instr_offset, offset);
+                try self.patchCallTarget(ref.instr_offset, offset);
                 try self.internal_call_patches.append(self.allocator, .{ .call_offset = ref.instr_offset, .target_offset = offset });
             }
             for (self.pending_rc_addrs.items) |ref| {
@@ -14983,7 +14990,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.codegen.emitLoadImm(out_reg, -2);
             try self.emitAndRegs(.w64, out_reg, out_reg, cap_reg);
-            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(done_patch, self.codegen.currentOffset());
         }
 
         fn emitBuiltinInternalRcHelperStrIncref(
@@ -15022,7 +15029,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, roc_ops_slot);
             try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
 
-            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
         }
 
         fn emitBuiltinInternalRcHelperStrDrop(
@@ -15061,7 +15068,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, roc_ops_slot);
             try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
 
-            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+            try self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
         }
 
         fn emitBuiltinInternalRcHelperListIncref(
@@ -15397,12 +15404,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             roc_ops_slot,
                         );
                         try done_patches.append(self.allocator, try self.codegen.emitJump());
-                        self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                        try self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
                     }
 
                     const done_offset = self.codegen.currentOffset();
                     for (done_patches.items) |patch| {
-                        self.codegen.patchJump(patch, done_offset);
+                        try self.codegen.patchJump(patch, done_offset);
                     }
                 },
                 .closure => |child_key| {
@@ -15501,7 +15508,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
-                self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+                // The error already propagating wins over a failed cleanup patch.
+                self.codegen.patchJump(skip_jump, self.codegen.currentOffset()) catch {};
             }
 
             const ptr_slot = self.codegen.allocStackSlot(8);
@@ -15528,7 +15536,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.emitEpilogue(&self.codegen.emit);
             }
 
-            self.codegen.patchJump(early_return_patch, body_epilogue_offset);
+            try self.codegen.patchJump(early_return_patch, body_epilogue_offset);
             const body_end = self.codegen.currentOffset();
 
             var helper_prologue_size: u32 = 0;
@@ -15561,6 +15569,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
                 break :blk prologue_start;
@@ -15591,6 +15600,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
                 break :blk prologue_start;
@@ -15621,7 +15631,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
 
-            self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+            try self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             return final_offset;
         }
 
@@ -15686,7 +15696,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
-                self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+                // The error already propagating wins over a failed cleanup patch.
+                self.codegen.patchJump(skip_jump, self.codegen.currentOffset()) catch {};
             }
 
             const ptr_slot = self.codegen.allocStackSlot(8);
@@ -15729,7 +15740,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.emitEpilogue(&self.codegen.emit);
             }
 
-            self.codegen.patchJump(early_return_patch, body_epilogue_offset);
+            try self.codegen.patchJump(early_return_patch, body_epilogue_offset);
             const body_end = self.codegen.currentOffset();
 
             var helper_prologue_size: u32 = 0;
@@ -15762,6 +15773,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
                 break :blk prologue_start;
@@ -15792,6 +15804,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
                 break :blk prologue_start;
@@ -15822,7 +15835,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
 
-            self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+            try self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             return final_offset;
         }
 
@@ -17178,7 +17191,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer self.allocator.free(msg);
                     try self.emitRocCrashShared(msg);
                     try self.emitTrap();
-                    self.codegen.patchJump(count_ok_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(count_ok_patch, self.codegen.currentOffset());
                 }
 
                 try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
@@ -17252,7 +17265,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.generation_mode.threadsRocOps()) {
                 try builder.callReg(hosted_target_reg);
             } else {
-                try builder.callRelocatable(try self.hostedSymbol(hosted.symbol), self.allocator, &self.codegen.relocations);
+                try builder.callRelocatable(try self.hostedSymbol(hosted.symbol), &self.codegen);
             }
 
             // Register-class return: store each result register into the return slot.
@@ -17569,7 +17582,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
 
             if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.bl(0);
+                _ = try self.codegen.emitCallPlaceholder();
             } else {
                 try self.codegen.emit.call(@bitCast(@as(i32, 0)));
             }
@@ -17934,7 +17947,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             switch (self.generation_mode) {
                 .shim_execution, .object_file => {
-                    try builder.callRelocatable(try self.boxySymbol(boxy_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.boxySymbol(boxy_fn), &self.codegen);
                 },
                 .native_execution => {
                     const table = self.boxy_native_fns orelse std.debug.panic(
@@ -17954,7 +17967,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(self.roc_ops_reg orelse unreachable);
-            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded"), self.allocator, &self.codegen.relocations);
+            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded"), &self.codegen);
         }
 
         /// Resolve a boxy descriptor reference to an 8-byte stack slot holding
@@ -18666,7 +18679,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.call(builtin_fn.wrapperAddress());
                 },
                 .shim_execution => {
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
                 .object_file => {
                     if (builtin_fn.payload() == .jit_only) {
@@ -18675,7 +18688,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .{builtin_fn.symbolName()},
                         );
                     }
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
             }
         }
@@ -18691,7 +18704,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.call(adapter_addr);
                 },
                 .shim_execution, .object_file => {
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
             }
         }
@@ -20098,7 +20111,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.subRegReg(.w64, dst, b);
                 const patch_loc = try self.codegen.emitCondJump(.above_or_equal);
                 try self.codegen.emit.xorRegReg(.w64, dst, dst);
-                self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
+                try self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
             }
         }
 
@@ -20440,7 +20453,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
             for (self.pending_calls.items) |pending| {
                 const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
-                self.patchCallTarget(pending.call_site, proc.code_start);
+                try self.patchCallTarget(pending.call_site, proc.code_start);
             }
             self.pending_calls.clearRetainingCapacity();
         }
@@ -20453,13 +20466,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.pending_proc_addrs.clearRetainingCapacity();
         }
 
-        fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) void {
-            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
-
+        fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
-                const instr_offset = @divTrunc(rel_offset, 4);
-                self.codegen.patchBL(call_site, instr_offset);
+                try self.codegen.patchCall(call_site, target_offset);
             } else {
+                const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
                 const call_rel = rel_offset - 5;
                 self.codegen.patchCall(call_site, call_rel);
             }
@@ -20477,7 +20488,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const movz_existing: u32 = @bitCast(buf[instr_offset + 4 ..][0..4].*);
                 const dst: GeneralReg = @enumFromInt(@as(u5, @truncate(adr_existing & 0x1F)));
                 const scratch: GeneralReg = @enumFromInt(@as(u5, @truncate(movz_existing & 0x1F)));
-                const parts = aarch64PcRelParts(instr_offset, target_offset);
+                const parts = CodeGen.pcRelParts(instr_offset, target_offset);
                 const words = [4]u32{
                     EmitT.encodeAdrZero(dst),
                     EmitT.encodeMovz64(scratch, parts.lo16, 0),
@@ -20512,6 +20523,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             for (proc_specs, 0..) |proc, i| {
                 if (proc.is_static_initializer) continue;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.maybeEmitBranchIsland();
+                    try self.codegen.compactBranchSites();
+                }
                 try self.compileProcSpec(@enumFromInt(i), proc);
             }
 
@@ -20657,7 +20672,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
-            const saved_proc_debug_msg_slot = self.proc_debug_msg_slot;
             const saved_vector_local_by_reg = self.vector_local_by_reg;
             const saved_vector_local_mask = self.vector_local_mask;
             var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
@@ -20680,7 +20694,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear state for procedure's scope
             self.clearLocalLocationsRetainingCapacity();
             self.clearFunctionControlFlowState();
-            self.proc_debug_msg_slot = null;
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
             self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
@@ -20759,7 +20772,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
-                self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
                 self.vector_local_by_reg = saved_vector_local_by_reg;
                 self.vector_local_mask = saved_vector_local_mask;
                 // Restore the saved maps by swapping them back into place. This
@@ -20863,7 +20875,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
 
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -20875,7 +20889,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
+                    try self.codegen.patchJump(patch, final_epilogue);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
                 self.early_return_ret_layout = saved_early_return_ret_layout;
@@ -20937,7 +20951,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
+                if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
 
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -20949,7 +20965,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
+                    try self.codegen.patchJump(patch, final_epilogue);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
                 self.early_return_ret_layout = saved_early_return_ret_layout;
@@ -20991,7 +21007,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
-            self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
             self.local_locations.deinit();
             self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
             self.vector_local_by_reg = saved_vector_local_by_reg;
@@ -22557,10 +22572,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             while (work.pop()) |item| switch (item) {
                 .node => |stmt_id| {
+                    if (comptime target.toCpuArch() == .aarch64) try self.codegen.maybeEmitBranchIsland();
                     const stmt_key = @intFromEnum(stmt_id);
                     if (self.stmt_locations.get(stmt_key)) |stmt_location| {
                         const patch = try self.codegen.emitJump();
-                        self.codegen.patchJump(patch, stmt_location);
+                        try self.codegen.patchJump(patch, stmt_location);
                         continue;
                     }
                     try self.stmt_locations.put(stmt_key, self.codegen.currentOffset());
@@ -22864,7 +22880,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const skip_patch = try self.emitJumpIfNotEqual();
                                 self.codegen.freeGeneral(cond_reg);
                                 try self.emitRocExpectFailed();
-                                self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                                try self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
                             }
                             try work.append(wa, .{ .node = expect_stmt.next });
                         },
@@ -23127,8 +23143,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             });
                             const done_patch = try self.codegen.emitJump();
                             const successor_offset = self.codegen.currentOffset();
-                            self.codegen.patchJump(skip_patch, successor_offset);
-                            self.codegen.patchJump(done_patch, successor_offset);
+                            try self.codegen.patchJump(skip_patch, successor_offset);
+                            try self.codegen.patchJump(done_patch, successor_offset);
                             try work.append(wa, .{ .node = dec.next });
                         },
 
@@ -23179,7 +23195,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                             const loop_target = self.loop_continue_targets.items[self.loop_continue_targets.items.len - 1];
                             const patch = try self.codegen.emitJump();
-                            self.codegen.patchJump(patch, loop_target);
+                            try self.codegen.patchJump(patch, loop_target);
                         },
 
                         .loop_break => {
@@ -23210,10 +23226,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .join_patch => |c| {
                     self.current_stmt_id = c.owner;
-                    self.codegen.patchJump(c.skip_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(c.skip_patch, self.codegen.currentOffset());
                     if (self.join_point_jumps.get(c.jp_key)) |jumps| {
                         for (jumps.items) |jump_record| {
-                            self.codegen.patchJump(jump_record.location, c.join_location);
+                            try self.codegen.patchJump(jump_record.location, c.join_location);
                         }
                     }
                 },
@@ -23236,7 +23252,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = state.owner;
                     const end_patch = try self.codegen.emitJump();
                     try state.end_patches.append(self.allocator, end_patch);
-                    self.codegen.patchJump(c.skip_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(c.skip_patch, self.codegen.currentOffset());
                     state.index += 1;
                     if (state.index < state.branches.len) {
                         try work.append(wa, .{ .switch_branch = state });
@@ -23256,7 +23272,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = state.owner;
                     const end_offset = self.codegen.currentOffset();
                     for (state.end_patches.items) |patch| {
-                        self.codegen.patchJump(patch, end_offset);
+                        try self.codegen.patchJump(patch, end_offset);
                     }
                     try self.restoreStmtEnv(&state.switch_env);
                     state.switch_env.deinit();
@@ -23267,7 +23283,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .switch1_after_branch => |state| {
                     self.current_stmt_id = state.owner;
                     state.end_patch = try self.codegen.emitJump();
-                    self.codegen.patchJump(state.else_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(state.else_patch, self.codegen.currentOffset());
                     try self.restoreStmtEnv(&state.switch_env);
                     try work.append(wa, .{ .switch1_end = state });
                     try work.append(wa, .{ .node = state.default_branch });
@@ -23275,7 +23291,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .switch1_end => |state| {
                     self.current_stmt_id = state.owner;
-                    self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
                     try self.restoreStmtEnv(&state.switch_env);
                     state.switch_env.deinit();
                     self.allocator.destroy(state);
@@ -23286,7 +23302,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     state.end_patch = try self.codegen.emitJump();
                     const miss_offset = self.codegen.currentOffset();
                     for (state.miss_patches.items) |patch| {
-                        self.codegen.patchJump(patch, miss_offset);
+                        try self.codegen.patchJump(patch, miss_offset);
                     }
                     try self.restoreStmtEnv(&state.before_env);
                     try work.append(wa, .{ .str_match_end = state });
@@ -23295,7 +23311,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .str_match_end => |state| {
                     self.current_stmt_id = state.owner;
-                    self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
+                    try self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
                     try self.restoreStmtEnv(&state.before_env);
                     state.before_env.deinit();
                     state.miss_patches.deinit(self.allocator);
@@ -23324,7 +23340,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try state.end_patches.append(self.allocator, try self.codegen.emitJump());
                     const next_arm_offset = self.codegen.currentOffset();
                     for (state.miss_patches.items) |patch| {
-                        self.codegen.patchJump(patch, next_arm_offset);
+                        try self.codegen.patchJump(patch, next_arm_offset);
                     }
                     state.miss_patches.deinit(self.allocator);
                     state.miss_patches = std.ArrayList(usize).empty;
@@ -23348,7 +23364,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = state.owner;
                     const end_offset = self.codegen.currentOffset();
                     for (state.end_patches.items) |patch| {
-                        self.codegen.patchJump(patch, end_offset);
+                        try self.codegen.patchJump(patch, end_offset);
                     }
                     try self.restoreStmtEnv(&state.before_env);
                     state.before_env.deinit();
@@ -23512,13 +23528,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitOrRegs(.w64, source_alloc_reg, source_alloc_reg, tmp_reg);
             const alloc_done_patch = try self.codegen.emitJump();
             const already_slice_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(already_slice_patch, already_slice_offset);
+            try self.codegen.patchJump(already_slice_patch, already_slice_offset);
             const alloc_done_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(alloc_done_patch, alloc_done_offset);
+            try self.codegen.patchJump(alloc_done_patch, alloc_done_offset);
             const shape_done_patch = try self.codegen.emitJump();
 
             const small_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(small_patch, small_offset);
+            try self.codegen.patchJump(small_patch, small_offset);
             try self.emitLeaStack(bytes_reg, source_offset);
             try self.codegen.emitLoadImm(source_is_small_reg, 1);
             try self.emitLsrImm(.w64, len_reg, len_reg, 56);
@@ -23527,7 +23543,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadImm(source_alloc_reg, 0);
 
             const shape_done_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(shape_done_patch, shape_done_offset);
+            try self.codegen.patchJump(shape_done_patch, shape_done_offset);
         }
 
         fn emitCheckBytesAvailable(
@@ -23604,13 +23620,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const found_patch = try self.codegen.emitJump();
 
             const retry_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(retry_patch, retry_offset);
+            try self.codegen.patchJump(retry_patch, retry_offset);
             try self.emitAddUsizeImm(cursor_reg, cursor_reg, 1);
             const back_patch = try self.codegen.emitJump();
-            self.codegen.patchJump(back_patch, loop_start);
+            try self.codegen.patchJump(back_patch, loop_start);
 
             const found_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(found_patch, found_offset);
+            try self.codegen.patchJump(found_patch, found_offset);
         }
 
         fn emitCompareLiteralAtPtr(
@@ -23681,11 +23697,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const done_patch = try self.codegen.emitJump();
 
             const heap_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(heap_patch, heap_offset);
+            try self.codegen.patchJump(heap_patch, heap_offset);
             try self.emitStoreHeapStrCapture(dest_offset, source_bytes_reg, source_alloc_reg, start_reg, capture_len_reg);
 
             const done_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(done_patch, done_offset);
+            try self.codegen.patchJump(done_patch, done_offset);
         }
 
         fn emitStoreSmallStrCapture(
@@ -23720,10 +23736,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitAddUsizeImm(dst_cur_reg, dst_cur_reg, 1);
             try self.emitSubImm(.w64, remaining_reg, remaining_reg, 1);
             const back_patch = try self.codegen.emitJump();
-            self.codegen.patchJump(back_patch, loop_start);
+            try self.codegen.patchJump(back_patch, loop_start);
 
             const done_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(done_patch, done_offset);
+            try self.codegen.patchJump(done_patch, done_offset);
 
             try self.emitMovRegReg(byte_reg, capture_len_reg);
             try self.emitAddUsizeImm(byte_reg, byte_reg, 0x80);
@@ -23944,71 +23960,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Max size of any debug-assertion crash message (in bytes, aligned to 8).
-        /// Used to size the per-proc shared msg slot. Generous to cover any
-        /// future debug messages without re-tuning. Sharing this single slot
-        /// across all debug crashes in a proc keeps the proc's frame from
-        /// growing linearly with the number of debug asserts.
-        const debug_msg_slot_size: u32 = 256;
-
+        /// Report a static message through a host callback: `roc_crashed`,
+        /// `roc_expect_failed` or `roc_dbg`, selected by its RocOps field
+        /// offset. The message bytes live in the image's message pool.
         fn emitRocStaticMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
-            return self.emitRocStaticMessageCallShared(field_offset, msg, false);
-        }
-
-        /// Like `emitRocStaticMessageCall`, but reuses a single per-proc stack
-        /// slot for the message and args. Safe because only one debug crash
-        /// can fire per program run—the program exits after the first.
-        fn emitRocStaticDebugMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
-            return self.emitRocStaticMessageCallShared(field_offset, msg, true);
-        }
-
-        fn emitRocStaticMessageCallShared(self: *Self, field_offset: i32, msg: []const u8, shared: bool) Allocator.Error!void {
             try self.spillAllVectorLocals();
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
 
-            const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
-            const effective_size: u32 = if (msg_aligned_size == 0) 8 else msg_aligned_size;
-            // If the message is unexpectedly larger than the shared slot we
-            // fall back to a fresh per-call allocation. Keeps the safety
-            // invariant even if a future caller passes a long string.
-            const can_share = shared and effective_size <= debug_msg_slot_size;
-            const msg_slot = if (can_share) blk: {
-                if (self.proc_debug_msg_slot) |existing| break :blk existing;
-                const slot = self.codegen.allocStackSlot(debug_msg_slot_size);
-                self.proc_debug_msg_slot = slot;
-                break :blk slot;
-            } else self.codegen.allocStackSlot(effective_size);
-
-            const base_reg = frame_ptr;
-            const tmp = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(tmp);
-
-            var offset: u32 = 0;
-            while (offset < msg.len) : (offset += 8) {
-                const remaining = msg.len - offset;
-                if (remaining >= 8) {
-                    const chunk: u64 = @bitCast(msg[offset..][0..8].*);
-                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
-                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
-                } else {
-                    var padded: [8]u8 = .{0} ** 8;
-                    @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
-                    const chunk: u64 = @bitCast(padded);
-                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
-                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
-                }
+            // The message register must survive the callback pointer load below.
+            var msg_reg = try self.allocTempGeneral();
+            var displaced: ?GeneralReg = null;
+            if (msg_reg == fn_ptr_reg) {
+                displaced = msg_reg;
+                msg_reg = try self.allocTempGeneral();
             }
-
+            defer {
+                self.codegen.freeGeneral(msg_reg);
+                if (displaced) |reg| self.codegen.freeGeneral(reg);
+            }
+            try self.emitPendingMessageAddress(msg, msg_reg);
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
 
             if (self.generation_mode.threadsRocOps()) {
                 // RocOps-threaded modes reach host callbacks through RocOps:
                 // callback(ops: *RocOps, bytes: [*]const u8, len: usize).
-                const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
                 try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addRegArg(roc_ops_reg);
-                try builder.addLeaArg(base_reg, msg_slot);
+                try builder.addRegArg(msg_reg);
                 try builder.addImmArg(msg_len_val);
                 try builder.callReg(fn_ptr_reg);
             } else {
@@ -24022,10 +24003,74 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     builtins.shim_symbols.roc_dbg;
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, msg_slot);
+                try builder.addRegArg(msg_reg);
                 try builder.addImmArg(msg_len_val);
-                try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol_name), self.allocator, &self.codegen.relocations);
+                try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol_name), &self.codegen);
             }
+        }
+
+        /// Pool offset of `msg`, appending it when the pool has no equal message.
+        fn internMessage(self: *Self, msg: []const u8) Allocator.Error!u32 {
+            const hash = std.hash.Wyhash.hash(0, msg);
+            if (self.message_pool_index.get(hash)) |span| {
+                if (span.len == msg.len and std.mem.eql(u8, self.message_pool.items[span.offset..][0..span.len], msg)) return span.offset;
+            }
+            const offset: u32 = @intCast(self.message_pool.items.len);
+            try self.message_pool.appendSlice(self.allocator, msg);
+            try self.message_pool_index.put(self.allocator, hash, .{ .offset = offset, .len = @intCast(msg.len) });
+            return offset;
+        }
+
+        /// Load the address of `msg` into `dst_reg`, patched once the pool is placed.
+        fn emitPendingMessageAddress(self: *Self, msg: []const u8, dst_reg: GeneralReg) Allocator.Error!void {
+            const message_offset = try self.internMessage(msg);
+            if (comptime target.toCpuArch() == .aarch64) {
+                // Reserve the 4-instruction PC-relative address sequence. The
+                // scratch register is allocated before the anchor offset is
+                // read because allocation may emit spill code.
+                const scratch = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(scratch);
+                const current = self.codegen.currentOffset();
+                try self.codegen.emit.pcRelAddrSequence(dst_reg, scratch, 0, 0, false);
+                try self.pending_message_addrs.append(self.allocator, .{ .instr_offset = current, .message_offset = message_offset });
+            } else {
+                const current = self.codegen.currentOffset();
+                try self.codegen.emit.leaRegRipRel(dst_reg, 0);
+                try self.pending_message_addrs.append(self.allocator, .{ .instr_offset = current, .message_offset = message_offset });
+            }
+            self.image_finished = false;
+        }
+
+        /// After a deferred-prologue body shifts forward, message address
+        /// sequences emitted inside it move with it.
+        fn shiftPendingMessageAddrs(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
+            for (self.pending_message_addrs.items) |*pending| {
+                if (pending.instr_offset >= body_start and pending.instr_offset < body_end) {
+                    pending.instr_offset += prologue_size;
+                }
+            }
+        }
+
+        /// Append the pool bytes not yet in the code and resolve every pending
+        /// message address. Instructions may follow on aarch64, so the run is
+        /// padded to an instruction boundary.
+        fn placeMessagePool(self: *Self) Allocator.Error!void {
+            const pool_len: u32 = @intCast(self.message_pool.items.len);
+            if (self.message_pool_placed_len < pool_len) {
+                const code_start = self.codegen.currentOffset();
+                try self.message_pool_runs.append(self.allocator, .{ .pool_from = self.message_pool_placed_len, .code_start = code_start });
+                try self.codegen.emit.buf.appendSlice(self.allocator, self.message_pool.items[self.message_pool_placed_len..]);
+                while (self.codegen.currentOffset() % 4 != 0) try self.codegen.emit.buf.append(self.allocator, 0);
+                self.message_pool_placed_len = pool_len;
+            }
+            for (self.pending_message_addrs.items) |pending| {
+                var run = self.message_pool_runs.items[0];
+                for (self.message_pool_runs.items) |candidate| {
+                    if (candidate.pool_from <= pending.message_offset) run = candidate;
+                }
+                self.patchInternalCodeAddress(pending.instr_offset, run.code_start + (pending.message_offset - run.pool_from));
+            }
+            self.pending_message_addrs.clearRetainingCapacity();
         }
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
@@ -24150,7 +24195,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// run (the program exits immediately after).
         fn emitRocCrashShared(self: *Self, msg: []const u8) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
         }
 
         fn emitTrap(self: *Self) Allocator.Error!void {
@@ -24267,6 +24312,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_val);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_val);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_val);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size_val);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
@@ -24277,7 +24323,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size_val + prologue_start;
                 epilogue_offset = @intCast(final_epilogue - prologue_start);
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
+                    try self.codegen.patchJump(patch, final_epilogue);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
@@ -24357,6 +24403,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_x86);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_x86);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size_x86);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
@@ -24367,7 +24414,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size_x86 + prologue_start_x86;
                 epilogue_offset = @intCast(final_epilogue - prologue_start_x86);
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
+                    try self.codegen.patchJump(patch, final_epilogue);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
@@ -24467,6 +24514,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_val);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_val);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_val);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
 
@@ -24475,7 +24523,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size_val + prologue_start;
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
+                    try self.codegen.patchJump(patch, final_epilogue);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
@@ -24527,6 +24575,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
                 self.shiftPendingProcAddrs(body_start, body_end, prologue_size_x86);
+                self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_x86);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
 
@@ -24535,7 +24584,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size_x86 + prologue_start_x86;
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
+                    try self.codegen.patchJump(patch, final_epilogue);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
@@ -25320,9 +25369,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Returns the patch location for use with patchJump.
         fn emitJumpPlaceholder(self: *Self) Allocator.Error!usize {
             if (comptime target.toCpuArch() == .aarch64) {
-                const patch_loc = self.codegen.currentOffset();
-                try self.codegen.emit.b(0);
-                return patch_loc;
+                return try self.codegen.emitJump();
             } else {
                 const patch_loc = self.codegen.currentOffset() + 1; // after E9 opcode
                 try self.codegen.emit.jmp(0);
@@ -25338,6 +25385,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         pub fn getGeneratedCode(self: *Self) []const u8 {
+            self.assertImageFinished();
             return self.codegen.getCode();
         }
 
@@ -25353,7 +25401,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Get relocations for the generated code buffer.
         pub fn getRelocations(self: *Self) []const Relocation {
+            self.assertImageFinished();
             return self.codegen.relocations.items;
+        }
+
+        /// Call once every procedure, helper and wrapper of the image is
+        /// emitted, before the code and relocations are read out.
+        pub fn finishImage(self: *Self) Allocator.Error!void {
+            if (self.image_finished) return;
+            try self.placeMessagePool();
+            if (comptime target.toCpuArch() == .aarch64) try self.codegen.finishImage();
+            self.image_finished = true;
+        }
+
+        fn assertImageFinished(self: *const Self) void {
+            if (builtin.mode == .Debug and !self.image_finished) {
+                std.debug.panic("generated code was read before finishImage", .{});
+            }
         }
     };
 }

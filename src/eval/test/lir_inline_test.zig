@@ -3203,6 +3203,94 @@ test "multi-use block helper with statements is not inlined" {
     , "helper", false);
 }
 
+fn appendWideHelper(source: *std.ArrayList(u8), name: []const u8, elements: usize) !void {
+    const allocator = std.testing.allocator;
+    // The binding keeps the body out of the wrapper rule, which admits a
+    // call-through body of any size; only single-use bodies are budgeted.
+    const header = try std.fmt.allocPrint(allocator, "{s} : U64 -> U64\n{s} = |x| {{\n    y = x + 1\n    y + List.len([", .{ name, name });
+    defer allocator.free(header);
+    try source.appendSlice(allocator, header);
+    var buffer: [24]u8 = undefined;
+    for (0..elements) |index| {
+        if (index != 0) try source.appendSlice(allocator, ", ");
+        try source.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "x + {d}", .{index}));
+    }
+    try source.appendSlice(allocator, "])\n}\n\n");
+}
+
+fn appendWideWrapper(source: *std.ArrayList(u8), name: []const u8, elements: usize) !void {
+    const allocator = std.testing.allocator;
+    const header = try std.fmt.allocPrint(allocator, "{s} : U64 -> U64\n{s} = |x| target(x, [", .{ name, name });
+    defer allocator.free(header);
+    try source.appendSlice(allocator, header);
+    var buffer: [24]u8 = undefined;
+    for (0..elements) |index| {
+        if (index != 0) try source.appendSlice(allocator, ", ");
+        try source.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "x + {d}", .{index}));
+    }
+    try source.appendSlice(allocator, "])\n\n");
+}
+
+const wide_wrapper_target =
+    \\target : U64, List(U64) -> U64
+    \\target = |x, xs| x + List.len(xs)
+    \\
+    \\
+;
+
+test "a call-through body past the wrapper limit is not copied to several call sites" {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, wide_wrapper_target);
+    try appendWideWrapper(&source, "wide", 40);
+    try source.appendSlice(allocator, "main : U64 -> U64\nmain = |y| wide(y) + wide(y + 1)\n");
+
+    try expectInlinePlanDecision(source.items, "wide", false);
+}
+
+test "a call-through body past the wrapper limit still folds into its only caller" {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, wide_wrapper_target);
+    try appendWideWrapper(&source, "wide", 40);
+    try source.appendSlice(allocator, "main : U64 -> U64\nmain = |y| wide(y) + target(y, [])\n");
+
+    try expectInlinePlanDecision(source.items, "wide", true);
+}
+
+test "a thin call-through wrapper is copied to every call site" {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, wide_wrapper_target);
+    try appendWideWrapper(&source, "thin", 2);
+    try source.appendSlice(allocator, "main : U64 -> U64\nmain = |y| thin(y) + thin(y + 1)\n");
+
+    try expectInlinePlanDecision(source.items, "thin", true);
+}
+
+test "single-use bodies stop folding into a caller once its absorb budget is spent" {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    // Each element depends on the argument so nothing hoists to a constant;
+    // each helper is a little over a third of the budget, so the third one
+    // no longer fits into main.
+    const elements = 500;
+    try appendWideHelper(&source, "first", elements);
+    try appendWideHelper(&source, "second", elements);
+    try appendWideHelper(&source, "third", elements);
+    // main takes an argument so the calls are not hoisted into separate
+    // compile-time roots, each with its own budget.
+    try source.appendSlice(allocator, "main : U64 -> U64\nmain = |y| first(y) + second(y) + third(y)\n");
+
+    try expectInlinePlanDecision(source.items, "first", true);
+    try expectInlinePlanDecision(source.items, "second", true);
+    try expectInlinePlanDecision(source.items, "third", false);
+}
+
 test "single-use block helper nested in a multi-use wrapper is not duplicated" {
     try expectInlinePlanDecision(
         \\helper : List(U64), U64 -> List(U64)

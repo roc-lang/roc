@@ -82,6 +82,21 @@ const MaterializationState = enum {
     multiple,
 };
 
+/// Lifted expression nodes one procedure may absorb through single-use
+/// inlining. Each admitted body brings the bodies it absorbed itself. The
+/// bound keeps a procedure's generated code far inside direct branch reach
+/// and keeps its dev-backend frame, which holds every local, within the
+/// 32 KiB that AArch64 addresses with one scaled immediate; a body that does
+/// not fit stays a procedure and is called instead.
+const single_use_absorb_budget: u32 = 4096;
+
+/// Lifted expression nodes a wrapper body may hold. A wrapper is inlined at
+/// every call site, so its body is copied per site. Wrappers are two to
+/// seven nodes in practice; this leaves room for guarded and multi-argument
+/// adapters. A larger call-through body is treated as a single-use body
+/// when it is one, and otherwise stays a procedure.
+const wrapper_body_limit: u32 = 32;
+
 const InlineAnalyzer = struct {
     allocator: std.mem.Allocator,
     procedure_usage: SpecConstr.ProcedureUsage,
@@ -89,6 +104,10 @@ const InlineAnalyzer = struct {
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
+    /// Lifted expression nodes in each candidate's own body, counted by the
+    /// callee walk; nested candidates count toward their own entry.
+    own_sizes: []u32,
+    walked_nodes: u32 = 0,
 
     fn run(
         allocator: std.mem.Allocator,
@@ -101,6 +120,9 @@ const InlineAnalyzer = struct {
         const decisions = try allocator.alloc(Decision, solved.lifted.fnCount());
         errdefer allocator.free(decisions);
         @memset(decisions, .unknown);
+        const own_sizes = try allocator.alloc(u32, solved.lifted.fnCount());
+        defer allocator.free(own_sizes);
+        @memset(own_sizes, 0);
 
         var analyzer = InlineAnalyzer{
             .allocator = allocator,
@@ -109,6 +131,7 @@ const InlineAnalyzer = struct {
             .solved_types = solved.types.view(),
             .decisions = decisions,
             .stack = .empty,
+            .own_sizes = own_sizes,
         };
         defer analyzer.stack.deinit(allocator);
 
@@ -116,6 +139,8 @@ const InlineAnalyzer = struct {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
             _ = try analyzer.inlineBody(fn_id);
         }
+
+        try analyzer.applySingleUseAbsorbBudget();
 
         const materialization_states = try allocator.alloc(MaterializationState, decisions.len);
         defer allocator.free(materialization_states);
@@ -175,7 +200,12 @@ const InlineAnalyzer = struct {
         // re-enters this function while it is `.visiting`, so `markCycle` marks
         // the whole cycle `.never` and keeps it out of the inline plan instead
         // of inlining it without bound.
-        if (!try self.visitBodyCallees(candidate.body, 0)) {
+        const outer_walked_nodes = self.walked_nodes;
+        self.walked_nodes = 0;
+        const body_complete = try self.visitBodyCallees(candidate.body, 0);
+        self.own_sizes[index] = self.walked_nodes;
+        self.walked_nodes = outer_walked_nodes;
+        if (!body_complete) {
             self.decisions[index] = .never;
             return null;
         }
@@ -188,7 +218,16 @@ const InlineAnalyzer = struct {
             => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
         }
 
-        self.decisions[index] = .{ .inline_body = candidate };
+        var kind = candidate.kind;
+        if (kind == .wrapper and self.own_sizes[index] > wrapper_body_limit) {
+            if (self.singleUseCandidate(fn_id) == null) {
+                self.decisions[index] = .never;
+                return null;
+            }
+            kind = .single_use;
+        }
+
+        self.decisions[index] = .{ .inline_body = .{ .body = candidate.body, .kind = kind } };
         return candidate.body;
     }
 
@@ -223,6 +262,84 @@ const InlineAnalyzer = struct {
             .hosted => return null,
         };
         return body;
+    }
+
+    /// Keep every owner's absorbed single-use bodies within
+    /// `single_use_absorb_budget`. A wrapper with exactly one call site is a
+    /// single-use body for this purpose. Owners form a forest: each such body
+    /// has one owner, and cycles were already refused. Bodies are sized
+    /// bottom-up, each with the bodies it absorbed, and an owner admits its
+    /// callees in function order until the next one no longer fits.
+    fn applySingleUseAbsorbBudget(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
+        const fn_count = self.decisions.len;
+        // Singly linked children lists, in ascending function order.
+        const first_child = try self.allocator.alloc(?Lifted.FnId, fn_count);
+        defer self.allocator.free(first_child);
+        @memset(first_child, null);
+        const next_sibling = try self.allocator.alloc(?Lifted.FnId, fn_count);
+        defer self.allocator.free(next_sibling);
+        @memset(next_sibling, null);
+        var index = fn_count;
+        while (index > 0) {
+            index -= 1;
+            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const decision = self.decisions[index];
+            if (decision != .inline_body) continue;
+            const use = self.procedure_usage.get(fn_id);
+            const budgeted = switch (decision.inline_body.kind) {
+                .single_use => true,
+                .wrapper => use.external_calls == 1 and use.value_refs == 0,
+            };
+            if (!budgeted) continue;
+            const owner = use.external_call_owner orelse
+                Common.invariant("single-use function had no external call owner");
+            const owner_index = @intFromEnum(owner);
+            next_sibling[index] = first_child[owner_index];
+            first_child[owner_index] = fn_id;
+        }
+
+        // Absorbed nodes per function, including everything below it.
+        const absorbed = try self.allocator.alloc(u32, fn_count);
+        defer self.allocator.free(absorbed);
+        @memset(absorbed, 0);
+        const Frame = struct { fn_id: Lifted.FnId, child: ?Lifted.FnId };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(self.allocator);
+        const visited = try self.allocator.alloc(bool, fn_count);
+        defer self.allocator.free(visited);
+        @memset(visited, false);
+
+        for (0..fn_count) |root_index| {
+            if (visited[root_index]) continue;
+            visited[root_index] = true;
+            try frames.append(self.allocator, .{ .fn_id = @enumFromInt(@as(u32, @intCast(root_index))), .child = first_child[root_index] });
+            while (frames.items.len > 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const child = frame.child orelse {
+                    _ = frames.pop();
+                    continue;
+                };
+                const child_index = @intFromEnum(child);
+                frame.child = next_sibling[child_index];
+                if (!visited[child_index]) {
+                    visited[child_index] = true;
+                    if (first_child[child_index] != null) {
+                        // Size the child's subtree first; it is re-examined
+                        // as its parent's next child once that finishes.
+                        frame.child = child;
+                        try frames.append(self.allocator, .{ .fn_id = child, .child = first_child[child_index] });
+                        continue;
+                    }
+                }
+                const owner_index = @intFromEnum(frame.fn_id);
+                const child_total = self.own_sizes[child_index] +| absorbed[child_index];
+                if (child_total > single_use_absorb_budget - absorbed[owner_index]) {
+                    self.decisions[child_index] = .never;
+                } else {
+                    absorbed[owner_index] += child_total;
+                }
+            }
+        }
     }
 
     /// Resolve outer single-use candidates before their descendants. Demoting
@@ -624,6 +741,7 @@ const InlineAnalyzer = struct {
     /// time, prove that every break and continue is owned by a loop inside the
     /// body; combining the checks avoids a second candidate-body traversal.
     fn visitBodyCallees(self: *InlineAnalyzer, expr_id: Lifted.ExprId, loop_depth: usize) std.mem.Allocator.Error!bool {
+        self.walked_nodes +|= 1;
         const expr = self.solved.lifted.getExpr(expr_id);
         return switch (expr.data) {
             .@"unreachable",

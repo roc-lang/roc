@@ -247,6 +247,7 @@ pub fn writeToSharedMemory(
                 });
             },
             .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
+            .retired => {},
         }
     }
 
@@ -448,6 +449,7 @@ pub fn requiredCapacityFromOffset(
                 relocation_count = try addNoOverflow(relocation_count, 1);
             },
             .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
+            .retired => {},
         }
     }
 
@@ -581,6 +583,7 @@ fn countReservedFunctionStubs(
             uses[@intFromEnum(data.symbol)] |= 2;
         },
         .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
+        .retired => {},
     };
     var count: usize = 0;
     for (names, uses) |name, use| {
