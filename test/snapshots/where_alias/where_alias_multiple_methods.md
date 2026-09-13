@@ -44,13 +44,13 @@ EndOfFile,
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "to_str")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))
 				(method (mod-of "a") (name "from_str")
-					(args
-						(ty (name "Str")))
-					(ty-var (raw "a")))))
+					(ty-fn
+						(ty (name "Str"))
+						(ty-var (raw "a"))))))
 		(s-type-anno (name "round_trip")
 			(ty-fn
 				(ty-var (raw "a"))
@@ -101,7 +101,7 @@ round_trip = |value| {
 			(e-block
 				(s-type-var-alias (alias "Item") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 21) (constraint-fn-var 255)
+				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 23) (constraint-fn-var 255)
 					(args
 						(e-dispatch-call (method "to_str") (constraint-fn-var 253)
 							(receiver
@@ -121,13 +121,13 @@ round_trip = |value| {
 		(ty-rigid-var (name "a"))
 		(where
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-lookup (name "Str") (builtin)))
+				(ty-fn (effectful false)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-lookup (name "Str") (builtin))))
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "from_str")
-				(args
-					(ty-lookup (name "Str") (builtin)))
-				(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+				(ty-fn (effectful false)
+					(ty-lookup (name "Str") (builtin))
+					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 ~~~
 # TYPES
 ~~~clojure

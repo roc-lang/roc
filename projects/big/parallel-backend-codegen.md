@@ -398,6 +398,6 @@ code artifacts.
 - [runtime-representation-single-sourcing.md](runtime-representation-single-sourcing.md)—
   hardens the per-backend value-representation constants this codegen
   emits; independent, but both touch the dev backend's emission path.
-- [host-boundary-single-sourcing.md](host-boundary-single-sourcing.md)—
+- [Host Symbol ABI](../../design.md#host-symbol-abi)—
   the symbol-name and shim-boundary contracts the object writer and run
   image resolve relocations against.

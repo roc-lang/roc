@@ -16,14 +16,23 @@ result = {
 # EXPECTED
 BREAK OUTSIDE LOOP - break_outside_loop.md:4:2:4:7
 # PROBLEMS
-── ✗ break outside loop ────────────────────────────── break_outside_loop.md:4:2
-
-The break statement can only be used inside loops like while or for to exit the
-loop early.
-
-break
-^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Break Outside Loop")
+		(region (start 4 2) (end 4 7))
+		(headline
+			(reflow "The ")
+			(annotated code "break")
+			(reflow " statement can only be used inside loops like ")
+			(annotated code "while")
+			(reflow " or ")
+			(annotated code "for")
+			(reflow " to exit the loop early."))
+		(document
+			(source-region (file "break_outside_loop.md") (start 4 2) (end 4 7) (annotation error) (line-text "\tbreak")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -65,14 +74,14 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "$var"))
+				(p-var-assign (ident "$var"))
 				(e-tag (name "True")))
 			(s-runtime-error (tag "break_outside_loop"))
 			(s-reassign
-				(p-assign (ident "$var"))
+				(p-var-assign (ident "$var"))
 				(e-tag (name "False")))
 			(e-lookup-local
-				(p-assign (ident "$var"))))
+				(p-var-assign (ident "$var"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin)))))
 ~~~

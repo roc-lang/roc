@@ -33,10 +33,10 @@ EndOfFile,
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "encode")
-					(args
+					(ty-fn
 						(ty-var (raw "a"))
-						(ty-var (raw "fmt")))
-					(ty-var (raw "fmt")))))
+						(ty-var (raw "fmt"))
+						(ty-var (raw "fmt"))))))
 		(s-type-anno (name "render")
 			(ty-fn
 				(ty-var (raw "a"))
@@ -48,9 +48,9 @@ EndOfFile,
 						(ty (name "Encodable"))
 						(ty-var (raw "fmt"))))
 				(method (mod-of "fmt") (name "finish")
-					(args
-						(ty-var (raw "fmt")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "fmt"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "render"))
 			(e-lambda
@@ -82,9 +82,9 @@ render = |value, fmt| value.encode(fmt).finish()
 			(args
 				(p-assign (ident "value"))
 				(p-assign (ident "fmt")))
-			(e-dispatch-call (method "finish") (constraint-fn-var 259)
+			(e-dispatch-call (method "finish") (constraint-fn-var 258)
 				(receiver
-					(e-dispatch-call (method "encode") (constraint-fn-var 257)
+					(e-dispatch-call (method "encode") (constraint-fn-var 256)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))
@@ -103,9 +103,9 @@ render = |value, fmt| value.encode(fmt).finish()
 					(ty-apply (name "Encodable") (local)
 						(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "fmt"))) (name "finish")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(s-where-alias-decl
 		(ty-header (name "Encodable")
 			(ty-args
@@ -113,10 +113,10 @@ render = |value, fmt| value.encode(fmt).finish()
 		(ty-rigid-var (name "a"))
 		(where
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "encode")
-				(args
+				(ty-fn (effectful false)
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "fmt")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "fmt"))))))))
 ~~~
 # TYPES
 ~~~clojure

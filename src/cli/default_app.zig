@@ -16,7 +16,7 @@ const parse = @import("parse");
 const can = @import("can");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = can.ModuleEnv;
+const Report = @import("reporting").Report;
 
 /// The shorthand the staged app uses for the Echo platform. A platform-less
 /// app header may already use this name for a package of its own, in which
@@ -45,16 +45,29 @@ pub const Kind = enum {
     platformless_app,
 };
 
-/// How to classify a headerless file that failed to parse. A syntax error can
-/// swallow every declaration after it, including `main!`, so such a file
-/// cannot always be classified from the parsed declarations alone.
-pub const UnparsableHeaderless = enum {
-    /// Report it as not a default app. The plain-module paths used by `check`
-    /// and `build` already report syntax errors against the user's file.
-    not_default_app,
-    /// Stage it as a default app. `run` needs the staged path so diagnostics
-    /// are remapped to the user's file instead of reporting a missing header.
-    default_app,
+/// Whether the caller needs an application entrypoint. Checking also accepts
+/// type modules; execution must reject non-app roots before platform setup.
+pub const Purpose = enum { checking, execution };
+
+/// Preparation either supplies default-platform wiring, leaves an explicit
+/// app/plain module unchanged, or reports why the root cannot be prepared.
+/// Reports own their source excerpts and outlive the temporary parser state.
+pub const Result = union(enum) {
+    unmodified,
+    staged: Staged,
+    invalid: std.ArrayList(Report),
+
+    pub fn deinit(self: *Result, gpa: Allocator) void {
+        switch (self.*) {
+            .unmodified => {},
+            .staged => |*staged| staged.deinit(gpa),
+            .invalid => |*reports| {
+                for (reports.items) |*report| report.deinit();
+                reports.deinit(gpa);
+            },
+        }
+        self.* = undefined;
+    }
 };
 
 /// A staged default app: what the compiler compiles, plus what it takes to
@@ -77,69 +90,88 @@ pub const Staged = struct {
     }
 };
 
-/// Errors staging can produce. A source that is neither headerless-with-`main!`
-/// nor a platform-less app is not an error: `stage` returns null for it.
+/// Errors staging can produce. Invalid source is returned as reports.
 pub const Error = Allocator.Error;
 
-/// Stage `source` (the bytes of a user's file) if it is a default app.
-///
-/// `source_dir` is the absolute directory the user's file lives in, which
-/// anchors any relative package path the header declares: the staged copy
-/// lives elsewhere, so those specs are rewritten to absolute paths as the copy
-/// is built.
-///
-/// Takes ownership of nothing; the returned `Staged` owns its own buffers.
+/// Parse the root once to validate its requested use and prepare default-app
+/// wiring. `source_dir` anchors relative package paths; `source_path` is the
+/// user's filename for diagnostics. The result owns its buffers and reports.
 pub fn stage(
     gpa: Allocator,
     source_dir: []const u8,
     source: []const u8,
-    unparsable: UnparsableHeaderless,
-) Error!?Staged {
+    purpose: Purpose,
+    source_path: []const u8,
+) Error!Result {
     const normalized = try base.source_utils.normalizeLineEndingsAlloc(gpa, source);
-    const original_source = if (normalized.allocated) normalized.data else try gpa.dupe(u8, normalized.data);
-    errdefer gpa.free(original_source);
+    const original_source = normalized.data;
+    var source_transferred = false;
+    defer if (normalized.allocated and !source_transferred) gpa.free(original_source);
 
-    var env = try ModuleEnv.init(gpa, original_source);
-    defer env.deinit();
-    env.common.source = original_source;
+    var env = try base.CommonEnv.init(gpa, original_source);
+    defer env.deinit(gpa);
 
-    const ast = try parse.file(gpa, &env.common);
+    const ast = try parse.file(gpa, &env);
     defer ast.deinit();
 
-    const file = ast.store.getFile();
-    const header = ast.store.getHeader(file.header);
+    if (ast.hasErrors()) {
+        // Check's normal discovery path reports these against the original file.
+        if (purpose == .checking) return .unmodified;
 
-    switch (header) {
-        .type_module => {
-            if (!ast.hasMainBangDecl()) {
-                const has_errors = ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0;
-                if (unparsable != .default_app or !has_errors) {
-                    gpa.free(original_source);
-                    return null;
-                }
-            }
-            const synthetic_source = try std.mem.concat(gpa, u8, &.{ headerless_wiring, original_source });
-            return .{
-                .kind = .headerless,
-                .original_source = original_source,
-                .synthetic_source = synthetic_source,
-                .header_len = headerless_wiring.len,
-                .header_lines = countNewlines(headerless_wiring),
-            };
-        },
-        .app => |app| {
-            if (app.platform_idx != null) {
-                gpa.free(original_source);
-                return null;
-            }
-            const staged = try stagePlatformlessApp(gpa, source_dir, original_source, ast, app);
-            return staged;
-        },
-        .module, .package, .platform, .hosted, .default_app, .malformed => {
-            gpa.free(original_source);
-            return null;
-        },
+        try env.calcLineStarts(gpa);
+        var result: Result = .{ .invalid = .empty };
+        errdefer result.deinit(gpa);
+        const reports = &result.invalid;
+        try reports.ensureTotalCapacity(gpa, ast.tokenize_diagnostics.items.len + ast.parse_diagnostics.items.len);
+        for (ast.tokenize_diagnostics.items) |diagnostic| {
+            reports.appendAssumeCapacity(try ast.tokenizeDiagnosticToReport(diagnostic, gpa, source_path));
+        }
+        for (ast.parse_diagnostics.items) |diagnostic| {
+            reports.appendAssumeCapacity(try ast.parseDiagnosticToReport(&env, diagnostic, gpa, source_path));
+        }
+        return result;
     }
+
+    switch (ast.rootAppKind()) {
+        .explicit_platform => return .unmodified,
+        .non_app => {
+            if (purpose == .checking) return .unmodified;
+
+            try env.calcLineStarts(gpa);
+            var result: Result = .{ .invalid = .empty };
+            errdefer result.deinit(gpa);
+            try result.invalid.ensureTotalCapacity(gpa, 1);
+            const region = ast.tokenizedRegionToRegion(ast.store.getFile().region);
+            result.invalid.appendAssumeCapacity(try can.CIR.Diagnostic.buildExecutionRequiresAppOrDefaultAppReport(
+                gpa,
+                env.calcRegionInfo(region),
+                source_path,
+                original_source,
+                env.line_starts.items.items,
+            ));
+            return result;
+        },
+        .default_platform => {},
+    }
+
+    // Only a staged app needs to retain the source beyond this call. Plain
+    // modules, explicit-platform apps, and diagnostics can borrow it to parse.
+    const owned_source = if (normalized.allocated) original_source else try gpa.dupe(u8, original_source);
+    errdefer if (!normalized.allocated) gpa.free(owned_source);
+    const header = ast.store.getHeader(ast.store.getFile().header);
+    const staged: Staged = switch (header) {
+        .type_module, .default_app => .{
+            .kind = .headerless,
+            .original_source = owned_source,
+            .synthetic_source = try std.mem.concat(gpa, u8, &.{ headerless_wiring, original_source }),
+            .header_len = headerless_wiring.len,
+            .header_lines = countNewlines(headerless_wiring),
+        },
+        .app => |app| try stagePlatformlessApp(gpa, source_dir, owned_source, ast, app),
+        .module, .package, .platform, .hosted, .malformed => unreachable,
+    };
+    source_transferred = true;
+    return .{ .staged = staged };
 }
 
 /// Build the staged source for an app header that names no platform: the
@@ -285,7 +317,7 @@ fn countNewlines(text: []const u8) u32 {
 const testing = std.testing;
 
 test "stage: a headerless file with main! gets the echo platform header" {
-    var staged = (try stage(testing.allocator, "/tmp", "main! = |_| echo!(\"hi\")\n", .not_default_app)).?;
+    var staged = (try stage(testing.allocator, "/tmp", "main! = |_| echo!(\"hi\")\n", .checking, "test.roc")).staged;
     defer staged.deinit(testing.allocator);
 
     try testing.expectEqual(Kind.headerless, staged.kind);
@@ -294,7 +326,7 @@ test "stage: a headerless file with main! gets the echo platform header" {
 }
 
 test "stage: a file with no main! is not a default app" {
-    try testing.expect(try stage(testing.allocator, "/tmp", "x = 1\n", .not_default_app) == null);
+    try testing.expect(try stage(testing.allocator, "/tmp", "x = 1\n", .checking, "test.roc") == .unmodified);
 }
 
 test "stage: an app header naming a platform is not a default app" {
@@ -304,7 +336,7 @@ test "stage: an app header naming a platform is not a default app" {
         \\main! = |_| Ok({})
         \\
     ;
-    try testing.expect(try stage(testing.allocator, "/tmp", source, .not_default_app) == null);
+    try testing.expect(try stage(testing.allocator, "/tmp", source, .checking, "test.roc") == .unmodified);
 }
 
 test "stage: a platform-less app header gets the echo platform and keeps its packages" {
@@ -321,7 +353,7 @@ test "stage: a platform-less app header gets the echo platform and keeps its pac
         \\}
         \\
     ;
-    var staged = (try stage(testing.allocator, "/tmp", source, .not_default_app)).?;
+    var staged = (try stage(testing.allocator, "/tmp", source, .checking, "test.roc")).staged;
     defer staged.deinit(testing.allocator);
 
     try testing.expectEqual(Kind.platformless_app, staged.kind);
@@ -346,7 +378,7 @@ test "stage: a relative package path is rewritten for the staging directory" {
         \\main! = |_| Ok({})
         \\
     ;
-    var staged = (try stage(testing.allocator, "/home/user/proj", source, .not_default_app)).?;
+    var staged = (try stage(testing.allocator, "/home/user/proj", source, .checking, "test.roc")).staged;
     defer staged.deinit(testing.allocator);
 
     const expected_path = try std.fs.path.resolve(testing.allocator, &.{ "/home/user/proj", "helper/main.roc" });
@@ -368,9 +400,79 @@ test "stage: the platform alias avoids a package that already uses it" {
         \\main! = |_| Ok({})
         \\
     ;
-    var staged = (try stage(testing.allocator, "/tmp", source, .not_default_app)).?;
+    var staged = (try stage(testing.allocator, "/tmp", source, .checking, "test.roc")).staged;
     defer staged.deinit(testing.allocator);
 
     try testing.expect(std.mem.startsWith(u8, staged.synthetic_source, "app [main!] { pf: \"https://example.com/pf.tar.zst\", pf2: platform "));
     try testing.expect(std.mem.endsWith(u8, staged.synthetic_source, "import pf2.Echo\n\necho! = |msg| Echo.line!(msg)\n"));
+}
+
+test "stage: execution rejects non-app roots without inventing platform wiring" {
+    const sources = [_][]const u8{
+        "",
+        "# main! in a comment is not an entrypoint\n",
+        "main = |_| Ok({})\n",
+        "main = |_| Ok({})\r\n",
+        "main! : List(Str) => Try({}, [Exit(I32)])\n",
+        "Foo := [A, B]\n",
+        "module [foo]\nfoo = 1\n",
+        "foo = |_| {\n    main! = |_| Ok({})\n    main!\n}\n",
+    };
+    for (sources) |source| {
+        var result = try stage(testing.allocator, "/tmp", source, .execution, "Foo.roc");
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .invalid);
+        try testing.expectEqual(@as(usize, 1), result.invalid.items.len);
+        try testing.expectEqualStrings("Execution Requires App Or Default App", result.invalid.items[0].title);
+
+        var checked = try stage(testing.allocator, "/tmp", source, .checking, "Foo.roc");
+        defer checked.deinit(testing.allocator);
+        try testing.expect(checked == .unmodified);
+    }
+}
+
+test "stage: normalized default apps own their source after parsing" {
+    var result = try stage(testing.allocator, "/tmp", "main! = |_| Ok({})\r\n", .execution, "main.roc");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .staged);
+    try testing.expectEqualStrings("main! = |_| Ok({})\n", result.staged.original_source);
+    try testing.expect(std.mem.endsWith(u8, result.staged.synthetic_source, result.staged.original_source));
+}
+
+test "stage: syntax errors are reported directly against the original root" {
+    const sources = [_][]const u8{
+        "main! = |_| {\n",
+        "app [main!] { pf: platform }\nmain! = |_| Ok({})\n",
+        "main! = |_| \"unclosed\n",
+    };
+    for (sources) |source| {
+        var result = try stage(testing.allocator, "/tmp", source, .execution, "original.roc");
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .invalid);
+        try testing.expect(result.invalid.items.len > 0);
+        for (result.invalid.items) |report| {
+            try testing.expect(!std.mem.eql(u8, report.title, "Execution Requires App Or Default App"));
+            for (report.document.elements.items) |element| {
+                if (element == .source_code_region) {
+                    try testing.expectEqualStrings("original.roc", element.source_code_region.filename.?);
+                }
+            }
+        }
+    }
+}
+
+test "stage: entrypoint arity and type remain checking responsibilities" {
+    const sources = [_][]const u8{
+        "main! = |_| Ok({})\n",
+        "main! : List(Str) => Try({}, [Exit(I32)])\nmain! = |_| Ok({})\n",
+        "main! = || Ok({})\n",
+        "main! = 123\n",
+    };
+    for (sources) |source| {
+        var result = try stage(testing.allocator, "/tmp", source, .execution, "main.roc");
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .staged);
+        try testing.expectEqual(Kind.headerless, result.staged.kind);
+        try testing.expectEqualStrings(source, result.staged.original_source);
+    }
 }

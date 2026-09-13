@@ -17,26 +17,30 @@ decode_things # After member name
 UNDECLARED TYPE - where_clauses_10.md:7:7:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
-── ✗ undeclared type ─────────────────────────────────── where_clauses_10.md:7:7
-
-The type Decode is not declared in this scope.
-
-[a.Decode]
-  ^^^^^^^
-
-── ● declaration has no value ────────────────────────── where_clauses_10.md:3:1
-
-This declaration has a type annotation but no implementation.
-
-decode_things # After member name
-    : # After colon
-        List(List(U8)) -> List(a) # After anno
-            where # after where
-                [a.Decode]
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 7 7) (end 7 14))
+		(headline
+			(reflow "The type ")
+			(annotated code "Decode")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "where_clauses_10.md") (start 7 7) (end 7 14) (annotation error) (line-text "\t\t\t\t[a.Decode]"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 3 1) (end 7 15))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "where_clauses_10.md") (start 3 1) (end 7 15) (annotation error) (line-text "decode_things # After member name\n\t: # After colon\n\t\tList(List(U8)) -> List(a) # After anno\n\t\t\twhere # after where\n\t\t\t\t[a.Decode]"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

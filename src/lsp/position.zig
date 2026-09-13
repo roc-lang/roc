@@ -167,6 +167,17 @@ pub fn utf16ColumnToByteOffset(line_text: []const u8, character: usize, landing:
     return index;
 }
 
+/// The line break the document is written with.
+///
+/// Generated source has to match what is already there: a lone `\n` written
+/// into a CRLF document leaves mixed endings behind for a formatter, a diff,
+/// or an EOL-strict editor to report. The first break in the file decides,
+/// since a file without one needs no answer.
+pub fn lineEnding(source: []const u8) []const u8 {
+    const newline = std.mem.findScalar(u8, source, '\n') orelse return "\n";
+    return if (newline > 0 and source[newline - 1] == '\r') "\r\n" else "\n";
+}
+
 /// A line's text without its terminating EOL sequence.
 ///
 /// LSP columns count within a line's content, which stops before the EOL, so
@@ -210,5 +221,25 @@ pub fn positionToOffset(module_env: *ModuleEnv, line: u32, character: u32) ?u32 
 
     const text = lineText(module_env.common.source, line_starts, line) orelse return null;
     const column = utf16ColumnToByteOffset(text, character, .nearest) orelse return null;
+    return line_starts[line] + @as(u32, @intCast(column));
+}
+
+/// The same conversion, clamping a position the document does not have rather
+/// than rejecting it.
+///
+/// Clients send positions past the end of what they are asking about. A
+/// selection reaching the last line ends at `{line: line_count, character: 0}`,
+/// one line past the last the document has, and "the whole line" is spelled by
+/// some clients as a character far past the line's length. Both still name a
+/// range in this document, so a query answers over the range they clamp to;
+/// only an edit, which would corrupt the document if it landed in the wrong
+/// place, insists on a position that exists.
+pub fn positionToOffsetClamped(module_env: *ModuleEnv, line: u32, character: u32) u32 {
+    const source_len: u32 = @intCast(module_env.common.source.len);
+    const line_starts = module_env.getLineStartsAll();
+    if (line >= line_starts.len) return source_len;
+
+    const text = lineText(module_env.common.source, line_starts, line) orelse return source_len;
+    const column = utf16ColumnToByteOffset(text, character, .nearest) orelse text.len;
     return line_starts[line] + @as(u32, @intCast(column));
 }

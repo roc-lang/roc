@@ -14,13 +14,19 @@ x = Foo.Bar.Baz.X
 # EXPECTED
 UNDECLARED TYPE - nominal_undefined_deeply_nested_tag.md:5:12:5:16
 # PROBLEMS
-── ✗ undeclared type ─────────────── nominal_undefined_deeply_nested_tag.md:5:12
-
-The type Foo.Bar.Baz is not declared in this scope.
-
-x = Foo.Bar.Baz.X
-           ^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 5 12) (end 5 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "Foo.Bar.Baz")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_undefined_deeply_nested_tag.md") (start 5 12) (end 5 16) (annotation error) (line-text "x = Foo.Bar.Baz.X")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

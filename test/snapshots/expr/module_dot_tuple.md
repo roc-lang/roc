@@ -10,13 +10,17 @@ I.5
 # EXPECTED
 INVALID TUPLE ACCESS - mod_dot_tuple.md:1:1:1:4
 # PROBLEMS
-── ✗ invalid tuple access ────────────────────────────── mod_dot_tuple.md:1:1
-
-This value is not a tuple, so it has no .5 element.
-
-I.5
-^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Access")
+		(region (start 1 1) (end 1 4))
+		(headline
+			(reflow "This value is not a tuple, so it has no .5 element."))
+		(document
+			(source-region (file "mod_dot_tuple.md") (start 1 1) (end 1 4) (annotation error) (line-text "I.5")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotInt,

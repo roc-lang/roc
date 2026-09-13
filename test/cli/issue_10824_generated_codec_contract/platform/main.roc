@@ -10,7 +10,7 @@ platform ""
     provides { "roc_main": main_for_host }
     targets: {
         inputs_dir: "targets/",
-        wasm32: { inputs: ["host.wasm", app] },
+        wasm32: { inputs: ["host.wasm", app], exports: [] },
     }
 
 main_for_host : Model -> Try(U64, [])

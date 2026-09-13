@@ -11,24 +11,34 @@ a=()->b()()()
 EMPTY TUPLE NOT ALLOWED - formatter_idempotence_issue_8851_comment2.md:1:3:1:5
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 # PROBLEMS
-── ✗ empty tuple not allowed ── formatter_idempotence_issue_8851_comment2.md:1:3
-
-I am part way through parsing this tuple, but it is empty.
-
-a=()->b()()()
-  ^^
-
-If you want to represent nothing, try using an empty record: {}.
-
-── ✗ name not in scope ──────── formatter_idempotence_issue_8851_comment2.md:1:7
-
-Nothing is named b in this scope.
-
-a=()->b()()()
-      ^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Empty Tuple Not Allowed")
+		(region (start 1 3) (end 1 5))
+		(headline
+			(reflow "I am part way through parsing this tuple, but it is empty."))
+		(document
+			(source-region (file "formatter_idempotence_issue_8851_comment2.md") (start 1 3) (end 1 5) (annotation error) (line-text "a=()->b()()()"))
+			(line-break)
+			(reflow "If you want to represent nothing, try using an empty record: ")
+			(annotated code "{}")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 7) (end 1 8))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "b")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "formatter_idempotence_issue_8851_comment2.md") (start 1 7) (end 1 8) (annotation error) (line-text "a=()->b()()()")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,CloseRound,OpArrow,LowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,

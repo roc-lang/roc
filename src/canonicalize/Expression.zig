@@ -367,13 +367,6 @@ pub const Expr = union(enum) {
     /// -42             # Unary minus on literal
     /// ```
     e_unary_minus: UnaryMinus,
-    /// Unary not expression that negates a boolean value.
-    ///
-    /// ```roc
-    /// !x              # Unary not (boolean negation)
-    /// !True           # Unary not on literal
-    /// ```
-    e_unary_not: UnaryNot,
     /// A maximal contiguous record-field access path.
     ///
     /// ```roc
@@ -772,8 +765,6 @@ pub const Expr = union(enum) {
         binop: Binop.Op,
         /// Desugared from unary negation (`-a`).
         unary_minus,
-        /// Desugared from unary logical not (`!a`).
-        unary_not,
     };
 
     /// Unary minus operation for numeric negation.
@@ -782,15 +773,6 @@ pub const Expr = union(enum) {
 
         pub fn init(expr: Expr.Idx) UnaryMinus {
             return UnaryMinus{ .expr = expr };
-        }
-    };
-
-    /// Unary not operation for boolean negation.
-    pub const UnaryNot = struct {
-        expr: Expr.Idx,
-
-        pub fn init(expr: Expr.Idx) UnaryNot {
-            return UnaryNot{ .expr = expr };
         }
     };
 
@@ -1067,7 +1049,16 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("source", ir.getIdent(e.source_ident));
-                try tree.pushStringPair("target-module", ir.moduleIdentityDisplayText(e.module_identity));
+                const module_name = ir.moduleIdentityDisplayText(e.module_identity);
+                // Use the same builtin display marker as external lookups.
+                if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
+                    const field_begin = tree.beginNode();
+                    try tree.pushStaticAtom("builtin");
+                    const field_attrs = tree.beginNode();
+                    try tree.endNode(field_begin, field_attrs);
+                } else {
+                    try tree.pushStringPair("target-module", module_name);
+                }
                 try tree.pushStringPairFmt("target-node", "{d}", .{e.target_node_idx});
                 try tree.pushStringPairFmt("target-def", "{d}", .{@intFromEnum(e.target_def_idx)});
                 const attrs = tree.beginNode();
@@ -1357,17 +1348,6 @@ pub const Expr = union(enum) {
             .e_unary_minus => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-unary-minus");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-
-                try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
-
-                try tree.endNode(begin, attrs);
-            },
-            .e_unary_not => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-unary-not");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

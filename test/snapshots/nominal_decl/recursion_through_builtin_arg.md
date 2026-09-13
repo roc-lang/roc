@@ -13,20 +13,37 @@ t = MyList.([])
 # EXPECTED
 INVALID RECURSIVE TYPE - recursion_through_builtin_arg.md:1:1:1:23
 # PROBLEMS
-── ✗ invalid recursive type ─────────────── recursion_through_builtin_arg.md:1:1
-
-The nominal type MyList refers to itself in a way that would make it infinite.
-
-MyList := List(MyList)
-^^^^^^^^^^^^^^^^^^^^^^
-
-Its definition is:
-
-    List(MyList)
-
-Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Recursive Type")
+		(region (start 1 1) (end 1 23))
+		(headline
+			(reflow "The nominal type")
+			(reflow " ")
+			(annotated type "MyList")
+			(reflow " ")
+			(reflow "refers to itself in a way that would make it infinite."))
+		(document
+			(source-region (file "recursion_through_builtin_arg.md") (start 1 1) (end 1 23) (annotation error) (line-text "MyList := List(MyList)"))
+			(line-break)
+			(reflow "Its definition is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(MyList)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Recursion in a nominal type is only allowed inside a tag union payload or record field—for example")
+			(reflow " ")
+			(annotated code "ConsList(a) := [Nil, Cons(a, ConsList(a))]")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,

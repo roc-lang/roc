@@ -53,7 +53,6 @@
     .diagnostic { color: var(--danger); white-space: pre-wrap; font: 13px/1.45 ui-monospace, monospace; }
     .request-failure { padding: .8rem; }
     .event { color: var(--event); white-space: pre-wrap; font: 13px/1.45 ui-monospace, monospace; }
-    .effect.unhandled, .effect.suppressed { color: var(--muted); }
     .notice { padding: .6rem .8rem; color: var(--muted); font-size: .82rem; }
     aside { padding: 1rem; }
     aside section + section { margin-top: 1.5rem; }
@@ -64,8 +63,6 @@
     #transcript > .empty { padding: 1rem; }
     kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: .08rem .3rem; background: Canvas; font: 11px ui-monospace, monospace; }
     .shortcuts { display: grid; grid-template-columns: auto 1fr; gap: .45rem .6rem; margin-top: .7rem; color: var(--muted); font-size: .82rem; }
-    .toasts { position: fixed; z-index: 4; right: 1rem; bottom: 1rem; display: grid; gap: .5rem; max-width: min(360px, calc(100vw - 2rem)); }
-    .toast { border: 1px solid var(--accent); border-radius: 10px; padding: .75rem 1rem; background: Canvas; box-shadow: 0 10px 30px #0004; }
     @media (max-width: 1100px) { .workspace.details-open { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .workspace.details-open aside { grid-column: 1 / -1; } }
     @media (max-width: 760px) { .workspace, .workspace.details-open { grid-template-columns: 1fr; } .workspace.details-open aside { grid-column: auto; } header { align-items: start; flex-direction: column; } .toolbar .status { width: 100%; margin-left: 0; } textarea, #transcript { min-height: 45vh; } }
   </style>
@@ -97,11 +94,7 @@ bar = "${foo}: bar"
 #%%
 bar
 #%%
-import Repl
-#%%
-Repl.emit!({ name: "log", payload: "Hello from Roc" })
-#%%
-Repl.emit!({ name: "toast", payload: "The caller handled this effect" })</textarea>
+dbg bar</textarea>
         <div id="completion" class="completion" role="listbox" aria-label="Completions" hidden></div>
       </div>
     </main>
@@ -138,7 +131,6 @@ Repl.emit!({ name: "toast", payload: "The caller handled this effect" })</textar
     </aside>
   </div>
 
-  <div id="toasts" class="toasts" aria-live="polite"></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

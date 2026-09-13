@@ -21,9 +21,32 @@ result = {
 expect result == Bool.False
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_list_bool.md:3:6:3:14
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Var Name Missing `$`")
+		(region (start 3 6) (end 3 14))
+		(headline
+			(reflow "The mutable binding ")
+			(annotated symbol-unqualified "allTrue_")
+			(reflow " is declared with ")
+			(annotated keyword "var")
+			(reflow " but its name does not start with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(reflow "Rename this binding and all of its uses to ")
+			(annotated symbol-unqualified "$allTrue_")
+			(reflow ". The name is only a convention; mutability comes from the ")
+			(annotated keyword "var")
+			(reflow " declaration.")
+			(line-break)
+			(line-break)
+			(source-region (file "for_loop_list_bool.md") (start 3 6) (end 3 14) (annotation warning) (line-text "\tvar allTrue_ = Bool.True")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -91,7 +114,7 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "allTrue_"))
+				(p-var-assign (ident "allTrue_"))
 				(e-nominal-external
 					(builtin)
 					(e-tag (name "True"))))
@@ -122,7 +145,7 @@ NO CHANGE
 											(e-tag (name "False")))))
 								(e-block
 									(s-reassign
-										(p-assign (ident "allTrue_"))
+										(p-var-assign (ident "allTrue_"))
 										(e-nominal-external
 											(builtin)
 											(e-tag (name "False"))))
@@ -131,7 +154,7 @@ NO CHANGE
 							(e-block
 								(e-empty_record))))))
 			(e-lookup-local
-				(p-assign (ident "allTrue_"))))
+				(p-var-assign (ident "allTrue_"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect

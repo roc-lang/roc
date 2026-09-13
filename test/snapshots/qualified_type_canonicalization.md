@@ -68,178 +68,279 @@ DOES NOT EXIST - qualified_type_canonicalization.md:35:24:35:39
 DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 # PROBLEMS
-── ● duplicate definition ─────────────── qualified_type_canonicalization.md:1:1
-
-The name Try is being redeclared here:
-
-import Basics.Try
-^^^^^^^^^^^^^^^^^
-
-In this scope, Try was already defined in qualified_type_canonicalization.md:1:1:
-
-import Basics.Try
-^
-
-── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:1:1
-
-The mod Basics was not found in this Roc project.
-
-import Basics.Try
-^^^^^^^^^^^^^^^^^
-
-── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:2:1
-
-The mod Color was not found in this Roc project.
-
-import Color
-^^^^^^^^^^^^
-
-── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:3:1
-
-The mod ModA/ModB was not found in this Roc project.
-
-import ModA/ModB exposing [TypeC]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:4:1
-
-The mod ExternalMod was not found in this Roc project.
-
-import ExternalMod as ExtMod
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ mod not found ────────────────── qualified_type_canonicalization.md:7:24
-
-This RGB type is declared to be in Color, which does not exist.
-
-simpleQualified : Color.RGB
-                       ^^^^
-
-── ✗ mod not found ────────────────── qualified_type_canonicalization.md:8:19
-
-This RGB type is declared to be in Color, which does not exist.
-
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-                  ^^^^^
-
-── ✗ mod not found ───────────────── qualified_type_canonicalization.md:11:26
-
-This DataType type is declared to be in ExternalMod, which does not exist.
-
-aliasedQualified : ExtMod.DataType
-                         ^^^^^^^^^
-
-── ✗ mod not found ───────────────── qualified_type_canonicalization.md:12:26
-
-This DataType type is declared to be in ExternalMod, which does not exist.
-
-aliasedQualified = ExtMod.DataType.Default
-                         ^^^^^^^^^
-
-── ✗ mod not imported ────────────── qualified_type_canonicalization.md:15:23
-
-There is no mod with the name ModA.ModB imported into this Roc file.
-
-multiLevelQualified : ModA.ModB.TypeC
-                      ^^^^^^^^^^^^^^^
-
-── ✗ does not exist ─────────────────── qualified_type_canonicalization.md:16:23
-
-TypeC.new does not exist.
-
-multiLevelQualified = TypeC.new
-                      ^^^^^^^^^
-
-── ✗ missing nested type ────────────── qualified_type_canonicalization.md:19:14
-
-Try is in scope, but it doesn't have a nested type that's also named Try.
-
-resultType : Try.Try(I32, Str)
-             ^^^^^^^
-
-── ✗ mod not found ───────────────── qualified_type_canonicalization.md:23:23
-
-This RGB type is declared to be in Color, which does not exist.
-
-getColor : {} -> Color.RGB
-                      ^^^^
-
-── ✗ mod not found ───────────────── qualified_type_canonicalization.md:24:16
-
-This RGB type is declared to be in Color, which does not exist.
-
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-               ^^^^^
-
-── ✗ mod not found ───────────────── qualified_type_canonicalization.md:27:21
-
-This RGB type is declared to be in Color, which does not exist.
-
-processColor : Color.RGB -> Str
-                    ^^^^
-
-── ● unused variable ────────────────── qualified_type_canonicalization.md:28:17
-
-Variable color is defined here and then never used:
-
-processColor = |color|
-                ^^^^^
-
-If you don't need this variable, prefix it with an underscore like _color to
-suppress this warning.
-
-── ✗ missing nested type ────────────── qualified_type_canonicalization.md:32:13
-
-Try is in scope, but it doesn't have a nested type that's also named Try.
-
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
-            ^^^^^^^
-
-── ✗ mod not found ───────────────── qualified_type_canonicalization.md:32:26
-
-This RGB type is declared to be in Color, which does not exist.
-
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
-                         ^^^^
-
-── ✗ mod not found ───────────────── qualified_type_canonicalization.md:32:38
-
-This Error type is declared to be in ExternalMod, which does not exist.
-
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
-                                     ^^^^^^
-
-── ✗ mod not imported ────────────── qualified_type_canonicalization.md:32:49
-
-There is no mod with the name ModA.ModB imported into this Roc file.
-
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
-                                                ^^^^^^^^^^^^^^^
-
-── ✗ does not exist ─────────────────── qualified_type_canonicalization.md:35:24
-
-TypeC.fromColor does not exist.
-
-Try.Ok(rgb) => TypeC.fromColor(rgb)
-               ^^^^^^^^^^^^^^^
-
-── ✗ does not exist ─────────────────── qualified_type_canonicalization.md:36:25
-
-TypeC.default does not exist.
-
-Try.Err(err) => TypeC.default
-                ^^^^^^^^^^^^^
-
-── ● unused variable ────────────────── qualified_type_canonicalization.md:36:17
-
-Variable err is defined here and then never used:
-
-Try.Err(err) => TypeC.default
-        ^^^
-
-If you don't need this variable, prefix it with an underscore like _err to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 1 1) (end 1 18))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Try")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 1 1) (end 1 18) (annotation error) (line-text "import Basics.Try"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Try")
+			(reflow " was already defined in ")
+			(source-location
+				(file "qualified_type_canonicalization.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "qualified_type_canonicalization.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import Basics.Try"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 18))
+		(headline
+			(text "The mod ")
+			(annotated code "Basics")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 1 1) (end 1 18) (annotation error) (line-text "import Basics.Try"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 2 1) (end 2 13))
+		(headline
+			(text "The mod ")
+			(annotated code "Color")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 2 1) (end 2 13) (annotation error) (line-text "import Color"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 3 1) (end 3 34))
+		(headline
+			(text "The mod ")
+			(annotated code "ModA/ModB")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 3 1) (end 3 34) (annotation error) (line-text "import ModA/ModB exposing [TypeC]"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 4 1) (end 4 29))
+		(headline
+			(text "The mod ")
+			(annotated code "ExternalMod")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 4 1) (end 4 29) (annotation error) (line-text "import ExternalMod as ExtMod"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 7 24) (end 7 28))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 7 24) (end 7 28) (annotation error) (line-text "simpleQualified : Color.RGB"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 8 19) (end 8 24))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 8 19) (end 8 24) (annotation error) (line-text "simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 11 26) (end 11 35))
+		(headline
+			(text "This ")
+			(annotated code "DataType")
+			(reflow " type is declared to be in ")
+			(annotated code "ExternalMod")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 11 26) (end 11 35) (annotation error) (line-text "aliasedQualified : ExtMod.DataType"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 12 26) (end 12 35))
+		(headline
+			(text "This ")
+			(annotated code "DataType")
+			(reflow " type is declared to be in ")
+			(annotated code "ExternalMod")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 12 26) (end 12 35) (annotation error) (line-text "aliasedQualified = ExtMod.DataType.Default"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 15 23) (end 15 38))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "ModA.ModB")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 15 23) (end 15 38) (annotation error) (line-text "multiLevelQualified : ModA.ModB.TypeC"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 16 23) (end 16 32))
+		(headline
+			(annotated symbol-unqualified "TypeC.new")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 16 23) (end 16 32) (annotation error) (line-text "multiLevelQualified = TypeC.new"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 19 14) (end 19 21))
+		(headline
+			(annotated code "Try")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "that's also ")
+			(reflow "named ")
+			(annotated code "Try")
+			(reflow "."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 19 14) (end 19 21) (annotation error) (line-text "resultType : Try.Try(I32, Str)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 23 23) (end 23 27))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 23 23) (end 23 27) (annotation error) (line-text "getColor : {} -> Color.RGB"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 24 16) (end 24 21))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 24 16) (end 24 21) (annotation error) (line-text "getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 27 21) (end 27 25))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 27 21) (end 27 25) (annotation error) (line-text "processColor : Color.RGB -> Str"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 28 17) (end 28 22))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "color")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_color")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "qualified_type_canonicalization.md") (start 28 17) (end 28 22) (annotation error) (line-text "processColor = |color|"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 32 13) (end 32 20))
+		(headline
+			(annotated code "Try")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "that's also ")
+			(reflow "named ")
+			(annotated code "Try")
+			(reflow "."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 32 13) (end 32 20) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 32 26) (end 32 30))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 32 26) (end 32 30) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 32 38) (end 32 44))
+		(headline
+			(text "This ")
+			(annotated code "Error")
+			(reflow " type is declared to be in ")
+			(annotated code "ExternalMod")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 32 38) (end 32 44) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 32 49) (end 32 64))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "ModA.ModB")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 32 49) (end 32 64) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 35 24) (end 35 39))
+		(headline
+			(annotated symbol-unqualified "TypeC.fromColor")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 35 24) (end 35 39) (annotation error) (line-text "        Try.Ok(rgb) => TypeC.fromColor(rgb)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 36 25) (end 36 38))
+		(headline
+			(annotated symbol-unqualified "TypeC.default")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 36 25) (end 36 38) (annotation error) (line-text "        Try.Err(err) => TypeC.default"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 36 17) (end 36 20))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "err")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_err")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "qualified_type_canonicalization.md") (start 36 17) (end 36 20) (annotation error) (line-text "        Try.Err(err) => TypeC.default")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,NoSpaceDotUpperIdent,

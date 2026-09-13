@@ -16,25 +16,51 @@ type=expr
 # EXPECTED
 MISSING METHOD - polymorphism.md:6:29:6:35
 # PROBLEMS
-── ✗ missing method ─────────────────────────────────────── polymorphism.md:6:29
-
-This to_str method is being called on a value whose type doesn't have that
-method.
-
-{ pair1, pair2, pair3 }.to_str()
-                        ^^^^^^
-
-The value's type, which does not have a method named to_str, is:
-
-    { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: {
-    first: [True, ..], second: [False, ..] } }
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-        c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-      ]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 6 29) (end 6 35))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "to_str")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "polymorphism.md") (start 6 29) (end 6 35) (annotation error) (line-text "    { pair1, pair2, pair3 }.to_str()"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "to_str")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True, ..], second: [False, ..] } }")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -118,7 +144,7 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(s-let
 		(p-assign (ident "pair1"))
-		(e-call (constraint-fn-var 264)
+		(e-call (constraint-fn-var 263)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-num (value "1"))
@@ -126,7 +152,7 @@ EndOfFile,
 				(e-literal (string "a")))))
 	(s-let
 		(p-assign (ident "pair2"))
-		(e-call (constraint-fn-var 287)
+		(e-call (constraint-fn-var 285)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-string
@@ -134,7 +160,7 @@ EndOfFile,
 			(e-num (value "42"))))
 	(s-let
 		(p-assign (ident "pair3"))
-		(e-call (constraint-fn-var 297)
+		(e-call (constraint-fn-var 294)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))

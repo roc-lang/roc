@@ -23,42 +23,57 @@ DEFAULT NOT ALLOWED IN STRUCTURAL RECORD - record_default_structural_rejected.md
 DEFAULT NOT ALLOWED IN STRUCTURAL RECORD - record_default_structural_rejected.md:6:16:6:31
 DEFAULT NOT ALLOWED IN STRUCTURAL RECORD - record_default_structural_rejected.md:9:23:9:38
 # PROBLEMS
-── ✗ default not allowed in structural record ─ record_default_structural_rejected.md:1:14
-
-Field defaults (??) are only allowed on the fields of a nominal record type
-declaration's backing record, not in structural record types (type aliases,
-inline annotations, or nested records).
-
-AliasCfg : { count : U8 ?? 1 }
-             ^^^^^^^^^^^^^^^
-
-Hint: A default belongs to one named type, so declare a nominal type (with :=)
-whose backing record carries the default, and use that type here.
-
-── ✗ default not allowed in structural record ─ record_default_structural_rejected.md:6:16
-
-Field defaults (??) are only allowed on the fields of a nominal record type
-declaration's backing record, not in structural record types (type aliases,
-inline annotations, or nested records).
-
-inline_cfg : { count : U8 ?? 2 }
-               ^^^^^^^^^^^^^^^
-
-Hint: A default belongs to one named type, so declare a nominal type (with :=)
-whose backing record carries the default, and use that type here.
-
-── ✗ default not allowed in structural record ─ record_default_structural_rejected.md:9:23
-
-Field defaults (??) are only allowed on the fields of a nominal record type
-declaration's backing record, not in structural record types (type aliases,
-inline annotations, or nested records).
-
-Nested := { inner : { count : U8 ?? 3 } }
-                      ^^^^^^^^^^^^^^^
-
-Hint: A default belongs to one named type, so declare a nominal type (with :=)
-whose backing record carries the default, and use that type here.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Default Not Allowed In Structural Record")
+		(region (start 1 14) (end 1 29))
+		(headline
+			(reflow "Field defaults (")
+			(annotated code "??")
+			(reflow ") are only allowed on the fields of a nominal record type declaration's backing record, not in structural record types (type aliases, inline annotations, or nested records)."))
+		(document
+			(source-region (file "record_default_structural_rejected.md") (start 1 14) (end 1 29) (annotation error) (line-text "AliasCfg : { count : U8 ?? 1 }"))
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " A default belongs to one named type, so declare a nominal type (with ")
+			(annotated code ":=")
+			(reflow ") whose backing record carries the default, and use that type here.")))
+	(report
+		(severity runtime_error)
+		(title "Default Not Allowed In Structural Record")
+		(region (start 6 16) (end 6 31))
+		(headline
+			(reflow "Field defaults (")
+			(annotated code "??")
+			(reflow ") are only allowed on the fields of a nominal record type declaration's backing record, not in structural record types (type aliases, inline annotations, or nested records)."))
+		(document
+			(source-region (file "record_default_structural_rejected.md") (start 6 16) (end 6 31) (annotation error) (line-text "inline_cfg : { count : U8 ?? 2 }"))
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " A default belongs to one named type, so declare a nominal type (with ")
+			(annotated code ":=")
+			(reflow ") whose backing record carries the default, and use that type here.")))
+	(report
+		(severity runtime_error)
+		(title "Default Not Allowed In Structural Record")
+		(region (start 9 23) (end 9 38))
+		(headline
+			(reflow "Field defaults (")
+			(annotated code "??")
+			(reflow ") are only allowed on the fields of a nominal record type declaration's backing record, not in structural record types (type aliases, inline annotations, or nested records)."))
+		(document
+			(source-region (file "record_default_structural_rejected.md") (start 9 23) (end 9 38) (annotation error) (line-text "Nested := { inner : { count : U8 ?? 3 } }"))
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " A default belongs to one named type, so declare a nominal type (with ")
+			(annotated code ":=")
+			(reflow ") whose backing record carries the default, and use that type here."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,

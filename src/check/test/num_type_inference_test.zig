@@ -9,6 +9,7 @@
 const std = @import("std");
 const testing = std.testing;
 const types = @import("types");
+const CIR = @import("can").CIR;
 const TestEnv = @import("TestEnv.zig");
 
 test "infers type for small nums" {
@@ -314,6 +315,53 @@ test "huge literal pinned to Dec by a concrete peer reports at the huge literal"
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Invalid Number");
+}
+
+test "invalid generalized numeral use preserves the source literal and valid specialization" {
+    const source =
+        \\get_n = |{}| 300
+        \\
+        \\small : U8
+        \\small = get_n({})
+        \\
+        \\large : I64
+        \\large = get_n({})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Invalid Number");
+    try test_env.assertDefTypeOptions("small", "U8", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("large", "I64", .{ .allow_type_errors = true });
+
+    var found_source_literal = false;
+    const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    for (defs) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const pattern = test_env.module_env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        const name = test_env.module_env.getIdentStoreConst().getText(pattern.assign.ident);
+        if (!std.mem.eql(u8, name, "get_n")) continue;
+
+        const lambda = test_env.module_env.store.getExpr(def.expr);
+        try testing.expectEqual(.e_lambda, std.meta.activeTag(lambda));
+        try testing.expectEqual(.e_num, std.meta.activeTag(test_env.module_env.store.getExpr(lambda.e_lambda.body)));
+        found_source_literal = true;
+        break;
+    }
+    try testing.expect(found_source_literal);
+
+    var runtime_error_exprs: usize = 0;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node = test_env.checker.cir.store.nodes.get(node_idx);
+        if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_") and node.tag != .malformed) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        if (test_env.checker.cir.store.getExpr(expr_idx) == .e_runtime_error) runtime_error_exprs += 1;
+    }
+    try testing.expect(runtime_error_exprs > 0);
 }
 
 test "unpinned integer literal beyond Dec range is a check-time error, not silent saturation" {

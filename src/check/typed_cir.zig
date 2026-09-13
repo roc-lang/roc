@@ -79,10 +79,11 @@ const ModuleData = struct {
 };
 
 /// Owned collection of typed CIR modules used by later lowering stages.
+/// Modules are addressed by their explicit indices. Display names need not be
+/// unique: imports from different packages can share a checked cache entry.
 pub const Modules = struct {
     allocator: Allocator,
     modules: []ModuleData,
-    module_idxs_by_name: std.StringHashMapUnmanaged(u32),
 
     /// Ways to provide a checked module env to typed CIR.
     pub const SourceModule = union(enum) {
@@ -151,22 +152,12 @@ pub const Modules = struct {
             modules[i] = try source_module.initModuleData(allocator);
         }
 
-        var module_idxs_by_name: std.StringHashMapUnmanaged(u32) = .{};
-        errdefer module_idxs_by_name.deinit(allocator);
-
         for (modules, 0..) |*module_data, i| {
             const module_ = Module{
                 .allocator = allocator,
                 .module_idx = @intCast(i),
                 .data_store = module_data,
             };
-            const module_name = module_.name();
-            const module_result = try module_idxs_by_name.getOrPut(allocator, module_name);
-            if (module_result.found_existing) {
-                std.debug.panic("typed_cir invariant violated: duplicate module name {s}", .{module_name});
-            }
-            module_result.value_ptr.* = @intCast(i);
-
             for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().top_level_value_defs)) |def_idx| {
                 const def = module_.def(def_idx);
                 if (def.data.kind != .let) continue;
@@ -182,13 +173,11 @@ pub const Modules = struct {
         return .{
             .allocator = allocator,
             .modules = modules,
-            .module_idxs_by_name = module_idxs_by_name,
         };
     }
 
     pub fn deinit(self: *Modules) void {
         for (self.modules) |*module_data| module_data.deinit(self.allocator);
-        self.module_idxs_by_name.deinit(self.allocator);
         self.allocator.free(self.modules);
     }
 
@@ -202,10 +191,6 @@ pub const Modules = struct {
             .module_idx = module_idx,
             .data_store = @constCast(&self.modules[module_idx]),
         };
-    }
-
-    pub fn moduleIdxByName(self: @This(), target_name: []const u8) ?u32 {
-        return self.module_idxs_by_name.get(target_name);
     }
 };
 

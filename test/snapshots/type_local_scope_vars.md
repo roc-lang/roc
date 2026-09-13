@@ -41,21 +41,48 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
-── ✗ type mismatch ────────────────────────────── type_local_scope_vars.md:19:16
-
-The first argument being passed to this function has the wrong type.
-
-_result2 = f(b)
-             ^
-
-This argument has the type:
-
-    b
-
-But f needs the first argument to be:
-
-    a
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 19 14) (end 19 18))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
+		(document
+			(source-underlines
+				(display (file "type_local_scope_vars.md") (start 19 14) (end 19 18) (annotation dim) (line-text "\t\t_result2 = f(b)"))
+				(underline (start 19 16) (end 19 17) (annotation error)))
+			(line-break)
+			(reflow "This argument has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "b")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But")
+			(reflow " ")
+			(annotated code "f")
+			(reflow " ")
+			(reflow "needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

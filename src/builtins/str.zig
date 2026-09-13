@@ -435,7 +435,9 @@ pub const RocStr = extern struct {
     /// An `.InPlace` update mode means the caller proved the string unique,
     /// so the runtime uniqueness check is skipped. Small strings and seamless
     /// slices still reallocate fresh: neither owns a growable big-string
-    /// allocation, so the structural checks are not uniqueness checks.
+    /// allocation, so the structural checks are not uniqueness checks. When
+    /// growth is necessary, the resulting big string has exactly `new_length`
+    /// capacity; append operations use `reallocateForAppend` instead.
     pub fn reallocate(
         self: RocStr,
         new_length: usize,
@@ -450,12 +452,12 @@ pub const RocStr = extern struct {
         }
 
         if (self.bytes) |source_ptr| {
-            if (old_capacity > new_length) {
+            if (old_capacity >= new_length) {
                 var output = self;
                 output.setLen(new_length);
                 return output;
             }
-            const new_capacity = @import("utils.zig").calculateCapacity(old_capacity, new_length, element_width);
+            const new_capacity = new_length;
             const new_source = @import("utils.zig").unsafeReallocate(
                 source_ptr,
                 RocStr.alignment,
@@ -468,6 +470,53 @@ pub const RocStr = extern struct {
 
             return RocStr{ .bytes = new_source, .capacity_or_alloc_ptr = encodeCapacity(new_capacity), .length = new_length };
         }
+        return self.reallocateFresh(new_length, roc_ops);
+    }
+
+    /// Grow for a concatenation that appends bytes to this string. Unlike an
+    /// explicit reserve, an append takes at least the next geometric capacity
+    /// step so a sequence of multi-byte appends remains amortized-linear.
+    fn reallocateForAppend(
+        self: RocStr,
+        new_length: usize,
+        update_mode: UpdateMode,
+        roc_ops: *RocOps,
+    ) RocStr {
+        const old_length = self.len();
+        const old_capacity = self.getCapacity();
+
+        if (self.canReuseAllocation(update_mode)) {
+            if (old_capacity >= new_length) {
+                var output = self;
+                output.setLen(new_length);
+                return output;
+            }
+
+            const new_capacity = @max(new_length, utils.geometricGrowth(old_capacity, 1));
+            const new_source = utils.unsafeReallocate(
+                self.bytes.?,
+                RocStr.alignment,
+                old_capacity,
+                new_capacity,
+                1,
+                false,
+                roc_ops,
+            );
+            return RocStr{ .bytes = new_source, .capacity_or_alloc_ptr = encodeCapacity(new_capacity), .length = new_length };
+        }
+
+        const growth_base = if (self.isSmallStr()) old_capacity else old_length;
+        const new_capacity = if (new_length == old_length)
+            new_length
+        else
+            @max(new_length, utils.geometricGrowth(growth_base, 1));
+        if (new_length >= SMALL_STRING_SIZE) {
+            var result = RocStr.allocateBig(new_length, new_capacity, roc_ops);
+            std.mem.copyForwards(u8, result.asU8ptrMut()[0..old_length], self.asU8ptr()[0..old_length]);
+            self.decref(roc_ops);
+            return result;
+        }
+
         return self.reallocateFresh(new_length, roc_ops);
     }
 
@@ -1376,7 +1425,9 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
 /// - Returns: **independent** or **copy-on-write** depending on arg1's capacity
 ///
 /// Note: arg1 is owned and may be returned directly if arg2 is empty,
-/// or reallocated to accommodate the combined content.
+/// or reallocated to accommodate the combined content. Growth takes at least
+/// the next geometric capacity step so repeated concatenation is
+/// amortized-linear in the bytes produced.
 ///
 /// An `.InPlace` update mode means the caller proved arg1 unique, so the
 /// runtime uniqueness check inside the reallocation is skipped. Small strings
@@ -1407,9 +1458,9 @@ pub fn strConcat(
         // first argument falls through to the copying path below.
         return arg1;
     } else {
-        const combined_length = arg1.len() + arg2.len();
+        const combined_length = arg1.len() +| arg2.len();
 
-        var result = arg1.reallocate(combined_length, update_mode, roc_ops);
+        var result = arg1.reallocateForAppend(combined_length, update_mode, roc_ops);
         const src = arg2.asU8ptr()[0..arg2.len()];
         const dest = result.asU8ptrMut()[arg1.len()..combined_length];
         var i = src.len;
@@ -3664,6 +3715,47 @@ test "RocStr.concat: concat result fed into concat again" {
     try std.testing.expect(expected.eql(result));
 }
 
+test "RocStr.concat: multi-byte appends grow geometrically" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const first = RocStr.fromSliceSmall("abcdefghijklmnopqrstuv");
+    const second = RocStr.fromSliceSmall("12");
+    const result = strConcat(first, second, .Immutable, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 24), result.len());
+    try std.testing.expectEqual(utils.geometricGrowth(SMALL_STR_MAX_LENGTH, 1), result.getCapacity());
+    try std.testing.expect(std.mem.eql(u8, result.asSlice(), "abcdefghijklmnopqrstuv12"));
+}
+
+test "RocStr.concat: unique big string takes a geometric growth step" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const first = RocStr.fromSlice("a string long enough to be heap allocated", test_env.getOps());
+    const old_capacity = first.getCapacity();
+    const second = RocStr.fromSliceSmall("12");
+    const result = strConcat(first, second, .Immutable, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    try std.testing.expectEqual(utils.geometricGrowth(old_capacity, 1), result.getCapacity());
+    try std.testing.expect(std.mem.eql(u8, result.asSlice(), "a string long enough to be heap allocated12"));
+}
+
+test "RocStr.reserve keeps an explicit request exact" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const first = RocStr.fromSlice("a string long enough to be heap allocated", test_env.getOps());
+    const old_length = first.len();
+    const result = reserve(first, 1, .Immutable, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    try std.testing.expectEqual(old_length, result.len());
+    try std.testing.expectEqual(old_length + 1, result.getCapacity());
+}
+
 test "RocStr.concat: big concat overlapping seamless suffix" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -4878,6 +4970,7 @@ test "strConcat Immutable copies a shared big allocation" {
     defer base.decref(test_env.getOps());
 
     try std.testing.expect(result.bytes != original_bytes);
+    try std.testing.expectEqual(utils.geometricGrowth(base.len(), 1), result.getCapacity());
     try std.testing.expect(std.mem.eql(u8, result.asSlice(), "a string long enough to be heap allocated!?"));
     try std.testing.expect(std.mem.eql(u8, base.asSlice(), "a string long enough to be heap allocated"));
 }

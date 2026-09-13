@@ -1405,6 +1405,25 @@ test "fx platform hosted function passed as argument to higher-order function" {
     try testing.expectEqualStrings("hello\n", run_result.stdout);
 }
 
+test "package consumes its app's exact platform API" {
+    const allocator = testing.allocator;
+
+    const run_result = try buildAndRunDevBackendApp(
+        allocator,
+        "test/fx/package_platform_dependency.roc",
+        "package-platform-dependency",
+        null,
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .exited => |code| if (code != 0) return error.UnexpectedExitCode,
+        .signal, .stopped, .unknown => return error.UnexpectedTermination,
+    }
+    try testing.expectEqualStrings("Hello, Package!\n", run_result.stdout);
+}
+
 test "fx platform runtime stack overflow" {
     // Keep coverage for both paths:
     // 1. The normal interpreter path on the real runtime sample. The

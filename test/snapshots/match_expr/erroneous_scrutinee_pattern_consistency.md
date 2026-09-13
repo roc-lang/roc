@@ -13,25 +13,55 @@ match undefined_scrutinee {
 # EXPECTED
 TYPE MISMATCH - erroneous_scrutinee_pattern_consistency.md:1:1:1:1
 # PROBLEMS
-── ✗ type mismatch ────────────── erroneous_scrutinee_pattern_consistency.md:1:5
-
-The second branch of this match does not match the previous ones.
-
-match undefined_scrutinee {
-    { name } => name
-    { name, age } => age
-}
-
-This second branch is trying to match:
-
-    { age: _field, name: _field2 }
-
-But the expression between the match parenthesis has the type:
-
-    { name: _field }
-
-These can never match! Either the pattern or expression has a problem.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 1) (end 4 2))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "second")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the previous ones."))
+		(document
+			(source-underlines
+				(display (file "erroneous_scrutinee_pattern_consistency.md") (start 1 1) (end 4 2) (annotation dim) (line-text "match undefined_scrutinee {\n    { name } => name\n    { name, age } => age\n}"))
+				(underline (start 3 5) (end 3 18) (annotation error)))
+			(line-break)
+			(reflow "This")
+			(reflow " ")
+			(reflow "second")
+			(reflow " ")
+			(reflow "branch is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ age: _field, name: _field2 }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ name: _field }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem."))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

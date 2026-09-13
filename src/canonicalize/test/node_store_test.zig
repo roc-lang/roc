@@ -441,9 +441,6 @@ test "NodeStore round trip - Expressions" {
         .e_unary_minus = CIR.Expr.UnaryMinus.init(rand_idx(CIR.Expr.Idx)),
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_unary_not = CIR.Expr.UnaryNot.init(rand_idx(CIR.Expr.Idx)),
-    });
-    try expressions.append(gpa, CIR.Expr{
         .e_field_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .segments = .{
@@ -1349,6 +1346,21 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .mutable,
+            .region = rand_region(),
+        },
+    });
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .immutable,
+            .region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);
@@ -1551,6 +1563,11 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(gpa, CIR.Pattern{
+        .var_assign = .{
+            .ident = rand_ident_idx(),
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
         .as = .{
             .pattern = rand_idx(CIR.Pattern.Idx),
             .ident = rand_ident_idx(),
@@ -1673,7 +1690,7 @@ test "NodeStore round trip - Pattern" {
 test "SurfaceOrigin encode/decode round-trips" {
     const SurfaceOrigin = CIR.Expr.SurfaceOrigin;
     // Every unit form.
-    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus, .unary_not };
+    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus };
     for (unit_origins) |origin| {
         try testing.expectEqual(
             origin,
@@ -1711,33 +1728,41 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     const outer_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = outer_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = item,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = item,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(outer_method);
     const item_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = item_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = outer_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = outer_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(item_method);
     const detached_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = detached,
         .method_name = method_name,
-        .args = no_args,
-        .ret = detached_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = detached_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(detached_method);
     const enclosing_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = enclosing_ref,
         .method_name = method_name,
-        .args = no_args,
-        .ret = outer_ref,
-        .effectful = false,
+        .anno = try store.addTypeAnno(.{ .@"fn" = .{
+            .args = no_args,
+            .ret = outer_ref,
+            .effectful = false,
+        } }, base.Region.zero()),
     } }, base.Region.zero());
     try store.addScratchWhereClause(enclosing_method);
 
@@ -1847,4 +1872,54 @@ test "field access path rollback removes every partial auxiliary node" {
     try testing.expectEqual(nodes_before, store.nodes.len());
     try testing.expectEqual(regions_before, store.regions.len());
     try testing.expectEqual(index_data_before, store.index_data.len());
+}
+
+test "write occurrences preserve binding identity and token regions across CIR copies" {
+    const gpa = testing.allocator;
+    var original = try NodeStore.init(gpa);
+    defer original.deinit();
+    try testing.expectEqual(@as(usize, 0), original.write_occurrences.items.capacity);
+    try testing.expectEqual(@as(usize, 12), @sizeOf(NodeStore.WriteOccurrence));
+
+    const declaration = from_raw_offsets(4, 6);
+    const pattern = try original.addPattern(.{ .var_assign = .{ .ident = rand_ident_idx() } }, declaration);
+    try original.recordWriteOccurrence(pattern, from_raw_offsets(20, 22));
+    try original.recordWriteOccurrence(pattern, from_raw_offsets(43, 45));
+
+    var cloned = try original.clone(gpa);
+    defer cloned.deinit();
+    try testing.expectEqualDeep(original.write_occurrences.items.items, cloned.write_occurrences.items.items);
+    try testing.expectEqualDeep(declaration, cloned.getPatternRegion(pattern));
+
+    var writer = @import("collections").CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, NodeStore.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, .@"16", @intCast(writer.total_bytes));
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const stored: *const NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const restored = stored.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    try testing.expectEqualDeep(original.write_occurrences.items.items, restored.write_occurrences.items.items);
+    try testing.expectEqualDeep(declaration, restored.getPatternRegion(pattern));
+    for (restored.write_occurrences.items.items) |write| {
+        try testing.expectEqual(pattern, write.pattern_idx);
+        try testing.expectEqualDeep(from_raw_offsets(write.start, write.end), write.region());
+    }
+
+    // Mutable cached modules own their region column, but borrow source write
+    // metadata from the cache just like their other canonical data.
+    var mutable = try stored.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
+    defer mutable.regions.deinit(gpa);
+    try testing.expectEqualDeep(original.write_occurrences.items.items, mutable.write_occurrences.items.items);
+
+    // Relocation must move the new table along with the existing CIR columns.
+    const moved_buffer = try gpa.alignedAlloc(u8, .@"16", buffer.len);
+    defer gpa.free(moved_buffer);
+    @memcpy(moved_buffer, buffer);
+    var moved = restored;
+    const delta = @as(isize, @intCast(@intFromPtr(moved_buffer.ptr))) - @as(isize, @intCast(@intFromPtr(buffer.ptr)));
+    moved.relocate(delta);
+    try testing.expectEqual(@intFromPtr(restored.write_occurrences.items.items.ptr) +% @as(usize, @bitCast(delta)), @intFromPtr(moved.write_occurrences.items.items.ptr));
+    try testing.expectEqualDeep(original.write_occurrences.items.items, moved.write_occurrences.items.items);
 }

@@ -15,23 +15,60 @@ main = 123.Foo
 # EXPECTED
 TYPE MISMATCH - number_suffix_custom_type.md:6:8:6:15
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────── number_suffix_custom_type.md:6:8
-
-The from_numeral method on Foo has an incompatible type.
-
-main = 123.Foo
-       ^^^^^^^
-
-The method from_numeral has the type:
-
-    I64, U8 -> Foo
-
-But I need it to have the type:
-
-    Numeral -> Try(Foo, [InvalidNumeral(Str)])
-
-Hint: This function expects 1 argument but got 2.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 6 8) (end 6 15))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method on")
+			(reflow " ")
+			(annotated code "Foo")
+			(reflow " ")
+			(reflow "has an incompatible type."))
+		(document
+			(source-region (file "number_suffix_custom_type.md") (start 6 8) (end 6 15) (annotation error) (line-text "main = 123.Foo"))
+			(line-break)
+			(reflow "The method")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "I64, U8 -> Foo")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need it to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Numeral -> Try(Foo, [InvalidNumeral(Str)])")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "2")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,

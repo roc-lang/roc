@@ -10784,7 +10784,12 @@ fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx)
                 self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @truncate(value)) catch return error.OutOfMemory;
             },
-            .f32, .f64, .v128 => unreachable,
+            .v128 => {
+                var bytes: [16]u8 = undefined;
+                std.mem.writeInt(i128, &bytes, value, .little);
+                try self.emitV128Const(bytes);
+            },
+            .f32, .f64 => unreachable,
         },
         .stack_memory => try self.generateI128Literal(value),
     }
@@ -14749,7 +14754,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (box_layout.tag == .box_of_zst or
                 (erased_box_ptr and try self.layoutByteSize(ll.ret_layout) == 0))
             {
-                _ = try self.emitProcLocal(box_expr);
+                // The input is an already-evaluated LIR local. A zero-sized
+                // payload needs no load; pushing its pointer here would leave
+                // an extra operand beneath the result. ARC owns its release.
                 const result_vt = try self.resolveValType(ll.ret_layout);
                 switch (result_vt) {
                     .i32 => {
@@ -14776,7 +14783,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 else
                     ls.builtinBoxAbi(box_layout_idx).elem_size;
                 if (elem_size == 0) {
-                    _ = try self.emitProcLocal(box_expr);
+                    // Only the result belongs on the operand stack for an
+                    // empty payload; the box local needs no dereference.
                     const result_vt = try self.resolveValType(ll.ret_layout);
                     switch (result_vt) {
                         .i32 => {

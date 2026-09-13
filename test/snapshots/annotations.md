@@ -33,43 +33,66 @@ TYPE MISMATCH - annotations.md:16:28:16:31
 TYPE MISMATCH - annotations.md:19:35:19:40
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────────────────── annotations.md:16:28
-
-This string literal is being used where a non-string type is needed.
-
-failPairDiffTypes = mkPair("1", 2)
-                           ^^^
-
-The type was determined to be:
-
-    U8
-
-── ✗ type mismatch ──────────────────────────────────────── annotations.md:19:35
-
-This string literal is being used where a non-string type is needed.
-
-failPairDiffTypes2 = Pair.Pair(1, "str")
-                                  ^^^^^
-
-The type was determined to be:
-
-    U64
-
-── ✗ invalid nominal tag ────────────────────────────────── annotations.md:22:24
-
-I'm having trouble with this nominal tag.
-
-mkPairInvalid = |x, y| Pair.Pair(x, y)
-                       ^^^^^^^^^^^^^^^
-
-The tag is:
-
-    Pair(a, b)
-
-But the nominal type needs it to be:
-
-    Pair(a, a)
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 16 28) (end 16 31))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "annotations.md") (start 16 28) (end 16 31) (annotation error) (line-text "failPairDiffTypes = mkPair(\"1\", 2)"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U8")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 19 35) (end 19 40))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "annotations.md") (start 19 35) (end 19 40) (annotation error) (line-text "failPairDiffTypes2 = Pair.Pair(1, \"str\")"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U64")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Nominal Tag")
+		(region (start 22 24) (end 22 39))
+		(headline
+			(reflow "I'm having trouble with this nominal tag."))
+		(document
+			(source-region (file "annotations.md") (start 22 24) (end 22 39) (annotation error) (line-text "mkPairInvalid = |x, y| Pair.Pair(x, y)"))
+			(line-break)
+			(text "The tag is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Pair(a, b)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "But the nominal type needs it to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Pair(a, a)")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,CloseSquare,
@@ -257,7 +280,7 @@ NO CHANGE
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-num (value "2")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-apply (name "Pair") (local)
 				(ty-lookup (name "U8") (builtin)))))
@@ -266,7 +289,7 @@ NO CHANGE
 		(e-nominal (nominal "Pair")
 			(e-tag (name "Pair")
 				(args
-					(e-num (value "1"))
+					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-runtime-error (tag "erroneous_value_expr")))))
 		(annotation
 			(ty-apply (name "Pair") (local)

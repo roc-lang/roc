@@ -92,8 +92,10 @@ test "issue 10765: erroneous for iterable does not introduce iterator constraint
 }
 
 test "issue 10765: recursive fib with an out-of-scope operand reports the name" {
+    // Keep the comparison numeric: logical negation now requires Bool, so
+    // using !1 here would introduce unrelated numeric-method errors.
     try expectChecksWithNameNotInScope(
-        \\fib = |n| if n <= !1 n else fib(n - d) + fib(n - 2)
+        \\fib = |n| if n <= 1 n else fib(n - d) + fib(n - 2)
         \\
         \\main! = |_| Ok({})
         \\

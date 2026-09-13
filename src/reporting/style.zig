@@ -1,8 +1,7 @@
 //! Styles for reporting.
 //!
 //! This module provides color palettes, style definitions, and utilities for
-//! rendering styled content across different output targets. It supports
-//! ANSI terminal colors and plain text fallbacks.
+//! rendering terminal content with ANSI colors or unstyled text.
 
 const std = @import("std");
 
@@ -51,7 +50,7 @@ pub const AnsiCodes = struct {
     pub const RESET_STRIKETHROUGH = "\x1b[29m";
 };
 
-/// A color palette that can be used across different rendering targets.
+/// Terminal colors and style codes, including the unstyled text palette.
 pub const ColorPalette = struct {
     // Core semantic colors
     primary: []const u8,
@@ -162,32 +161,44 @@ pub const ColorPalette = struct {
 
     /// Get the appropriate color for an annotation.
     pub fn colorForAnnotation(self: ColorPalette, annotation: Annotation) []const u8 {
-        return switch (annotation) {
-            .emphasized => self.bold,
-            .keyword => self.keyword,
-            .type_variable => self.type_variable,
-            .error_highlight => self.error_color,
-            .warning_highlight => self.warning,
-            .suggestion => self.success,
-            .code_block => "",
-            .inline_code => self.primary,
-            .symbol => self.symbol,
-            .path => self.path,
-            .literal => self.literal,
-            .comment => self.comment,
-            .underline => self.underline,
-            .dimmed => self.dim,
-            .symbol_qualified => self.symbol,
-            .symbol_unqualified => self.symbol,
-            .module_name => self.primary,
-            .record_field => self.type_variable,
-            .tag_name => self.type_variable,
-            .binary_operator => self.keyword,
-            .source_region => self.primary,
-            .reflowing_text => self.reset,
-        };
+        const field = terminal_colors.get(annotation) orelse return "";
+        inline for (std.meta.fields(ColorPalette)) |palette_field| {
+            if (field == @field(PaletteField, palette_field.name)) {
+                return @field(self, palette_field.name);
+            }
+        }
+        unreachable;
     }
 };
+
+/// Terminal annotation styles reference palette fields, so every palette uses
+/// the same exhaustive mapping. An unstyled code block has no palette field.
+const PaletteField = std.meta.FieldEnum(ColorPalette);
+
+const terminal_colors = std.enums.EnumArray(Annotation, ?PaletteField).init(.{
+    .emphasized = .bold,
+    .keyword = .keyword,
+    .type_variable = .type_variable,
+    .error_highlight = .error_color,
+    .warning_highlight = .warning,
+    .suggestion = .success,
+    .code_block = null,
+    .inline_code = .primary,
+    .symbol = .symbol,
+    .path = .path,
+    .literal = .literal,
+    .comment = .comment,
+    .underline = .underline,
+    .dimmed = .dim,
+    .symbol_qualified = .symbol,
+    .symbol_unqualified = .symbol,
+    .module_name = .primary,
+    .record_field = .type_variable,
+    .tag_name = .type_variable,
+    .binary_operator = .keyword,
+    .source_region = .primary,
+    .reflowing_text = .reset,
+});
 
 /// Style information for rendering.
 pub const Style = struct {

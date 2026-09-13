@@ -45,60 +45,84 @@ INVALID NOMINAL RECORD - record_default_expressions.md:33:19:33:21
 EFFECTFUL DEFAULT VALUE - record_default_expressions.md:20:26:20:34
 DEFAULT CONSTRAINS A TYPE PARAMETER - record_default_expressions.md:25:33:25:34
 # PROBLEMS
-── ✗ default value cycle ─────────────────── record_default_expressions.md:30:22
-
-The default value for the a field depends on itself.
-
-Cycle := { a : U8 ?? cycle_val.a }
-                     ^^^^^^^^^^^
-
-A field default (??) is materialized at every construction site that omits the
-field. This default reaches itself again—through values it references, or
-through constructions that omit the field and would materialize it—so there is
-no value to start from. Break the cycle by supplying the field at one of the
-constructions involved, or by removing the self-dependent reference from the
-default.
-
-── ✗ invalid nominal record ──────────────── record_default_expressions.md:33:19
-
-I'm having trouble with this nominal type that wraps a record.
-
-cycle_val = Cycle.{}
-                  ^^
-
-The record I found is:
-
-    {}
-
-But the nominal type expects:
-
-    { a: U8 }
-
-── ✗ effectful default value ─────────────── record_default_expressions.md:20:26
-
-The default value for the a field performs effects, but a field default must be
-pure.
-
-BadEffect := { a : U8 ?? eff!({}) }
-                         ^^^^^^^^
-
-A default is filled in by the compiler wherever construction omits the field,
-so running effects here would happen at unpredictable times. Compute the value
-with an effectful function first, then pass it explicitly.
-
-── ✗ default constrains a type parameter ─── record_default_expressions.md:25:33
-
-The default value for the value field requires the type parameter t to have a
-from_numeral method.
-
-BadLiteral(t) := { value : t ?? 0 }
-                                ^
-
-A field default can never place a requirement on the type's parameters: type
-declarations do not carry where clauses, and the compiler never infers such
-requirements onto a type. Make the field's type concrete, or use a default
-value that demands nothing of the parameter.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Default Value Cycle")
+		(region (start 30 22) (end 30 33))
+		(headline
+			(reflow "The default value for the ")
+			(annotated record-field "a")
+			(reflow " field depends on itself."))
+		(document
+			(source-region (file "record_default_expressions.md") (start 30 22) (end 30 33) (annotation error) (line-text "Cycle := { a : U8 ?? cycle_val.a }"))
+			(line-break)
+			(reflow "A field default (")
+			(annotated code "??")
+			(reflow ") is materialized at every construction site that omits the field. This default reaches itself again—through values it references, or through constructions that omit the field and would materialize it—so there is no value to start from. Break the cycle by supplying the field at one of the constructions involved, or by removing the self-dependent reference from the default.")))
+	(report
+		(severity runtime_error)
+		(title "Invalid Nominal Record")
+		(region (start 33 19) (end 33 21))
+		(headline
+			(reflow "I'm having trouble with this nominal type that wraps a record."))
+		(document
+			(source-region (file "record_default_expressions.md") (start 33 19) (end 33 21) (annotation error) (line-text "cycle_val = Cycle.{}"))
+			(line-break)
+			(text "The record I found is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "But the nominal type expects:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ a: U8 }")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Effectful Default Value")
+		(region (start 20 26) (end 20 34))
+		(headline
+			(reflow "The default value for the")
+			(reflow " ")
+			(annotated code "a")
+			(reflow " ")
+			(reflow "field performs effects, but a field default must be pure."))
+		(document
+			(source-region (file "record_default_expressions.md") (start 20 26) (end 20 34) (annotation error) (line-text "BadEffect := { a : U8 ?? eff!({}) }"))
+			(line-break)
+			(reflow "A default is filled in by the compiler wherever construction omits the field, so running effects here would happen at unpredictable times. Compute the value with an effectful function first, then pass it explicitly.")))
+	(report
+		(severity runtime_error)
+		(title "Default Constrains A Type Parameter")
+		(region (start 25 33) (end 25 34))
+		(headline
+			(reflow "The default value for the")
+			(reflow " ")
+			(annotated code "value")
+			(reflow " ")
+			(reflow "field requires the type parameter")
+			(reflow " ")
+			(annotated code "t")
+			(reflow " ")
+			(reflow "to have a")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method."))
+		(document
+			(source-region (file "record_default_expressions.md") (start 25 33) (end 25 34) (annotation error) (line-text "BadLiteral(t) := { value : t ?? 0 }"))
+			(line-break)
+			(reflow "A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

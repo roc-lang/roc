@@ -36,45 +36,66 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
-── ✗ does not exist ────────────────── rigid_var_no_instantiation_error.md:17:21
-
-Bool.true does not exist.
-
-result2 = swap((Bool.true, [1, 2, 3]))
-                ^^^^^^^^^
-
-Bool is in scope, but it has no associated true.
-
-── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:13:5
-
-Variable result1 is defined here and then never used:
-
-result1 = swap((42, "hello"))
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result1 to
-suppress this warning.
-
-── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:17:5
-
-Variable result2 is defined here and then never used:
-
-result2 = swap((Bool.true, [1, 2, 3]))
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result2 to
-suppress this warning.
-
-── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:21:5
-
-Variable result3 is defined here and then never used:
-
-result3 = swap(("foo", "bar"))
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result3 to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 17 21) (end 17 30))
+		(headline
+			(annotated code "Bool.true")
+			(reflow " does not exist."))
+		(document
+			(annotated code "Bool")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "true")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "rigid_var_no_instantiation_error.md") (start 17 21) (end 17 30) (annotation error) (line-text "    result2 = swap((Bool.true, [1, 2, 3]))"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 13 5) (end 13 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result1")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result1")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "rigid_var_no_instantiation_error.md") (start 13 5) (end 13 12) (annotation error) (line-text "    result1 = swap((42, \"hello\"))"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 17 5) (end 17 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result2")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result2")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "rigid_var_no_instantiation_error.md") (start 17 5) (end 17 12) (annotation error) (line-text "    result2 = swap((Bool.true, [1, 2, 3]))"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 21 5) (end 21 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result3")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result3")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "rigid_var_no_instantiation_error.md") (start 21 5) (end 21 12) (annotation error) (line-text "    result3 = swap((\"foo\", \"bar\"))")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

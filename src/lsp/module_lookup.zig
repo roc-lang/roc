@@ -67,12 +67,13 @@ pub const BindingInfo = struct {
 
 // Pattern Extraction Functions
 
-/// Extract the identifier from a pattern, handling .assign and .as cases.
+/// Extract the identifier from a binding pattern.
 /// Returns null for patterns that don't directly bind an identifier
 /// (e.g., record destructures, literals, underscore).
 pub fn extractIdentFromPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = store.getPattern(pattern_idx);
     if (std.meta.activeTag(pattern) == .assign) return pattern.assign.ident;
+    if (std.meta.activeTag(pattern) == .var_assign) return pattern.var_assign.ident;
     if (std.meta.activeTag(pattern) == .as) return pattern.as.ident;
     return null;
 }
@@ -82,6 +83,7 @@ pub fn extractIdentFromPattern(store: *const NodeStore, pattern_idx: CIR.Pattern
 pub fn extractIdentFromPatternRecursive(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = store.getPattern(pattern_idx);
     if (std.meta.activeTag(pattern) == .assign) return pattern.assign.ident;
+    if (std.meta.activeTag(pattern) == .var_assign) return pattern.var_assign.ident;
     if (std.meta.activeTag(pattern) == .as) return pattern.as.ident;
     return null;
 }

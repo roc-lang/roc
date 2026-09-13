@@ -25,90 +25,29 @@ const shim_symbols = builtins.shim_symbols;
 // Freestanding hosts (the wasm test host) have no stderr to trace to.
 const trace_refcount = build_options.trace_refcount and builtin.os.tag != .freestanding;
 
-/// Bytes reserved before the user data for the stored total size. The prefix
-/// is at least `alignment` bytes so the user data keeps its alignment, and at
-/// least `@alignOf(usize)` bytes so the size store/load stays aligned.
-pub fn sizeStorageBytes(alignment: usize) usize {
-    return @max(alignment, @alignOf(usize));
-}
+const tracking = @import("tracking.zig");
+pub const sizeStorageBytes = tracking.sizeStorageBytes;
+pub const backingAlignment = tracking.backingAlignment;
+pub const storedTotalSize = tracking.storedTotalSize;
+pub const basePtr = tracking.basePtr;
 
-/// The alignment the backing allocation is made with: the requested alignment,
-/// raised to `@alignOf(usize)` so the size prefix is aligned.
-pub fn backingAlignment(alignment: usize) std.mem.Alignment {
-    return std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
-}
-
-/// Total size (prefix included) stored for the live allocation at `ptr`.
-pub fn storedTotalSize(ptr: *const anyopaque) usize {
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
-    return size_ptr.*;
-}
-
-/// The backing allocation's base pointer for the user allocation at `ptr`.
-pub fn basePtr(ptr: *anyopaque, alignment: usize) [*]u8 {
-    return @ptrFromInt(@intFromPtr(ptr) - sizeStorageBytes(alignment));
-}
-
-/// Allocate `length` bytes aligned to `alignment` with the size prefix filled
-/// in, returning null on OOM.
+/// Allocate through the shared core and emit the configured host allocation trace.
 pub fn alloc(backing: std.mem.Allocator, length: usize, alignment: usize) ?*anyopaque {
-    const size_storage_bytes = sizeStorageBytes(alignment);
-    const total_size = length + size_storage_bytes;
-
-    const base_ptr = backing.rawAlloc(total_size, backingAlignment(alignment), @returnAddress()) orelse
-        return null;
-
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-
-    const answer: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-    std.debug.assert(@intFromPtr(answer) % @max(alignment, 1) == 0);
-    if (trace_refcount) {
-        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(answer), length, alignment });
-    }
-    return answer;
+    const ptr = tracking.alloc(backing, length, alignment) orelse return null;
+    if (trace_refcount) std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(ptr), length, alignment });
+    return ptr;
 }
 
-/// Free the allocation at `ptr` using its stored total size. (On an arena
-/// backing this is effectively a no-op, which is exactly what arena-based
-/// hosts want.)
+/// Release a tracked allocation, tracing its size before the core frees it.
 pub fn dealloc(backing: std.mem.Allocator, ptr: *anyopaque, alignment: usize) void {
-    const total_size = storedTotalSize(ptr);
-    if (trace_refcount) {
-        std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
-            @intFromPtr(ptr),
-            alignment,
-            total_size,
-            sizeStorageBytes(alignment),
-        });
-    }
-    const base_ptr = basePtr(ptr, alignment);
-    backing.rawFree(base_ptr[0..total_size], backingAlignment(alignment), @returnAddress());
+    if (trace_refcount) std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{ @intFromPtr(ptr), alignment, storedTotalSize(ptr), sizeStorageBytes(alignment) });
+    tracking.dealloc(backing, ptr, alignment);
 }
 
-/// Reallocate the allocation at `ptr` to `new_length` bytes, returning null on
-/// OOM (in which case the old allocation stays live).
+/// Resize through the shared core, preserving the old allocation on failure.
 pub fn realloc(backing: std.mem.Allocator, ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
-    const size_storage_bytes = sizeStorageBytes(alignment);
-    const old_total_size = storedTotalSize(ptr);
-    const old_base_ptr = basePtr(ptr, alignment);
-    const new_total_size = new_length + size_storage_bytes;
-
-    const new_base_ptr = backing.rawAlloc(new_total_size, backingAlignment(alignment), @returnAddress()) orelse
-        return null;
-
-    const copy_size = @min(old_total_size, new_total_size);
-    @memcpy(new_base_ptr[0..copy_size], old_base_ptr[0..copy_size]);
-
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-
-    backing.rawFree(old_base_ptr[0..old_total_size], backingAlignment(alignment), @returnAddress());
-
-    const answer: *anyopaque = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
-    if (trace_refcount) {
-        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(ptr), @intFromPtr(answer), new_length });
-    }
+    const answer = tracking.realloc(backing, ptr, new_length, alignment) orelse return null;
+    if (trace_refcount) std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(ptr), @intFromPtr(answer), new_length });
     return answer;
 }
 
@@ -165,26 +104,21 @@ pub const ExportOptions = struct {
 };
 
 /// The six runtime-symbol implementations, typed directly from
-/// `host_abi.extern_host` so a signature that drifts from the canonical ABI is
+/// `host_abi.ExternHostFns` so a signature that drifts from the canonical ABI is
 /// a compile error.
 pub const RuntimeFns = struct {
-    alloc: *const @TypeOf(builtins.host_abi.extern_host.roc_alloc),
-    dealloc: *const @TypeOf(builtins.host_abi.extern_host.roc_dealloc),
-    realloc: *const @TypeOf(builtins.host_abi.extern_host.roc_realloc),
-    dbg: *const @TypeOf(builtins.host_abi.extern_host.roc_dbg),
-    expect_failed: *const @TypeOf(builtins.host_abi.extern_host.roc_expect_failed),
-    crashed: *const @TypeOf(builtins.host_abi.extern_host.roc_crashed),
+    alloc: builtins.host_abi.ExternHostFns.roc_alloc,
+    dealloc: builtins.host_abi.ExternHostFns.roc_dealloc,
+    realloc: builtins.host_abi.ExternHostFns.roc_realloc,
+    dbg: builtins.host_abi.ExternHostFns.roc_dbg,
+    expect_failed: builtins.host_abi.ExternHostFns.roc_expect_failed,
+    crashed: builtins.host_abi.ExternHostFns.roc_crashed,
 };
 
 /// Export `fns` under the fixed runtime symbol names. Call from a `comptime`
 /// block. Hosts that build a `RocOps` use `exportRuntimeSymbols` instead.
 pub fn exportRuntimeFns(comptime fns: RuntimeFns) void {
-    @export(fns.alloc, .{ .name = shim_symbols.roc_alloc, .visibility = .hidden });
-    @export(fns.dealloc, .{ .name = shim_symbols.roc_dealloc, .visibility = .hidden });
-    @export(fns.realloc, .{ .name = shim_symbols.roc_realloc, .visibility = .hidden });
-    @export(fns.dbg, .{ .name = shim_symbols.roc_dbg, .visibility = .hidden });
-    @export(fns.expect_failed, .{ .name = shim_symbols.roc_expect_failed, .visibility = .hidden });
-    @export(fns.crashed, .{ .name = shim_symbols.roc_crashed, .visibility = .hidden });
+    shim_symbols.exportRuntimeFns(fns, .hidden);
 }
 
 /// Export the fixed runtime symbols (`roc_alloc` and friends) the symbol ABI
@@ -260,4 +194,64 @@ test "small alignments still keep the size prefix aligned" {
     const ptr = alloc(backing, 3, 1).?;
     try std.testing.expectEqual(@as(usize, 3 + @alignOf(usize)), storedTotalSize(ptr));
     dealloc(backing, ptr, 1);
+}
+
+const AccountingTestHost = struct {
+    count: usize = 0,
+    var env: @This() = .{};
+    var ops: RocOps = undefined;
+
+    pub fn rocAllocator(_: *@This()) std.mem.Allocator {
+        return std.testing.allocator;
+    }
+    fn getOps() *RocOps {
+        return &ops;
+    }
+    fn countAlloc() void {
+        env.count += 1;
+    }
+};
+
+comptime {
+    if (builtin.is_test) exportRuntimeSymbols(AccountingTestHost.getOps, .{ .on_alloc = AccountingTestHost.countAlloc });
+}
+
+test "alloc-count counts exported alloc and realloc but not private callbacks or free" {
+    const Host = AccountingTestHost;
+    const callbacks = Callbacks(Host);
+    Host.env = .{};
+    Host.ops = .{
+        .env = @ptrCast(&Host.env),
+        .roc_alloc = callbacks.rocAllocFn,
+        .roc_dealloc = callbacks.rocDeallocFn,
+        .roc_realloc = callbacks.rocReallocFn,
+        .roc_dbg = callbacks.rocDbgFn,
+        .roc_expect_failed = callbacks.rocExpectFailedFn,
+        .roc_crashed = callbacks.rocCrashedFn,
+        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+    };
+    const exported = builtins.host_abi.extern_host;
+    const private = Host.ops.roc_alloc(&Host.ops, 20, 8).?;
+    Host.ops.roc_dealloc(&Host.ops, private, 8);
+    try std.testing.expectEqual(@as(usize, 0), Host.env.count);
+    const first = exported.roc_alloc(20, 8).?;
+    try std.testing.expectEqual(@as(usize, 1), Host.env.count);
+    const grown = exported.roc_realloc(first, 40, 8).?;
+    try std.testing.expectEqual(@as(usize, 2), Host.env.count);
+    const shrunk = exported.roc_realloc(grown, 5, 8).?;
+    try std.testing.expectEqual(@as(usize, 3), Host.env.count);
+    exported.roc_dealloc(shrunk, 8);
+    try std.testing.expectEqual(@as(usize, 3), Host.env.count);
+}
+
+test "realloc failure preserves the live allocation and its bytes" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    const backing = failing.allocator();
+    const ptr = alloc(backing, 12, 8).?;
+    defer dealloc(backing, ptr, 8);
+    const bytes: [*]u8 = @ptrCast(ptr);
+    @memset(bytes[0..12], 0x7b);
+    try std.testing.expectEqual(@as(?*anyopaque, null), realloc(backing, ptr, 100, 8));
+    try std.testing.expectEqual(@as(usize, 12 + sizeStorageBytes(8)), storedTotalSize(ptr));
+    for (bytes[0..12]) |byte| try std.testing.expectEqual(@as(u8, 0x7b), byte);
 }

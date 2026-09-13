@@ -88,114 +88,161 @@ UNUSED VARIABLE - trailing_comma_layout.md:39:32:39:35
 UNUSED VARIABLE - trailing_comma_layout.md:59:4:59:7
 UNUSED VARIABLE - trailing_comma_layout.md:61:16:61:19
 # PROBLEMS
-── ✗ name not in scope ────────────────────────── trailing_comma_layout.md:13:16
-
-Nothing is named make in this scope.
-
-compact_call = make(
-               ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────── trailing_comma_layout.md:18:17
-
-Nothing is named make in this scope.
-
-expanded_call = make(1, 2,)
-                ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ───────────────────────────── trailing_comma_layout.md:32:2
-
-Variable two is defined here and then never used:
-
-two
-^^^
-
-If you don't need this variable, prefix it with an underscore like _two to
-suppress this warning.
-
-── ● unused variable ──────────────────────────── trailing_comma_layout.md:35:31
-
-Variable two is defined here and then never used:
-
-expanded_lambda_ident = |one, two,| one
-                              ^^^
-
-If you don't need this variable, prefix it with an underscore like _two to
-suppress this warning.
-
-── ● unused variable ──────────────────────────── trailing_comma_layout.md:36:26
-
-Variable one is defined here and then never used:
-
-expanded_lambda_block = |one, two,| {}
-                         ^^^
-
-If you don't need this variable, prefix it with an underscore like _one to
-suppress this warning.
-
-── ● unused variable ──────────────────────────── trailing_comma_layout.md:36:31
-
-Variable two is defined here and then never used:
-
-expanded_lambda_block = |one, two,| {}
-                              ^^^
-
-If you don't need this variable, prefix it with an underscore like _two to
-suppress this warning.
-
-── ● unused variable ──────────────────────────── trailing_comma_layout.md:37:30
-
-Variable two is defined here and then never used:
-
-expanded_lambda_list = |one, two,| [one]
-                             ^^^
-
-If you don't need this variable, prefix it with an underscore like _two to
-suppress this warning.
-
-── ● unused variable ──────────────────────────── trailing_comma_layout.md:39:27
-
-Variable one is defined here and then never used:
-
-expanded_lambda_nested = |one, two,| |value| value
-                          ^^^
-
-If you don't need this variable, prefix it with an underscore like _one to
-suppress this warning.
-
-── ● unused variable ──────────────────────────── trailing_comma_layout.md:39:32
-
-Variable two is defined here and then never used:
-
-expanded_lambda_nested = |one, two,| |value| value
-                               ^^^
-
-If you don't need this variable, prefix it with an underscore like _two to
-suppress this warning.
-
-── ● unused variable ───────────────────────────── trailing_comma_layout.md:59:4
-
-Variable two is defined here and then never used:
-
-two
-^^^
-
-If you don't need this variable, prefix it with an underscore like _two to
-suppress this warning.
-
-── ● unused variable ──────────────────────────── trailing_comma_layout.md:61:16
-
-Variable one is defined here and then never used:
-
-ExpandedPair(one, two,) => two
-             ^^^
-
-If you don't need this variable, prefix it with an underscore like _one to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 13 16) (end 13 20))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "make")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 13 16) (end 13 20) (annotation error) (line-text "compact_call = make("))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 18 17) (end 18 21))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "make")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 18 17) (end 18 21) (annotation error) (line-text "expanded_call = make(1, 2,)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 32 2) (end 32 5))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "two")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_two")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 32 2) (end 32 5) (annotation error) (line-text "\ttwo"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 35 31) (end 35 34))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "two")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_two")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 35 31) (end 35 34) (annotation error) (line-text "expanded_lambda_ident = |one, two,| one"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 36 26) (end 36 29))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "one")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_one")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 36 26) (end 36 29) (annotation error) (line-text "expanded_lambda_block = |one, two,| {}"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 36 31) (end 36 34))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "two")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_two")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 36 31) (end 36 34) (annotation error) (line-text "expanded_lambda_block = |one, two,| {}"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 37 30) (end 37 33))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "two")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_two")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 37 30) (end 37 33) (annotation error) (line-text "expanded_lambda_list = |one, two,| [one]"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 39 27) (end 39 30))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "one")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_one")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 39 27) (end 39 30) (annotation error) (line-text "expanded_lambda_nested = |one, two,| |value| value"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 39 32) (end 39 35))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "two")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_two")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 39 32) (end 39 35) (annotation error) (line-text "expanded_lambda_nested = |one, two,| |value| value"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 59 4) (end 59 7))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "two")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_two")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 59 4) (end 59 7) (annotation error) (line-text "\t\t\ttwo"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 61 16) (end 61 19))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "one")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_one")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "trailing_comma_layout.md") (start 61 16) (end 61 19) (annotation error) (line-text "\t\tExpandedPair(one, two,) => two")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,

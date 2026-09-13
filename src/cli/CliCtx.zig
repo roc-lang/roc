@@ -262,6 +262,8 @@ pub const CliCtx = struct {
     /// headers use the detected width, capped by the renderer at 120 columns.
     fn baseReportConfig(self: *const Self) ReportingConfig {
         var config = ReportingConfig.initColorTerminal();
+        // Reporting must still work if the working directory is inaccessible.
+        config.source_path_base = self.coreCtx().canonicalize(".", self.arena) catch null;
         if (self.coreCtx().terminalWidth()) |cols| {
             if (cols > 0) config.max_line_width = cols;
         }
@@ -447,7 +449,9 @@ pub fn reportSingleProblem(
     command: Command,
     problem: CliProblem,
 ) u8 {
-    var ctx = CliCtx.init(allocator, allocator, io, command);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var ctx = CliCtx.init(allocator, arena.allocator(), io, command);
     defer ctx.deinit();
 
     ctx.addProblemIgnoreError(problem);
@@ -528,8 +532,10 @@ test "CliCtx accumulates problems" {
 
 test "CliCtx no_color selects plain reporting" {
     const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
     var io = Io.create(std.testing.io);
-    var ctx = CliCtx.init(allocator, allocator, &io, .build);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io, .build);
     ctx.setNoColor(true);
     ctx.initIo();
     defer ctx.deinit();

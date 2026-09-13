@@ -19,103 +19,155 @@ UNEXPECTED EXPRESSION SYNTAX - record_builder.md:3:9:3:10
 DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
-── ✗ unexpected expression syntax ─────────────────────── record_builder.md:1:15
-
-I was parsing an expression, and this token cannot start an expression here.
-
-{ Foo.Bar.baz <-
-              ^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found <- here.
-
-── ✗ unexpected type syntax ────────────────────────────── record_builder.md:2:8
-
-I was parsing a type annotation, and this token cannot start a type here.
-
-x: 5,
-   ^
-
-Types can be type variables, uppercase type names, function types, tuples,
-records, or tag unions.
-
-For example:
-    List(U64)
-
-I found 5 here.
-
-── ✗ unexpected expression syntax ──────────────────────── record_builder.md:2:9
-
-I was parsing an expression, and this token cannot start an expression here.
-
-x: 5,
-    ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found , here.
-A comma separates items, but there must be a valid item on both sides of it.
-
-── ✗ unexpected type syntax ────────────────────────────── record_builder.md:3:8
-
-I was parsing a type annotation, and this token cannot start a type here.
-
-y: 0,
-   ^
-
-Types can be type variables, uppercase type names, function types, tuples,
-records, or tag unions.
-
-For example:
-    List(U64)
-
-I found 0 here.
-
-── ✗ unexpected expression syntax ──────────────────────── record_builder.md:3:9
-
-I was parsing an expression, and this token cannot start an expression here.
-
-y: 0,
-    ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found , here.
-A comma separates items, but there must be a valid item on both sides of it.
-
-── ● declaration has no value ──────────────────────────── record_builder.md:2:5
-
-This declaration has a type annotation but no implementation.
-
-x: 5,
-^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ──────────────────────────── record_builder.md:3:5
-
-This declaration has a type annotation but no implementation.
-
-y: 0,
-^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 1 15) (end 1 17))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "<-")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_builder.md") (start 1 15) (end 1 17) (annotation error) (line-text "{ Foo.Bar.baz <-"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Type Syntax")
+		(region (start 2 8) (end 2 9))
+		(headline
+			(reflow "I was parsing a type annotation, and this token cannot start a type here."))
+		(document
+			(reflow "Types can be type variables, uppercase type names, function types, tuples, records, or tag unions.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "5")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_builder.md") (start 2 8) (end 2 9) (annotation error) (line-text "    x: 5,"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 2 9) (end 2 10))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ",")
+			(text " here.")
+			(line-break)
+			(reflow "A comma separates items, but there must be a valid item on both sides of it.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_builder.md") (start 2 9) (end 2 10) (annotation error) (line-text "    x: 5,"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Type Syntax")
+		(region (start 3 8) (end 3 9))
+		(headline
+			(reflow "I was parsing a type annotation, and this token cannot start a type here."))
+		(document
+			(reflow "Types can be type variables, uppercase type names, function types, tuples, records, or tag unions.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "0")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_builder.md") (start 3 8) (end 3 9) (annotation error) (line-text "    y: 0,"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 3 9) (end 3 10))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ",")
+			(text " here.")
+			(line-break)
+			(reflow "A comma separates items, but there must be a valid item on both sides of it.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_builder.md") (start 3 9) (end 3 10) (annotation error) (line-text "    y: 0,"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 2 5) (end 2 9))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "record_builder.md") (start 2 5) (end 2 9) (annotation error) (line-text "    x: 5,"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 3 5) (end 3 9))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "record_builder.md") (start 3 5) (end 3 9) (annotation error) (line-text "    y: 0,"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,

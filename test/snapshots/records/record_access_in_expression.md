@@ -8,19 +8,9 @@ type=expr
 person.age + 5
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
+NIL
 # PROBLEMS
-── ✗ polymorphic value ────────────────────── record_access_in_expression.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
-person.age + 5
-^^^^^^^^^^^^^^
-
-Its type is:
-a where [a.plus : a, Dec -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,OpPlus,Int,
@@ -41,17 +31,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "plus") (constraint-fn-var 215)
-	(receiver
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "age") (mode "required")))))
-	(args
-		(e-num (value "5"))))
+(e-binop (op "add")
+	(e-field-access
+		(receiver
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(segments
+			(segment (name "age") (mode "required"))))
+	(e-num (value "5")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.plus : a, Dec -> a]"))
+(expr (type "Error"))
 ~~~

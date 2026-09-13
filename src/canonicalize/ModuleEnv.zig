@@ -711,6 +711,16 @@ pub const SchemeUseRecord = extern struct {
         /// The edge shares the definition's vars, so its record has no copy
         /// pairs but still names the exact scheme root used by checking.
         shared_value_use,
+        /// A fully concrete recursive dispatch reuses an ancestor's selected
+        /// method instance. `slot_data` identifies this constraint, and
+        /// `scheme_root` names the reused instance; no fresh pairs are minted.
+        /// Its requirements are determined by the target's callable paths.
+        recursive_dispatch_target,
+        /// Producer-authored provenance for a reference to a definition in an
+        /// on-stack recursive binding group. This record carries no evidence
+        /// or substitution of its own; an accompanying value/shared use owns
+        /// those facts when the referenced scheme has quantified variables.
+        recursive_reference,
     };
 };
 
@@ -862,10 +872,17 @@ pub const BindingScheme = extern struct {
 /// the complete callable graph and metadata without reconstructing either from
 /// the receiver's final shape.
 pub const BindingSchemeCodecRequirement = extern struct {
+    /// Binding source var, or a synthetic pristine imported scheme var. The
+    /// latter has no CIR node but still owns a complete evidence schema.
     node_idx: u32,
     scheme_root: u32,
     receiver_var: u32,
     constraint_index: u32,
+    /// The checker retired definition-side validation because this relation
+    /// must be instantiated before a concrete codec can be selected.
+    requires_instantiation: u32,
+    /// Persist the producer's classification for checked-environment rechecks.
+    is_synthetic: u32,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -925,8 +942,10 @@ external_decls: CIR.ExternalDecl.SafeList,
 imports: CIR.Import.Store,
 /// Source-relative file imports read while canonicalizing this module.
 file_dependencies: FileDependency.SafeList,
-/// The module's name as a string
-/// This is needed for import resolution to match import names to modules
+/// The module's source-visible final path segment, such as `Foo` for the
+/// logical module path `Folder/Foo`.
+/// Used for type-module main types and associated-name construction; logical
+/// import paths remain in coordinator state.
 module_name: []const u8,
 /// The module's bare name as an interned identifier (e.g., "Color").
 /// Used for display, type module validation, and method name construction.
@@ -2425,6 +2444,66 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .binding_name_does_not_match_mutability => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const title = switch (data.mutability) {
+                .mutable => "Var Name Missing `$`",
+                .immutable => "Dollar Prefix Without `var`",
+            };
+            var report = try Report.init(allocator, title, "", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+
+            switch (data.mutability) {
+                .mutable => {
+                    try report.headline.addReflowingText("The mutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" is declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(" but its name does not start with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = try std.fmt.allocPrint(allocator, "${s}", .{ident_name});
+                    defer allocator.free(suggested);
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(". The name is only a convention; mutability comes from the ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" declaration.");
+                },
+                .immutable => {
+                    try report.headline.addReflowingText("The immutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" starts with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(" but is not declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = if (ident_name.len > 0) ident_name[1..] else ident_name;
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Either rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(", or declare it with ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" if it should be mutable.");
+                },
+            }
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            break :blk report;
+        },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3357,34 +3436,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .execution_requires_app_or_default_app => |data| blk: {
-            const region_info = self.calcRegionInfo(data.region);
-
-            var report = try Report.init(allocator, "Execution Requires App Or Default App", "This file cannot be executed because it is not an app or default-app module.", .runtime_error);
-
-            try report.document.addReflowingText("Add either:");
-            try report.document.addLineBreak();
-            try report.document.addInlineCode("app");
-            try report.document.addReflowingText(" header at the top of the file");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("or:");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("a ");
-            try report.document.addInlineCode("main!");
-            try report.document.addReflowingText(" function with 1 argument (for default-app)");
-            try report.document.addLineBreak();
-
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
-
-            break :blk report;
-        },
+        .execution_requires_app_or_default_app => |data| CIR.Diagnostic.buildExecutionRequiresAppOrDefaultAppReport(
+            allocator,
+            self.calcRegionInfo(data.region),
+            filename,
+            self.getSourceAll(),
+            self.getLineStartsAll(),
+        ),
         .type_name_case_mismatch => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -4093,7 +4151,7 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) std.mem.Allocator.Error!*Self {
         // Allocate a fresh ModuleEnv on the heap
         const env = try gpa.create(Self);
@@ -4122,7 +4180,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4153,6 +4211,8 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
 
+        env.debugAssertModuleBasename();
+
         return env;
     }
 
@@ -4164,13 +4224,13 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) error{CorruptSerializedModuleEnv}!Self {
         if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
 
-        return Self{
+        const env = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
             .types = self.types.deserializeInto(base_addr, gpa),
@@ -4193,7 +4253,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = CIR.Import.Store.init(),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4223,6 +4283,9 @@ pub const Serialized = extern struct {
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
+
+        env.debugAssertModuleBasename();
+        return env;
     }
 
     /// Deserialize with mutable type store and node store for cache modules.
@@ -4234,7 +4297,7 @@ pub const Serialized = extern struct {
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
-        module_name: []const u8,
+        module_basename: []const u8,
     ) std.mem.Allocator.Error!*Self {
         // Allocate a fresh ModuleEnv on the heap
         const env = try gpa.create(Self);
@@ -4264,7 +4327,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .module_name = module_name,
+            .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .module_identities = self.module_identities.deserialize(base_addr),
@@ -4297,9 +4360,25 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
 
+        env.debugAssertModuleBasename();
+
         return env;
     }
 };
+
+/// Assert that the runtime-only module basename agrees with its serialized
+/// identifier. The basename is supplied by the cache consumer because its
+/// slice is not relocatable; it must never be replaced with a logical path.
+fn debugAssertModuleBasename(self: *const Self) void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(!self.display_module_name_idx.isNone());
+        std.debug.assert(std.mem.eql(
+            u8,
+            self.module_name,
+            self.getIdent(self.display_module_name_idx),
+        ));
+    }
+}
 
 /// Convert a type into a node index
 pub fn nodeIdxFrom(idx: anytype) Node.Idx {
@@ -4493,12 +4572,16 @@ pub fn recordBindingSchemeCodecRequirement(
     scheme_root: TypeVar,
     receiver_var: TypeVar,
     constraint_index: u32,
+    requires_instantiation: bool,
+    is_synthetic: bool,
 ) std.mem.Allocator.Error!void {
     const entry = BindingSchemeCodecRequirement{
         .node_idx = @intFromEnum(node_idx),
         .scheme_root = @intFromEnum(scheme_root),
         .receiver_var = @intFromEnum(receiver_var),
         .constraint_index = constraint_index,
+        .requires_instantiation = @intFromBool(requires_instantiation),
+        .is_synthetic = @intFromBool(is_synthetic),
     };
     const entries = self.binding_scheme_codec_requirements.items.items;
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
@@ -4508,6 +4591,7 @@ pub fn recordBindingSchemeCodecRequirement(
             existing.receiver_var == entry.receiver_var and
             existing.constraint_index == entry.constraint_index)
         {
+            std.debug.assert(existing.requires_instantiation == entry.requires_instantiation and existing.is_synthetic == entry.is_synthetic);
             return;
         }
     }
@@ -4573,8 +4657,15 @@ pub fn recordNumeralDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .numeral, target_var, fn_var);
+    try self.store.recordLiteralDispatchPlan(
+        node_idx,
+        .numeral,
+        target_var,
+        fn_var,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+    );
 }
 
 /// Return the checked `from_numeral` function for a numeric expression.
@@ -4598,8 +4689,15 @@ pub fn recordQuoteDispatchPlan(
     node_idx: Node.Idx,
     target_var: TypeVar,
     fn_var: TypeVar,
+    pattern_failure_owner: ?CIR.Node.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .quote, target_var, fn_var);
+    try self.store.recordLiteralDispatchPlan(
+        node_idx,
+        .quote,
+        target_var,
+        fn_var,
+        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+    );
 }
 
 /// Record a constrained-scheme use for static-dispatch evidence.

@@ -14,28 +14,35 @@ foo = 42
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 # PROBLEMS
-── ✗ underscore in type alias ─────────────────── simple_underscore_error.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadType := _
-^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ type mismatch ────────────────────────────── simple_underscore_error.md:4:7
-
-This number is being used where a non-number type is needed.
-
-foo = 42
-      ^^
-
-Other code expects this to have the type:
-
-    BadType
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "simple_underscore_error.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 7) (end 4 9))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "simple_underscore_error.md") (start 4 7) (end 4 9) (annotation error) (line-text "foo = 42"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadType")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

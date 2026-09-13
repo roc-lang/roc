@@ -11,23 +11,32 @@ main!=|0|""_=""
 # EXPECTED
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_088.md:1:8:1:9
 # PROBLEMS
-── ✗ non exhaustive destructure ────────────────────────── fuzz_crash_088.md:1:8
-
-This destructuring pattern doesn't cover all possible cases.
-
-main!=|0|""_=""
-       ^
-
-The value being destructured has type:
-        a
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    a.is_eq : a, a -> Bool,
-  ]
-
-Missing patterns:
-        _
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Non Exhaustive Destructure")
+		(region (start 1 8) (end 1 9))
+		(headline
+			(reflow "This destructuring pattern doesn't cover all possible cases."))
+		(document
+			(source-region (file "fuzz_crash_088.md") (start 1 8) (end 1 9) (annotation error) (line-text "main!=|0|\"\"_=\"\""))
+			(line-break)
+			(reflow "The value being destructured has type:")
+			(line-break)
+			(text "        ")
+			(annotated type "a\n  where [\n    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),\n    a.is_eq : a, a -> Bool,\n  ]")
+			(line-break)
+			(line-break)
+			(reflow "Missing patterns:")
+			(line-break)
+			(text "    ")
+			(annotation-start code-block)
+			(indent 1)
+			(text "_")
+			(annotation-end)
+			(line-break))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Int,OpBar,StringStart,StringPart,StringEnd,Underscore,OpAssign,StringStart,StringPart,StringEnd,

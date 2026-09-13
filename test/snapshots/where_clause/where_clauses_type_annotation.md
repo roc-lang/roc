@@ -29,9 +29,9 @@ EndOfFile,
 				(ty-var (raw "b")))
 			(where
 				(method (mod-of "a") (name "to_b")
-					(args
-						(ty-var (raw "a")))
-					(ty-var (raw "b")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "convert"))
 			(e-lambda
@@ -54,7 +54,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "to_b") (constraint-fn-var 225)
+			(e-dispatch-call (method "to_b") (constraint-fn-var 224)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
@@ -65,9 +65,9 @@ NO CHANGE
 				(ty-rigid-var (name "b")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_b")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))))
 ~~~
 # TYPES
 ~~~clojure

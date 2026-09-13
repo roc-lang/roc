@@ -11,7 +11,8 @@ const RocTarget = @import("roc_target").RocTarget;
 const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const Call = @import("Call.zig");
-const Relocation = @import("../Relocation.zig").Relocation;
+const Relocation = @import("../Relocation.zig").IndexedRelocation;
+const SymbolTable = @import("../SymbolTable.zig");
 const FrameBuilderMod = @import("../FrameBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
@@ -68,6 +69,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         allocator: Allocator,
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
+        symbols: SymbolTable.Table = .{},
         free_general: u32,
         free_float: u32,
         callee_saved_used: u32, // Bitmask of callee-saved regs we used
@@ -91,11 +93,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn deinit(self: *Self) void {
             self.emit.deinit();
             self.relocations.deinit(self.allocator);
+            self.symbols.deinit(self.allocator);
         }
 
         pub fn reset(self: *Self) void {
             self.emit.buf.clearRetainingCapacity();
             self.relocations.clearRetainingCapacity();
+            self.symbols.clearRetainingCapacity();
             self.stack_offset = 0;
             self.free_general = CC.CALLER_SAVED_GENERAL_MASK;
             self.free_float = CC.CALLER_SAVED_FLOAT_MASK;
@@ -492,7 +496,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.movRegImm64(dst, @bitCast(value));
         }
 
-        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) Allocator.Error!void {
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol: SymbolTable.Id) Allocator.Error!void {
             const page_offset = self.currentOffset();
             try self.emit.adrp(dst);
             const offset12 = self.currentOffset();
@@ -500,14 +504,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.relocations.append(self.allocator, .{
                 .linked_data = .{
                     .offset = @intCast(page_offset),
-                    .name = symbol_name,
+                    .symbol = symbol,
                     .kind = .page21,
                 },
             });
             try self.relocations.append(self.allocator, .{
                 .linked_data = .{
                     .offset = @intCast(offset12),
-                    .name = symbol_name,
+                    .symbol = symbol,
                     .kind = .pageoff12,
                 },
             });
@@ -641,13 +645,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit function call with relocation
-        pub fn emitCall(self: *Self, name: []const u8) Allocator.Error!void {
+        pub fn emitCall(self: *Self, symbol: SymbolTable.Id) Allocator.Error!void {
             const offset = self.currentOffset();
             try self.emit.bl(0); // Placeholder
-            try self.relocations.append(.{
+            try self.relocations.append(self.allocator, .{
                 .linked_function = .{
                     .offset = @intCast(offset),
-                    .name = name,
+                    .symbol = symbol,
                 },
             });
         }

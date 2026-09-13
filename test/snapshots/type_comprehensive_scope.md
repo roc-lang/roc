@@ -49,64 +49,110 @@ MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
-── ● builtin type shadowed ──────────────────── type_comprehensive_scope.md:10:1
-
-The type Try shadows a builtin type.
-
-Try(ok, err) : [Ok(ok), Err(err)]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This may make the builtin type inaccessible in this scope.
-
-── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:13:1
-
-The type alias Tree and Node form a recursive cycle.
-
-Tree(a) : [Branch(Node(a)), Leaf(a)]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
-
-
-And it references Node declared in type_comprehensive_scope.md:16:1:
-
-Node(a) : { value: a, children: List(Tree(a)) }
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:16:1
-
-The type alias Node and Tree form a recursive cycle.
-
-Node(a) : { value: a, children: List(Tree(a)) }
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
-
-
-And it references Tree declared in type_comprehensive_scope.md:13:1:
-
-Tree(a) : [Branch(Node(a)), Leaf(a)]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ type redeclared ────────────────────────── type_comprehensive_scope.md:22:1
-
-The type Person is being redeclared.
-
-Person : U64
-^^^^^^^^^^^^
-
-But Person was already declared in type_comprehensive_scope.md:7:1:
-
-Person : { name: Str, age: U64 }
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ undeclared type ───────────────────────── type_comprehensive_scope.md:25:11
-
-The type SomeUndeclaredType is not declared in this scope.
-
-BadType : SomeUndeclaredType
-          ^^^^^^^^^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Builtin Type Shadowed")
+		(region (start 10 1) (end 10 34))
+		(headline
+			(text "The type ")
+			(annotated symbol-unqualified "Try")
+			(text " shadows a builtin type."))
+		(document
+			(reflow "This may make the builtin type inaccessible in this scope.")
+			(line-break)
+			(source-region (file "type_comprehensive_scope.md") (start 10 1) (end 10 34) (annotation warning) (line-text "Try(ok, err) : [Ok(ok), Err(err)]"))))
+	(report
+		(severity runtime_error)
+		(title "Mutually Recursive Type Aliases")
+		(region (start 13 1) (end 13 37))
+		(headline
+			(reflow "The type alias ")
+			(annotated code "Tree")
+			(reflow " and ")
+			(annotated code "Node")
+			(reflow " form a recursive cycle."))
+		(document
+			(reflow "Type aliases are transparent synonyms and cannot be mutually recursive. ")
+			(reflow "If you need recursive types, use nominal types (")
+			(annotated code ":=")
+			(reflow ") instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_comprehensive_scope.md") (start 13 1) (end 13 37) (annotation error) (line-text "Tree(a) : [Branch(Node(a)), Leaf(a)]"))
+			(line-break)
+			(reflow "And it references ")
+			(annotated type "Node")
+			(reflow " declared in ")
+			(source-location
+				(file "type_comprehensive_scope.md")
+				(line 16)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "type_comprehensive_scope.md") (start 16 1) (end 16 48) (annotation dim) (line-text "Node(a) : { value: a, children: List(Tree(a)) }"))))
+	(report
+		(severity runtime_error)
+		(title "Mutually Recursive Type Aliases")
+		(region (start 16 1) (end 16 48))
+		(headline
+			(reflow "The type alias ")
+			(annotated code "Node")
+			(reflow " and ")
+			(annotated code "Tree")
+			(reflow " form a recursive cycle."))
+		(document
+			(reflow "Type aliases are transparent synonyms and cannot be mutually recursive. ")
+			(reflow "If you need recursive types, use nominal types (")
+			(annotated code ":=")
+			(reflow ") instead.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_comprehensive_scope.md") (start 16 1) (end 16 48) (annotation error) (line-text "Node(a) : { value: a, children: List(Tree(a)) }"))
+			(line-break)
+			(reflow "And it references ")
+			(annotated type "Tree")
+			(reflow " declared in ")
+			(source-location
+				(file "type_comprehensive_scope.md")
+				(line 13)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "type_comprehensive_scope.md") (start 13 1) (end 13 37) (annotation dim) (line-text "Tree(a) : [Branch(Node(a)), Leaf(a)]"))))
+	(report
+		(severity runtime_error)
+		(title "Type Redeclared")
+		(region (start 22 1) (end 22 13))
+		(headline
+			(reflow "The type ")
+			(annotated code "Person")
+			(reflow " is being redeclared."))
+		(document
+			(source-region (file "type_comprehensive_scope.md") (start 22 1) (end 22 13) (annotation error) (line-text "Person : U64"))
+			(line-break)
+			(reflow "But ")
+			(annotated type "Person")
+			(reflow " was already declared in ")
+			(source-location
+				(file "type_comprehensive_scope.md")
+				(line 7)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "type_comprehensive_scope.md") (start 7 1) (end 7 33) (annotation dim) (line-text "Person : { name: Str, age: U64 }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 25 11) (end 25 29))
+		(headline
+			(reflow "The type ")
+			(annotated code "SomeUndeclaredType")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_comprehensive_scope.md") (start 25 11) (end 25 29) (annotation error) (line-text "BadType : SomeUndeclaredType")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

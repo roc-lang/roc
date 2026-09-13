@@ -1,9 +1,15 @@
+const shim_io = @import("shim_io");
+pub const std_options = shim_io.std_options_static_archive;
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
+const backing = std.heap.c_allocator;
+const host_alloc = @import("host_alloc");
+const shim_symbols = @import("shim_symbols");
 const std = @import("std");
 const builtin = @import("builtin");
 const abi = @import("roc_platform_abi.zig");
 
-extern fn malloc(size: usize) callconv(.c) ?*anyopaque;
-extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 extern fn write(fd: c_int, buf: [*]const u8, count: usize) callconv(.c) isize;
 extern fn _write(fd: c_int, buf: [*]const u8, count: c_uint) callconv(.c) c_int;
 
@@ -37,45 +43,47 @@ fn stderrPrint(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn allocRaw(length: usize, alignment: usize) ?*anyopaque {
-    const total = length + alignment - 1 + @sizeOf(usize);
-    const raw: [*]u8 = @ptrCast(malloc(total) orelse return null);
-    const aligned = std.mem.alignForward(usize, @intFromPtr(raw) + @sizeOf(usize), alignment);
-    const slot: *usize = @ptrFromInt(aligned - @sizeOf(usize));
-    slot.* = @intFromPtr(raw);
+    const ptr = host_alloc.alloc(backing, length, alignment) orelse return null;
     alloc_count += 1;
-    return @ptrFromInt(aligned);
+    return ptr;
 }
 
-fn deallocRaw(ptr: ?*anyopaque) void {
+fn deallocRaw(ptr: ?*anyopaque, alignment: usize) void {
     const p = ptr orelse return;
-    const slot: *usize = @ptrFromInt(@intFromPtr(p) - @sizeOf(usize));
-    free(@ptrFromInt(slot.*));
+    host_alloc.dealloc(backing, p, alignment);
     dealloc_count += 1;
 }
 
-export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn reallocRaw(ptr: ?*anyopaque, length: usize, alignment: usize) ?*anyopaque {
+    const old = ptr orelse return allocRaw(length, alignment);
+    const answer = host_alloc.realloc(backing, old, length, alignment) orelse return null;
+    alloc_count += 1;
+    dealloc_count += 1;
+    return answer;
+}
+
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return allocRaw(length, alignment);
 }
 
-export fn roc_dealloc(ptr: ?*anyopaque, _: usize) callconv(.c) void {
-    deallocRaw(ptr);
+fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
+    deallocRaw(ptr, alignment);
 }
 
-export fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    deallocRaw(ptr);
-    return allocRaw(new_length, alignment);
+fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return reallocRaw(ptr, new_length, alignment);
 }
 
-export fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
     writeStderr(bytes[0..len]);
     writeStderr("\n");
 }
 
-export fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {
+fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {
     fail("roc_expect_failed", .{});
 }
 
-export fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
+fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
     fail("roc_crashed", .{});
 }
 
@@ -302,4 +310,15 @@ fn runContract() c_int {
 export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = .{ argc, argv };
     return runContract();
+}
+
+comptime {
+    shim_symbols.exportRuntimeFns(.{
+        .alloc = &roc_alloc,
+        .dealloc = &roc_dealloc,
+        .realloc = &roc_realloc,
+        .dbg = &roc_dbg,
+        .expect_failed = &roc_expect_failed,
+        .crashed = &roc_crashed,
+    }, .default);
 }

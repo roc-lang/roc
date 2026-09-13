@@ -1,12 +1,16 @@
+const backing = std.heap.wasm_allocator;
+const std = @import("std");
+const host_alloc = @import("host_alloc");
+const shim_symbols = @import("shim_symbols");
 const abi = @import("roc_platform_abi.zig");
 
 const max_allocations = 512;
 const canary_size = 16;
 const canary_byte: u8 = 0xA5;
 const poison_byte: u8 = 0xCC;
-const wasm_page_size = 65_536;
 
 const Allocation = struct {
+    raw: ?[*]u8 = null,
     user: ?[*]u8 = null,
     length: usize = 0,
     alignment: usize = 0,
@@ -15,7 +19,6 @@ const Allocation = struct {
 
 const ContractEnv = struct {
     allocations: [max_allocations]Allocation = [_]Allocation{.{}} ** max_allocations,
-    heap_cursor: usize = 0,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     live_alloc_count: usize = 0,
@@ -77,35 +80,6 @@ const ContractEnv = struct {
         return true;
     }
 
-    fn bumpAlloc(self: *ContractEnv, total: usize, alignment: usize) ?[*]u8 {
-        if (self.heap_cursor == 0) {
-            const heap_start = @mulWithOverflow(@wasmMemorySize(0), wasm_page_size);
-            if (heap_start[1] != 0) {
-                self.allocatorFail("wasm memory exhausted");
-                return null;
-            }
-            self.heap_cursor = heap_start[0];
-        }
-        const raw = alignForward(self.heap_cursor, alignment) orelse {
-            self.allocatorFail("bump alignment overflow");
-            return null;
-        };
-        const end_result = @addWithOverflow(raw, total);
-        if (end_result[1] != 0) {
-            self.allocatorFail("bump allocation overflow");
-            return null;
-        }
-        const end = end_result[0];
-        const required_pages = wasmPagesForBytes(end);
-        const current_pages = @wasmMemorySize(0);
-        if (required_pages > current_pages and @wasmMemoryGrow(0, required_pages - current_pages) == -1) {
-            self.allocatorFail("wasm memory grow failed");
-            return null;
-        }
-        self.heap_cursor = end;
-        return @ptrFromInt(raw);
-    }
-
     fn alloc(self: *ContractEnv, length: usize, alignment: usize) ?*anyopaque {
         if (alignment == 0 or (alignment & (alignment - 1)) != 0) {
             self.allocatorFail("invalid alignment");
@@ -117,7 +91,7 @@ const ContractEnv = struct {
         }
 
         const total = canary_size + alignment - 1 + length + canary_size;
-        const raw = self.bumpAlloc(@max(total, 1), alignment) orelse return null;
+        const raw: [*]u8 = @ptrCast(host_alloc.alloc(backing, total, alignment) orelse return null);
         const user_start = @addWithOverflow(@intFromPtr(raw), canary_size);
         if (user_start[1] != 0) {
             self.allocatorFail("user pointer overflow");
@@ -141,6 +115,7 @@ const ContractEnv = struct {
             }
         }
         const allocation = slot orelse {
+            host_alloc.dealloc(backing, @ptrCast(raw), alignment);
             self.allocatorFail("allocation table exhausted");
             return null;
         };
@@ -150,6 +125,7 @@ const ContractEnv = struct {
         @memset((user + length)[0..canary_size], canary_byte);
 
         allocation.* = .{
+            .raw = raw,
             .user = user,
             .length = length,
             .alignment = alignment,
@@ -171,6 +147,7 @@ const ContractEnv = struct {
         }
         _ = self.checkCanaries(allocation);
         @memset(allocation.user.?[0..allocation.length], 0xDD);
+        host_alloc.dealloc(backing, @ptrCast(allocation.raw.?), allocation.alignment);
         allocation.live = false;
         self.dealloc_count += 1;
         self.live_alloc_count -= 1;
@@ -205,17 +182,6 @@ fn alignForward(value: usize, alignment: usize) ?usize {
     const sum = @addWithOverflow(value, alignment - 1);
     if (sum[1] != 0) return null;
     return sum[0] & ~(alignment - 1);
-}
-
-fn wasmPagesForBytes(byte_count: usize) usize {
-    return byte_count / wasm_page_size + @intFromBool(byte_count % wasm_page_size != 0);
-}
-
-comptime {
-    const max_usize = ~@as(usize, 0);
-    if (wasmPagesForBytes(max_usize) != max_usize / wasm_page_size + 1) {
-        @compileError("wasm page rounding must handle the usize limit");
-    }
 }
 
 fn bytesEqual(a: []const u8, b: []const u8) bool {
@@ -273,28 +239,28 @@ fn hostCrashed(roc_host_ptr: *abi.RocHost, bytes: [*]const u8, len: usize) callc
     env.fail("roc_crashed");
 }
 
-export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return contract_env.alloc(length, alignment);
 }
 
-export fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
+fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
     contract_env.dealloc(ptr, alignment);
 }
 
-export fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return contract_env.realloc(ptr, new_length, alignment);
 }
 
-export fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
     _ = .{ bytes, len };
 }
 
-export fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void {
+fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void {
     _ = .{ bytes, len };
     contract_env.fail("roc_expect_failed");
 }
 
-export fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void {
     _ = .{ bytes, len };
     contract_env.fail("roc_crashed");
 }
@@ -433,4 +399,15 @@ export fn wasm_alloc_count() usize {
 
 export fn wasm_dealloc_count() usize {
     return contract_env.dealloc_count;
+}
+
+comptime {
+    shim_symbols.exportRuntimeFns(.{
+        .alloc = &roc_alloc,
+        .dealloc = &roc_dealloc,
+        .realloc = &roc_realloc,
+        .dbg = &roc_dbg,
+        .expect_failed = &roc_expect_failed,
+        .crashed = &roc_crashed,
+    }, .default);
 }

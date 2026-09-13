@@ -84,18 +84,18 @@ expect result == True
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "$foo"))
+				(p-var-assign (ident "$foo"))
 				(e-tag (name "True")))
 			(s-breakable-loop
 				(e-tag (name "True"))
 				(e-block
 					(s-break)
 					(s-reassign
-						(p-assign (ident "$foo"))
+						(p-var-assign (ident "$foo"))
 						(e-tag (name "False")))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "$foo"))))
+				(p-var-assign (ident "$foo"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect

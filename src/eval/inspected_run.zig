@@ -402,7 +402,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             allocator,
             program.store,
             program.layouts,
-            static_strings.entries,
+            static_strings.view(),
             program.boxy_tables.erased_arg_desc_offsets,
             program.boxy_tables.erased_arg_desc_params,
             program.boxy_tables.worker_procs,
@@ -555,15 +555,6 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
 
     const llvm_compile = @import("llvm_compile");
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(
-        allocator,
-        program.store,
-        program.boxy_tables.erased_arg_desc_offsets,
-        program.boxy_tables.erased_arg_desc_params,
-        program.boxy_tables.worker_procs,
-    );
-    codegen.layout_store = program.layouts;
-    defer codegen.deinit();
 
     const proc = program.store.getProcSpec(program.main_proc);
     const arg_layouts = try mainProcArgLayouts(allocator, program);
@@ -575,7 +566,19 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         .arg_layouts = arg_layouts,
         .ret_layout = proc.ret_layout,
     }};
-    const bitcode = try codegen.generateEntrypointModule("roc_eval_module", llvm_entrypoints[0..]);
+    const bitcode = generate: {
+        var codegen = llvm_compile.MonoLlvmCodeGen.init(
+            allocator,
+            program.store,
+            program.boxy_tables.erased_arg_desc_offsets,
+            program.boxy_tables.erased_arg_desc_params,
+            program.boxy_tables.worker_procs,
+        );
+        codegen.layout_store = program.layouts;
+        defer codegen.deinit();
+
+        break :generate try codegen.generateEntrypointModule("roc_eval_module", llvm_entrypoints[0..]);
+    };
     defer {
         var owned = bitcode;
         owned.deinit();

@@ -34,16 +34,23 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 # PROBLEMS
-── ● unused variable ────────────────────── bound_type_var_no_annotation.md:19:5
-
-Variable pair is defined here and then never used:
-
-pair = combine(num, text)
-^^^^
-
-If you don't need this variable, prefix it with an underscore like _pair to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 19 5) (end 19 9))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "pair")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_pair")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "bound_type_var_no_annotation.md") (start 19 5) (end 19 9) (annotation error) (line-text "    pair = combine(num, text)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

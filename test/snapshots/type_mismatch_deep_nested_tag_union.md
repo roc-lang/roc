@@ -16,24 +16,34 @@ collide = |x| x
 # EXPECTED
 TYPE MISMATCH - type_mismatch_deep_nested_tag_union.md:7:15:7:16
 # PROBLEMS
-── ✗ type mismatch ───────────────── type_mismatch_deep_nested_tag_union.md:7:15
-
-This expression is used in an unexpected way.
-
-collide = |x| x
-              ^
-
-It has the type:
-
-    [A6([A5([A4([A3([A2([A1([Z1, Z10, Z2, Z3, Z4, Z5, Z6, Z7, Z8, Z9]), B1_1,
-    B1_2, B1_3, B1_4, B1_5]), B2_1, B2_2, B2_3, B2_4, B2_5]), B3_1, B3_2, B3_3,
-    B3_4, B3_5]), B4_1, B4_2, B4_3, B4_4, B4_5]), B5_1, B5_2, B5_3, B5_4,
-    B5_5]), B6_1, B6_2, B6_3, B6_4, B6_5]
-
-But the annotation says it should be:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 7 15) (end 7 16))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "type_mismatch_deep_nested_tag_union.md") (start 7 15) (end 7 16) (annotation error) (line-text "collide = |x| x"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[A6([A5([A4([A3([A2([A1([Z1, Z10, Z2, Z3, Z4, Z5, Z6, Z7, Z8, Z9]), B1_1, B1_2, B1_3, B1_4, B1_5]), B2_1, B2_2, B2_3, B2_4, B2_5]), B3_1, B3_2, B3_3, B3_4, B3_5]), B4_1, B4_2, B4_3, B4_4, B4_5]), B5_1, B5_2, B5_3, B5_4, B5_5]), B6_1, B6_2, B6_3, B6_4, B6_5]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,OpArrow,UpperIdent,

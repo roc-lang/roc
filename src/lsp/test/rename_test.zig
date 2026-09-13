@@ -22,6 +22,11 @@ test "rename accepts renaming an ignored name to another ignored name" {
     try std.testing.expectEqual(@as(?rename.Rejection, null), try rename.checkNewName(allocator, "_unused", "_spare"));
 }
 
+test "rename may add or remove the conventional dollar prefix" {
+    try std.testing.expectEqual(@as(?rename.Rejection, null), try rename.checkNewName(allocator, "value", "$value"));
+    try std.testing.expectEqual(@as(?rename.Rejection, null), try rename.checkNewName(allocator, "$value", "value"));
+}
+
 test "rename rejects gaining an effectful marker" {
     // `foo` to `foo!` is not a rename: the `!` is what marks a value effectful.
     try std.testing.expectEqual(rename.Rejection.changes_ident_kind, try rename.checkNewName(allocator, "foo", "foo!"));

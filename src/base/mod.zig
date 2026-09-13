@@ -29,7 +29,9 @@ pub const post_check_task_executor = @import("post_check_task_executor.zig");
 pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
+pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
+pub const TypeDigestHasher = @import("TypeDigestHasher.zig");
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
@@ -73,6 +75,7 @@ test {
     const ident = @import("Ident.zig");
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
+    std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }
@@ -92,7 +95,7 @@ pub const CalledVia = enum {
     apply,
     /// Calling with an operator, e.g. `(1 + 2)`
     binop,
-    /// Calling with a unary operator, e.g. `!foo` or `-foo`
+    /// Logical negation `!foo`, desugared to a call to builtin Bool.not.
     unary_op,
     /// This call is the result of desugaring string interpolation,
     /// e.g. "${first} ${last}" is transformed into `Str.concat(Str.concat(first, " "))` last.

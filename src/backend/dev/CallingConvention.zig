@@ -26,7 +26,8 @@ const layout = @import("layout");
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 
-const Relocation = @import("Relocation.zig").Relocation;
+const Relocation = @import("Relocation.zig").IndexedRelocation;
+const SymbolTable = @import("SymbolTable.zig");
 
 /// Calling convention configuration for a specific target
 pub const CallingConvention = struct {
@@ -1188,13 +1189,13 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// The linker will patch the call offset during linking.
         ///
         /// Arguments:
-        /// - symbol_name: The symbol name to call (e.g., "roc_dev_str_concat")
+        /// - symbol: The target declared in the code generator symbol table
         /// - allocator: Allocator for the relocations list
         /// - relocations: The relocations list to append the relocation entry to
         ///
         /// Note: On x86_64, this emits `call rel32` (E8 xx xx xx xx).
         ///       On aarch64, this emits `bl offset` (26-bit signed offset).
-        pub fn callRelocatable(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) Allocator.Error!void {
+        pub fn callRelocatable(self: *Self, symbol: SymbolTable.Id, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) Allocator.Error!void {
             // Calculate total stack space needed (same as call/callReg)
             const stack_args_space: u32 = self.stack_arg_size;
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -1240,7 +1241,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 try relocations.append(allocator, .{
                     .linked_function = .{
                         .offset = @intCast(code_offset),
-                        .name = symbol_name,
+                        .symbol = symbol,
                     },
                 });
             } else {
@@ -1250,7 +1251,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 try relocations.append(allocator, .{
                     .linked_function = .{
                         .offset = @intCast(code_offset + 1),
-                        .name = symbol_name,
+                        .symbol = symbol,
                     },
                 });
             }
@@ -2802,7 +2803,10 @@ test "relocatable call stabilizes memory args before clobbering base param regis
     try builder.addMemArg(.RDI, 0); // RDI <- [old RDI]
     try builder.addMemArg(.RDI, 8); // RSI <- [old RDI + 8]
 
-    try builder.callRelocatable("roc_test_target", std.testing.allocator, &relocs);
+    var symbols: SymbolTable.Table = .{};
+    defer symbols.deinit(std.testing.allocator);
+    const symbol = try symbols.intern(std.testing.allocator, "roc_test_target");
+    try builder.callRelocatable(symbol, std.testing.allocator, &relocs);
 
     // Without stabilization, the first argument would emit `mov rdi, [rdi]`
     // and the second would then read through the clobbered RDI.

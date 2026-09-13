@@ -31,68 +31,87 @@ INVALID STATEMENT - assoc_invalid_statements.md:8:5:10:6
 INVALID STATEMENT - assoc_invalid_statements.md:12:5:14:6
 INVALID STATEMENT - assoc_invalid_statements.md:16:5:16:10
 # PROBLEMS
-── ✗ invalid statement ───────────────────────── assoc_invalid_statements.md:2:5
-
-The statement dbg is not allowed in an associated block.
-
-dbg 5
-^^^^^
-
-Only associated values, type declarations, and type annotations are allowed in
-an associated block.
-
-── ✗ invalid statement ───────────────────────── assoc_invalid_statements.md:4:5
-
-The statement crash is not allowed in an associated block.
-
-crash "boom"
-^^^^^^^^^^^^
-
-Only associated values, type declarations, and type annotations are allowed in
-an associated block.
-
-── ✗ invalid statement ───────────────────────── assoc_invalid_statements.md:6:5
-
-The statement return is not allowed in an associated block.
-
-return 5
-^^^^^^^^
-
-Only associated values, type declarations, and type annotations are allowed in
-an associated block.
-
-── ✗ invalid statement ───────────────────────── assoc_invalid_statements.md:8:5
-
-The statement for is not allowed in an associated block.
-
-for x in [1, 2] {
-    dbg x
-}
-
-Only associated values, type declarations, and type annotations are allowed in
-an associated block.
-
-── ✗ invalid statement ──────────────────────── assoc_invalid_statements.md:12:5
-
-The statement while is not allowed in an associated block.
-
-while 1 == 2 {
-    dbg 3
-}
-
-Only associated values, type declarations, and type annotations are allowed in
-an associated block.
-
-── ✗ invalid statement ──────────────────────── assoc_invalid_statements.md:16:5
-
-The statement break is not allowed in an associated block.
-
-break
-^^^^^
-
-Only associated values, type declarations, and type annotations are allowed in
-an associated block.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Statement")
+		(region (start 2 5) (end 2 10))
+		(headline
+			(reflow "The statement ")
+			(annotated code "dbg")
+			(reflow " is not allowed in an associated block."))
+		(document
+			(reflow "Only associated values, type declarations, and type annotations are allowed in an associated block.")
+			(line-break)
+			(line-break)
+			(source-region (file "assoc_invalid_statements.md") (start 2 5) (end 2 10) (annotation error) (line-text "    dbg 5"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Statement")
+		(region (start 4 5) (end 4 17))
+		(headline
+			(reflow "The statement ")
+			(annotated code "crash")
+			(reflow " is not allowed in an associated block."))
+		(document
+			(reflow "Only associated values, type declarations, and type annotations are allowed in an associated block.")
+			(line-break)
+			(line-break)
+			(source-region (file "assoc_invalid_statements.md") (start 4 5) (end 4 17) (annotation error) (line-text "    crash \"boom\""))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Statement")
+		(region (start 6 5) (end 6 13))
+		(headline
+			(reflow "The statement ")
+			(annotated code "return")
+			(reflow " is not allowed in an associated block."))
+		(document
+			(reflow "Only associated values, type declarations, and type annotations are allowed in an associated block.")
+			(line-break)
+			(line-break)
+			(source-region (file "assoc_invalid_statements.md") (start 6 5) (end 6 13) (annotation error) (line-text "    return 5"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Statement")
+		(region (start 8 5) (end 10 6))
+		(headline
+			(reflow "The statement ")
+			(annotated code "for")
+			(reflow " is not allowed in an associated block."))
+		(document
+			(reflow "Only associated values, type declarations, and type annotations are allowed in an associated block.")
+			(line-break)
+			(line-break)
+			(source-region (file "assoc_invalid_statements.md") (start 8 5) (end 10 6) (annotation error) (line-text "    for x in [1, 2] {\n        dbg x\n    }"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Statement")
+		(region (start 12 5) (end 14 6))
+		(headline
+			(reflow "The statement ")
+			(annotated code "while")
+			(reflow " is not allowed in an associated block."))
+		(document
+			(reflow "Only associated values, type declarations, and type annotations are allowed in an associated block.")
+			(line-break)
+			(line-break)
+			(source-region (file "assoc_invalid_statements.md") (start 12 5) (end 14 6) (annotation error) (line-text "    while 1 == 2 {\n        dbg 3\n    }"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Statement")
+		(region (start 16 5) (end 16 10))
+		(headline
+			(reflow "The statement ")
+			(annotated code "break")
+			(reflow " is not allowed in an associated block."))
+		(document
+			(reflow "Only associated values, type declarations, and type annotations are allowed in an associated block.")
+			(line-break)
+			(line-break)
+			(source-region (file "assoc_invalid_statements.md") (start 16 5) (end 16 10) (annotation error) (line-text "    break")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

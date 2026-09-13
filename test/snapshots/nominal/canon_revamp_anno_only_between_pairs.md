@@ -18,16 +18,20 @@ Foo := [Whatever].{
 # EXPECTED
 DECLARATION HAS NO VALUE - canon_revamp_anno_only_between_pairs.md:5:5:5:17
 # PROBLEMS
-── ● declaration has no value ────── canon_revamp_anno_only_between_pairs.md:5:5
-
-This declaration has a type annotation but no implementation.
-
-middle : Foo
-^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 5 5) (end 5 17))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "canon_revamp_anno_only_between_pairs.md") (start 5 5) (end 5 17) (annotation error) (line-text "    middle : Foo"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

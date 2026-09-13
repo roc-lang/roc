@@ -12,20 +12,37 @@ T := [].{
 # EXPECTED
 INVALID RECURSIVE TYPE - fuzz_crash_100.md:2:2:2:9
 # PROBLEMS
-── ✗ invalid recursive type ────────────────────────────── fuzz_crash_100.md:2:2
-
-The nominal type T.A refers to itself in a way that would make it infinite.
-
-A ::T.A
-^^^^^^^
-
-Its definition is:
-
-    T.A
-
-Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Recursive Type")
+		(region (start 2 2) (end 2 9))
+		(headline
+			(reflow "The nominal type")
+			(reflow " ")
+			(annotated type "T.A")
+			(reflow " ")
+			(reflow "refers to itself in a way that would make it infinite."))
+		(document
+			(source-region (file "fuzz_crash_100.md") (start 2 2) (end 2 9) (annotation error) (line-text "\tA ::T.A"))
+			(line-break)
+			(reflow "Its definition is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "T.A")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Recursion in a nominal type is only allowed inside a tag union payload or record field—for example")
+			(reflow " ")
+			(annotated code "ConsList(a) := [Nil, Cons(a, ConsList(a))]")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

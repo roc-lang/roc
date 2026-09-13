@@ -179,3 +179,20 @@ body {
 .section {
     display: none;
 }
+
+/* Diagnostic annotations. These classes are the HTML report color source. */
+.emphasis { font-weight: bold; }
+.keyword, .operator { color: #800080; }
+.type, .record-field, .tag { color: #0000ff; }
+.error { color: #c00000; }
+.warning { color: #956000; }
+.suggestion { color: #008000; }
+.code-block { white-space: pre; }
+.code, .symbol, .symbol-qualified, .symbol-unqualified, .module { color: #007080; }
+.path { color: #956000; }
+.literal { color: #008000; }
+.comment { color: #666; font-style: italic; }
+.underline { text-decoration: underline; }
+.dim { color: #666; }
+.source-region { white-space: pre; }
+.reflow { white-space: normal; }

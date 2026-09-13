@@ -14,32 +14,78 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 # PROBLEMS
-── ✗ type mismatch ─────────────────────── destructure_closed_assignment.md:3:16
-
-This expression is used in an unexpected way.
-
-{ x, y } = { x: 1, y: 2, z: 3 }
-           ^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    { x: a, y: b, z: c }
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-      ]
-
-But you are trying to use it as:
-
-    { x: a, y: b }
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-      ]
-Hint: This pattern doesn't bind the z field. Match it explicitly with z: _, or
-add .. to match all the remaining fields.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 3 16) (end 3 36))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "destructure_closed_assignment.md") (start 3 16) (end 3 36) (annotation error) (line-text "    { x, y } = { x: 1, y: 2, z: 3 }"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ x: a, y: b, z: c }")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ x: a, y: b }")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This pattern doesn't bind the")
+			(reflow " ")
+			(annotated code "z")
+			(reflow " ")
+			(reflow "field. Match it explicitly with")
+			(reflow " ")
+			(annotated code "z: _")
+			(reflow ",")
+			(reflow " ")
+			(reflow "or add")
+			(reflow " ")
+			(annotated code "..")
+			(reflow " ")
+			(reflow "to match all the remaining fields."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

@@ -8,7 +8,7 @@ platform ""
     provides { "roc_bar": bar_for_host, "roc_baz": baz_for_host }
     targets: {
         inputs_dir: "targets/",
-        wasm32: { inputs: ["host.wasm", app] },
+        wasm32: { inputs: ["host.wasm", app], exports: [] },
     }
 
 bar_for_host : {} -> Box(Foo)

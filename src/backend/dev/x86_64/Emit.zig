@@ -12,7 +12,8 @@ const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
 
-const Relocation = @import("../Relocation.zig").Relocation;
+const Relocation = @import("../Relocation.zig").IndexedRelocation;
+const SymbolTable = @import("../SymbolTable.zig");
 
 /// x86_64 instruction emitter for generating machine code.
 /// Parameterized by target for cross-compilation support.
@@ -605,14 +606,14 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CALL with relocation (address resolved at link time)
-        pub fn callRelocated(self: *Self, name: []const u8) Allocator.Error!void {
+        pub fn callRelocated(self: *Self, symbol: SymbolTable.Id) Allocator.Error!void {
             const call_offset = self.offset();
             try self.buf.append(self.allocator, 0xE8);
             try self.buf.appendSlice(self.allocator, &[4]u8{ 0, 0, 0, 0 }); // Placeholder
             try self.relocs.append(self.allocator, .{
                 .linked_function = .{
                     .offset = call_offset + 1, // Offset of the rel32 operand
-                    .name = name,
+                    .symbol = symbol,
                 },
             });
         }

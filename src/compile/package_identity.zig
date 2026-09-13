@@ -296,6 +296,7 @@ test "buildPackageKeys applies synthetic root and platform only to compiler-synt
     var resolved = package_resolution.Resolved{
         .arena = undefined,
         .packages = &packages,
+        .selected_platform_index = 1,
     };
 
     const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
@@ -390,8 +391,8 @@ test "buildPackageKeys produces byte-equal mappings for check and run path spell
     run_packages[2].identity = pkg_run_path;
     run_packages[2].root_file = pkg_run_path;
 
-    var check_resolved = package_resolution.Resolved{ .arena = undefined, .packages = &check_packages };
-    var run_resolved = package_resolution.Resolved{ .arena = undefined, .packages = &run_packages };
+    var check_resolved = package_resolution.Resolved{ .arena = undefined, .packages = &check_packages, .selected_platform_index = 1 };
+    var run_resolved = package_resolution.Resolved{ .arena = undefined, .packages = &run_packages, .selected_platform_index = 1 };
 
     const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
     var check_keys = try buildPackageKeys(allocator, filesystem, &check_resolved, .{});

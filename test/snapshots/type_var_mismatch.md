@@ -25,21 +25,29 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────────────── type_var_mismatch.md:7:9
-
-This number is being used where a non-number type is needed.
-
-item = 42
-       ^^
-
-The type was determined to be non-numeric here:
-
-result = List.first(list).ok_or(item)
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Other code expects this to have the type:
-
-    item
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 7 9) (end 7 11))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "type_var_mismatch.md") (start 7 9) (end 7 11) (annotation error) (line-text "\titem = 42"))
+			(line-break)
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "type_var_mismatch.md") (start 11 11) (end 11 39) (annotation error) (line-text "\tresult = List.first(list).ok_or(item)"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "item")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

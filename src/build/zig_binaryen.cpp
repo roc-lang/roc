@@ -11,6 +11,8 @@ extern "C" {
 typedef struct RocBinaryenOptimizeConfig {
     int optimize_level;
     int shrink_level;
+    const char* const* passes;
+    unsigned int pass_count;
     uint8_t zero_filled_memory;
     uint8_t debug_info;
     uint8_t strip_debug;
@@ -107,7 +109,14 @@ extern "C" int RocBinaryenOptimizeWasm(
         return RocBinaryenStatusReadFailed;
     }
 
-    BinaryenModuleOptimize(module);
+    if (config.passes == nullptr) {
+        BinaryenModuleOptimize(module);
+    } else {
+        // The C API takes a mutable array pointer but only reads the pass names.
+        BinaryenModuleRunPasses(module,
+                               const_cast<const char**>(config.passes),
+                               config.pass_count);
+    }
 
     const char* strip_passes[4];
     BinaryenIndex strip_count = 0;

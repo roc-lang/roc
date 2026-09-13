@@ -10,15 +10,22 @@ a=0->b .c()
 # EXPECTED
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment3.md:1:6:1:7
 # PROBLEMS
-── ✗ name not in scope ──────── formatter_idempotence_issue_8851_comment3.md:1:6
-
-Nothing is named b in this scope.
-
-a=0->b .c()
-     ^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 6) (end 1 7))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "b")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "formatter_idempotence_issue_8851_comment3.md") (start 1 6) (end 1 7) (annotation error) (line-text "a=0->b .c()")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,DotLowerIdent,NoSpaceOpenRound,CloseRound,

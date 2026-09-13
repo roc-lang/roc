@@ -112,10 +112,10 @@ pattern this project generalizes:
   `componentForTuple`, `named`, `tagUnion`, `tagBranch`) plugged into
   one generic derivation walker. Exactly the right shape, currently
   reachable only from `BodyContext`.
-- `layout/graph.zig` + `layout/store.zig`—four independent producers
-  (`monotype/lower.zig`, `solved_lir_lower.zig`, `boxy/layouts.zig`,
-  `glue/checked_artifact_layout_resolver.zig`) build a
-  `GraphInput`/`GraphNode` description and commit through one store.
+- `layout/graph.zig` + `layout/store.zig`—three independent producers
+  (`monotype/lower.zig`, `solved_lir_lower.zig`, `boxy/layouts.zig`) build a
+  `GraphInput`/`GraphNode` description and commit through one store; glue
+  reads committed layouts out of the LIR lowering instead of producing its own.
   This seam holds and should be the model for shape description.
 
 `src/postcheck/lambda_mono/` (6,294 lines, reachable only from

@@ -10,26 +10,49 @@ f = |value| (value.convert(), value.convert(1))
 # EXPECTED
 TYPE MISMATCH - conflicting_same_method_arities.md:1:31:1:36
 # PROBLEMS
-── ✗ type mismatch ───────────────────── conflicting_same_method_arities.md:1:31
-
-This expression is used in an unexpected way.
-
-f = |value| (value.convert(), value.convert(1))
-                              ^^^^^
-
-It has the type:
-
-    a where [a.convert : a -> _ret]
-
-But you are trying to use it as:
-
-    _a
-      where [
-        _b.convert : c, d -> _ret,
-        c.convert : c -> _ret2,
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-      ]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 31) (end 1 36))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "conflicting_same_method_arities.md") (start 1 31) (end 1 36) (annotation error) (line-text "f = |value| (value.convert(), value.convert(1))"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a where [a.convert : a -> _ret]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "_a")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    _b.convert : c, d -> _ret,")
+			(line-break)
+			(indent 1)
+			(text "    c.convert : c -> _ret2,")
+			(line-break)
+			(indent 1)
+			(text "    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenRound,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,CloseRound,CloseRound,

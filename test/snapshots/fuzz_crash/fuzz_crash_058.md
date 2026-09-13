@@ -11,13 +11,17 @@ app[]{f:platform"",r:"
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_058.md:1:22:1:23
 # PROBLEMS
-── ✗ unclosed string ──────────────────────────────────── fuzz_crash_058.md:1:22
-
-This string is missing a closing quote.
-
-app[]{f:platform"",r:"
-                     ^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unclosed String")
+		(region (start 1 22) (end 1 23))
+		(headline
+			(reflow "This string is missing a closing quote."))
+		(document
+			(source-region (file "fuzz_crash_058.md") (start 1 22) (end 1 23) (annotation error) (line-text "app[]{f:platform\"\",r:\"")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,

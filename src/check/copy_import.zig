@@ -37,7 +37,7 @@ const NominalType = types_mod.NominalType;
 /// A mapping from source type variables to destination type variables.
 /// Callers may preseed exact source substitutions; copying reuses those
 /// destination roots and memoizes every newly copied root in the same map.
-const VarMapping = std.AutoHashMap(Var, Var);
+const VarMapping = @import("collections").DenseMap(Var, Var);
 
 /// Explicit source declaration identity for alias substitutions performed
 /// while copying a type graph between module stores.

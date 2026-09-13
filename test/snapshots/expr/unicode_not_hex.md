@@ -10,13 +10,17 @@ type=expr
 # EXPECTED
 INVALID UNICODE ESCAPE SEQUENCE - unicode_not_hex.md:1:5:1:13
 # PROBLEMS
-── ✗ invalid unicode escape sequence ──────────────────── unicode_not_hex.md:1:5
-
-This Unicode escape sequence is not valid.
-
-"abc\u(zzzz)def"
-    ^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 1 5) (end 1 13))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "unicode_not_hex.md") (start 1 5) (end 1 13) (annotation error) (line-text "\"abc\\u(zzzz)def\"")))))
+~~~
 # TOKENS
 ~~~zig
 StringStart,MalformedStringPart,StringEnd,

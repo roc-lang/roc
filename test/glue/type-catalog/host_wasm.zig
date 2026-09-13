@@ -1,12 +1,14 @@
+const backing = std.heap.wasm_allocator;
+const std = @import("std");
+const host_alloc = @import("host_alloc");
+const shim_symbols = @import("shim_symbols");
 const abi = @import("roc_platform_abi.zig");
 
-const wasm_page_size = 65_536;
 var failure_count: usize = 0;
 var report: [512]u8 = [_]u8{0} ** 512;
 var report_len: usize = 0;
 var alloc_count: usize = 0;
 var dealloc_count: usize = 0;
-var heap_cursor: usize = 0;
 
 fn fail(comptime message: []const u8) void {
     if (failure_count == 0) {
@@ -28,51 +30,23 @@ fn allocRaw(length: usize, alignment: usize) ?*anyopaque {
         fail("invalid allocation alignment");
         return null;
     }
-    if (heap_cursor == 0) {
-        const heap_start = @mulWithOverflow(@wasmMemorySize(0), wasm_page_size);
-        if (heap_start[1] != 0) {
-            fail("wasm memory exhausted");
-            return null;
-        }
-        heap_cursor = heap_start[0];
-    }
-    const aligned = @addWithOverflow(heap_cursor, alignment - 1);
-    if (aligned[1] != 0) {
-        fail("allocation alignment overflow");
-        return null;
-    }
-    const ptr = aligned[0] & ~(alignment - 1);
-    const end_result = @addWithOverflow(ptr, length);
-    if (end_result[1] != 0) {
-        fail("allocation overflow");
-        return null;
-    }
-    const end = end_result[0];
-    const required_pages = wasmPagesForBytes(end);
-    const current_pages = @wasmMemorySize(0);
-    if (required_pages > current_pages and @wasmMemoryGrow(0, required_pages - current_pages) == -1) {
-        fail("memory grow failed");
-        return null;
-    }
-    heap_cursor = end;
+    const ptr = host_alloc.alloc(backing, length, alignment) orelse return null;
     alloc_count += 1;
-    return @ptrFromInt(ptr);
+    return ptr;
 }
 
-fn wasmPagesForBytes(byte_count: usize) usize {
-    return byte_count / wasm_page_size + @intFromBool(byte_count % wasm_page_size != 0);
-}
-
-comptime {
-    const max_usize = ~@as(usize, 0);
-    if (wasmPagesForBytes(max_usize) != max_usize / wasm_page_size + 1) {
-        @compileError("wasm page rounding must handle the usize limit");
-    }
-}
-
-fn deallocRaw(ptr: ?*anyopaque, _: usize, _: usize) void {
-    _ = ptr orelse return;
+fn deallocRaw(ptr: ?*anyopaque, alignment: usize) void {
+    const p = ptr orelse return;
+    host_alloc.dealloc(backing, p, alignment);
     dealloc_count += 1;
+}
+
+fn reallocRaw(ptr: ?*anyopaque, length: usize, alignment: usize) ?*anyopaque {
+    const old = ptr orelse return allocRaw(length, alignment);
+    const answer = host_alloc.realloc(backing, old, length, alignment) orelse return null;
+    alloc_count += 1;
+    dealloc_count += 1;
+    return answer;
 }
 
 fn hostAlloc(_: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
@@ -80,12 +54,11 @@ fn hostAlloc(_: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*an
 }
 
 fn hostDealloc(_: *abi.RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    deallocRaw(ptr, 0, alignment);
+    deallocRaw(ptr, alignment);
 }
 
 fn hostRealloc(_: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    _ = ptr;
-    return allocRaw(new_length, alignment);
+    return reallocRaw(ptr, new_length, alignment);
 }
 
 fn hostDbg(_: *abi.RocHost, _: [*]const u8, _: usize) callconv(.c) void {}
@@ -106,21 +79,20 @@ var roc_host = abi.RocHost{
     .roc_crashed = &hostCrashed,
 };
 
-export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return allocRaw(length, alignment);
 }
-export fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
-    deallocRaw(ptr, 0, alignment);
+fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
+    deallocRaw(ptr, alignment);
 }
-export fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    _ = ptr;
-    return allocRaw(new_length, alignment);
+fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return reallocRaw(ptr, new_length, alignment);
 }
-export fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}
-export fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {
+fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}
+fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {
     fail("roc_expect_failed");
 }
-export fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
+fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
     fail("roc_crashed");
 }
 
@@ -183,4 +155,15 @@ export fn wasm_alloc_count() usize {
 
 export fn wasm_dealloc_count() usize {
     return dealloc_count;
+}
+
+comptime {
+    shim_symbols.exportRuntimeFns(.{
+        .alloc = &roc_alloc,
+        .dealloc = &roc_dealloc,
+        .realloc = &roc_realloc,
+        .dbg = &roc_dbg,
+        .expect_failed = &roc_expect_failed,
+        .crashed = &roc_crashed,
+    }, .default);
 }

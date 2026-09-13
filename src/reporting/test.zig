@@ -51,7 +51,9 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\<h1 class="report-title">syntax problem</h1>
         \\<div class="report-content">
         \\Using more than one <span class="operator">+</span> like this requires parentheses, to clarify how things should be grouped.<br>
-        \\<div class="source-region"><pre class="error">example.roc</pre></div></div>
+        \\<div class="source-region"><pre class="error">example.roc
+        \\         ^^^^^^^^^^
+        \\</pre></div></div>
         \\</div>
         \\
     ;
@@ -65,6 +67,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\
         \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
         \\example.roc
+        \\         ^^^^^^^^^^
         \\
     ;
     try expectMultilineEqual(expected_lsp, writer.written());
@@ -204,6 +207,15 @@ test "terminal diagnostic headers follow the configured width up to 120 columns"
         writer.clearRetainingCapacity();
     }
 }
+
+test "owned rendered reports can drop trailing line breaks without a copy" {
+    const raw = try testing.allocator.dupe(u8, "report\r\n\n");
+    const trimmed = try reporting.trimOwnedTrailingLineBreaks(testing.allocator, raw);
+    defer testing.allocator.free(trimmed);
+
+    try testing.expectEqualStrings("report", trimmed);
+}
+
 // Test Helpers
 
 /// Should only print out the debug copy-paste ready string if the string comparison fails.

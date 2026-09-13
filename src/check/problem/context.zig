@@ -87,6 +87,9 @@ pub const Context = union(enum) {
     fn_args_bound_var: FnArgsBoundVarContext,
     /// Platform requirement mismatch
     platform_requirement: PlatformRequirementContext,
+    /// A platform-required function's return value. The lambda checker assigns
+    /// this only to a recorded mismatch, after platform unification completes.
+    platform_requirement_return: PlatformRequirementContext,
     /// Method type mismatch (where clause)
     method_type: MethodTypeContext,
     /// `expect` statements

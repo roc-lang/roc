@@ -418,7 +418,7 @@ const Unifier = struct {
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
     unresolved_b: ?Var,
-    /// The two record vars of the innermost record-vs-record relation currently
+    /// The checked record vars of the innermost record relation currently
     /// being unified. A row absorbed into an empty record names that empty row's
     /// var, which for a nested literal is the literal's internal extension var
     /// rather than the literal's own var; the enclosing pair is how the checker
@@ -510,7 +510,10 @@ const Unifier = struct {
                         return Content{ .structure = FlatType{ .tag_union = try self.tagUnionForMerge(vars, tag_union) } };
                     },
                     .fn_pure => |func| {
-                        return Content{ .structure = FlatType{ .fn_pure = try self.funcForMerge(vars, func) } };
+                        // A pure function's effect formula is discharged: every
+                        // dependency it ever had was made pure when the two
+                        // sides unified, so the merged type carries none.
+                        return Content{ .structure = FlatType{ .fn_pure = .{ .args = func.args, .ret = func.ret } } };
                     },
                     .fn_effectful => |func| {
                         return Content{ .structure = FlatType{ .fn_effectful = try self.funcForMerge(vars, func) } };
@@ -733,6 +736,8 @@ const Unifier = struct {
                 self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
                 self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
+            } else if (frame_tag == .restore_enclosing_records) {
+                self.enclosing_records = frame.restore_enclosing_records;
             } else if (frame_tag == .mismatch_handler) {
                 const handler = frame.mismatch_handler;
                 if (handler != .propagate) return try self.applyMismatchHandling(handler);
@@ -1134,7 +1139,9 @@ const Unifier = struct {
                         try self.unifyFunc(vars, a_func, b_func);
                     },
                     .fn_unbound => |b_func| {
-                        // pure unifies with unbound -> pure
+                        // pure unifies with unbound -> pure, which makes every
+                        // function the unbound side's effect depends on pure
+                        try self.demandPureEffectDeps(b_func.effect_deps);
                         try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
                     },
@@ -1180,7 +1187,9 @@ const Unifier = struct {
             .fn_unbound => |a_func| {
                 switch (b_flat_type) {
                     .fn_pure => |b_func| {
-                        // unbound unifies with pure -> pure
+                        // unbound unifies with pure -> pure, which makes every
+                        // function the unbound side's effect depends on pure
+                        try self.demandPureEffectDeps(a_func.effect_deps);
                         try self.scheduleMerge(vars.*, vars.b.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
                     },
@@ -1207,7 +1216,7 @@ const Unifier = struct {
             .record => |a_record| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_record.fields, a_record.ext);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_record.fields, a_record.ext, null);
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(
@@ -1247,7 +1256,7 @@ const Unifier = struct {
             .record_unbound => |a_fields| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_fields, null);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_fields, null, null);
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(
@@ -1295,10 +1304,10 @@ const Unifier = struct {
                     },
 
                     .record => |b_record| {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_record.fields, b_record.ext);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_record.fields, b_record.ext, null);
                     },
                     .record_unbound => |b_fields| {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_fields, null);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_fields, null, null);
                     },
                     .nominal_type => |b_type| {
                         // Try to unify empty record (a) with nominal record (b)
@@ -1306,7 +1315,7 @@ const Unifier = struct {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyEmptyWithNominal(vars, b_type, .empty_record, .b_is_nominal, .skip_opacity);
+                        try self.unifyEmptyWithNominal(vars, b_type, .empty_record, .b_is_nominal, .enforce_opacity);
                     },
                     .tuple,
                     .fn_pure,
@@ -1529,6 +1538,7 @@ const Unifier = struct {
             decl,
             args,
             Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .instantiation,
         );
 
         // Every var minted by the instantiation needs the caller's post-unify
@@ -1563,12 +1573,13 @@ const Unifier = struct {
         return .{ .opened = opened };
     }
 
-    /// Which shape an empty anonymous side must find in the nominal's backing.
+    /// The shape of the empty anonymous operand.
     const EmptyShape = enum { empty_record, empty_tag_union };
     const OpacityGate = enum { enforce_opacity, skip_opacity };
 
-    /// Unify an empty anonymous record/tag union with a nominal whose backing
-    /// is (an equivalent of) the same empty shape; the nominal wins.
+    /// Empty records use ordinary backing-row unification, including default
+    /// and optional field omission. Empty tag unions require an empty backing.
+    /// In either case the nominal wins only after the backing relation succeeds.
     fn unifyEmptyWithNominal(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -1594,24 +1605,40 @@ const Unifier = struct {
             return;
         }
 
-        const backing_is_empty = blk: {
-            if (backing_content != .structure) break :blk false;
-            const backing_flat = backing_content.structure;
-            switch (empty_shape) {
-                .empty_record => {
-                    if (backing_flat == .empty_record) break :blk true;
-                    if (backing_flat == .record) {
-                        const fields = self.types_store.getRecordFieldsSlice(backing_flat.record.fields);
-                        if (fields.len == 0) break :blk true;
-                    }
-                    break :blk false;
-                },
-                .empty_tag_union => {
-                    break :blk backing_flat == .empty_tag_union;
-                },
+        if (backing_content != .structure) return error.TypeMismatch;
+        if (empty_shape == .empty_record) {
+            switch (backing_content.structure) {
+                .record, .empty_record => {},
+                .record_unbound,
+                .nominal_type,
+                .tuple,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => return error.TypeMismatch,
             }
-        };
-        if (backing_is_empty) {
+
+            try self.retainOuterRecordMismatch(vars, opened, direction);
+            if (backing_content.structure == .empty_record) {
+                try self.mergeToNominal(vars, direction);
+            } else {
+                const record = backing_content.structure.record;
+                const source = switch (direction) {
+                    .a_is_nominal => self.unresolved_b.?,
+                    .b_is_nominal => self.unresolved_a.?,
+                };
+                // Relate the source construction directly to the backing row.
+                // Never merge the opened backing root with the nominal result:
+                // later constructions may reuse that structural opening.
+                try self.enterRecordRelation(vars);
+                try self.unifyRowWithEmptyRecord(vars, source, record.fields, record.ext, direction);
+            }
+            return;
+        }
+
+        if (backing_content.structure == .empty_tag_union) {
             // Both are empty—merge to the NOMINAL side.
             try self.mergeToNominal(vars, direction);
         } else {
@@ -2321,15 +2348,27 @@ const Unifier = struct {
     }
 
     /// Absorb an optional/defaulted row only for a fresh construction relation.
+    /// A nominal result retains its wrapper without merging it into the opened
+    /// backing or its extension; those structures may serve other constructions.
     fn unifyRowWithEmptyRecord(
         self: *Self,
         vars: *const ResolvedVarDescs,
         record_var: Var,
         fields: RecordFieldSafeMultiList.Range,
         mb_ext: ?Var,
+        nominal_direction: ?NominalDirection,
     ) Error!void {
         if (fields.len() == 0) {
-            if (mb_ext) |ext| {
+            if (nominal_direction) |direction| {
+                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+                    .vars = vars.*,
+                    .direction = direction,
+                } });
+                if (mb_ext) |ext| {
+                    const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
+                    try self.unifyGuarded(ext, empty_var);
+                }
+            } else if (mb_ext) |ext| {
                 try self.unifyGuarded(ext, record_var);
             } else {
                 try self.merge(vars, .{ .structure = .empty_record });
@@ -2342,13 +2381,33 @@ const Unifier = struct {
         try self.recordAbsorbedRecordDefaults(record_var, fields, mb_ext);
 
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
+        if (nominal_direction) |direction| {
+            _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+                .vars = vars.*,
+                .direction = direction,
+            } });
+        } else {
+            try self.merge(vars, Content{ .structure = .{ .record = .{
+                .fields = fields,
+                .ext = mb_ext orelse empty_var,
+            } } });
+        }
         if (mb_ext) |ext| {
             try self.unifyGuarded(ext, empty_var);
         }
-        try self.merge(vars, Content{ .structure = .{ .record = .{
-            .fields = fields,
-            .ext = mb_ext orelse empty_var,
-        } } });
+    }
+
+    /// Retain the checked representatives of a record relation while its
+    /// children run. A polymorphic call's raw operand may name a formal slot,
+    /// whereas its checked representative still names the record construction.
+    fn enterRecordRelation(self: *Self, vars: *const ResolvedVarDescs) std.mem.Allocator.Error!void {
+        // Pushed before any child work so it pops once that work has drained;
+        // a plain `defer` would restore while the children are still queued.
+        _ = try self.scratch.unify_work_stack.append(
+            self.scratch.gpa,
+            .{ .restore_enclosing_records = self.enclosing_records },
+        );
+        self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
     }
 
     /// Unify two extensible records.
@@ -2439,13 +2498,7 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Pushed before any child work so it pops once that work has drained;
-        // a plain `defer` would restore while the children are still queued.
-        _ = try self.scratch.unify_work_stack.append(
-            self.scratch.gpa,
-            .{ .restore_enclosing_records = self.enclosing_records },
-        );
-        self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
+        try self.enterRecordRelation(vars);
 
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
@@ -2783,6 +2836,60 @@ const Unifier = struct {
             .only_in_b = scratch.only_in_b_fields.rangeToEnd(b_fields_start),
             .in_both = scratch.in_both_fields.rangeToEnd(both_fields_start),
         };
+    }
+
+    /// An effect-polymorphic function's effect is the disjunction of the
+    /// effects of the functions in `deps`, so requiring it to be pure requires
+    /// each of them to be pure. A dependency that is still effect-polymorphic
+    /// becomes pure in place (and its own dependencies in turn), while one that
+    /// has already become effectful cannot satisfy the requirement.
+    fn demandPureEffectDeps(self: *Self, deps: Var.SafeList.Range) Error!void {
+        var i: u32 = 0;
+        while (i < deps.len()) : (i += 1) {
+            try self.demandPureFunction(self.types_store.getVarAt(deps, i));
+        }
+    }
+
+    fn demandPureFunction(self: *Self, dep_var: Var) Error!void {
+        var current = dep_var;
+        while (true) {
+            const resolved = self.types_store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    current = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure => return,
+                    .fn_effectful => return error.TypeMismatch,
+                    .fn_unbound => |func| {
+                        // Write the pure type before visiting the dependencies
+                        // so a recursive group, whose members depend on each
+                        // other, terminates at the member already made pure.
+                        // A dependency that turns out effectful fails the
+                        // whole demand, and this function's effect then still
+                        // depends on it, so the write is undone on that path.
+                        try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_pure = .{ .args = func.args, .ret = func.ret } } });
+                        self.demandPureEffectDeps(func.effect_deps) catch |err| {
+                            try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_unbound = func } });
+                            return err;
+                        };
+                        return;
+                    },
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return,
+                },
+                // An effect dependency is recorded from a call, which has
+                // already given the callee a function shape.
+                .flex, .rigid, .field_presence => unreachable,
+                .err => return,
+            }
+        }
     }
 
     /// Preserve every directed effect dependency when two representations of
@@ -4048,7 +4155,7 @@ pub const Scratch = struct {
 
     // Reusable formal->actual substitution map for the nominal-vs-structural
     // lift's declaration-backed opening operation.
-    open_var_map: std.AutoHashMap(types_mod.Var, types_mod.Var),
+    open_var_map: collections.DenseMap(types_mod.Var, types_mod.Var),
 
     // Memo of declaration openings performed during the CURRENT unify call:
     // one instantiated backing per (declaration, resolved arg roots). Without
@@ -4206,7 +4313,7 @@ pub const Scratch = struct {
             .b_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
-            .open_var_map = std.AutoHashMap(types_mod.Var, types_mod.Var).init(gpa),
+            .open_var_map = collections.DenseMap(types_mod.Var, types_mod.Var).init(gpa),
             .opened_nominals = .empty,
             .opened_nominal_persistable = .empty,
             .persistent_openings = .empty,

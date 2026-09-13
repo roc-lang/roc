@@ -26,41 +26,59 @@ UNDECLARED TYPE - type_declarations.md:5:19:5:21
 UNDECLARED TYPE - type_declarations.md:5:32:5:41
 MOD NOT IMPORTED - type_declarations.md:13:11:13:21
 # PROBLEMS
-── ✗ undeclared type ────────────────────────────────── type_declarations.md:3:8
-
-The type Bar is not declared in this scope.
-
-Foo : (Bar, Baz)
-       ^^^
-
-── ✗ undeclared type ───────────────────────────────── type_declarations.md:3:13
-
-The type Baz is not declared in this scope.
-
-Foo : (Bar, Baz)
-            ^^^
-
-── ✗ undeclared type ───────────────────────────────── type_declarations.md:5:19
-
-The type Ok is not declared in this scope.
-
-Some(a) : { foo : Ok(a), bar : Something }
-                  ^^
-
-── ✗ undeclared type ───────────────────────────────── type_declarations.md:5:32
-
-The type Something is not declared in this scope.
-
-Some(a) : { foo : Ok(a), bar : Something }
-                               ^^^^^^^^^
-
-── ✗ mod not imported ──────────────────────────── type_declarations.md:13:11
-
-There is no mod with the name Mod imported into this Roc file.
-
-MyType2 : Mod.Thingy
-          ^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 3 8) (end 3 11))
+		(headline
+			(reflow "The type ")
+			(annotated code "Bar")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_declarations.md") (start 3 8) (end 3 11) (annotation error) (line-text "Foo : (Bar, Baz)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 3 13) (end 3 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "Baz")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_declarations.md") (start 3 13) (end 3 16) (annotation error) (line-text "Foo : (Bar, Baz)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 5 19) (end 5 21))
+		(headline
+			(reflow "The type ")
+			(annotated code "Ok")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_declarations.md") (start 5 19) (end 5 21) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : Something }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 5 32) (end 5 41))
+		(headline
+			(reflow "The type ")
+			(annotated code "Something")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_declarations.md") (start 5 32) (end 5 41) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : Something }"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 13 11) (end 13 21))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "Mod")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "type_declarations.md") (start 13 11) (end 13 21) (annotation error) (line-text "MyType2 : Mod.Thingy")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,

@@ -19,21 +19,42 @@ main = run(Wrap.W(42.U8))
 # EXPECTED
 MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:3:28:3:38
 # PROBLEMS
-── ✗ missing method ─ where_clause_nested_obligation_missing_method_issue_9892.md:3:28
-
-This frobnicate method is being called on a value whose type doesn't have that
-method.
-
-unwrap = |Wrap.W(x)| x.frobnicate()
-                       ^^^^^^^^^^
-
-The value's type, which does not have a method named frobnicate, is:
-
-    U8
-
-Hint: For this to work, the type would need to have a method named frobnicate
-associated with it in the type's declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 3 28) (end 3 38))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "frobnicate")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "where_clause_nested_obligation_missing_method_issue_9892.md") (start 3 28) (end 3 38) (annotation error) (line-text "    unwrap = |Wrap.W(x)| x.frobnicate()"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "frobnicate")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U8")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "frobnicate")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -69,9 +90,9 @@ EndOfFile,
 						(ty (name "Str")))
 					(where
 						(method (mod-of "a") (name "frobnicate")
-							(args
-								(ty-var (raw "a")))
-							(ty (name "Str")))))
+							(ty-fn
+								(ty-var (raw "a"))
+								(ty (name "Str"))))))
 				(s-decl
 					(p-ident (raw "unwrap"))
 					(e-lambda
@@ -88,9 +109,9 @@ EndOfFile,
 				(ty (name "Str")))
 			(where
 				(method (mod-of "b") (name "unwrap")
-					(args
-						(ty-var (raw "b")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "b"))
+						(ty (name "Str"))))))
 		(s-decl
 			(p-ident (raw "run"))
 			(e-lambda
@@ -132,7 +153,7 @@ main = run(Wrap.W(42.U8))
 			(args
 				(p-nominal
 					(p-applied-tag)))
-			(e-dispatch-call (method "frobnicate") (constraint-fn-var 285)
+			(e-dispatch-call (method "frobnicate") (constraint-fn-var 284)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -144,15 +165,15 @@ main = run(Wrap.W(42.U8))
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "frobnicate")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "run"))
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-dispatch-call (method "unwrap") (constraint-fn-var 296)
+			(e-dispatch-call (method "unwrap") (constraint-fn-var 294)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "v"))))
@@ -163,9 +184,9 @@ main = run(Wrap.W(42.U8))
 				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "unwrap")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-runtime-error (tag "erroneous_value_expr"))

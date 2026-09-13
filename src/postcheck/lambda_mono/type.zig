@@ -5,6 +5,7 @@
 //! callable layout selected by direct LIR lowering.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const collections = @import("collections");
 
@@ -284,7 +285,7 @@ pub const Store = struct {
     }
 
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = TypeDigestHasher.init();
         self.writeTypeDigest(name_store, &hasher, ty);
         return .{ .bytes = hasher.finalResult() };
     }
@@ -292,7 +293,7 @@ pub const Store = struct {
     fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: *TypeDigestHasher,
         ty: TypeId,
     ) void {
         switch (self.get(ty)) {
@@ -411,7 +412,7 @@ pub const Store = struct {
     fn writeTypeSpanDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: *TypeDigestHasher,
         span_: Span,
     ) void {
         const values = self.span(span_);
@@ -423,12 +424,12 @@ pub const Store = struct {
     }
 };
 
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
     if (value) |v| {
         hasher.update(&[_]u8{1});
         writeU32(hasher, v);
@@ -437,7 +438,7 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
     }
 }
 
-fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeDigest) void {
+fn writeOptionalDigest(hasher: *TypeDigestHasher, value: ?names.TypeDigest) void {
     if (value) |digest| {
         hasher.update(&[_]u8{1});
         hasher.update(&digest.bytes);
@@ -447,7 +448,7 @@ fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeD
 }
 
 fn writeIteratorTopology(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *TypeDigestHasher,
     name_store: *const names.NameStore,
     topology: ?MonoType.IteratorTopology,
 ) void {
@@ -467,7 +468,7 @@ fn writeIteratorTopology(
     writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }

@@ -15,18 +15,33 @@ match coord {
 # EXPECTED
 MISSING METHOD - tuple_patterns.md:2:21:2:29
 # PROBLEMS
-── ✗ missing method ───────────────────────────────────── tuple_patterns.md:2:21
-
-This from_quote method is being called on a value whose type doesn't have that
-method.
-
-(Zero, Zero) => "origin"
-                ^^^^^^^^
-
-The value's type, which does not have a method named from_quote, is:
-
-    [Zero, ..]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 2 21) (end 2 29))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "tuple_patterns.md") (start 2 21) (end 2 29) (annotation error) (line-text "    (Zero, Zero) => \"origin\""))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Zero, ..]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

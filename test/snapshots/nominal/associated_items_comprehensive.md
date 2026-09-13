@@ -449,96 +449,139 @@ NAME NOT IN SCOPE - associated_items_comprehensive.md:429:14:429:21
 NAME NOT IN SCOPE - associated_items_comprehensive.md:430:14:430:22
 NAME NOT IN SCOPE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:350:21
-
-Nothing is named value in this scope.
-
-errModUnqualified = value  # ERROR: 'value' not in scope at mod level
-                    ^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:361:17
-
-Nothing is named innerItem in this scope.
-
-badAccess = innerItem  # ERROR: 'innerItem' not in scope here
-            ^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:372:28
-
-Nothing is named sibAVal in this scope.
-
-badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
-                   ^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:387:31
-
-Nothing is named leaf1Val in this scope.
-
-badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
-                  ^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:401:27
-
-Nothing is named grandchildVal in this scope.
-
-badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
-                      ^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:423:25
-
-Nothing is named otherVal in this scope.
-
-badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
-                ^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:428:15
-
-Nothing is named outerItem in this scope.
-
-errTryOuter = outerItem      # ERROR: not in scope
-              ^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:429:14
-
-Nothing is named sibAVal in this scope.
-
-errTrySibA = sibAVal         # ERROR: not in scope
-             ^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:430:14
-
-Nothing is named leaf1Val in this scope.
-
-errTryLeaf = leaf1Val        # ERROR: not in scope
-             ^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────── associated_items_comprehensive.md:431:15
-
-Nothing is named grandchildVal in this scope.
-
-errTryGrand = grandchildVal  # ERROR: not in scope
-              ^^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 350 21) (end 350 26))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "value")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 350 21) (end 350 26) (annotation error) (line-text "errModUnqualified = value  # ERROR: 'value' not in scope at mod level"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 361 17) (end 361 26))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "innerItem")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 361 17) (end 361 26) (annotation error) (line-text "    badAccess = innerItem  # ERROR: 'innerItem' not in scope here"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 372 28) (end 372 35))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "sibAVal")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 372 28) (end 372 35) (annotation error) (line-text "        badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 387 31) (end 387 39))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "leaf1Val")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 387 31) (end 387 39) (annotation error) (line-text "            badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 401 27) (end 401 40))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "grandchildVal")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 401 27) (end 401 40) (annotation error) (line-text "    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 423 25) (end 423 33))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "otherVal")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 423 25) (end 423 33) (annotation error) (line-text "        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 428 15) (end 428 24))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "outerItem")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 428 15) (end 428 24) (annotation error) (line-text "errTryOuter = outerItem      # ERROR: not in scope"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 429 14) (end 429 21))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "sibAVal")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 429 14) (end 429 21) (annotation error) (line-text "errTrySibA = sibAVal         # ERROR: not in scope"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 430 14) (end 430 22))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "leaf1Val")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 430 14) (end 430 22) (annotation error) (line-text "errTryLeaf = leaf1Val        # ERROR: not in scope"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 431 15) (end 431 28))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "grandchildVal")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_comprehensive.md") (start 431 15) (end 431 28) (annotation error) (line-text "errTryGrand = grandchildVal  # ERROR: not in scope")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

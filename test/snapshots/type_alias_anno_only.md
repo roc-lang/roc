@@ -12,16 +12,20 @@ hey : MyType
 # EXPECTED
 DECLARATION HAS NO VALUE - type_alias_anno_only.md:3:1:3:13
 # PROBLEMS
-── ● declaration has no value ────────────────────── type_alias_anno_only.md:3:1
-
-This declaration has a type annotation but no implementation.
-
-hey : MyType
-^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 3 1) (end 3 13))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_alias_anno_only.md") (start 3 1) (end 3 13) (annotation error) (line-text "hey : MyType"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

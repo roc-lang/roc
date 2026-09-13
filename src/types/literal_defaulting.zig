@@ -192,7 +192,7 @@ pub fn numericDefaultPhase(
 }
 
 fn testIdent(idx: u29) Ident.Idx {
-    return .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = idx };
+    return .{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = idx };
 }
 
 const test_literal_idents = LiteralMethodIdents{

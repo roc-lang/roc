@@ -25,35 +25,54 @@ MISSING NESTED TYPE - record_default_duplicate_associated_forward_lookup.md:1:5:
 MISSING NESTED TYPE - record_default_duplicate_associated_forward_lookup.md:4:5:4:12
 TYPE REDECLARED - record_default_duplicate_associated_forward_lookup.md:11:1:14:2
 # PROBLEMS
-── ✗ missing nested type ─ record_default_duplicate_associated_forward_lookup.md:1:5
-
-Foo is in scope, but it doesn't have a nested type named Baz.
-
-f : Foo.Baz -> U8
-    ^^^^^^^
-
-── ✗ missing nested type ─ record_default_duplicate_associated_forward_lookup.md:4:5
-
-Foo is in scope, but it doesn't have a nested type named Qux.
-
-g : Foo.Qux -> U8
-    ^^^^^^^
-
-── ✗ type redeclared ─ record_default_duplicate_associated_forward_lookup.md:11:1
-
-The type Foo is being redeclared.
-
-Foo := [B].{
-    Baz := { y : U8 }
-    Qux : { z : U8 }
-}
-
-But Foo was already declared in record_default_duplicate_associated_forward_lookup.md:7:1:
-
-Foo := [A].{
-    Bar := { x : U8 }
-}
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 1 5) (end 1 12))
+		(headline
+			(annotated code "Foo")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Baz")
+			(reflow "."))
+		(document
+			(source-region (file "record_default_duplicate_associated_forward_lookup.md") (start 1 5) (end 1 12) (annotation error) (line-text "f : Foo.Baz -> U8"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 4 5) (end 4 12))
+		(headline
+			(annotated code "Foo")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "Qux")
+			(reflow "."))
+		(document
+			(source-region (file "record_default_duplicate_associated_forward_lookup.md") (start 4 5) (end 4 12) (annotation error) (line-text "g : Foo.Qux -> U8"))))
+	(report
+		(severity runtime_error)
+		(title "Type Redeclared")
+		(region (start 11 1) (end 14 2))
+		(headline
+			(reflow "The type ")
+			(annotated code "Foo")
+			(reflow " is being redeclared."))
+		(document
+			(source-region (file "record_default_duplicate_associated_forward_lookup.md") (start 11 1) (end 14 2) (annotation error) (line-text "Foo := [B].{\n    Baz := { y : U8 }\n    Qux : { z : U8 }\n}"))
+			(line-break)
+			(reflow "But ")
+			(annotated type "Foo")
+			(reflow " was already declared in ")
+			(source-location
+				(file "record_default_duplicate_associated_forward_lookup.md")
+				(line 7)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "record_default_duplicate_associated_forward_lookup.md") (start 7 1) (end 9 2) (annotation dim) (line-text "Foo := [A].{\n    Bar := { x : U8 }\n}")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,OpArrow,UpperIdent,

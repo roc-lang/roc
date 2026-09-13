@@ -73,6 +73,27 @@ fn moduleTestWithLiveAllocations(
 
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    exprTestWithLiveAllocations(
+        "rc balance: Set storage mutations and early fold release shared heap items",
+        \\{
+        \\    words = Set.from_list(["a long string stored in the shared original set", "another long string stored in the shared original set"])
+        \\    reserved = words.reserve(100)
+        \\    cleared = reserved.clear()
+        \\    rebuilt = reserved.remove("a long string stored in the shared original set").release_excess_capacity()
+        \\    joined = words.join_map(|word| Set.single([word]))
+        \\    first = words.fold_until("", |_, word| Break(word))
+        \\    expect first == "a long string stored in the shared original set"
+        \\    expect words.len() == 2
+        \\    expect rebuilt.len() == 1
+        \\    expect cleared.is_empty()
+        \\    expect joined.len() == 2
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
     // Ported from origin/main:src/eval/test/interpreter_style_test.zig
     exprTest(
         "host effects: crash statement triggers crash callback",

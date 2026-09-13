@@ -69,13 +69,6 @@ batches and of each other:
 - [big/runtime-representation-single-sourcing.md](big/runtime-representation-single-sourcing.md)—
   backends stop re-encoding RocStr/RocList offsets, flag bits, the
   refcount contract, and C-ABI thresholds as magic numbers.
-- [big/host-boundary-single-sourcing.md](big/host-boundary-single-sourcing.md)—
-  glue templates, glue-platform struct mirrors, shim symbol
-  strings, and test-host boilerplate get generated or lock-tested
-  against `host_abi.zig`/builtins.
-- [big/one-report-renderer.md](big/one-report-renderer.md)—collapse
-  the four per-target diagnostic renderers onto one walker plus style
-  data; delete the duplicated annotation-color switch.
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).

@@ -2,8 +2,8 @@
 //!
 //! A rename may only change what a binding is called. In Roc part of what a
 //! name *means* is spelled in the name itself: a trailing `!` marks a value
-//! effectful, a leading `_` marks it deliberately unused, and a leading `$`
-//! marks it reassignable, while upper and lower case separate types and tags
+//! effectful and a leading `_` marks it deliberately unused, while upper and
+//! lower case separate types and tags
 //! from values. Rewriting `foo` to `foo!` is therefore not a rename—it is an
 //! edit the type checker would reject, or worse, silently accept with
 //! different meaning.
@@ -34,7 +34,7 @@ pub const Rejection = enum {
         return switch (self) {
             .not_an_identifier => "the new name must be a single Roc identifier",
             .changes_ident_kind => "the new name must be the same kind of identifier as the old one: " ++
-                "upper- and lowercase names are not interchangeable, and the `!`, `_` and `$` markers carry meaning",
+                "upper- and lowercase names are not interchangeable, and the `!` and `_` markers carry meaning",
         };
     }
 };
@@ -47,8 +47,7 @@ const NameShape = struct {
     fn eql(self: NameShape, other: NameShape) bool {
         return self.tag == other.tag and
             self.attributes.effectful == other.attributes.effectful and
-            self.attributes.ignored == other.attributes.ignored and
-            self.attributes.reassignable == other.attributes.reassignable;
+            self.attributes.ignored == other.attributes.ignored;
     }
 };
 

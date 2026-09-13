@@ -13,27 +13,72 @@ match person {
 # EXPECTED
 TYPE MISMATCH - simple_record.md:1:1:1:1
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────────────────── simple_record.md:1:5
-
-The second branch of this match does not match the previous ones.
-
-match person {
-    { name } => name
-    { age } => age
-}
-
-This second branch is trying to match:
-
-    { age: _field }
-
-But the expression between the match parenthesis has the type:
-
-    { name: _field }
-
-These can never match! Either the pattern or expression has a problem.
-Hint: This pattern doesn't bind the name field. Match it explicitly with name:
-_, or add .. to match all the remaining fields.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 1) (end 4 2))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "second")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the previous ones."))
+		(document
+			(source-underlines
+				(display (file "simple_record.md") (start 1 1) (end 4 2) (annotation dim) (line-text "match person {\n    { name } => name\n    { age } => age\n}"))
+				(underline (start 3 5) (end 3 12) (annotation error)))
+			(line-break)
+			(reflow "This")
+			(reflow " ")
+			(reflow "second")
+			(reflow " ")
+			(reflow "branch is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ age: _field }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ name: _field }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem.")
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This pattern doesn't bind the")
+			(reflow " ")
+			(annotated code "name")
+			(reflow " ")
+			(reflow "field. Match it explicitly with")
+			(reflow " ")
+			(annotated code "name: _")
+			(reflow ",")
+			(reflow " ")
+			(reflow "or add")
+			(reflow " ")
+			(annotated code "..")
+			(reflow " ")
+			(reflow "to match all the remaining fields."))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

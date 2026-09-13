@@ -31,64 +31,87 @@ DEFAULT VALUE CYCLE - record_default_invoked_flow_cycles.md:8:20:8:31
 INVALID NOMINAL RECORD - record_default_invoked_flow_cycles.md:5:16:5:18
 INVALID NOMINAL RECORD - record_default_invoked_flow_cycles.md:12:16:12:18
 # PROBLEMS
-── ✗ default value cycle ──────────── record_default_invoked_flow_cycles.md:1:23
-
-The default value for the a field depends on itself.
-
-Blocky := { a : U8 ?? f({}) }
-                      ^^^^^
-
-A field default (??) is materialized at every construction site that omits the
-field. This default reaches itself again—through values it references, or
-through constructions that omit the field and would materialize it—so there is
-no value to start from. Break the cycle by supplying the field at one of the
-constructions involved, or by removing the self-dependent reference from the
-default.
-
-── ✗ default value cycle ──────────── record_default_invoked_flow_cycles.md:8:20
-
-The default value for the a field depends on itself.
-
-Hof := { a : U8 ?? apply(make) }
-                   ^^^^^^^^^^^
-
-A field default (??) is materialized at every construction site that omits the
-field. This default reaches itself again—through values it references, or
-through constructions that omit the field and would materialize it—so there is
-no value to start from. Break the cycle by supplying the field at one of the
-constructions involved, or by removing the self-dependent reference from the
-default.
-
-── ✗ invalid nominal record ───────── record_default_invoked_flow_cycles.md:5:16
-
-I'm having trouble with this nominal type that wraps a record.
-
-|_| Blocky.{}.a + n
-           ^^
-
-The record I found is:
-
-    {}
-
-But the nominal type expects:
-
-    { a: U8 }
-
-── ✗ invalid nominal record ──────── record_default_invoked_flow_cycles.md:12:16
-
-I'm having trouble with this nominal type that wraps a record.
-
-make = |_| Hof.{}.a
-               ^^
-
-The record I found is:
-
-    {}
-
-But the nominal type expects:
-
-    { a: U8 }
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Default Value Cycle")
+		(region (start 1 23) (end 1 28))
+		(headline
+			(reflow "The default value for the ")
+			(annotated record-field "a")
+			(reflow " field depends on itself."))
+		(document
+			(source-region (file "record_default_invoked_flow_cycles.md") (start 1 23) (end 1 28) (annotation error) (line-text "Blocky := { a : U8 ?? f({}) }"))
+			(line-break)
+			(reflow "A field default (")
+			(annotated code "??")
+			(reflow ") is materialized at every construction site that omits the field. This default reaches itself again—through values it references, or through constructions that omit the field and would materialize it—so there is no value to start from. Break the cycle by supplying the field at one of the constructions involved, or by removing the self-dependent reference from the default.")))
+	(report
+		(severity runtime_error)
+		(title "Default Value Cycle")
+		(region (start 8 20) (end 8 31))
+		(headline
+			(reflow "The default value for the ")
+			(annotated record-field "a")
+			(reflow " field depends on itself."))
+		(document
+			(source-region (file "record_default_invoked_flow_cycles.md") (start 8 20) (end 8 31) (annotation error) (line-text "Hof := { a : U8 ?? apply(make) }"))
+			(line-break)
+			(reflow "A field default (")
+			(annotated code "??")
+			(reflow ") is materialized at every construction site that omits the field. This default reaches itself again—through values it references, or through constructions that omit the field and would materialize it—so there is no value to start from. Break the cycle by supplying the field at one of the constructions involved, or by removing the self-dependent reference from the default.")))
+	(report
+		(severity runtime_error)
+		(title "Invalid Nominal Record")
+		(region (start 5 16) (end 5 18))
+		(headline
+			(reflow "I'm having trouble with this nominal type that wraps a record."))
+		(document
+			(source-region (file "record_default_invoked_flow_cycles.md") (start 5 16) (end 5 18) (annotation error) (line-text "    |_| Blocky.{}.a + n"))
+			(line-break)
+			(text "The record I found is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "But the nominal type expects:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ a: U8 }")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Nominal Record")
+		(region (start 12 16) (end 12 18))
+		(headline
+			(reflow "I'm having trouble with this nominal type that wraps a record."))
+		(document
+			(source-region (file "record_default_invoked_flow_cycles.md") (start 12 16) (end 12 18) (annotation error) (line-text "make = |_| Hof.{}.a"))
+			(line-break)
+			(text "The record I found is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "But the nominal type expects:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ a: U8 }")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,LowerIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,CloseRound,CloseCurly,
@@ -227,45 +250,19 @@ keeps = Keeps.{}
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-block
-			(s-let
-				(p-assign (ident "n"))
-				(e-num (value "1")))
-			(e-closure
-				(captures
-					(capture (ident "n")))
-				(e-lambda
-					(args
-						(p-underscore))
-					(e-dispatch-call (method "plus") (constraint-fn-var 296)
-						(receiver
-							(e-field-access
-								(receiver
-									(e-runtime-error (tag "erroneous_value_expr")))
-								(segments
-									(segment (name "a") (mode "required")))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "n")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "apply"))
 		(e-lambda
 			(args
 				(p-assign (ident "g")))
-			(e-call (constraint-fn-var 301)
+			(e-call (constraint-fn-var 299)
 				(e-lookup-local
 					(p-assign (ident "g")))
 				(e-empty_record))))
 	(d-let
 		(p-assign (ident "make"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-field-access
-				(receiver
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(segments
-					(segment (name "a") (mode "required"))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "make_handler"))
 		(e-lambda
@@ -308,9 +305,9 @@ keeps = Keeps.{}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> b where [b.plus : b, Dec -> b]"))
+		(patt (type "_arg -> Error"))
 		(patt (type "({} -> b) -> b"))
-		(patt (type "_arg -> _ret"))
+		(patt (type "_arg -> Error"))
 		(patt (type "_arg -> U8"))
 		(patt (type "Keeps")))
 	(type_decls
@@ -321,9 +318,9 @@ keeps = Keeps.{}
 		(nominal (type "Keeps")
 			(ty-header (name "Keeps"))))
 	(expressions
-		(expr (type "_arg -> b where [b.plus : b, Dec -> b]"))
+		(expr (type "_arg -> Error"))
 		(expr (type "({} -> b) -> b"))
-		(expr (type "_arg -> _ret"))
+		(expr (type "_arg -> Error"))
 		(expr (type "_arg -> U8"))
 		(expr (type "Keeps"))))
 ~~~

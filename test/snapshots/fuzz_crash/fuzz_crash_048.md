@@ -25,91 +25,111 @@ DECLARATION HAS NO VALUE - fuzz_crash_048.md:4:1:5:16
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:6:1:6:35
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 # PROBLEMS
-── ✗ ascii control character ───────────────────────────────────────────────────
-
-ASCII control characters are not allowed in Roc source code.
-
-── ✗ undeclared type ───────────────────────────────────── fuzz_crash_048.md:2:7
-
-The type Thing is not declared in this scope.
-
-bar : Thing(a, b, _)
-      ^^^^^
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_048.md:6:14
-
-The type String is not declared in this scope.
-
-main! : List(String) -> Try({}, _)
-             ^^^^^^
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_048.md:7:13
-
-The type Value is not declared in this scope.
-
-tag_tuple : Value((a, b, c))
-            ^^^^^
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_048.md:1:1
-
-This declaration has a type annotation but no implementation.
-
-foo : U64
-^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_048.md:2:1
-
-This declaration has a type annotation but no implementation.
-
-bar : Thing(a, b, _)
-^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_048.md:3:1
-
-This declaration has a type annotation but no implementation.
-
-biz : (a, b, c)
-^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_048.md:4:1
-
-This declaration has a type annotation but no implementation.
-
-add_one : (
-U8, U16 -> U32)
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_048.md:6:1
-
-This declaration has a type annotation but no implementation.
-
-main! : List(String) -> Try({}, _)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_048.md:7:1
-
-This declaration has a type annotation but no implementation.
-
-tag_tuple : Value((a, b, c))
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "ASCII Control Character")
+		(headline
+			(reflow "ASCII control characters are not allowed in Roc source code."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 2 7) (end 2 12))
+		(headline
+			(reflow "The type ")
+			(annotated code "Thing")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 2 7) (end 2 12) (annotation error) (line-text "bar : Thing(a, b, _)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 6 14) (end 6 20))
+		(headline
+			(reflow "The type ")
+			(annotated code "String")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 6 14) (end 6 20) (annotation error) (line-text "main! : List(String) -> Try({}, _)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 7 13) (end 7 18))
+		(headline
+			(reflow "The type ")
+			(annotated code "Value")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 7 13) (end 7 18) (annotation error) (line-text "tag_tuple : Value((a, b, c))"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 1 1) (end 1 10))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 1 1) (end 1 10) (annotation error) (line-text "foo : U64"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 2 1) (end 2 21))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 2 1) (end 2 21) (annotation error) (line-text "bar : Thing(a, b, _)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 3 1) (end 3 16))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 3 1) (end 3 16) (annotation error) (line-text "biz : (a, b, c)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 4 1) (end 5 16))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 4 1) (end 5 16) (annotation error) (line-text "add_one : (\u{11}\nU8, U16 -> U32)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 6 1) (end 6 35))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 6 1) (end 6 35) (annotation error) (line-text "main! : List(String) -> Try({}, _)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 7 1) (end 7 29))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 7 1) (end 7 29) (annotation error) (line-text "tag_tuple : Value((a, b, c))"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

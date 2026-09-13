@@ -26,39 +26,57 @@ TYPE MISMATCH - nominal_primitive_literal_construction.md:4:7:4:8
 TYPE MISMATCH - nominal_primitive_literal_construction.md:9:9:9:14
 TYPE MISMATCH - nominal_primitive_literal_construction.md:15:13:15:19
 # PROBLEMS
-── ✗ type mismatch ─────────────── nominal_primitive_literal_construction.md:4:7
-
-This number is being used where a non-number type is needed.
-
-uid = 0
-      ^
-
-Other code expects this to have the type:
-
-    UserId
-
-── ✗ type mismatch ─────────────── nominal_primitive_literal_construction.md:9:9
-
-This string literal is being used where a non-string type is needed.
-
-token = "abc"
-        ^^^^^
-
-The type was determined to be:
-
-    Token
-
-── ✗ type mismatch ───────────── nominal_primitive_literal_construction.md:15:13
-
-This string literal is being used where a non-string type is needed.
-
-goodValue = "test"
-            ^^^^^^
-
-The type was determined to be:
-
-    GoodDerived
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 7) (end 4 8))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "nominal_primitive_literal_construction.md") (start 4 7) (end 4 8) (annotation error) (line-text "uid = 0"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "UserId")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 9 9) (end 9 14))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "nominal_primitive_literal_construction.md") (start 9 9) (end 9 14) (annotation error) (line-text "token = \"abc\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Token")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 15 13) (end 15 19))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "nominal_primitive_literal_construction.md") (start 15 13) (end 15 19) (annotation error) (line-text "goodValue = \"test\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "GoodDerived")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,UpperIdent,

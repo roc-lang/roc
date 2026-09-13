@@ -28,6 +28,16 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 21: type and evidence digests are SHA-256 again (32 bytes, computed
+/// with the CPU's SHA-256 instructions), changing every serialized digest byte
+/// and digest width.
+/// Version 20: 128-bit type and evidence content hashes replace SHA-256,
+/// changing every serialized type digest byte and digest width.
+/// Version 19: pre-lift closure operands store explicit target capture keys.
+/// Version 18: callable-derived evidence belongs to its vector slot and no
+/// longer stores a parameter index from another scheme.
+/// Version 17: generated-codec specialization identities retain the explicit
+/// public value shape separately from the constructor representation.
 /// Version 16: generated-codec specialization identities name their complete
 /// derivation boundary and instantiated constructor rather than one grounding
 /// call edge.
@@ -45,8 +55,8 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Version 9: function metadata records whether a signature is independent
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
-/// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 16;
+/// content hash of exact compile-time evidence topology.
+pub const FORMAT_VERSION: u32 = 21;
 
 const SECTION_COUNT = 43;
 
@@ -469,7 +479,7 @@ fn evidenceVectorEnd(
                     .from_callable => {},
                 }
             },
-            .structural, .unreachable_value, .checked_error => {},
+            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
         }
     }
     return cursor;
@@ -608,7 +618,6 @@ pub const MappedProgramView = struct {
             if (!self.exprRefInBounds(field.value)) return false;
         }
         for (self.fn_def_captures) |capture| {
-            if (!self.localRefInBounds(capture.local)) return false;
             if (!self.exprRefInBounds(capture.value)) return false;
         }
         for (self.record_destructs) |destruct| {
@@ -635,7 +644,7 @@ pub const MappedProgramView = struct {
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return false;
             if (spec.identity.codec_contract) |contract| {
-                if (!self.typeRefInBounds(contract.constructor_ty)) return false;
+                if (!self.typeRefInBounds(contract.constructor_ty) or !self.typeRefInBounds(contract.shape_ty)) return false;
             }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return false;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return false;
@@ -1559,7 +1568,7 @@ fn writeConstData(hasher: *std.crypto.hash.sha2.Sha256, data: anytype) void {
     writeModuleId(hasher, @field(data, "arti" ++ "f" ++ "act"));
     writeConstOwner(hasher, data.owner);
     writeHashU32(hasher, @intFromEnum(data.template));
-    writeHashBytes32(hasher, data.source_scheme.bytes);
+    writeHashDigest(hasher, data.source_scheme.bytes);
 }
 
 fn writeConstOwner(hasher: *std.crypto.hash.sha2.Sha256, owner: checked.ConstOwner) void {
@@ -1617,28 +1626,29 @@ fn writeOptionalProcedureUseTemplate(hasher: *std.crypto.hash.sha2.Sha256, use: 
 
 fn writeProcedureUseTemplate(hasher: *std.crypto.hash.sha2.Sha256, use: checked.ProcedureUseTemplate) void {
     writeProcedureBinding(hasher, use.binding);
-    writeHashBytes32(hasher, use.source_fn_ty_template.bytes);
+    writeHashDigest(hasher, use.source_fn_ty_template.bytes);
     writeOptionalCheckedTypeId(hasher, use.source_fn_ty_payload);
 }
 
 fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) void {
     writeCallableIdentity(hasher, spec.identity.callable);
     writeHashBytes32(hasher, spec.identity.method_scope.bytes);
-    writeHashBytes32(hasher, spec.identity.source_fn_ty_digest.bytes);
-    writeHashBytes32(hasher, spec.identity.evidence_digest.bytes);
-    writeHashBytes32(hasher, spec.identity.codec_contract_digest.bytes);
+    writeHashDigest(hasher, spec.identity.source_fn_ty_digest.bytes);
+    writeHashDigest(hasher, spec.identity.evidence_digest.bytes);
+    writeHashDigest(hasher, spec.identity.codec_contract_digest.bytes);
     if (spec.identity.codec_contract) |contract| {
         writeHashBool(hasher, true);
         writeHashBytes32(hasher, contract.module.bytes);
         writeHashU32(hasher, @intFromEnum(contract.derivation));
         writeHashU32(hasher, @intFromEnum(contract.kind));
-        writeHashBytes32(hasher, contract.constructor_ty_digest.bytes);
+        writeHashDigest(hasher, contract.constructor_ty_digest.bytes);
+        writeHashDigest(hasher, contract.shape_ty_digest.bytes);
     } else {
         writeHashBool(hasher, false);
     }
-    writeHashBytes32(hasher, spec.identity.request_fn_ty_digest.bytes);
-    writeHashBytes32(hasher, spec.request_fn_ty_digest.bytes);
-    writeHashBytes32(hasher, spec.solved_fn_ty_digest.bytes);
+    writeHashDigest(hasher, spec.identity.request_fn_ty_digest.bytes);
+    writeHashDigest(hasher, spec.request_fn_ty_digest.bytes);
+    writeHashDigest(hasher, spec.solved_fn_ty_digest.bytes);
 }
 
 fn writeCallableIdentity(hasher: *std.crypto.hash.sha2.Sha256, callable: Ast.CallableIdentity) void {
@@ -1654,7 +1664,7 @@ fn writeCallableIdentity(hasher: *std.crypto.hash.sha2.Sha256, callable: Ast.Cal
             writeHashBytes32(hasher, site.module.bytes);
             writeHashU32(hasher, site.owner_proc_base);
             writeHashU32(hasher, site.owner_template);
-            writeHashBytes32(hasher, site.owner_fn_digest.bytes);
+            writeHashDigest(hasher, site.owner_fn_digest.bytes);
             writeHashU32(hasher, site.site);
             if (site.default_root_module) |identity| {
                 writeHashBytes(hasher, "default_root");
@@ -1732,6 +1742,10 @@ fn writeHashOptionalBytes32(hasher: *std.crypto.hash.sha2.Sha256, bytes: ?[32]u8
     } else {
         writeHashBool(hasher, false);
     }
+}
+
+fn writeHashDigest(hasher: *std.crypto.hash.sha2.Sha256, bytes: [32]u8) void {
+    hasher.update(&bytes);
 }
 
 fn writeHashBytes32(hasher: *std.crypto.hash.sha2.Sha256, bytes: [32]u8) void {
@@ -2331,9 +2345,12 @@ test "monotype specialization cache maps fresh single-shard program view equival
     const call_args = try program.addExprSpan(&.{local_expr});
     const typed_args = try program.addTypedLocalSpan(&.{.{ .local = local, .ty = unit_ty }});
 
-    const fn_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .{ .derivation = .equality } }};
+    const fn_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{
+        .{ .structural = .{ .derivation = .equality } },
+        .{ .from_callable = .{ .independent_callable = true } },
+    };
     const fn_evidence_frame_nodes = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
     };
     const fn_evidence = try program.addConstFnEvidence(&fn_evidence_nodes);
     const fn_evidence_frames = try program.addConstFnEvidenceFrames(&fn_evidence_frame_nodes);
@@ -2397,6 +2414,11 @@ test "monotype specialization cache maps fresh single-shard program view equival
     });
 
     _ = try program.addFieldExprSpan(&.{.{ .name = field_name, .value = local_expr }});
+    // Capture keys are target identities, independent of this shard's locals.
+    _ = try program.addFnDefCaptureSpan(&.{
+        .{ .id = checked.CaptureId.canonical(100), .value = local_expr },
+        .{ .id = checked.CaptureId.generatedCheck(200), .value = call_expr },
+    });
     _ = try program.addRecordDestructSpan(&.{.{ .name = field_name, .pattern = pat }});
     const delimiter = try program.addStringLiteral("done");
     _ = try program.addStrPatternStepSpan(&.{.{ .capture = pat, .delimiter = delimiter }});
@@ -2906,9 +2928,13 @@ test "monotype specialization cache validity includes stored specialization iden
         .kind = .encoder,
         .constructor_ty_digest = mono_digest,
         .constructor_ty = spec_ty,
+        .shape_ty_digest = mono_digest,
+        .shape_ty = spec_ty,
     };
     var fifth_spec = fourth_spec;
     fifth_spec.identity.codec_contract.?.derivation = @enumFromInt(13);
+    var sixth_spec = fourth_spec;
+    sixth_spec.identity.codec_contract.?.shape_ty_digest = second_source_digest;
 
     const no_specs = computeValidityId(.{ .root_module = testModuleId(1) });
     const first = computeValidityId(.{
@@ -2932,11 +2958,17 @@ test "monotype specialization cache validity includes stored specialization iden
         .specs = &.{fifth_spec},
     });
 
+    const sixth = computeValidityId(.{
+        .root_module = testModuleId(1),
+        .specs = &.{sixth_spec},
+    });
+
     try std.testing.expect(!std.mem.eql(u8, no_specs[0..], first[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], second[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], third[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], fourth[0..]));
     try std.testing.expect(!std.mem.eql(u8, fourth[0..], fifth[0..]));
+    try std.testing.expect(!std.mem.eql(u8, fourth[0..], sixth[0..]));
 }
 
 fn expectEquivalentProgramViews(

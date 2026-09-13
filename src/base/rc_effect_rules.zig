@@ -159,6 +159,13 @@ pub fn assertTableConforms() void {
     comptime {
         for (std.enums.values(LowLevel)) |op| {
             assertRowConforms(@tagName(op), op.rcEffect());
+            const effect = op.rcEffect();
+            const allocation_args = effect.consume_args | effect.retain_args |
+                effect.result_borrows_args | effect.result_shares_args |
+                effect.may_runtime_uniqueness_check_args;
+            if ((op.representationArgs() & allocation_args) != 0) {
+                @compileError("representation-only operand has an allocation effect: " ++ @tagName(op));
+            }
         }
     }
 }

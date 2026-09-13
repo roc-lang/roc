@@ -35,36 +35,51 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 # PROBLEMS
-── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:20:5
-
-Variable result1 is defined here and then never used:
-
-result1 = testEllipsis(42)
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result1 to
-suppress this warning.
-
-── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:21:5
-
-Variable result2 is defined here and then never used:
-
-result2 = testCrash(42)
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result2 to
-suppress this warning.
-
-── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:22:5
-
-Variable result3 is defined here and then never used:
-
-result3 = testCrashSimple(42)
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result3 to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 20 5) (end 20 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result1")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result1")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "crash_and_ellipsis_test.md") (start 20 5) (end 20 12) (annotation error) (line-text "    result1 = testEllipsis(42)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 21 5) (end 21 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result2")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result2")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "crash_and_ellipsis_test.md") (start 21 5) (end 21 12) (annotation error) (line-text "    result2 = testCrash(42)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 22 5) (end 22 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result3")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result3")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "crash_and_ellipsis_test.md") (start 22 5) (end 22 12) (annotation error) (line-text "    result3 = testCrashSimple(42)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

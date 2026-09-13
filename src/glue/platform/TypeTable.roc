@@ -134,9 +134,6 @@ TypeTable := { entries : List(TypeInfo) }.{
 			_ => Bool.False
 		}
 
-	tag_union_has_payload : TagUnionRepr -> Bool
-	tag_union_has_payload = |tu| !(List.all(tu.tags, |tag| List.is_empty(tag.payload)))
-
 	## Stable structural token for a type, independent of type-table entry
 	## order. Named types (record / tag union / unknown) contribute their name
 	## and terminate the recursion (a recursive shape routes through a named

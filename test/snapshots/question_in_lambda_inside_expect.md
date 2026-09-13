@@ -205,7 +205,7 @@ expect {
 										(e-num (value "2")))))))))
 			(e-method-eq (negated "false")
 				(lhs
-					(e-call (constraint-fn-var 379)
+					(e-call (constraint-fn-var 381)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "3"))))

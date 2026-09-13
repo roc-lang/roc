@@ -14,17 +14,25 @@ match color {
 # EXPECTED
 TYPE MISMATCH - basic_tag_union.md:4:11:4:14
 # PROBLEMS
-── ✗ type mismatch ───────────────────────────────────── basic_tag_union.md:4:11
-
-This string literal is being used where a non-string type is needed.
-
-Green => "3"
-         ^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 11) (end 4 14))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "basic_tag_union.md") (start 4 11) (end 4 14) (annotation error) (line-text "\tGreen => \"3\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -66,13 +74,13 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-num (value "1"))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-num (value "2"))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

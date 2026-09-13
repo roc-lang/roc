@@ -3,9 +3,8 @@
 //! Renders corpora that exercise every `DocumentElement` and `Annotation`
 //! variant to all four render targets and asserts the target-independent
 //! invariants: annotated content survives every target, the plain targets
-//! (LSP, markup-stripped terminal) reproduce the bare text exactly, and the
-//! caret rows drawn under source regions are byte-identical between the
-//! targets that draw them. Both corpora are comptime-enumerated from the
+//! reproduce the bare text exactly after removing decoration, and the caret
+//! rows drawn under source regions are byte-identical across all four targets. Both corpora are comptime-enumerated from the
 //! types, so adding a variant fails compilation here until it is covered.
 //! Exact per-target byte pins for a small fixture live at the bottom; they
 //! are regenerated intentionally whenever output is meant to change.
@@ -20,6 +19,55 @@ const DocumentElement = reporting.DocumentElement;
 const Annotation = reporting.Annotation;
 const ColorPalette = reporting.ColorPalette;
 const ReportingConfig = reporting.ReportingConfig;
+
+// Explicit membership prevents a newly added annotation from silently receiving
+// only generic coverage. Each entry is exercised inline and as a nested region.
+const annotation_corpus = [_]Annotation{
+    .emphasized,        .keyword,        .type_variable,    .error_highlight,
+    .warning_highlight, .suggestion,     .code_block,       .inline_code,
+    .symbol,            .path,           .literal,          .comment,
+    .underline,         .dimmed,         .symbol_qualified, .symbol_unqualified,
+    .module_name,       .record_field,   .tag_name,         .binary_operator,
+    .source_region,     .reflowing_text,
+};
+comptime {
+    for (std.enums.values(Annotation)) |annotation| {
+        var count: usize = 0;
+        for (annotation_corpus) |covered| {
+            if (annotation == covered) count += 1;
+        }
+        if (count != 1) @compileError("parity corpus must cover each annotation exactly once: " ++ @tagName(annotation));
+    }
+}
+
+/// Decode the markup emitted by the HTML style. This intentionally rejects
+/// unknown entities so escaping changes cannot disappear from parity checks.
+fn visibleHtml(gpa: Allocator, bytes: []const u8) (Allocator.Error || std.Io.Writer.Error || error{ UnclosedHtmlTag, UnknownHtmlEntity })![]u8 {
+    var out = std.Io.Writer.Allocating.init(gpa);
+    errdefer out.deinit();
+    var i: usize = 0;
+    while (i < bytes.len) {
+        if (bytes[i] == '<') {
+            const end = std.mem.findScalarPos(u8, bytes, i, '>') orelse return error.UnclosedHtmlTag;
+            i = end + 1;
+        } else if (bytes[i] == '&') {
+            const entities = .{ .{ "&lt;", "<" }, .{ "&gt;", ">" }, .{ "&amp;", "&" }, .{ "&quot;", "\"" }, .{ "&#39;", "'" }, .{ "&nbsp;", " " } };
+            var matched = false;
+            inline for (entities) |entity| {
+                if (!matched and std.mem.startsWith(u8, bytes[i..], entity[0])) {
+                    try out.writer.writeAll(entity[1]);
+                    i += entity[0].len;
+                    matched = true;
+                }
+            }
+            if (!matched) return error.UnknownHtmlEntity;
+        } else {
+            try out.writer.writeByte(bytes[i]);
+            i += 1;
+        }
+    }
+    return out.toOwnedSlice();
+}
 
 /// A document rendered to every target.
 const Outputs = struct {
@@ -110,7 +158,7 @@ test "every annotation preserves its content on every render target" {
     const gpa = testing.allocator;
     const payload = "AnnotationPayload";
 
-    inline for (comptime std.enums.values(Annotation)) |annotation| {
+    inline for (annotation_corpus) |annotation| {
         var doc = Document.init(gpa);
         defer doc.deinit();
         try doc.addText("before ");
@@ -132,10 +180,28 @@ test "every annotation preserves its content on every render target" {
         // and the colored terminal is the same text once colors are removed.
         const plain = "before " ++ payload ++ " after";
         try testing.expectEqualStrings(plain, outputs.lsp);
+        const html_text = try visibleHtml(gpa, outputs.html);
+        defer gpa.free(html_text);
+        try testing.expectEqualStrings(plain, html_text);
 
         const stripped = try stripAnsi(gpa, outputs.terminal_ansi);
         defer gpa.free(stripped);
         try testing.expectEqualStrings(plain, stripped);
+
+        const md_open = try std.mem.replaceOwned(u8, gpa, outputs.markdown, "```roc\n", "");
+        defer gpa.free(md_open);
+        const md_close = try std.mem.replaceOwned(u8, gpa, md_open, "\n```", "");
+        defer gpa.free(md_close);
+        const md_ticks = try stripChar(gpa, md_close, '`');
+        defer gpa.free(md_ticks);
+        const md_stars = try stripChar(gpa, md_ticks, '*');
+        defer gpa.free(md_stars);
+        const md_underscores = try stripChar(gpa, md_stars, '_');
+        defer gpa.free(md_underscores);
+        // The warning bullet is a style marker, like emphasis delimiters.
+        const md_text = try std.mem.replaceOwned(u8, gpa, md_underscores, "● ", "");
+        defer gpa.free(md_text);
+        try testing.expectEqualStrings(plain, md_text);
 
         // The no-color terminal may add backticks around code spans; nothing
         // else may differ from the plain text.
@@ -148,7 +214,7 @@ test "every annotation preserves its content on every render target" {
 test "annotation regions preserve nested content on every render target" {
     const gpa = testing.allocator;
 
-    inline for (comptime std.enums.values(Annotation)) |annotation| {
+    inline for (annotation_corpus) |annotation| {
         var doc = Document.init(gpa);
         defer doc.deinit();
         try doc.startAnnotation(annotation);
@@ -164,6 +230,10 @@ test "annotation regions preserve nested content on every render target" {
 
         const plain = "outer one inner outer two";
         try testing.expectEqualStrings(plain, outputs.lsp);
+        const html_text = try visibleHtml(gpa, outputs.html);
+        defer gpa.free(html_text);
+        try testing.expectEqualStrings(plain, html_text);
+
         try testing.expectEqualStrings(plain, outputs.markdown);
         try testing.expectEqualStrings(plain, outputs.terminal_plain);
 
@@ -272,6 +342,37 @@ test "every document element variant renders on every target" {
         var outputs = try renderAllTargets(gpa, &doc);
         defer outputs.deinit(gpa);
 
+        inline for (.{ .{ reporting.RenderTarget.color_terminal, "terminal_ansi" }, .{ reporting.RenderTarget.markdown, "markdown" }, .{ reporting.RenderTarget.html, "html" }, .{ reporting.RenderTarget.language_server, "lsp" } }) |entry| {
+            const target = entry[0];
+            const expected: ?[]const u8 = comptime switch (tag) {
+                .text => "text payload",
+                .annotated => "annotated payload",
+                .raw => "raw payload",
+                .reflowing_text => "reflowing payload",
+                .link => "<https://example.test/payload>",
+                .vertical_stack => if (target == .html) "\nstack payload one\nstack payload two\n" else "stack payload one\nstack payload two",
+                .horizontal_concat => "concat payload one concat payload two",
+                .source_location => "location.roc:3:5",
+                .line_break => "\n",
+                .indent => if (target == .language_server) "    " else "        ",
+                .space => "   ",
+                .horizontal_rule => switch (target) {
+                    .color_terminal => "─────",
+                    .markdown => "\n---\n",
+                    .html => "\n",
+                    .language_server => "-----",
+                },
+                .annotation_start, .annotation_end => "",
+                .source_code_region, .source_code_with_underlines, .source_code_multi_region => null,
+            };
+            if (expected) |visible| {
+                const raw = @field(outputs, entry[1]);
+                const decoded = if (target == .html) try visibleHtml(gpa, raw) else if (target == .color_terminal) try stripAnsi(gpa, raw) else if (target == .markdown and tag == .annotated) try stripChar(gpa, raw, '`') else try gpa.dupe(u8, raw);
+                defer gpa.free(decoded);
+                try testing.expectEqualStrings(visible, decoded);
+            }
+        }
+
         if (comptime payloadFor(tag)) |payload| {
             try testing.expect(countOccurrences(outputs.terminal_ansi, payload) >= 1);
             try testing.expect(countOccurrences(outputs.terminal_plain, payload) >= 1);
@@ -310,7 +411,7 @@ fn collectCaretRows(gpa: Allocator, out: []const u8, comptime strip_gutter: bool
     return rows;
 }
 
-test "caret rows are byte-identical between markdown and plain terminal" {
+test "caret rows are byte-identical across all four targets" {
     const gpa = testing.allocator;
 
     var doc = Document.init(gpa);
@@ -356,8 +457,97 @@ test "caret rows are byte-identical between markdown and plain terminal" {
         try testing.expectEqualStrings(md_row, term_row);
     }
 
+    const html_text = try visibleHtml(gpa, outputs.html);
+    defer gpa.free(html_text);
+    const ansi_text = try stripAnsi(gpa, outputs.terminal_ansi);
+    defer gpa.free(ansi_text);
+    inline for (.{ html_text, outputs.lsp }) |out| {
+        var rows = try collectCaretRows(gpa, out, false);
+        defer rows.deinit();
+        try testing.expectEqual(markdown_rows.items.len, rows.items.len);
+        for (markdown_rows.items, rows.items) |expected, actual| {
+            try testing.expectEqualStrings(expected, actual);
+        }
+    }
+    var ansi_rows = try collectCaretRows(gpa, ansi_text, true);
+    defer ansi_rows.deinit();
+    try testing.expectEqual(markdown_rows.items.len, ansi_rows.items.len);
+    for (markdown_rows.items, ansi_rows.items) |expected, actual| {
+        try testing.expectEqualStrings(expected, actual);
+    }
+
+    // Pin the actual spans, rather than only agreement between renderers.
+    try testing.expectEqualStrings("\t         ^^^^^", markdown_rows.items[0]);
+    try testing.expectEqualStrings("^^^     ^^^^^", markdown_rows.items[1]);
+
     // The tab survives into both caret rows.
     try testing.expectEqual(@as(u8, '\t'), markdown_rows.items[0][0]);
+}
+
+/// Extract every source row, retaining whitespace and empty lines. The fixture
+/// contains no literal carets; caret rows can therefore be removed exactly.
+fn sourceRows(gpa: Allocator, bytes: []const u8, comptime target: reporting.RenderTarget) (Allocator.Error || std.Io.Writer.Error || error{ UnclosedHtmlTag, UnknownHtmlEntity, MissingSourceFence, MissingSourceGutter })![]u8 {
+    var decoded = if (target == .html) try visibleHtml(gpa, bytes) else if (target == .color_terminal) try stripAnsi(gpa, bytes) else try gpa.dupe(u8, bytes);
+    defer gpa.free(decoded);
+    if (target == .markdown) {
+        const start = std.mem.find(u8, decoded, "```roc\n") orelse return error.MissingSourceFence;
+        const end = std.mem.findPos(u8, decoded, start + 7, "\n```") orelse return error.MissingSourceFence;
+        return gpa.dupe(u8, decoded[start + 7 .. end]);
+    }
+    var out = std.Io.Writer.Allocating.init(gpa);
+    errdefer out.deinit();
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, decoded, "\n"), '\n');
+    var first = true;
+    while (lines.next()) |raw| {
+        const line = if (target == .color_terminal) blk: {
+            const gutter = std.mem.find(u8, raw, "│ ") orelse return error.MissingSourceGutter;
+            break :blk raw[gutter + "│ ".len ..];
+        } else raw;
+        if (std.mem.findScalar(u8, line, '^') != null) continue;
+        if (!first) try out.writer.writeByte('\n');
+        first = false;
+        try out.writer.writeAll(line);
+    }
+    return out.toOwnedSlice();
+}
+
+test "source rows preserve exact text and line count across all four targets" {
+    const gpa = testing.allocator;
+    const source = "\tfirst <source> & value\n\n  final source line";
+    inline for (.{ false, true }) |multiple_underlines| {
+        var doc = Document.init(gpa);
+        defer doc.deinit();
+        if (multiple_underlines) {
+            try doc.addSourceCodeWithUnderlines(.{
+                .line_text = try gpa.dupe(u8, source),
+                .start_line = 3,
+                .start_column = 1,
+                .end_line = 5,
+                .end_column = 20,
+                .region_annotation = .error_highlight,
+                .filename = "rows.roc",
+            }, &.{
+                .{ .start_line = 3, .start_column = 2, .end_line = 3, .end_column = 7, .annotation = .error_highlight },
+                .{ .start_line = 5, .start_column = 3, .end_line = 5, .end_column = 8, .annotation = .warning_highlight },
+            });
+        } else {
+            try doc.addSourceRegion(
+                .{ .start_line_idx = 0, .start_col_idx = 1, .end_line_idx = 2, .end_col_idx = 7 },
+                .error_highlight,
+                "rows.roc",
+                source,
+                &.{ 0, 24, 25 },
+            );
+        }
+        var outputs = try renderAllTargets(gpa, &doc);
+        defer outputs.deinit(gpa);
+        inline for (.{ .{ reporting.RenderTarget.color_terminal, "terminal_ansi" }, .{ reporting.RenderTarget.markdown, "markdown" }, .{ reporting.RenderTarget.html, "html" }, .{ reporting.RenderTarget.language_server, "lsp" } }) |entry| {
+            const rows = try sourceRows(gpa, @field(outputs, entry[1]), entry[0]);
+            defer gpa.free(rows);
+            try testing.expectEqualStrings(source, rows);
+            try testing.expectEqual(@as(usize, 2), countOccurrences(rows, "\n"));
+        }
+    }
 }
 
 test "source lines appear on every render target" {
@@ -389,6 +579,8 @@ test "source lines appear on every render target" {
 }
 
 // Byte-identity pins: exact rendered output per target for one small fixture.
+// Terminal and Markdown pins retain their pre-refactor bytes. HTML and LSP
+// deliberately gain the source underlines formerly omitted by those targets.
 // These freeze the concrete markup so any unintended change to a style table
 // or hook shows up as a diff here; update them deliberately when output is
 // meant to change.
@@ -440,7 +632,7 @@ test "byte-identity pins per render target" {
     try testing.expectEqualStrings(
         "Expected Str but got U64.\n" ++
             "  main (pin.roc:1:5):\n" ++
-            "x = magic 42\n",
+            "x = magic 42\n    ^^^^^\n",
         outputs.lsp,
     );
 
@@ -448,7 +640,7 @@ test "byte-identity pins per render target" {
         "Expected <span class=\"type\">Str</span> but got <span class=\"error\">U64</span>.<br>\n" ++
             "&nbsp;&nbsp;&nbsp;&nbsp;<span class=\"symbol\">main</span> (<span class=\"source-location\"><span class=\"filename\">pin.roc</span>:1:5</span>):<br>\n" ++
             "<div class=\"source-region\">" ++
-            "<pre class=\"error\">x = magic 42</pre></div>",
+            "<pre class=\"error\">x = magic 42\n    ^^^^^\n</pre></div>",
         outputs.html,
     );
 
@@ -473,4 +665,103 @@ test "byte-identity pins per render target" {
             "  │     ^^^^^\n",
         outputs.terminal_plain,
     );
+}
+
+test "HTML escaping preserves visible punctuation through nested structure" {
+    const gpa = testing.allocator;
+    var doc = Document.init(gpa);
+    defer doc.deinit();
+    const content = "<value> & \"quoted\" 'apostrophe'";
+    try doc.addHorizontalConcat(&.{
+        .{ .text = "before " },
+        .{ .annotated = .{ .content = content, .annotation = .inline_code } },
+        .{ .text = " after" },
+    });
+    var outputs = try renderAllTargets(gpa, &doc);
+    defer outputs.deinit(gpa);
+    const html_text = try visibleHtml(gpa, outputs.html);
+    defer gpa.free(html_text);
+    const terminal_text = try stripAnsi(gpa, outputs.terminal_ansi);
+    defer gpa.free(terminal_text);
+    const expected = "before " ++ content ++ " after";
+    try testing.expectEqualStrings(expected, html_text);
+    try testing.expectEqualStrings(expected, terminal_text);
+    try testing.expectEqualStrings(expected, outputs.lsp);
+    const md_text = try stripChar(gpa, outputs.markdown, '`');
+    defer gpa.free(md_text);
+    try testing.expectEqualStrings(expected, md_text);
+}
+
+test "multi-region source text and coordinate spans agree across all four targets" {
+    const gpa = testing.allocator;
+    const source = "first <source> & value\n\tsecond source";
+    var doc = Document.init(gpa);
+    defer doc.deinit();
+    try doc.addSourceMultiRegion(source, &.{
+        .{ .start_line = 1, .start_column = 2, .end_line = 1, .end_column = 5, .annotation = .error_highlight },
+        .{ .start_line = 2, .start_column = 3, .end_line = 2, .end_column = 7, .annotation = .warning_highlight },
+    }, "multi.roc");
+    var outputs = try renderAllTargets(gpa, &doc);
+    defer outputs.deinit(gpa);
+
+    inline for (.{ .{ reporting.RenderTarget.color_terminal, "terminal_ansi" }, .{ reporting.RenderTarget.markdown, "markdown" }, .{ reporting.RenderTarget.html, "html" }, .{ reporting.RenderTarget.language_server, "lsp" } }) |entry| {
+        const target = entry[0];
+        const raw = @field(outputs, entry[1]);
+        const decoded = if (target == .html) try visibleHtml(gpa, raw) else if (target == .color_terminal) try stripAnsi(gpa, raw) else try gpa.dupe(u8, raw);
+        defer gpa.free(decoded);
+        // Multi-region displays intentionally describe spans with coordinates
+        // on every target rather than caret rows. Strip only their structural
+        // wrappers; the complete source and both coordinate tuples are pinned.
+        const expected = switch (target) {
+            .color_terminal, .language_server => source ++ "\n  1:2-1:5\n  2:3-2:7\n",
+            .markdown => "```roc\n" ++ source ++ "\n```\n- Line 1:2-1:5\n- Line 2:3-2:7\n",
+            .html => source ++ "\n1:2-1:52:3-2:7",
+        };
+        try testing.expectEqualStrings(expected, decoded);
+        const source_start: usize = if (target == .markdown) "```roc\n".len else 0;
+        const source_text = decoded[source_start .. source_start + source.len];
+        try testing.expectEqualStrings(source, source_text);
+        try testing.expectEqual(@as(usize, 1), countOccurrences(source_text, "\n"));
+        inline for (.{ "1:2-1:5", "2:3-2:7" }) |span| {
+            try testing.expectEqual(@as(usize, 1), countOccurrences(decoded[source_start + source.len ..], span));
+        }
+    }
+}
+
+test "report wrapper entrypoints preserve headline and nested document content on every target" {
+    const gpa = testing.allocator;
+    var report = try reporting.Report.init(gpa, "Parity Wrapper", "wrapper.roc", .runtime_error);
+    defer report.deinit();
+    try report.headline.addText("The headline survives.");
+    try report.document.addHorizontalConcat(&.{
+        .{ .text = "BeforePayload " },
+        .{ .annotated = .{ .content = "AnnotatedPayload", .annotation = .type_variable } },
+        .{ .text = " AfterPayload" },
+    });
+    try report.document.addLineBreak();
+    try report.document.addSourceRegion(
+        .{ .start_line_idx = 0, .start_col_idx = 0, .end_line_idx = 0, .end_col_idx = 13 },
+        .error_highlight,
+        "wrapper.roc",
+        "SourcePayload = 42",
+        &.{0},
+    );
+
+    inline for (comptime std.enums.values(reporting.RenderTarget)) |target| {
+        var out = std.Io.Writer.Allocating.init(gpa);
+        defer out.deinit();
+        try reporting.renderReport(&report, &out.writer, target);
+        const raw = out.written();
+        const visible = if (target == .html) try visibleHtml(gpa, raw) else if (target == .color_terminal) try stripAnsi(gpa, raw) else try gpa.dupe(u8, raw);
+        defer gpa.free(visible);
+        inline for (.{ "parity wrapper", "The headline survives.", "BeforePayload", "AnnotatedPayload", "AfterPayload", "SourcePayload = 42" }) |payload| {
+            // Markdown's title capitalization is a deliberate wrapper choice.
+            const expected = if (target == .markdown and std.mem.eql(u8, payload, "parity wrapper")) "Parity Wrapper" else payload;
+            try testing.expectEqual(@as(usize, 1), countOccurrences(visible, expected));
+        }
+        const before = std.mem.find(u8, visible, "BeforePayload").?;
+        const annotated = std.mem.find(u8, visible, "AnnotatedPayload").?;
+        const after = std.mem.find(u8, visible, "AfterPayload").?;
+        try testing.expect(before < annotated and annotated < after);
+    }
 }

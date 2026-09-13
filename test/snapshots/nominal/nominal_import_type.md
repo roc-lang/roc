@@ -14,20 +14,33 @@ red = Color.RGB.Red
 MOD NOT FOUND - nominal_import_type.md:3:12:3:16
 MOD NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
-── ✗ mod not found ────────────────────────────── nominal_import_type.md:3:12
-
-This RGB type is declared to be in Color, which does not exist.
-
-red : Color.RGB
-           ^^^^
-
-── ✗ mod not found ────────────────────────────── nominal_import_type.md:4:12
-
-This RGB type is declared to be in Color, which does not exist.
-
-red = Color.RGB.Red
-           ^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 3 12) (end 3 16))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_import_type.md") (start 3 12) (end 3 16) (annotation error) (line-text "red : Color.RGB"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 4 12) (end 4 16))
+		(headline
+			(text "This ")
+			(annotated code "RGB")
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_import_type.md") (start 4 12) (end 4 16) (annotation error) (line-text "red = Color.RGB.Red")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

@@ -34,15 +34,21 @@ main! = |_| {}
 # EXPECTED
 BUILTIN TYPE SHADOWED - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
-── ● builtin type shadowed ─────────────────────── type_tag_union_complex.md:7:1
-
-The type Try shadows a builtin type.
-
-Try : [Success(Str), Error(Str), Warning(Str, I32)]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This may make the builtin type inaccessible in this scope.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Builtin Type Shadowed")
+		(region (start 7 1) (end 7 52))
+		(headline
+			(text "The type ")
+			(annotated symbol-unqualified "Try")
+			(text " shadows a builtin type."))
+		(document
+			(reflow "This may make the builtin type inaccessible in this scope.")
+			(line-break)
+			(source-region (file "type_tag_union_complex.md") (start 7 1) (end 7 52) (annotation warning) (line-text "Try : [Success(Str), Error(Str), Warning(Str, I32)]")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

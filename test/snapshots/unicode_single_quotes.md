@@ -63,300 +63,433 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 # PROBLEMS
-── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:5:6
-
-This Unicode escape sequence is not valid.
-
-'\u',
- ^^
-
-── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:6:6
-
-This Unicode escape sequence is not valid.
-
-'\u)',
- ^^
-
-── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:7:6
-
-This Unicode escape sequence is not valid.
-
-'\u(',
- ^^^
-
-── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:8:6
-
-This Unicode escape sequence is not valid.
-
-'\u()',
- ^^^^
-
-── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:10:6
-
-This Unicode escape sequence is not valid.
-
-'\u(EDA0B5)'
- ^^^^^^^^^^
-
-── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:11:6
-
-This Unicode escape sequence is not valid.
-
-'\u(K)',
- ^^^^^
-
-── ✗ single quote empty ────────────────────────── unicode_single_quotes.md:14:5
-
-Single-quoted literals must contain exactly one valid UTF-8 codepoint.
-
-'',
-^^
-
-── ✗ single quote too long ─────────────────────── unicode_single_quotes.md:15:5
-
-Single-quoted literals must contain exactly one valid UTF-8 codepoint.
-
-'long',
-^^^^^^
-
-── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:16:5
-
-This single-quoted literal is missing a closing quote.
-
-'\',
-^^^^
-
-── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:19:5
-
-This single-quoted literal is missing a closing quote.
-
-y = 'u
-    ^^
-
-── ✗ invalid escape sequence ───────────────────── unicode_single_quotes.md:22:2
-
-This escape sequence is not recognized.
-
-'\
-
-
-── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:22:1
-
-This single-quoted literal is missing a closing quote.
-
-'\
-^^
-
-── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:5:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'\u',
-^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '\u' here.
-
-── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:6:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'\u)',
-^^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '\u)' here.
-
-── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:7:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'\u(',
-^^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '\u(' here.
-
-── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:8:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'\u()',
-^^^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '\u()' here.
-
-── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:10:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'\u(EDA0B5)'
-^^^^^^^^^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '\u(EDA0B5)' here.
-
-── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:11:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'\u(K)',
-^^^^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '\u(K)' here.
-
-── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:14:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'',
-^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '' here.
-
-── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:15:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'long',
-^^^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found 'long' here.
-
-── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:16:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-'\',
-^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found '\', here.
-
-── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:19:5
-
-I was parsing an expression, and this token cannot start an expression here.
-
-y = 'u
-    ^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found 'u here.
-
-── ✗ unexpected statement ──────────────────────── unicode_single_quotes.md:22:1
-
-I was parsing a statement, and this token cannot start a statement here.
-
-'\
-^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found '\ here.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ invalid tuple element ─────────────────────────────────────────────────────
-
-This tuple element is malformed or contains invalid syntax.
-
-── ✗ unrecognized syntax ───────────────────────── unicode_single_quotes.md:19:5
-
-I don't recognize this syntax.
-
-y = 'u
-    ^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 5 6) (end 5 8))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 5 6) (end 5 8) (annotation error) (line-text "    '\\u',"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 6 6) (end 6 8))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 6 6) (end 6 8) (annotation error) (line-text "    '\\u)',"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 7 6) (end 7 9))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 7 6) (end 7 9) (annotation error) (line-text "    '\\u(',"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 8 6) (end 8 10))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 8 6) (end 8 10) (annotation error) (line-text "    '\\u()',"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 10 6) (end 10 16))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 10 6) (end 10 16) (annotation error) (line-text "    '\\u(EDA0B5)'"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 11 6) (end 11 11))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 11 6) (end 11 11) (annotation error) (line-text "    '\\u(K)',"))))
+	(report
+		(severity runtime_error)
+		(title "Single Quote Empty")
+		(region (start 14 5) (end 14 7))
+		(headline
+			(reflow "Single-quoted literals must contain exactly one valid UTF-8 codepoint."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 14 5) (end 14 7) (annotation error) (line-text "    '',"))))
+	(report
+		(severity runtime_error)
+		(title "Single Quote Too Long")
+		(region (start 15 5) (end 15 11))
+		(headline
+			(reflow "Single-quoted literals must contain exactly one valid UTF-8 codepoint."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 15 5) (end 15 11) (annotation error) (line-text "    'long',"))))
+	(report
+		(severity runtime_error)
+		(title "Unclosed Single Quote")
+		(region (start 16 5) (end 16 9))
+		(headline
+			(reflow "This single-quoted literal is missing a closing quote."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 16 5) (end 16 9) (annotation error) (line-text "    '\\',"))))
+	(report
+		(severity runtime_error)
+		(title "Unclosed Single Quote")
+		(region (start 19 5) (end 19 7))
+		(headline
+			(reflow "This single-quoted literal is missing a closing quote."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 19 5) (end 19 7) (annotation error) (line-text "y = 'u"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Escape Sequence")
+		(region (start 22 2) (end 23 1))
+		(headline
+			(reflow "This escape sequence is not recognized."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 22 2) (end 23 1) (annotation error) (line-text "'\\\n"))))
+	(report
+		(severity runtime_error)
+		(title "Unclosed Single Quote")
+		(region (start 22 1) (end 22 3))
+		(headline
+			(reflow "This single-quoted literal is missing a closing quote."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 22 1) (end 22 3) (annotation error) (line-text "'\\"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 5 5) (end 5 9))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\u'")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 5 5) (end 5 9) (annotation error) (line-text "    '\\u',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 6 5) (end 6 10))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\u)'")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 6 5) (end 6 10) (annotation error) (line-text "    '\\u)',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 7 5) (end 7 10))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\u('")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 7 5) (end 7 10) (annotation error) (line-text "    '\\u(',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 8 5) (end 8 11))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\u()'")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 8 5) (end 8 11) (annotation error) (line-text "    '\\u()',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 10 5) (end 10 17))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\u(EDA0B5)'")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 10 5) (end 10 17) (annotation error) (line-text "    '\\u(EDA0B5)'"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 11 5) (end 11 12))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\u(K)'")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 11 5) (end 11 12) (annotation error) (line-text "    '\\u(K)',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 14 5) (end 14 7))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "''")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 14 5) (end 14 7) (annotation error) (line-text "    '',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 15 5) (end 15 11))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'long'")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 15 5) (end 15 11) (annotation error) (line-text "    'long',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 16 5) (end 16 9))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\',")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 16 5) (end 16 9) (annotation error) (line-text "    '\\',"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 19 5) (end 19 7))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'u")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 19 5) (end 19 7) (annotation error) (line-text "y = 'u"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 22 1) (end 22 3))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 22 1) (end 22 3) (annotation error) (line-text "'\\"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Element")
+		(headline
+			(reflow "This tuple element is malformed or contains invalid syntax."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 19 5) (end 19 7))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "unicode_single_quotes.md") (start 19 5) (end 19 7) (annotation error) (line-text "y = 'u"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

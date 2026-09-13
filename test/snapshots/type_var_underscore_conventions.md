@@ -36,67 +36,95 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 # PROBLEMS
-── ● unused variable ─────────────────── type_var_underscore_conventions.md:5:15
-
-Variable x is defined here and then never used:
-
-single_use = |x| "hello"
-              ^
-
-If you don't need this variable, prefix it with an underscore like _x to
-suppress this warning.
-
-── ● unused variable ─────────────────── type_var_underscore_conventions.md:9:20
-
-Variable list is defined here and then never used:
-
-starting_dollar = |list| "default"
-                   ^^^^
-
-If you don't need this variable, prefix it with an underscore like _list to
-suppress this warning.
-
-── ● unused variable ────────────────── type_var_underscore_conventions.md:13:17
-
-Variable x is defined here and then never used:
-
-combo_single = |x| "combo"
-                ^
-
-If you don't need this variable, prefix it with an underscore like _x to
-suppress this warning.
-
-── ● unused variable ────────────────── type_var_underscore_conventions.md:17:17
-
-Variable x is defined here and then never used:
-
-valid_single = |x| "valid"
-                ^
-
-If you don't need this variable, prefix it with an underscore like _x to
-suppress this warning.
-
-── ● unused variable ─────────────────── type_var_underscore_conventions.md:22:9
-
-Variable x is defined here and then never used:
-
-main = |x| "done"
-        ^
-
-If you don't need this variable, prefix it with an underscore like _x to
-suppress this warning.
-
-── ✗ type mismatch ───────────────────── type_var_underscore_conventions.md:9:26
-
-This string literal is being used where a non-string type is needed.
-
-starting_dollar = |list| "default"
-                         ^^^^^^^^^
-
-The type was determined to be:
-
-    $elem
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 5 15) (end 5 16))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "x")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_x")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_underscore_conventions.md") (start 5 15) (end 5 16) (annotation error) (line-text "single_use = |x| \"hello\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 9 20) (end 9 24))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "list")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_list")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_underscore_conventions.md") (start 9 20) (end 9 24) (annotation error) (line-text "starting_dollar = |list| \"default\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 13 17) (end 13 18))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "x")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_x")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_underscore_conventions.md") (start 13 17) (end 13 18) (annotation error) (line-text "combo_single = |x| \"combo\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 17 17) (end 17 18))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "x")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_x")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_underscore_conventions.md") (start 17 17) (end 17 18) (annotation error) (line-text "valid_single = |x| \"valid\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 22 9) (end 22 10))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "x")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_x")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_underscore_conventions.md") (start 22 9) (end 22 10) (annotation error) (line-text "main = |x| \"done\""))))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 9 26) (end 9 35))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "type_var_underscore_conventions.md") (start 9 26) (end 9 35) (annotation error) (line-text "starting_dollar = |list| \"default\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "$elem")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -12,32 +12,59 @@ value = { x: 1 }
 INVALID OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:23:1:24
 INVALID OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:34:1:35
 # PROBLEMS
-── ✗ invalid optional field syntax ───────── record_optional_legacy_mark.md:1:23
-
-I was parsing a record type, and this optional field puts the `?` after the `:`.
-
-value : { x : U32, y :? U32, z : ? U32 }
-                      ^
-
-Optional fields are written with the ? before the :: ?: declares the field
-optional.
-
-For example:
-    { name ?: Str }
-
-── ✗ invalid optional field syntax ───────── record_optional_legacy_mark.md:1:34
-
-I was parsing a record type, and this optional field puts the `?` after the `:`.
-
-value : { x : U32, y :? U32, z : ? U32 }
-                                 ^
-
-Optional fields are written with the ? before the :: ?: declares the field
-optional.
-
-For example:
-    { name ?: Str }
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Optional Field Syntax")
+		(region (start 1 23) (end 1 24))
+		(headline
+			(reflow "I was parsing a record type, and this optional field puts the `?` after the `:`."))
+		(document
+			(reflow "Optional fields are written with the ")
+			(annotated code "?")
+			(reflow " before the ")
+			(annotated code ":")
+			(reflow ": ")
+			(annotated code "?:")
+			(reflow " declares the field optional.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ name ?: Str }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "record_optional_legacy_mark.md") (start 1 23) (end 1 24) (annotation error) (line-text "value : { x : U32, y :? U32, z : ? U32 }"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Optional Field Syntax")
+		(region (start 1 34) (end 1 35))
+		(headline
+			(reflow "I was parsing a record type, and this optional field puts the `?` after the `:`."))
+		(document
+			(reflow "Optional fields are written with the ")
+			(annotated code "?")
+			(reflow " before the ")
+			(annotated code ":")
+			(reflow ": ")
+			(annotated code "?:")
+			(reflow " declares the field optional.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ name ?: Str }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "record_optional_legacy_mark.md") (start 1 34) (end 1 35) (annotation error) (line-text "value : { x : U32, y :? U32, z : ? U32 }")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,NoSpaceOpQuestion,UpperIdent,Comma,LowerIdent,OpColon,OpQuestion,UpperIdent,CloseCurly,

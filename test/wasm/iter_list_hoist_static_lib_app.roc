@@ -20,9 +20,9 @@ main! = |_seed| {
         .iter()
         .append({ x: 2, y: 1 })
         .append({ x: 7, y: 1 })
-    var sum = 0.I64
+    var $sum = 0.I64
     for { x, y } in collision_points {
-        sum = sum + x + y
+        $sum = $sum + x + y
     }
-    if sum == 130 { "ok" } else { "bad" }
+    if $sum == 130 { "ok" } else { "bad" }
 }

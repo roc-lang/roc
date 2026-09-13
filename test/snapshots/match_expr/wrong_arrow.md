@@ -14,30 +14,47 @@ match l {
 WRONG MATCH ARROW - wrong_arrow.md:2:8:2:8
 WRONG MATCH ARROW - wrong_arrow.md:3:13:3:13
 # PROBLEMS
-── ✗ wrong match arrow ────────────────────────────────────── wrong_arrow.md:2:8
-
-I was parsing a match branch, and I found `->` where Roc uses `=>`.
-
-[] -> Err(EmptyList)
-   ^
-
-Match branches use a fat arrow between the pattern and the branch body.
-
-For example:
-    Ok(value) => value
-
-── ✗ wrong match arrow ───────────────────────────────────── wrong_arrow.md:3:13
-
-I was parsing a match branch, and I found `->` where Roc uses `=>`.
-
-[.., e] -> Ok(e)
-        ^
-
-Match branches use a fat arrow between the pattern and the branch body.
-
-For example:
-    Ok(value) => value
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Wrong Match Arrow")
+		(region (start 2 8) (end 2 8))
+		(headline
+			(reflow "I was parsing a match branch, and I found `->` where Roc uses `=>`."))
+		(document
+			(reflow "Match branches use a fat arrow between the pattern and the branch body.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Ok(value) => value")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "wrong_arrow.md") (start 2 8) (end 2 8) (annotation error) (line-text "    [] -> Err(EmptyList)"))))
+	(report
+		(severity runtime_error)
+		(title "Wrong Match Arrow")
+		(region (start 3 13) (end 3 13))
+		(headline
+			(reflow "I was parsing a match branch, and I found `->` where Roc uses `=>`."))
+		(document
+			(reflow "Match branches use a fat arrow between the pattern and the branch body.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Ok(value) => value")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "wrong_arrow.md") (start 3 13) (end 3 13) (annotation error) (line-text "    [.., e] -> Ok(e)")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

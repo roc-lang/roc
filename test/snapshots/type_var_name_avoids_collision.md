@@ -76,36 +76,51 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 # PROBLEMS
-── ● unused variable ──────────────────── type_var_name_avoids_collision.md:59:5
-
-Variable result3 is defined here and then never used:
-
-result3 = combine(result1, result2)
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result3 to
-suppress this warning.
-
-── ● unused variable ──────────────────── type_var_name_avoids_collision.md:60:5
-
-Variable result4 is defined here and then never used:
-
-result4 = yetAnotherIdentity(True)
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result4 to
-suppress this warning.
-
-── ● unused variable ──────────────────── type_var_name_avoids_collision.md:61:5
-
-Variable result5 is defined here and then never used:
-
-result5 = finalIdentity(3.14)
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result5 to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 59 5) (end 59 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result3")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result3")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_name_avoids_collision.md") (start 59 5) (end 59 12) (annotation error) (line-text "    result3 = combine(result1, result2)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 60 5) (end 60 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result4")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result4")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_name_avoids_collision.md") (start 60 5) (end 60 12) (annotation error) (line-text "    result4 = yetAnotherIdentity(True)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 61 5) (end 61 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result5")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result5")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_name_avoids_collision.md") (start 61 5) (end 61 12) (annotation error) (line-text "    result5 = finalIdentity(3.14)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

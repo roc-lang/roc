@@ -149,6 +149,7 @@ test "lambda solved named backing preserves generated-private authority" {
 pub const Store = struct {
     allocator: std.mem.Allocator,
     vars: std.ArrayList(Content),
+    owned_named_backings: std.ArrayList(bool),
     spans: std.ArrayList(TypeVarId),
     fields: std.ArrayList(Field),
     tags: std.ArrayList(Tag),
@@ -160,6 +161,7 @@ pub const Store = struct {
         return .{
             .allocator = allocator,
             .vars = .empty,
+            .owned_named_backings = .empty,
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -176,17 +178,34 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        self.owned_named_backings.deinit(self.allocator);
         self.vars.deinit(self.allocator);
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
         const id: TypeVarId = @enumFromInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.append(self.allocator, content);
+        errdefer _ = self.vars.pop();
+        try self.owned_named_backings.append(self.allocator, false);
         return id;
     }
 
     pub fn set(self: *Store, id: TypeVarId, content: Content) void {
+        if (content == .link and self.owned_named_backings.items[@intFromEnum(id)]) {
+            const target = self.root(content.link);
+            self.owned_named_backings.items[@intFromEnum(target)] = true;
+        }
         self.vars.items[@intFromEnum(id)] = content;
+    }
+
+    pub fn markNamedBacking(self: *Store, id: TypeVarId) void {
+        const root_id = self.root(id);
+        self.owned_named_backings.items[@intFromEnum(root_id)] = true;
+    }
+
+    pub fn isOwnedNamedBacking(self: *const Store, id: TypeVarId) bool {
+        const root_id = self.root(id);
+        return self.owned_named_backings.items[@intFromEnum(root_id)];
     }
 
     pub fn get(self: *const Store, id: TypeVarId) Content {

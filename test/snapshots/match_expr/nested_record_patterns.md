@@ -16,14 +16,23 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - nested_record_patterns.md:1:7:1:10
 # PROBLEMS
-── ● unconditional condition ───────────────────── nested_record_patterns.md:1:7
-
-This match value is known at compile time, so this match will always inspect
-the same value.
-
-match ... {
-      ^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 1 7) (end 1 10))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "match value")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this match will always inspect the same value."))
+		(document
+			(source-region (file "nested_record_patterns.md") (start 1 7) (end 1 10) (annotation warning) (line-text "match ... {")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

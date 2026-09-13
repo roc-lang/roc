@@ -130,7 +130,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool);
@@ -201,7 +201,7 @@ test "issue 10295: nested list equality has bounded register pressure" {
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool);
@@ -352,7 +352,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     const u32x3_body = try helpers.addStructBody(&store, u32x3_layout, .u32, &.{ 0x01020304, 0x05060708, 0x090A0B0C });
     const u32x3_proc = try helpers.addErasedProc(&store, &layout_store, u32x3_body, u32x3_layout);
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -431,7 +431,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
@@ -441,7 +441,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     const code = codegen.getGeneratedCode();
     var return_code: ?[]const u8 = null;
     for (codegen.getRelocations()) |relocation| {
-        if (relocation == .linked_function and std.mem.eql(u8, relocation.linked_function.name, "hosted_u128_identity")) {
+        if (relocation == .linked_function and std.mem.eql(u8, codegen.getSymbolNames()[@intFromEnum(relocation.linked_function.symbol)], "hosted_u128_identity")) {
             const call_end: usize = @intCast(relocation.linked_function.offset + 4);
             return_code = code[call_end..@min(call_end + 32, code.len)];
             break;
@@ -478,7 +478,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 

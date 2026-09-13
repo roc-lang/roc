@@ -187,6 +187,7 @@ pub fn extractSemanticTokensWithImports(
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .skip_file_import_contents = true,
     }) catch return error.OutOfMemory;
     defer canonicalizer.deinit();
@@ -422,7 +423,6 @@ const SemanticCollector = struct {
             .e_zero_argument_tag,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_method_call,
             .e_dispatch_call,
@@ -453,7 +453,7 @@ const SemanticCollector = struct {
     fn visitPatternAsParameter(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
         const pattern = self.module_env.store.getPattern(pattern_idx);
         switch (pattern) {
-            .assign => {
+            .assign, .var_assign => {
                 // Simple identifier pattern
                 const region = self.module_env.store.getPatternRegion(pattern_idx);
                 try self.addToken(region, .parameter);
@@ -559,7 +559,6 @@ const SemanticCollector = struct {
             .e_hosted_lambda,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_method_call,
             .e_dispatch_call,

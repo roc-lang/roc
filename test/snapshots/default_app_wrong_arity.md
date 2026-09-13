@@ -14,30 +14,43 @@ main! = |arg1, arg2| {
 UNUSED VARIABLE - default_app_wrong_arity.md:1:16:1:20
 `MAIN!` SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 # PROBLEMS
-── ● unused variable ─────────────────────────── default_app_wrong_arity.md:1:16
-
-Variable arg2 is defined here and then never used:
-
-main! = |arg1, arg2| {
-               ^^^^
-
-If you don't need this variable, prefix it with an underscore like _arg2 to
-suppress this warning.
-
-── ✗ `main!` should take 1 argument ───────────── default_app_wrong_arity.md:1:1
-
-main! is defined but has the wrong number of arguments. main! should take 1
-argument.
-
-main! = |arg1, arg2| {
-    arg1
-}
-
-Found 2 arguments.
-
-Change it to:
-main! = |arg| { ... }
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 16) (end 1 20))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "arg2")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_arg2")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "default_app_wrong_arity.md") (start 1 16) (end 1 20) (annotation error) (line-text "main! = |arg1, arg2| {"))))
+	(report
+		(severity runtime_error)
+		(title "`main!` Should Take 1 Argument")
+		(region (start 1 1) (end 3 2))
+		(headline
+			(annotated code "main!")
+			(reflow " is defined but has the wrong number of arguments. ")
+			(annotated code "main!")
+			(reflow " should take 1 argument."))
+		(document
+			(text "Found ")
+			(annotated code "2")
+			(reflow " arguments.")
+			(line-break)
+			(line-break)
+			(reflow "Change it to:")
+			(line-break)
+			(annotated code "main! = |arg| { ... }")
+			(line-break)
+			(source-region (file "default_app_wrong_arity.md") (start 1 1) (end 3 2) (annotation error) (line-text "main! = |arg1, arg2| {\n    arg1\n}")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,

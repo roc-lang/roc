@@ -10,23 +10,37 @@ type=expr
 # EXPECTED
 EXPECTED RECORD FIELD - fuzz_crash_033.md:1:6:1:14
 # PROBLEMS
-── ✗ expected record field ─────────────────────────────── fuzz_crash_033.md:1:6
-
-I was parsing a record expression, and I expected a lowercase field name.
-
-{ i, Complete]
-     ^^^^^^^^
-
-Record fields start with lowercase names. After the name, either write : value
-or omit the value to use field punning.
-
-For example:
-    { name: "Ada", age }
-
-I found Complete here.
-Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Expected Record Field")
+		(region (start 1 6) (end 1 14))
+		(headline
+			(reflow "I was parsing a record expression, and I expected a lowercase field name."))
+		(document
+			(reflow "Record fields start with lowercase names. After the name, either write ")
+			(annotated code ": value")
+			(reflow " or omit the value to use field punning.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ name: \"Ada\", age }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "Complete")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with uppercase letters are used for tags, type names, and mod names in Roc.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_033.md") (start 1 6) (end 1 14) (annotation error) (line-text "{ i, Complete]")))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,UpperIdent,CloseSquare,

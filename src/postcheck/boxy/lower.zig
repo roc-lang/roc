@@ -56,6 +56,7 @@ pub const Options = struct {
     target_usize: base.target.TargetUsize = .native,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
+    observe_expects: bool = false,
 };
 
 /// Lower an explicit Boxy plan and its checked modules into ownership-neutral LIR.
@@ -68,6 +69,16 @@ pub fn run(
 ) Common.LowerError!Output {
     var result = try LirProgram.Result.init(allocator, options.target_usize);
     errdefer result.deinit();
+    if (options.observe_expects) {
+        var source_files = std.ArrayList(base.SourceFileEntry).empty;
+        defer source_files.deinit(allocator);
+        var seen_source_files = std.StringHashMapUnmanaged(void){};
+        defer seen_source_files.deinit(allocator);
+        try appendSourceFile(&source_files, &seen_source_files, allocator, rootProcedureModule(modules));
+        for (modules.imports) |imported| try appendSourceFile(&source_files, &seen_source_files, allocator, procedureModuleFromImport(imported));
+        for (modules.root.relation_modules) |relation| try appendSourceFile(&source_files, &seen_source_files, allocator, procedureModuleFromImport(relation));
+        try result.store.setSourceFiles(source_files.items);
+    }
 
     var layout_plan = try Layouts.build(allocator, plan, &result.layouts, .{});
     defer layout_plan.deinit();
@@ -83,6 +94,7 @@ pub fn run(
     try appendRequestedLayouts(allocator, modules, roots, plan, &layout_plan, &procedure_builder, &result);
     procedure_builder.verifyDirectCallAbis();
     try procedure_builder.finalizeDescriptorMaterializationCaptures();
+    result.finishExpectSites();
 
     return .{
         .lir_result = result,
@@ -112,6 +124,22 @@ const ProcedureModuleView = struct {
     const_store: *const check.ConstStore.ConstStore,
     module_env: *const can.ModuleEnv,
 };
+
+fn appendSourceFile(
+    files: *std.ArrayList(base.SourceFileEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    allocator: Allocator,
+    module: ProcedureModuleView,
+) Allocator.Error!void {
+    const qualified_name = module.module_env.qualifiedModuleName();
+    const entry = try seen.getOrPut(allocator, qualified_name);
+    if (entry.found_existing) return;
+    errdefer _ = seen.remove(qualified_name);
+    try files.append(allocator, .{
+        .name = module.module_env.module_name,
+        .qualified_name = qualified_name,
+    });
+}
 
 const ResolvedWorker = struct {
     worker: Plan.WorkerPlanId,
@@ -347,6 +375,12 @@ fn resolveProcedureBinding(
             .synthetic,
             => boxyLowerInvariant("non-checked procedure template reached boxy worker resolution"),
         },
+        .checked_error => |expr| .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
+        },
         .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
 }
@@ -364,6 +398,12 @@ fn resolveImportedProcedureBinding(
             .lifted,
             .synthetic,
             => boxyLowerInvariant("non-checked imported procedure template reached boxy worker resolution"),
+        },
+        .checked_error => |expr| .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .body = .{ .checked_expr = .{ .body_id = null, .root_expr = expr } },
         },
         .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
@@ -388,7 +428,7 @@ fn topLevelProcedureBindingForExpr(
     module: ProcedureModuleView,
     expr: checked.CheckedExprId,
 ) ?checked.ArtifactTopLevelProcedureBindingRef {
-    for (module.top_level_procedure_bindings.bindings, 0..) |binding, index| {
+    for (module.top_level_procedure_bindings.bindings.items, 0..) |binding, index| {
         const template_ref = switch (binding.body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| template,
@@ -396,7 +436,7 @@ fn topLevelProcedureBindingForExpr(
                 .synthetic,
                 => continue,
             },
-            .callable_eval_template => continue,
+            .checked_error, .callable_eval_template => continue,
         };
         const template = module.checked_procedure_templates.get(template_ref.template);
         const body_id = switch (template.body) {
@@ -1024,13 +1064,50 @@ const StaticDescInstantiationEntry = struct {
     worker_rep: Plan.TypeRepId,
     source_rep: ?Plan.TypeRepId,
     desc: LIR.BoxyTypeDescId,
+    env: u32,
 };
 
 const StaticDescInstantiationContext = struct {
     entries: std.ArrayList(StaticDescInstantiationEntry) = .empty,
+    environments: std.ArrayList(Environment) = .empty,
+    env: u32 = 0,
+
+    const Binding = struct {
+        formal: Plan.TypeRepId,
+        actual: Plan.TypeRepId,
+        source: ?Plan.TypeRepId,
+        env: u32,
+    };
+    const Environment = struct { parent: u32, binding: Binding };
+
+    fn bound(self: *const StaticDescInstantiationContext, rep: Plan.TypeRepId) ?Binding {
+        var env = self.env;
+        while (env != 0) {
+            const environment = self.environments.items[env - 1];
+            if (environment.binding.formal == rep) return environment.binding;
+            env = environment.parent;
+        }
+        return null;
+    }
+
+    fn bind(self: *StaticDescInstantiationContext, allocator: Allocator, binding: Binding) Allocator.Error!void {
+        if (self.bound(binding.formal)) |existing| {
+            if (std.meta.eql(existing, binding)) return;
+        }
+        const key = Environment{ .parent = self.env, .binding = binding };
+        for (self.environments.items, 0..) |environment, index| {
+            if (std.meta.eql(environment, key)) {
+                self.env = @intCast(index + 1);
+                return;
+            }
+        }
+        try self.environments.append(allocator, key);
+        self.env = @intCast(self.environments.items.len);
+    }
 
     fn deinit(self: *StaticDescInstantiationContext, allocator: Allocator) void {
         self.entries.deinit(allocator);
+        self.environments.deinit(allocator);
     }
 
     fn get(
@@ -1039,7 +1116,7 @@ const StaticDescInstantiationContext = struct {
         source_rep: ?Plan.TypeRepId,
     ) ?LIR.BoxyTypeDescId {
         for (self.entries.items) |entry| {
-            if (entry.worker_rep == worker_rep and entry.source_rep == source_rep) return entry.desc;
+            if (entry.worker_rep == worker_rep and entry.source_rep == source_rep and entry.env == self.env) return entry.desc;
         }
         return null;
     }
@@ -1055,6 +1132,7 @@ const StaticDescInstantiationContext = struct {
             .worker_rep = worker_rep,
             .source_rep = source_rep,
             .desc = desc,
+            .env = self.env,
         });
     }
 };
@@ -1140,8 +1218,33 @@ const ProcedureBuilder = struct {
     callable_adapter_cache: std.ArrayList(CallableAdapterCacheEntry),
     pending_direct_call_descriptor_abis: std.ArrayList(PendingDirectCallDescriptorAbi),
     descriptor_read_steps: std.ArrayList(DescriptorReadStep),
+    source_file_ids: std.StringHashMapUnmanaged(u32),
     hosted_catalog: []HostedCatalogEntry = &.{},
     symbols: Common.SymbolGen = .{},
+
+    fn sourceLoc(self: *ProcedureBuilder, module: ProcedureModuleView, region: base.Region) Allocator.Error!base.SourceLoc {
+        if (self.source_file_ids.count() == 0) {
+            for (0..self.result.store.sourceFileCount()) |file| {
+                const file_id: u32 = @intCast(file);
+                try self.source_file_ids.put(self.allocator, self.result.store.sourceFileQualifiedName(file_id), file_id);
+            }
+        }
+        const qualified_name = module.module_env.qualifiedModuleName();
+        if (self.source_file_ids.get(qualified_name)) |file_id| {
+            const info = module.module_env.calcRegionInfo(region);
+            return .{
+                .file = file_id,
+                .line = info.start_line_idx + 1,
+                .column = info.start_col_idx + 1,
+            };
+        }
+        boxyLowerInvariant("boxy expect source module was absent from the LIR source table");
+    }
+
+    fn expectSite(self: *ProcedureBuilder, module: ProcedureModuleView, region: base.Region) Allocator.Error!?LIR.ExpectSiteId {
+        if (!self.options.observe_expects) return null;
+        return try self.result.addExpectSite(try self.sourceLoc(module, region), region);
+    }
 
     /// The module data the shared label-comparing plan queries need.
     pub fn moduleNames(self: *ProcedureBuilder, module_id: checked.ModuleId) Plan.ModuleNames {
@@ -1186,10 +1289,12 @@ const ProcedureBuilder = struct {
             .callable_adapter_cache = .empty,
             .pending_direct_call_descriptor_abis = .empty,
             .descriptor_read_steps = .empty,
+            .source_file_ids = .empty,
         };
     }
 
     fn deinit(self: *ProcedureBuilder) void {
+        self.source_file_ids.deinit(self.allocator);
         self.descriptor_read_steps.deinit(self.allocator);
         self.pending_direct_call_descriptor_abis.deinit(self.allocator);
         self.callable_adapter_cache.deinit(self.allocator);
@@ -1767,6 +1872,9 @@ const ProcedureBuilder = struct {
         }
 
         const resolved = self.resolved_workers.items[@intFromEnum(worker_id)];
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
         var proc = ProcBodyBuilder.initSyntheticAdapter(
             self,
             resolved.module,
@@ -1909,12 +2017,12 @@ const ProcedureBuilder = struct {
                 continuation,
             );
         }
-        continuation = try proc.prependWorkerArgumentDescriptorInitializers(continuation);
         continuation = try proc.prependStaticDescriptorMaterializationsForSlotsWithSources(
             &slot_sources,
             &desc_context,
             continuation,
         );
+        continuation = try proc.prependWorkerArgumentDescriptorInitializers(continuation);
 
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const ret_layout = proc.workerRuntimeLayoutForRep(requirement_function.ret).layoutIdx();
@@ -2740,12 +2848,24 @@ const ProcedureBuilder = struct {
         context: *StaticDescInstantiationContext,
     ) Allocator.Error!LIR.BoxyTypeDescId {
         const identity_worker = self.descriptorStorageRep(worker_rep_id);
+        if (context.bound(identity_worker)) |binding| {
+            const outer_env = context.env;
+            context.env = binding.env;
+            defer context.env = outer_env;
+            return try self.typeDescForWorkerRepWithSourceMap(binding.actual, binding.source, descriptor_sources, context);
+        }
         const effective_source = self.effectiveStaticDescriptorSource(identity_worker, source_rep_id, descriptor_sources);
         const identity_source = if (effective_source) |source| self.descriptorIdentityRep(source) else null;
 
         const worker_rep = self.plan.representations.items[@intFromEnum(identity_worker)];
         if (worker_rep.kind == .dynamic) {
             if (identity_source) |source| {
+                if (context.bound(source)) |binding| {
+                    const outer_env = context.env;
+                    context.env = binding.env;
+                    defer context.env = outer_env;
+                    return try self.typeDescForWorkerRepWithSourceMap(binding.actual, binding.source, descriptor_sources, context);
+                }
                 const source_rep = self.plan.representations.items[@intFromEnum(source)];
                 if (!source_rep.contains_dynamic or (worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0)) {
                     return try self.typeDescForRep(source);
@@ -2753,6 +2873,43 @@ const ProcedureBuilder = struct {
             } else if (worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0) {
                 return try self.typeDescForRep(identity_worker);
             }
+        }
+
+        const outer_env = context.env;
+        defer context.env = outer_env;
+        var substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        if (worker_rep.nominal_backing_arg_substitutions.len != 0) {
+            var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
+            defer bindings.deinit(self.allocator);
+            while (substitutions.next()) |substitution| {
+                const formal_rep = substitution.formal_rep orelse continue;
+                const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
+                if (formal.descriptor == null) continue;
+                const actual_source = if (identity_source) |source| blk: {
+                    const source_rep = self.plan.representations.items[@intFromEnum(source)];
+                    break :blk self.plan.nominalBackingActual(source_rep.nominal_backing_arg_substitutions, substitution.arg_index);
+                } else null;
+                if (formal_rep == substitution.actual_rep and
+                    (actual_source == null or actual_source == formal_rep)) continue;
+                var binding = StaticDescInstantiationContext.Binding{
+                    .formal = formal_rep,
+                    .actual = substitution.actual_rep,
+                    .source = actual_source,
+                    .env = outer_env,
+                };
+                // A formal forwarded from an enclosing nominal retains that
+                // nominal's environment, rather than referring to this new scope.
+                while (context.bound(binding.actual)) |forwarded| {
+                    binding.actual = forwarded.actual;
+                    binding.source = forwarded.source;
+                    binding.env = forwarded.env;
+                    context.env = forwarded.env;
+                }
+                context.env = outer_env;
+                if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
+                try bindings.append(self.allocator, binding);
+            }
+            for (bindings.items) |binding| try context.bind(self.allocator, binding);
         }
 
         if (context.get(identity_worker, identity_source)) |existing| return existing;
@@ -2974,14 +3131,14 @@ const ProcedureBuilder = struct {
             const start: u32 = @intCast(self.result.boxy_tag_variants.items.len);
             try self.result.boxy_tag_variants.appendSlice(self.allocator, &.{
                 .{
-                    .name = try self.result.store.insertString("False"),
+                    .name = try self.result.store.insertBoxyName("False"),
                     .discriminant = 0,
                     .payload_count = 0,
                     .payload_layout = .zst,
                     .payload_descs = .{},
                 },
                 .{
-                    .name = try self.result.store.insertString("True"),
+                    .name = try self.result.store.insertBoxyName("True"),
                     .discriminant = 1,
                     .payload_count = 0,
                     .payload_layout = .zst,
@@ -3028,7 +3185,7 @@ const ProcedureBuilder = struct {
                 break :blk self.plan.childSlice(source_variant.payloads);
             } else &[_]Plan.RepChild{};
             try entries.append(self.allocator, .{
-                .name = try self.result.store.insertString(self.tagVariantNameText(variant)),
+                .name = try self.result.store.insertBoxyName(self.tagVariantNameText(variant)),
                 .discriminant = @intCast(index),
                 .payload_count = @intCast(payloads.len),
                 .payload_layout = tag_info.variants.get(index).payload_layout,
@@ -3115,7 +3272,7 @@ const ProcedureBuilder = struct {
             descriptor_sources,
             context,
         );
-        const name = try self.result.store.insertString(self.tagVariantNameText(variant));
+        const name = try self.result.store.insertBoxyName(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.result.boxy_tag_variants.items.len);
         try self.result.boxy_tag_variants.append(self.allocator, .{
             .name = name,
@@ -3140,7 +3297,7 @@ const ProcedureBuilder = struct {
 
         const variant = variants[0];
         const payload_descs = try self.staticPayloadDescRefsForTagVariant(variant, .zst);
-        const name = try self.result.store.insertString(self.tagVariantNameText(variant));
+        const name = try self.result.store.insertBoxyName(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.result.boxy_tag_variants.items.len);
         try self.result.boxy_tag_variants.append(self.allocator, .{
             .name = name,
@@ -3336,6 +3493,9 @@ const ProcedureBuilder = struct {
         }
 
         const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
         var proc = ProcBodyBuilder.initSyntheticAdapter(
             self,
             procedureModuleById(self.modules, source_rep.source_type.module),
@@ -3395,6 +3555,9 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("unreachable dictionary method was emitted without a worker layout context");
         }
 
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
         var proc = ProcBodyBuilder.initSyntheticAdapter(
             self,
             procedureModuleById(self.modules, fn_type.module),
@@ -3536,6 +3699,33 @@ const ProcedureBuilder = struct {
         return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
     }
 
+    /// Compose the explicit substitutions along the storage wrapper chain.
+    /// Layout planning has already committed finite storage; a wrapper cycle
+    /// would violate that contract. The representation count bounds the walk
+    /// without allocating a visited set for every static descriptor.
+    fn collectStaticNominalBackingDescriptorSources(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        sources: *StaticDescriptorSourceMap,
+    ) Allocator.Error!void {
+        var current = rep_id;
+        for (0..self.plan.representations.items.len) |_| {
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                const formal_rep = substitution.formal_rep orelse continue;
+                const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
+                const desc = formal.descriptor orelse continue;
+                const actual = self.effectiveStaticDescriptorSource(substitution.actual_rep, substitution.actual_rep, sources).?;
+                if (formal_rep != actual) {
+                    try sources.put(self.allocator, desc, actual);
+                }
+            }
+            current = self.descriptorBackingShapeRep(current) orelse return;
+        }
+        boxyLowerInvariant("cyclic static descriptor storage wrapper");
+    }
+
     fn typeDescForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
         try self.ensureTypeDescIds();
         const rep_index = @intFromEnum(rep_id);
@@ -3545,17 +3735,10 @@ const ProcedureBuilder = struct {
         if (self.type_desc_ids[rep_index]) |existing| return existing;
 
         const source_rep = self.plan.representations.items[rep_index];
-        const nominal_substitutions = self.plan.nominalBackingArgSubstitutionSlice(
-            source_rep.nominal_backing_arg_substitutions,
-        );
-        if (nominal_substitutions.len != 0) {
+        if (source_rep.nominal_backing_arg_substitutions.len != 0) {
             var descriptor_sources = StaticDescriptorSourceMap{};
             defer descriptor_sources.deinit(self.allocator);
-            for (nominal_substitutions) |substitution| {
-                const formal = self.plan.representations.items[@intFromEnum(substitution.formal_rep)];
-                const desc = formal.descriptor orelse continue;
-                try descriptor_sources.put(self.allocator, desc, substitution.actual_rep);
-            }
+            try self.collectStaticNominalBackingDescriptorSources(rep_id, &descriptor_sources);
             var context = StaticDescInstantiationContext{};
             defer context.deinit(self.allocator);
             const desc_id = try self.typeDescForWorkerRepWithSourceMap(
@@ -3769,14 +3952,14 @@ const ProcedureBuilder = struct {
             const start: u32 = @intCast(self.result.boxy_tag_variants.items.len);
             try self.result.boxy_tag_variants.appendSlice(self.allocator, &.{
                 .{
-                    .name = try self.result.store.insertString("False"),
+                    .name = try self.result.store.insertBoxyName("False"),
                     .discriminant = 0,
                     .payload_count = 0,
                     .payload_layout = .zst,
                     .payload_descs = .{},
                 },
                 .{
-                    .name = try self.result.store.insertString("True"),
+                    .name = try self.result.store.insertBoxyName("True"),
                     .discriminant = 1,
                     .payload_count = 0,
                     .payload_layout = .zst,
@@ -3803,7 +3986,7 @@ const ProcedureBuilder = struct {
             const variant_payload_layout = tag_info.variants.get(index).payload_layout;
             const payload_descs = try self.staticPayloadDescRefsForTagVariant(variant, variant_payload_layout);
             try entries.append(self.allocator, .{
-                .name = try self.result.store.insertString(self.tagVariantNameText(variant)),
+                .name = try self.result.store.insertBoxyName(self.tagVariantNameText(variant)),
                 .discriminant = @intCast(index),
                 .payload_count = @intCast(self.plan.childSlice(variant.payloads).len),
                 .payload_layout = tag_info.variants.get(index).payload_layout,
@@ -3920,7 +4103,8 @@ const ProcedureBuilder = struct {
     }
 
     fn layoutNeedsNestedBoxyDesc(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
-        return switch (self.result.layouts.getLayout(layout_idx).tag) {
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        return switch (value_layout.tag) {
             .box,
             .erased_box,
             .list,
@@ -3928,7 +4112,7 @@ const ProcedureBuilder = struct {
             .struct_,
             .tag_union,
             => true,
-            .scalar,
+            .scalar => value_layout.getScalar().tag == .vector,
             .box_of_zst,
             .closure,
             .erased_callable,
@@ -4107,10 +4291,10 @@ const ProcedureBuilder = struct {
             => true,
             .alias => self.repNeedsTagPayloadDesc(self.singleChildRepForDesc(rep_id, .alias_backing) orelse return true),
             .nominal => self.repNeedsTagPayloadDesc(self.singleChildRepForDesc(rep_id, .nominal_backing) orelse return true),
+            .primitive => |primitive| Common.primitiveInspectLowering(primitive) == .builtin_method,
             .in_progress,
             .dynamic,
             .erased_callable,
-            .primitive,
             .empty_record,
             .empty_tag_union,
             => false,
@@ -4163,15 +4347,15 @@ const ProcedureBuilder = struct {
     /// payloads print positionally).
     fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        const view = procedureModuleById(self.modules, rep.source_type.module);
 
-        var field_name_ids = std.ArrayList(base.StringLiteral.Idx).empty;
+        var field_name_ids = std.ArrayList(LIR.BoxyNameId).empty;
         defer field_name_ids.deinit(self.allocator);
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .record_field) {
+                const view = procedureModuleById(self.modules, child.source_type.module);
                 try field_name_ids.append(
                     self.allocator,
-                    try self.result.store.insertString(view.canonical_names.recordFieldLabelText(child.role.record_field)),
+                    try self.result.store.insertBoxyName(view.canonical_names.recordFieldLabelText(child.role.record_field)),
                 );
             } else if (child.role != .record_ext) {
                 return .{};
@@ -4650,6 +4834,9 @@ const ProcedureBuilder = struct {
             => {},
         }
 
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
         var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
         defer proc.deinit();
 
@@ -4669,13 +4856,18 @@ const ProcedureBuilder = struct {
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
         self.worker_procs[index] = proc_id;
+        var tail_builder = lir_core.TailCallBuilder.init(self.allocator, proc_id);
+        defer tail_builder.deinit();
+        self.result.store.tail_call_builder = &tail_builder;
         try self.setProcDebugName(proc_id, resolved);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
+        // Body descriptor templates may capture rebuilt argument descriptors.
+        // Initialize those roots from hidden inputs before consuming them.
+        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
         const return_desc = try self.returnDescriptorInfoForBody(
@@ -4690,6 +4882,11 @@ const ProcedureBuilder = struct {
         proc_spec.runtime_ret_desc = return_desc.runtime_local;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
         self.resolvePendingDirectCallDescriptorAbis(proc_id, return_desc.runtime_local != null);
+        // All self-call ABI fixups are resolved with this worker's signature.
+        // Later descriptor capture finalization does not change continuations.
+        tail_builder.adapters = self.result.boxy_adapters.items;
+        const tail_sites = try tail_builder.finish(&self.result.store);
+        self.result.store.getProcSpecPtr(proc_id).tail_calls = tail_sites;
         return proc_id;
     }
 
@@ -4713,6 +4910,9 @@ const ProcedureBuilder = struct {
             => {},
         }
 
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
         var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
         defer proc.deinit();
 
@@ -4746,10 +4946,10 @@ const ProcedureBuilder = struct {
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
+        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
+        body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
         proc_spec.erased_arg_desc_offsets = try proc.erasedArgumentDescriptorCaptureOffsets();
@@ -4798,24 +4998,22 @@ const ProcedureBuilder = struct {
         const template = resolved.template orelse
             boxyLowerInvariant("hosted worker had no checked procedure template");
         const host_capability = hostedRepresentationForTemplate(resolved.module, template_ref);
-        const host_function = checkedFunctionPayload(resolved.module, host_capability.host_checked_fn_root);
+        const source_fn_rep = self.plan.repForSourceType(.{ .module = resolved.module.key, .ty = host_capability.host_checked_fn_root }) orelse
+            boxyLowerInvariant("hosted checked signature has no representation");
+        const host_function = (Plan.RepQuery{ .plan = self.plan, .allocator = self.allocator }).functionChildren(self.plan.hostRepFor(source_fn_rep)) orelse
+            boxyLowerInvariant("hosted ABI signature is not a function");
         const worker_function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
-        if (host_function.args.len != worker_function.args.len) {
+        if (host_function.arg_count != worker_function.args.len) {
             boxyLowerInvariant("hosted host signature arity disagreed with worker signature");
         }
-
-        const arg_locals = try self.allocator.alloc(LIR.LocalId, host_function.args.len);
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(host_function.rep)].children);
+        const arg_locals = try self.allocator.alloc(LIR.LocalId, host_function.arg_count);
         defer self.allocator.free(arg_locals);
-        for (host_function.args, arg_locals) |arg_ty, *local| {
-            const rep = self.plan.repForSourceType(.{ .module = resolved.module.key, .ty = arg_ty }) orelse
-                boxyLowerInvariant("hosted host argument type was missing from the boxy representation plan");
-            const runtime = self.layout_plan.rep_layouts[@intFromEnum(rep)].host;
-            local.* = try self.addLocalWithBoxyDesc(runtime.layoutIdx(), try self.staticDescRefForRepIfNeeded(rep));
+        for (children[host_function.args_start..][0..host_function.arg_count], arg_locals) |child, *local| {
+            const runtime = self.layout_plan.rep_layouts[@intFromEnum(child.rep)].worker;
+            local.* = try self.addLocalWithBoxyDesc(runtime.layoutIdx(), try self.staticDescRefForRepIfNeeded(child.rep));
         }
-
-        const ret_rep = self.plan.repForSourceType(.{ .module = resolved.module.key, .ty = host_function.ret }) orelse
-            boxyLowerInvariant("hosted host return type was missing from the boxy representation plan");
-        const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(ret_rep)].host.layoutIdx();
+        const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(host_function.ret)].worker.layoutIdx();
 
         const args_span = try self.result.store.addLocalSpan(arg_locals);
         const proc_id = try self.result.store.addProcSpec(.{
@@ -6532,7 +6730,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated record encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated encode_record call did not have three arguments");
 
@@ -6658,7 +6856,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated sequence encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated sequence encoder call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
@@ -11059,7 +11257,7 @@ const ProcedureBuilder = struct {
         const template_ref = resolved.template_ref orelse
             boxyLowerInvariant("hosted worker had no checked procedure template identity");
         const host_capability = hostedRepresentationForTemplate(resolved.module, template_ref);
-        const host_fn_rep = proc.repForModuleType(resolved.module, host_capability.host_checked_fn_root);
+        const host_fn_rep = self.plan.hostRepFor(proc.repForModuleType(resolved.module, host_capability.host_checked_fn_root));
         const host_function = proc.functionChildrenForRep(host_fn_rep) orelse
             boxyLowerInvariant("hosted host signature was not a function");
         const worker_plan = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
@@ -11082,11 +11280,14 @@ const ProcedureBuilder = struct {
         }
 
         const host_ret_layout = proc.hostRuntimeLayoutForRep(host_function.ret);
-        const ret_layout = self.result.store.getLocal(ret_local).layout_idx;
-        const host_ret_local = if (host_ret_layout.layoutIdx() == ret_layout)
-            ret_local
-        else
-            try proc.addFrameLocalForRuntimeRep(host_ret_layout, host_function.ret);
+        const host_result_desc = try proc.descriptorRefForRepIfNeeded(host_function.ret);
+        const host_ret_local = try proc.addFrameLocal(host_ret_layout.layoutIdx());
+        // The hosted call produces this exact descriptor. Generic frame-local
+        // allocation can reserve a runtime descriptor for nested dynamic data,
+        // which would conflict with the call's descriptor even on a fresh local.
+        if (host_result_desc) |desc| {
+            self.result.store.setLocalBoxyDesc(host_ret_local, desc);
+        }
 
         var continuation = ret_stmt;
         if (host_ret_local != ret_local) {
@@ -11098,11 +11299,6 @@ const ProcedureBuilder = struct {
                 continuation,
             );
         }
-        const host_result_desc = try proc.descriptorRefForRepIfNeeded(host_function.ret);
-        if (host_result_desc) |desc| {
-            self.result.store.setLocalBoxyDesc(host_ret_local, desc);
-        }
-
         continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = host_ret_local,
             .proc = try self.emitHostedExternalProc(proc.worker_layout.worker, resolved),
@@ -11132,71 +11328,77 @@ const ProcedureBuilder = struct {
         worker_proc: LIR.LirProcSpecId,
         worker_plan: Plan.WorkerPlan,
     ) Allocator.Error!LIR.LirProcSpecId {
+        const root_plan = self.plan.roots.items[@intFromEnum(root_layout.root)];
+        const resolved = self.resolved_workers.items[@intFromEnum(root_plan.worker)];
+        var proc = ProcBodyBuilder.initSyntheticAdapter(self, resolved.module, worker_layout);
+        defer proc.deinit();
+        const host_rep = self.plan.hostRepFor(root_plan.host_rep);
+        const host_function = proc.functionChildrenForRep(host_rep);
+        const worker_function = proc.functionChildrenForRep(worker_plan.rep);
         const host_args = self.layout_plan.rootLayoutSlice(root_layout.host_args);
-        const worker_proc_args = self.result.store.getLocalSpan(self.result.store.getProcSpec(worker_proc).args);
+        const host_ret = root_layout.host_ret orelse root_layout.host_value orelse
+            boxyLowerInvariant("boxy host wrapper had no host return layout");
+        const host_ret_rep = if (host_function) |function| function.ret else host_rep;
+        const worker_ret_rep = if (worker_function) |function| function.ret else worker_plan.rep;
         const hidden_desc_params = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs);
         const hidden_dict_params = self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts);
-        const root_plan = self.plan.roots.items[@intFromEnum(root_layout.root)];
         const hidden_dict_args = self.plan.directCallHiddenDictionaryArgSlice(root_plan.hidden_dict_args);
-        if (host_args.len + hidden_desc_params.len + hidden_dict_params.len != worker_proc_args.len) {
-            boxyLowerInvariant("boxy host wrapper needed argument adaptation before adapters were emitted");
-        }
         if (hidden_dict_args.len != hidden_dict_params.len) {
             boxyLowerInvariant("boxy host wrapper dictionary arguments disagreed with its worker parameters");
         }
 
-        const arg_locals = try self.allocator.alloc(LIR.LocalId, host_args.len);
-        defer self.allocator.free(arg_locals);
-        for (host_args, arg_locals, 0..) |host_arg, *local, arg_index| {
-            const worker_arg = GuardedList.at(worker_proc_args, arg_index);
-            if (host_arg.layoutIdx() != self.result.store.getLocal(worker_arg).layout_idx) {
-                boxyLowerInvariant("boxy host wrapper needed argument layout adaptation before adapters were emitted");
-            }
-            local.* = try self.addLocal(host_arg.layoutIdx());
-        }
-
-        const host_ret = root_layout.host_ret orelse root_layout.host_value orelse
-            boxyLowerInvariant("boxy host wrapper had no host return layout");
-        const worker_ret = worker_layout.ret orelse worker_layout.value;
-        if (host_ret.layoutIdx() != worker_ret.layoutIdx()) {
-            boxyLowerInvariant("boxy host wrapper needed return layout adaptation before adapters were emitted");
-        }
-
-        // Root plans map the worker's hidden parameters to the exact checked
-        // implementation type, so the wrapper materializes only static refs.
         var descriptor_sources = StaticDescriptorSourceMap{};
         defer descriptor_sources.deinit(self.allocator);
         try self.collectPlannedStaticDescriptorSources(root_plan.worker, root_plan.hidden_desc_args, &descriptor_sources);
         var desc_context = StaticDescInstantiationContext{};
         defer desc_context.deinit(self.allocator);
+        proc.static_descriptor_materialization_scope = .{ .sources = &descriptor_sources, .context = &desc_context };
 
         const call_arg_count = host_args.len + hidden_desc_params.len + hidden_dict_params.len;
         const call_locals = try self.allocator.alloc(LIR.LocalId, call_arg_count);
         defer self.allocator.free(call_locals);
-        @memcpy(call_locals[0..host_args.len], arg_locals);
-        for (hidden_desc_params, 0..) |_, index| {
-            call_locals[host_args.len + index] = try self.addLocal(.opaque_ptr);
+        if (host_function) |function| {
+            const host_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+            const worker_fn = worker_function orelse boxyLowerInvariant("host wrapper worker was not a function");
+            const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_fn.rep)].children);
+            if (function.arg_count != worker_fn.arg_count) boxyLowerInvariant("host wrapper argument arity mismatch");
+            for (host_children[function.args_start..][0..function.arg_count], worker_children[worker_fn.args_start..][0..worker_fn.arg_count], 0..) |host_arg, worker_arg, index| {
+                const arg = try proc.addArgLocalForRep(host_arg.rep);
+                call_locals[index] = if (proc.callableArgumentBoundaryIsDirect(worker_arg.rep, host_arg.rep)) arg else try proc.addFrameLocalForRep(worker_arg.rep);
+            }
         }
-        for (hidden_dict_params, 0..) |_, index| {
-            call_locals[host_args.len + hidden_desc_params.len + index] = try self.addLocal(.opaque_ptr);
-        }
-
-        const ret_local = try self.addLocal(host_ret.layoutIdx());
-        const ret_desc_local = if (self.result.store.getProcSpec(worker_proc).runtime_ret_desc != null)
-            try self.addLocal(.opaque_ptr)
+        for (call_locals[host_args.len..]) |*local| local.* = try proc.addFrameLocal(.opaque_ptr);
+        const worker_returns_desc = self.result.store.getProcSpec(worker_proc).runtime_ret_desc != null;
+        const raw_result = if (worker_returns_desc)
+            try proc.addFrameLocalForRepWithRequiredFreshDescriptor(worker_ret_rep)
+        else
+            try proc.addFrameLocalForRep(worker_ret_rep);
+        const ret_desc_local = if (worker_returns_desc)
+            proc.callResultOutputDescriptorLocal(raw_result) orelse boxyLowerInvariant("host wrapper worker result has no output descriptor")
         else
             null;
-        if (ret_desc_local) |local| {
-            self.result.store.setLocalBoxyDesc(ret_local, .{ .local = local });
-        }
+        const ret_local = if (!worker_returns_desc and proc.representationBoundaryIsDirect(host_ret_rep, worker_ret_rep)) raw_result else try proc.addFrameLocalForRep(host_ret_rep);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
-        var continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
-            .target = ret_local,
+        var continuation = if (ret_local == raw_result) ret_stmt else try proc.assignRepresentationBoundary(ret_local, raw_result, host_ret_rep, worker_ret_rep, ret_stmt);
+        continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
+            .target = raw_result,
             .proc = worker_proc,
             .args = try self.result.store.addLocalSpan(call_locals),
             .out_desc = ret_desc_local,
-            .next = ret_stmt,
+            .next = continuation,
         } });
+        if (host_function) |function| {
+            const host_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+            const worker_fn = worker_function.?;
+            const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_fn.rep)].children);
+            var index = function.arg_count;
+            while (index > 0) {
+                index -= 1;
+                if (call_locals[index] != proc.arg_locals.items[index]) {
+                    continuation = try proc.assignRepresentationBoundary(call_locals[index], proc.arg_locals.items[index], worker_children[worker_fn.args_start + index].rep, host_children[function.args_start + index].rep, continuation);
+                }
+            }
+        }
         var dict_index = hidden_dict_params.len;
         while (dict_index > 0) {
             dict_index -= 1;
@@ -11229,13 +11431,8 @@ const ProcedureBuilder = struct {
                 .next = continuation,
             } });
         }
-        const args_span = try self.result.store.addLocalSpan(arg_locals);
-        const frame_locals = try self.allocator.alloc(LIR.LocalId, call_arg_count + 1 + @intFromBool(ret_desc_local != null));
-        defer self.allocator.free(frame_locals);
-        @memcpy(frame_locals[0..call_arg_count], call_locals);
-        frame_locals[call_arg_count] = ret_local;
-        if (ret_desc_local) |local| frame_locals[call_arg_count + 1] = local;
-        const frame_span = try self.result.store.addLocalSpan(frame_locals);
+        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         return try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
             .args = args_span,
@@ -11844,6 +12041,7 @@ const ProcBodyBuilder = struct {
     const DescriptorTemplateBinding = struct {
         formal: Plan.TypeRepId,
         outer: ?Plan.TypeRepId,
+        actual: Plan.TypeRepId,
     };
 
     /// Identity of a substitution environment, interned as a link to the
@@ -13158,19 +13356,24 @@ const ProcBodyBuilder = struct {
             },
             .run_low_level => |run_low_level| try self.lowerLowLevelInto(target, expr.ty, run_low_level.op, run_low_level.args, next),
             .block => |block| blk: {
-                try self.reserveBlockBindings(block.statements);
+                var live_statements = block.statements;
                 var block_diverges = false;
-                for (block.statements) |statement| {
-                    if (self.module.checked_bodies.statementDiverges(statement, .run)) block_diverges = true;
+                for (block.statements, 0..) |statement, i| {
+                    if (self.module.checked_bodies.statementDiverges(statement, .run)) {
+                        live_statements = block.statements[0 .. i + 1];
+                        block_diverges = true;
+                        break;
+                    }
                 }
+                try self.reserveBlockBindings(live_statements);
                 var continuation = if (block_diverges)
                     try self.parent.result.store.addCFStmt(.runtime_error)
                 else
                     try self.lowerExprInto(target, block.final_expr, next);
-                var index = block.statements.len;
+                var index = live_statements.len;
                 while (index > 0) {
                     index -= 1;
-                    continuation = try self.lowerStatement(block.statements[index], continuation);
+                    continuation = try self.lowerStatement(live_statements[index], continuation);
                 }
                 break :blk continuation;
             },
@@ -13211,6 +13414,11 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         if (quote.plan == null) return try self.assignStringLiteral(target, quote.literal, next);
 
+        switch (self.staticDispatchPlan(quote.plan).resolution) {
+            .evidence_dependent, .checked_error, .@"unreachable" => return try self.lowerRuntimeQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
+            .direct_closed, .direct_parametric => {},
+            .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
+        }
         const root = self.module.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
             boxyLowerInvariant("checked from_quote expression had no compile-time conversion root");
         return switch (root.payload) {
@@ -13222,7 +13430,7 @@ const ProcBodyBuilder = struct {
                 checked_ty,
                 next,
             ),
-            .pending => try self.lowerPendingQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
+            .pending => try self.lowerRuntimeQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
             .fn_value,
             .discarded,
             .expect,
@@ -13230,7 +13438,7 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn lowerPendingQuoteConversionInto(
+    fn lowerRuntimeQuoteConversionInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
@@ -13304,7 +13512,7 @@ const ProcBodyBuilder = struct {
                 payload.desc_local,
                 source,
                 source_rep,
-                try self.parent.result.store.insertString("Ok"),
+                try self.parent.result.store.insertBoxyName("Ok"),
                 0,
                 moved,
             )
@@ -13329,7 +13537,7 @@ const ProcBodyBuilder = struct {
             return try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = source,
                 .source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep),
-                .tag_name = try self.parent.result.store.insertString("Ok"),
+                .tag_name = try self.parent.result.store.insertBoxyName("Ok"),
                 .on_match = read_ok,
                 .on_miss = invalid,
             } });
@@ -15386,17 +15594,60 @@ const ProcBodyBuilder = struct {
         var source_index = items.len;
         while (source_index > 0) {
             source_index -= 1;
-            continuation = try self.restoreConstIntoStorageRep(
-                source_field_locals[source_index].?,
-                store_module,
-                type_module,
-                items[source_index],
-                fields[source_index].ty,
-                source_field_reps[source_index],
-                continuation,
-            );
+            continuation = if (fields[source_index].kind.tag == .optional)
+                try self.restoreConstOptionalSlotInto(
+                    source_field_locals[source_index].?,
+                    store_module,
+                    type_module,
+                    items[source_index],
+                    fields[source_index].ty,
+                    source_field_reps[source_index],
+                    continuation,
+                )
+            else
+                try self.restoreConstIntoStorageRep(
+                    source_field_locals[source_index].?,
+                    store_module,
+                    type_module,
+                    items[source_index],
+                    fields[source_index].ty,
+                    source_field_reps[source_index],
+                    continuation,
+                );
         }
         return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
+    }
+
+    /// An optional field's stored node is its presence slot, while its checked
+    /// field type names only the payload. Restore the slot using the planner's
+    /// explicit presence representation and restore Present's child at that
+    /// checked payload type.
+    fn restoreConstOptionalSlotInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        node: checked.ConstNodeId,
+        payload_ty: checked.CheckedTypeId,
+        slot_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const stored = store_module.const_store.get(node);
+        if (stored != .tag) boxyLowerInvariant("stored optional field did not carry its presence tag");
+        const slot = self.parent.plan.representations.items[@intFromEnum(slot_rep)];
+        const present = slot.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("stored optional field had no planned presence slot");
+        const variant = self.plannedTagVariantByText(slot_rep, stored.tag.tag_name);
+        const payload_tys: []const checked.CheckedTypeId = if (variant.index == present) &.{payload_ty} else &.{};
+        return try self.restoreConstPlannedTagPayloadsInto(
+            target,
+            store_module,
+            type_module,
+            variant,
+            stored.tag,
+            payload_tys,
+            next,
+        );
     }
 
     fn restoreConstTagInto(
@@ -15561,13 +15812,31 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const checked_tag = constTagPayloadTypes(type_module, checked_ty, tag.tag_name);
-        const name = checked_tag.name;
-        const payload_tys = checked_tag.payload_tys;
+        return try self.restoreConstPlannedTagPayloadsInto(
+            target,
+            store_module,
+            type_module,
+            self.tagVariantForModule(rep, type_module, checked_tag.name),
+            tag,
+            checked_tag.payload_tys,
+            next,
+        );
+    }
+
+    fn restoreConstPlannedTagPayloadsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        variant: TagVariantLookup,
+        tag: anytype,
+        payload_tys: []const checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         if (payload_tys.len != tag.payloads.len) {
             boxyLowerInvariant("ConstStore tag payload count differed from checked tag type");
         }
 
-        const variant = self.tagVariantForModule(rep, type_module, name);
         const payload_children = self.parent.plan.childSlice(variant.payloads);
         if (payload_children.len != tag.payloads.len) {
             boxyLowerInvariant("ConstStore tag payload count disagreed with its boxy representation");
@@ -16955,12 +17224,15 @@ const ProcBodyBuilder = struct {
         if (entry.found_existing) return;
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-            const put = try substitutions.getOrPut(substitution.formal_rep);
-            if (put.found_existing and put.value_ptr.* != substitution.actual_rep) {
-                boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+        var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitution_iter.next()) |substitution| {
+            if (substitution.formal_rep) |formal_rep| {
+                const put = try substitutions.getOrPut(formal_rep);
+                if (put.found_existing and put.value_ptr.* != substitution.actual_rep) {
+                    boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+                }
+                put.value_ptr.* = substitution.actual_rep;
             }
-            put.value_ptr.* = substitution.actual_rep;
             try self.collectNominalBackingRepActualSubstitutions(substitution.actual_rep, substitutions, seen);
         }
         for (self.parent.plan.childSlice(rep.children)) |child| {
@@ -17021,7 +17293,7 @@ const ProcBodyBuilder = struct {
         module: ProcedureModuleView,
         ref_id: checked.ResolvedValueRefId,
     ) ?Plan.WorkerSource {
-        const record = resolvedValueRecordInModule(module, ref_id);
+        const record = module.resolved_value_refs.callableTarget(ref_id);
         return switch (record.ref) {
             .local_proc => |local| if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
                 .{ .procedure_binding = binding }
@@ -17065,6 +17337,7 @@ const ProcBodyBuilder = struct {
         const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
         const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
         switch (binding.body) {
+            .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
             .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(module, template)) |source| {
                 return source;
             },
@@ -17903,7 +18176,10 @@ const ProcBodyBuilder = struct {
         defer descriptor_snapshot.deinit(self.parent.allocator);
         defer self.restoreDescriptorBindings(descriptor_snapshot);
 
-        const match = self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
+        const match: DictionaryMethodMatch = if (planned.scheme_requirement) |requirement| .{
+            .requirement = requirement,
+            .slot = self.parent.plan.dictionaries.items[@intFromEnum(requirement)].slot,
+        } else self.dictionaryMethodForRep(planned.dispatcher_rep, dispatch.method) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a matching dictionary requirement");
         const dict_local = self.dictionaryLocalForRequirementOrNull(match.requirement) orelse
             boxyLowerInvariant("dictionary dispatch reached boxy lowering without a bound dictionary local");
@@ -17977,6 +18253,12 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
+        // A quote conversion's argument is concrete Str. Its remaining type
+        // parameters (including the conversion error) belong to the selected
+        // dictionary method, rather than to an explicit argument at this call.
+        if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
+            try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
+        }
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, lowered, arg_reps, null, null, &pre_arg_descriptor_initializers);
         defer self.parent.allocator.free(hidden_desc_locals);
 
@@ -18064,6 +18346,33 @@ const ProcBodyBuilder = struct {
             lowered,
             continuation,
         );
+    }
+
+    fn bindQuoteDictionaryDescriptorArgs(
+        self: *ProcBodyBuilder,
+        args: []const Plan.DirectCallHiddenDescriptorArg,
+        dict: LIR.LocalId,
+        method: names.MethodNameId,
+        slot: u32,
+        initializers: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!void {
+        for (args, 0..) |arg, index| {
+            // Constructor descriptors are built by ordinary call lowering from
+            // these exact leaf descriptors supplied by conversion evidence.
+            if (!self.repIsBareDynamic(arg.rep)) continue;
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try initializers.append(self.parent.allocator, .{
+                .local = local,
+                .materialize = .{ .dict_method_hidden = .{
+                    .dict = dict,
+                    .method = method,
+                    .method_slot = slot,
+                    .hidden_index = @intCast(index),
+                    .shape = .requirement,
+                } },
+            });
+            try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
+        }
     }
 
     fn dictionaryCallArgumentDescriptorLocals(
@@ -18239,7 +18548,7 @@ const ProcBodyBuilder = struct {
             hidden_dict_args,
             continuation,
         );
-        self.parent.result.store.getCFStmtPtr(call_placeholder).* = self.parent.result.store.getCFStmt(call_entry);
+        try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry));
         for (self.parent.pending_direct_call_descriptor_abis.items) |*pending| {
             if (pending.provisional_call == call_entry) {
                 pending.provisional_call = call_placeholder;
@@ -18863,7 +19172,7 @@ const ProcBodyBuilder = struct {
 
             for (target_template_variants) |target_variant| {
                 var specialized_variant = target_variant;
-                const target_name = self.parent.result.store.getString(target_variant.name);
+                const target_name = self.parent.result.store.getBoxyName(target_variant.name);
                 var target_plan_variant: ?Plan.TagVariant = null;
                 for (target_plan_variants) |plan_variant| {
                     if (std.mem.eql(u8, target_name, self.tagVariantNameText(plan_variant))) {
@@ -18880,7 +19189,7 @@ const ProcBodyBuilder = struct {
                 }
                 var source_variant: ?LirProgram.BoxyTagVariant = null;
                 for (source_template_variants) |candidate| {
-                    if (std.mem.eql(u8, target_name, self.parent.result.store.getString(candidate.name))) {
+                    if (target_variant.name == candidate.name) {
                         source_variant = candidate;
                         break;
                     }
@@ -18912,6 +19221,10 @@ const ProcBodyBuilder = struct {
                             boxyLowerInvariant("boxy tag adapter target payload descriptor index exceeded variant payloads");
                         }
                         const payload_index = target_payload_desc.payload_index;
+                        // Payload storage belongs to this nominal application,
+                        // not to the declaration formal shared by other uses.
+                        const target_payload_rep = self.nominalBackingActualRep(target_rep, target_payloads[payload_index].rep);
+                        const source_payload_rep = self.nominalBackingActualRep(source_rep, source_payloads[payload_index].rep);
                         var source_payload_desc_info: ?ResultDescriptorSource = null;
                         for (source_descs) |source_payload_desc| {
                             if (source_payload_desc.payload_index == payload_index) {
@@ -18920,11 +19233,11 @@ const ProcBodyBuilder = struct {
                             }
                         }
                         const exact_source_desc_info = source_payload_desc_info orelse
-                            try self.adapterDescriptorForKnownRep(source_payloads[payload_index].rep);
+                            try self.adapterDescriptorForKnownRep(source_payload_rep);
                         try self.appendResultDescriptorInitializers(prerequisites, exact_source_desc_info);
                         const exact_source_payload_rep = self.descriptorSourceRep(
                             exact_source_desc_info,
-                            source_payloads[payload_index].rep,
+                            source_payload_rep,
                         );
 
                         const target_payload_layout = self.parent.tagVariantPayloadFieldLayout(
@@ -18934,19 +19247,19 @@ const ProcBodyBuilder = struct {
                         );
                         const target_payload_tag = self.parent.result.layouts.getLayout(target_payload_layout).tag;
                         const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst or target_payload_tag == .erased_box;
-                        const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payloads[payload_index].rep).layoutIdx();
+                        const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payload_rep).layoutIdx();
                         const adapted_payload_desc_info = if (self.representationBoundaryIsDirect(
-                            target_payloads[payload_index].rep,
+                            target_payload_rep,
                             exact_source_payload_rep,
                         ) or
                             (target_payload_is_box and
-                                self.repIsBareDynamic(self.descriptorStorageRep(target_payloads[payload_index].rep))))
+                                self.repIsBareDynamic(self.descriptorStorageRep(target_payload_rep))))
                             exact_source_desc_info
                         else if (target_payload_layout != target_standalone_layout)
                             ResultDescriptorSource{ .desc = target_payload_desc.desc }
                         else
                             try self.adapterDescriptorForCallBoundary(
-                                target_payloads[payload_index].rep,
+                                target_payload_rep,
                                 exact_source_payload_rep,
                                 exact_source_desc_info,
                                 prerequisites,
@@ -18986,10 +19299,9 @@ const ProcBodyBuilder = struct {
             const source_variants = self.parent.result.boxy_tag_variants.items[source_template_value.tag_variants.start..][0..source_template_value.tag_variants.len];
             var has_residual_variant = false;
             for (source_variants) |source_variant| {
-                const source_name = self.parent.result.store.getString(source_variant.name);
                 var belongs_to_target = false;
                 for (target_variants) |target_variant| {
-                    if (std.mem.eql(u8, source_name, self.parent.result.store.getString(target_variant.name))) {
+                    if (source_variant.name == target_variant.name) {
                         belongs_to_target = true;
                         break;
                     }
@@ -19113,8 +19425,6 @@ const ProcBodyBuilder = struct {
         var extra_captures = std.ArrayList(LIR.LocalId).empty;
         defer extra_captures.deinit(self.parent.allocator);
         var specialized = false;
-        const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
-        const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
         var target_field_index: u16 = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
@@ -19128,8 +19438,7 @@ const ProcBodyBuilder = struct {
                     }
                     const source_field = self.findRecordFieldByLabel(
                         source_record_rep,
-                        source_view,
-                        target_view,
+                        procedureModuleById(self.parent.modules, target_child.source_type.module),
                         target_label,
                     ) orelse {
                         switch (target_child.record_field_kind.tag) {
@@ -19938,7 +20247,7 @@ const ProcBodyBuilder = struct {
             const pattern = self.module.checked_bodies.pattern(patterns[0].pattern);
             switch (pattern.data) {
                 .numeral_literal => |literal| {
-                    if (literal.conversion != null) return null;
+                    if (literal.guard != null) return null;
                     const magnitude = exact_numeral.intMagnitude(
                         self.module.module_env.exactNumeral(literal.literal),
                     ) orelse return null;
@@ -20355,6 +20664,10 @@ const ProcBodyBuilder = struct {
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
     ) Plan.TypeRepId {
+        // A bare type parameter has no storage shape of its own. Boxing the
+        // operand preserves its exact payload descriptor.
+        if (self.repIsBareDynamic(target_rep)) return source_rep;
+
         if (self.parent.result.store.getLocal(target).layout_idx == self.workerRuntimeLayoutForRep(source_rep).layoutIdx() and
             self.repsUseSameDynamicBoxStorage(target_rep, source_rep))
         {
@@ -20591,7 +20904,11 @@ const ProcBodyBuilder = struct {
             const descriptor_fields = [_]AggregateDescriptorField{.{
                 .local = payload_local,
                 .target_rep = payload_children[0].rep,
-                .source_rep = self.repForType(self.module.checked_bodies.expr(args[0]).ty),
+                .source_rep = self.exprTagPayloadStorageRep(
+                    payload_local,
+                    payload_children[0].rep,
+                    self.repForType(self.module.checked_bodies.expr(args[0]).ty),
+                ),
             }};
             const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, rep_id, &descriptor_fields);
             defer tag_desc.deinit(self.parent.allocator);
@@ -20621,7 +20938,11 @@ const ProcBodyBuilder = struct {
             descriptor_field.* = .{
                 .local = field_local.*,
                 .target_rep = child.rep,
-                .source_rep = self.repForType(self.module.checked_bodies.expr(arg).ty),
+                .source_rep = self.exprTagPayloadStorageRep(
+                    field_local.*,
+                    child.rep,
+                    self.repForType(self.module.checked_bodies.expr(arg).ty),
+                ),
             };
             switch (child.role) {
                 .tag_payload => {},
@@ -21197,7 +21518,8 @@ const ProcBodyBuilder = struct {
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => {
-                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                    var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                    while (substitution_iter.next()) |substitution| {
                         if (substitution.formal_rep == backing_rep) return substitution.actual_rep;
                     }
                     return backing_rep;
@@ -21259,8 +21581,29 @@ const ProcBodyBuilder = struct {
         };
         const read_target = if (self.representationBoundaryIsDirect(target_rep, access.field_rep))
             target
+        else if (nested_desc_index != null)
+            try self.addFrameLocal(self.workerRuntimeLayoutForRep(access.field_rep).layoutIdx())
         else
             try self.addFrameLocalForRep(access.field_rep);
+        // Record the descriptor supplied by the field read before lowering its
+        // adapter. Its initializer executes before the read and conversion; it
+        // must not become a type-wide slot initialized in the worker prologue.
+        const field_desc_local = if (nested_desc_index != null) blk: {
+            if (self.parent.result.store.getLocal(read_target).boxy_desc) |desc| {
+                if (desc.localOrNull() == null) break :blk null;
+            }
+            const local = try self.mutableDescriptorLocalForValue(read_target);
+            break :blk local;
+        } else null;
+        const descriptor_snapshot = if (read_target != target and field_desc_local != null)
+            try self.snapshotDescriptorBindings()
+        else
+            null;
+        defer if (descriptor_snapshot) |snapshot| {
+            self.restoreDescriptorBindings(snapshot);
+            snapshot.deinit(self.parent.allocator);
+        };
+        if (descriptor_snapshot != null) try self.bindDescriptorIdentityLocalForRep(access.field_rep, field_desc_local.?, false);
         const after_read = if (read_target == target)
             next
         else
@@ -21273,17 +21616,13 @@ const ProcBodyBuilder = struct {
             } },
             .next = after_read,
         } });
-        const before_read = if (nested_desc_index) |index| blk: {
-            if (self.parent.result.store.getLocal(read_target).boxy_desc) |desc| {
-                if (desc.localOrNull() == null) break :blk read;
-            }
-            const desc_local = try self.mutableDescriptorLocalForValue(read_target);
+        const before_read = if (field_desc_local) |desc_local| blk: {
             if (self.localIsReadOnlyDescriptorInput(desc_local)) break :blk read;
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = desc_local,
                 .desc = record_desc orelse
                     boxyLowerInvariant("record field descriptor bind had no source descriptor"),
-                .nested_index = index,
+                .nested_index = nested_desc_index.?,
                 .next = read,
             } });
         } else read;
@@ -21520,9 +21859,36 @@ const ProcBodyBuilder = struct {
                 .builtin_other,
                 => {
                     const backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing);
+                    var snapshot: ?DescriptorBindingsSnapshot = null;
+                    defer if (snapshot) |outer| {
+                        self.restoreDescriptorBindings(outer);
+                        outer.deinit(self.parent.allocator);
+                    };
+                    var initializers = std.ArrayList(DescriptorArgLocal).empty;
+                    defer initializers.deinit(self.parent.allocator);
+                    var bindings = std.ArrayList(DescriptorTemplateOverride).empty;
+                    defer bindings.deinit(self.parent.allocator);
+                    // Resolve all actuals in the enclosing scope before binding
+                    // this declaration's formals (including nested uses of the
+                    // same nominal at different arguments).
+                    var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                    while (substitutions.next()) |substitution| {
+                        const formal_rep = substitution.formal_rep orelse continue;
+                        if (formal_rep == substitution.actual_rep) continue;
+                        const formal = self.parent.plan.representations.items[@intFromEnum(formal_rep)];
+                        if (formal.descriptor == null) continue;
+                        if (snapshot == null) snapshot = try self.snapshotDescriptorBindings();
+                        const materialization = try self.descriptorMaterializationForKnownRep(substitution.actual_rep);
+                        const local = try self.addFrameLocal(.opaque_ptr);
+                        try self.recordDescriptorLocalTemplate(local, materialization);
+                        try initializers.append(self.parent.allocator, .{ .local = local, .materialize = materialization.desc, .captures = materialization.captures });
+                        try bindings.append(self.parent.allocator, .{ .rep = formal_rep, .local = local });
+                    }
+                    for (bindings.items) |binding| try self.bindDescriptorIdentityLocalForRep(binding.rep, binding.local, false);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
+                    const body = try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
+                    return try self.prependDescriptorArgMaterializations(initializers.items, body);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -21975,8 +22341,34 @@ const ProcBodyBuilder = struct {
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
         for (statements) |statement_id| {
             const statement = self.module.checked_bodies.statement(statement_id);
+            const rhs: ?checked.CheckedExprId = switch (statement.data) {
+                .decl => |decl| decl.expr,
+                .var_ => |decl| decl.expr,
+                .reassign => |reassign| reassign.expr,
+                .pending,
+                .var_uninitialized,
+                .crash,
+                .dbg,
+                .expr,
+                .expect,
+                .for_,
+                .while_,
+                .infinite_loop,
+                .breakable_loop,
+                .break_,
+                .return_,
+                .import_,
+                .alias_decl,
+                .where_alias_decl,
+                .nominal_decl,
+                .type_anno,
+                .type_var_alias,
+                .runtime_error,
+                => null,
+            };
+            if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
-                .decl => |decl| if (!self.declBindsUncapturedNestedProc(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
+                .decl => |decl| if (!self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
                 .var_ => |decl| try self.reservePatternBindings(decl.pattern),
                 .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
@@ -21997,7 +22389,7 @@ const ProcBodyBuilder = struct {
         expr_id: checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (self.declBindsUncapturedNestedProc(pattern_id, expr_id)) return next;
+        if (self.declOmitsRuntimeBinding(pattern_id, expr_id)) return next;
 
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const source = switch (pattern.data) {
@@ -22033,7 +22425,7 @@ const ProcBodyBuilder = struct {
         return try self.lowerExprInto(source, expr_id, bound);
     }
 
-    fn declBindsUncapturedNestedProc(
+    fn declOmitsRuntimeBinding(
         self: *ProcBodyBuilder,
         pattern_id: checked.CheckedPatternId,
         expr_id: checked.CheckedExprId,
@@ -22043,18 +22435,14 @@ const ProcBodyBuilder = struct {
             .assign => |binder| binder,
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return false,
         };
-        const callable_expr = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return false;
-        if (!self.nestedCallableExprHasNoCaptures(callable_expr)) return false;
+        if (self.module.checked_bodies.patternBinder(binder).is_scheme_alias) return true;
+        _ = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return false;
+        // Procedure lookups construct the callable at the instantiated use,
+        // including its source captures. Only another closure's capture of
+        // this binder reads the declaration's runtime local. Materializing an
+        // otherwise unread declaration would require descriptors for scheme
+        // parameters before any use has instantiated them.
         return !self.binderCapturedByNestedCallable(binder);
-    }
-
-    fn nestedCallableExprHasNoCaptures(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) bool {
-        const expr = self.module.checked_bodies.expr(expr_id);
-        return switch (expr.data) {
-            .lambda => true,
-            .closure => |closure| closure.captures.len == 0,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable capture check did not reference a lambda or closure"),
-        };
     }
 
     fn binderCapturedByNestedCallable(self: *ProcBodyBuilder, binder: checked.PatternBinderId) bool {
@@ -22174,14 +22562,14 @@ const ProcBodyBuilder = struct {
             .nominal => |nominal| try self.lowerNominalPatternThen(pattern.ty, nominal.backing_pattern, source, on_match, miss, remaps),
             .applied_tag => |tag| try self.lowerAppliedTagPatternThen(pattern.ty, tag.name, tag.args, source, on_match, miss, remaps),
             .numeral_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin numeral pattern reached boxy match lowering before dictionary conversion lowering");
+                if (literal.guard) |guard| {
+                    break :blk try self.lowerCheckedLiteralGuard(pattern_id, guard, source, on_match, miss);
                 }
                 break :blk try self.lowerNumeralPatternThen(pattern.ty, source, literal.literal, on_match, miss);
             },
             .str_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin string pattern reached boxy match lowering before dictionary conversion lowering");
+                if (literal.guard) |guard| {
+                    break :blk try self.lowerCheckedLiteralGuard(pattern_id, guard, source, on_match, miss);
                 }
                 break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .str = literal.literal }, on_match, miss);
             },
@@ -23068,7 +23456,7 @@ const ProcBodyBuilder = struct {
         target_desc: ?LIR.LocalId,
         source: LIR.LocalId,
         source_rep: Plan.TypeRepId,
-        tag_name: base.StringLiteral.Idx,
+        tag_name: LIR.BoxyNameId,
         payload_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -23115,6 +23503,24 @@ const ProcBodyBuilder = struct {
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
         } });
+    }
+
+    /// Bind the matched value before evaluating its checker-selected equality
+    /// guard. Ordinary expression lowering owns conversion and method dispatch.
+    fn lowerCheckedLiteralGuard(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        guard: checked.CheckedExprId,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Allocator.Error!LIR.CFStmtId {
+        const binder = self.module.checked_bodies.literalPatternBinder(pattern_id);
+        try self.reserveBinderLocalIfFresh(binder, self.module.checked_bodies.pattern(pattern_id).ty);
+        const eq = try self.addFrameLocal(.bool);
+        const branch = try self.boolSwitchNoContinuation(eq, on_match, try self.patternMissJump(miss));
+        const compare = try self.lowerExprInto(eq, guard, branch);
+        return try self.bindMatchBinder(binder, source, &.{}, compare);
     }
 
     fn lowerLiteralPatternThen(
@@ -23871,6 +24277,34 @@ const ProcBodyBuilder = struct {
         defer self.parent.result.store.current_region = saved_region;
         self.parent.result.store.current_region = statement.source_region;
 
+        const rhs: ?checked.CheckedExprId = switch (statement.data) {
+            .decl => |decl| decl.expr,
+            .var_ => |decl| decl.expr,
+            .reassign => |reassign| reassign.expr,
+            .expr => |expr| expr,
+            .pending,
+            .var_uninitialized,
+            .crash,
+            .dbg,
+            .expect,
+            .for_,
+            .while_,
+            .infinite_loop,
+            .breakable_loop,
+            .break_,
+            .return_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => null,
+        };
+        if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
+            return try self.parent.result.store.addCFStmt(.runtime_error);
+        };
         return switch (statement.data) {
             .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
             .var_ => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
@@ -24074,21 +24508,21 @@ const ProcBodyBuilder = struct {
             const skip_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = step_local,
                 .source_desc = source_desc,
-                .tag_name = try self.parent.result.store.insertString(step.module.canonical_names.tagLabelText(step.skip_tag)),
+                .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.skip_tag)),
                 .on_match = skip_body,
                 .on_miss = impossible,
             } });
             const one_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = step_local,
                 .source_desc = source_desc,
-                .tag_name = try self.parent.result.store.insertString(step.module.canonical_names.tagLabelText(step.one_tag)),
+                .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.one_tag)),
                 .on_match = one_body,
                 .on_miss = skip_match,
             } });
             const done_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = step_local,
                 .source_desc = source_desc,
-                .tag_name = try self.parent.result.store.insertString(step.module.canonical_names.tagLabelText(step.done_tag)),
+                .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.done_tag)),
                 .on_match = done_body,
                 .on_miss = one_match,
             } });
@@ -26613,7 +27047,11 @@ const ProcBodyBuilder = struct {
             // the target identity names the generic descriptor requirement those
             // bytes satisfy. Only the source descriptor must match the committed
             // field layout.
-            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.source_rep, field_layout, true) orelse
+            // The field local contains the result of adaptation. A concrete
+            // target has its own exact descriptor; the pre-conversion erased
+            // source descriptor describes different storage.
+            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed aggregate source field had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
             try self.bindDescriptorIdentityLocalForRep(target_desc_rep, desc_local, false);
@@ -26668,7 +27106,11 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.source_rep, field_layout, true) orelse
+            // The field local contains the result of adaptation. A concrete
+            // target has its own exact descriptor; the pre-conversion erased
+            // source descriptor describes different storage.
+            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed tag source payload had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
             try self.bindDescriptorIdentityLocalForRep(target_desc_rep, desc_local, false);
@@ -26712,7 +27154,8 @@ const ProcBodyBuilder = struct {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const force_field = self.parent.layoutIsBoxStorage(field_layout);
             if (!force_field and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.source_rep, field_layout, force_field) orelse continue;
+            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, force_field) orelse continue;
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, desc_rep, &field_initializers);
             try refs.append(self.parent.allocator, .{ .local = desc_local });
             try appendUniqueLocal(self.parent.allocator, &captures, desc_local);
@@ -26926,6 +27369,12 @@ const ProcBodyBuilder = struct {
         visited[rep_index] = true;
 
         const rep = self.parent.plan.representations.items[rep_index];
+        var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitutions.next()) |substitution| {
+            const formal_rep = substitution.formal_rep orelse continue;
+            if (substitution.actual_rep != formal_rep and
+                self.descriptorTemplateRefNeedsCaptures(substitution.actual_rep, rep.descriptor, visited)) return true;
+        }
         const current_desc = rep.descriptor;
         const rep_layout = self.parent.layout_plan.rep_layouts[rep_index];
         const payload_layout = rep_layout.descriptor_payload_layout orelse rep_layout.worker.layoutIdx();
@@ -27054,11 +27503,11 @@ const ProcBodyBuilder = struct {
     }
 
     fn descriptorTemplateExactRep(
-        _: *const ProcBodyBuilder,
+        self: *const ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
         context: *const DescriptorTemplateContext,
     ) Plan.TypeRepId {
-        if (!context.exact_storage) return rep_id;
+        if (!context.exact_storage and !self.repIsBareDynamic(rep_id)) return rep_id;
 
         var current = rep_id;
         var remaining = context.exact_reps.len;
@@ -27089,33 +27538,41 @@ const ProcBodyBuilder = struct {
             .bindings_start = context.bindings.items.len,
             .env = context.env,
         };
-        if (!context.exact_storage) return scope;
 
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
-            if (substitution.formal_rep == substitution.actual_rep) continue;
-            const slot = &context.exact_reps[@intFromEnum(substitution.formal_rep)];
-            if (slot.*) |existing| {
-                if (existing == substitution.actual_rep) continue;
+        var current = rep_id;
+        for (0..self.parent.plan.representations.items.len) |_| {
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            const bindings_start = context.bindings.items.len;
+            // Resolve all arguments in the enclosing scope before binding this
+            // declaration's formals. The next wrapper can reuse those formals.
+            var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                const formal_rep = substitution.formal_rep orelse continue;
+                const actual = self.descriptorTemplateExactRep(substitution.actual_rep, context);
+                const outer = context.exact_reps[@intFromEnum(formal_rep)];
+                if (formal_rep == actual or outer == actual) continue;
+                try context.bindings.append(self.parent.allocator, .{
+                    .formal = formal_rep,
+                    .outer = outer,
+                    .actual = actual,
+                });
             }
-            try context.bindings.append(self.parent.allocator, .{
-                .formal = substitution.formal_rep,
-                .outer = slot.*,
-            });
-            slot.* = substitution.actual_rep;
-
-            const key = DescriptorTemplateEnvKey{
-                .parent = context.env,
-                .formal = substitution.formal_rep,
-                .actual = substitution.actual_rep,
-            };
-            const entry = try context.env_ids.getOrPut(key);
-            if (!entry.found_existing) {
-                entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+            for (context.bindings.items[bindings_start..]) |binding| {
+                context.exact_reps[@intFromEnum(binding.formal)] = binding.actual;
+                const key = DescriptorTemplateEnvKey{
+                    .parent = context.env,
+                    .formal = binding.formal,
+                    .actual = binding.actual,
+                };
+                const entry = try context.env_ids.getOrPut(key);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+                }
+                context.env = entry.value_ptr.*;
             }
-            context.env = entry.value_ptr.*;
+            current = self.parent.descriptorBackingShapeRep(current) orelse return scope;
         }
-        return scope;
+        boxyLowerInvariant("cyclic exact descriptor storage wrapper");
     }
 
     /// Restore the bindings and environment a descent replaced.
@@ -27328,7 +27785,7 @@ const ProcBodyBuilder = struct {
         for (variants, 0..) |variant, index| {
             const variant_payload_layout = tag_info.variants.get(index).payload_layout;
             try entries.append(self.parent.allocator, .{
-                .name = try self.parent.result.store.insertString(self.tagVariantNameText(variant)),
+                .name = try self.parent.result.store.insertBoxyName(self.tagVariantNameText(variant)),
                 .discriminant = @intCast(index),
                 .payload_count = @intCast(self.parent.plan.childSlice(variant.payloads).len),
                 .payload_layout = variant_payload_layout,
@@ -27369,7 +27826,7 @@ const ProcBodyBuilder = struct {
             captures,
             context,
         );
-        const name = try self.parent.result.store.insertString(self.tagVariantNameText(variant));
+        const name = try self.parent.result.store.insertBoxyName(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
         try self.parent.result.boxy_tag_variants.append(self.parent.allocator, .{
             .name = name,
@@ -27862,6 +28319,7 @@ const ProcBodyBuilder = struct {
         const cond = try self.addFrameLocalForType(child_expr.ty);
         const expect_stmt = try self.parent.result.store.addCFStmt(.{ .expect = .{
             .condition = cond,
+            .site = try self.parent.expectSite(self.module, self.parent.result.store.current_region),
             .next = next,
         } });
         return try self.lowerExprInto(cond, child, expect_stmt);
@@ -27952,7 +28410,7 @@ const ProcBodyBuilder = struct {
             => try self.assignStringBytesLiteral(target, "<opaque>", next),
             .list => try self.lowerListInspectLocalsInto(target, source, rep_id, next),
             .box => try self.lowerBoxInspectLocalsInto(target, source, rep_id, next),
-            .primitive => |primitive| try self.lowerPrimitiveInspectLocalsInto(target, source, primitive, next),
+            .primitive => |primitive| try self.lowerPrimitiveInspectLocalsInto(target, source, rep_id, primitive, next),
             .bool_tag_union => try self.lowerBoolInspectLocalsInto(target, source, next),
             .empty_record => try self.assignStringBytesLiteral(target, "{}", next),
             .empty_tag_union => try self.parent.result.store.addCFStmt(.{ .crash = .{
@@ -27993,6 +28451,16 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!?LIR.CFStmtId {
         const worker_id = self.parent.methodWorkerForRepByName(rep_id, "to_inspect") orelse return null;
+        return try self.lowerToInspectWorkerInto(target, source, worker_id, next);
+    }
+
+    fn lowerToInspectWorkerInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        worker_id: Plan.WorkerPlanId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         if (worker.hidden_descs.len != 0 or worker.hidden_dicts.len != 0) {
             boxyLowerInvariant("boxy to_inspect method worker carried hidden parameters");
@@ -28062,13 +28530,19 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
         primitive: checked.CheckedPrimitive,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (primitive == .bool) {
-            return try self.lowerBoolInspectLocalsInto(target, source, next);
-        }
-        const op = Common.primitiveInspectLowLevelOp(primitive);
+        const op = switch (Common.primitiveInspectLowering(primitive)) {
+            .low_level => |op| op,
+            .bool_tag_union => return try self.lowerBoolInspectLocalsInto(target, source, next),
+            .builtin_method => {
+                const method = self.parent.plan.inspectMethodForRep(rep_id) orelse
+                    boxyLowerInvariant("primitive inspect had no planned to_inspect worker");
+                return try self.lowerToInspectWorkerInto(target, source, method.worker, next);
+            },
+        };
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
@@ -30565,6 +31039,9 @@ const ProcBodyBuilder = struct {
 
         const source_closure_layout = self.workerRuntimeLayoutForRep(source_function.rep).layoutIdx();
         const capture_layout = try self.callableAdapterCaptureLayout(source_closure_layout, descriptor_captures.len);
+        const saved_tail_builder = self.parent.result.store.tail_call_builder;
+        self.parent.result.store.tail_call_builder = null;
+        defer self.parent.result.store.tail_call_builder = saved_tail_builder;
         var adapter_proc = ProcBodyBuilder.initSyntheticAdapter(self.parent, self.module, self.worker_layout);
         defer adapter_proc.deinit();
 
@@ -30692,9 +31169,10 @@ const ProcBodyBuilder = struct {
             },
         });
         const call_entry = try adapter_proc.prependDescriptorArgMaterializations(arg_desc_initializers.items, call_stmt);
-        self.parent.result.store.getCFStmtPtr(call_placeholder).* = self.parent.result.store.getCFStmt(call_entry);
+        try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry));
         continuation = call_with_args;
 
+        continuation = try adapter_proc.prependStaticDescriptorMaterializationsForSlots(continuation);
         continuation = try adapter_proc.prependWorkerArgumentDescriptorInitializers(continuation);
         continuation = try adapter_proc.prependCallableAdapterCaptureBindings(
             capture_arg,
@@ -30703,7 +31181,7 @@ const ProcBodyBuilder = struct {
             descriptor_locals,
             try adapter_proc.prependDescriptorArgMaterializations(
                 capture_descriptor_initializers.items,
-                try adapter_proc.prependStaticDescriptorMaterializationsForSlots(continuation),
+                continuation,
             ),
         );
 
@@ -32674,13 +33152,11 @@ const ProcBodyBuilder = struct {
         const source_field_indices = try self.parent.allocator.alloc(u16, target_field_count);
         defer self.parent.allocator.free(source_field_indices);
 
-        const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
-        const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
         var field_index: usize = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(source_record_rep, source_view, target_view, target_label) orelse
+                    const source_field = self.findRecordFieldByLabel(source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
                         boxyLowerInvariant("dynamic record boundary source was missing target field");
                     target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
                         try self.addFrameLocalForRep(target_child.rep)
@@ -32706,7 +33182,11 @@ const ProcBodyBuilder = struct {
             field.* = .{
                 .local = field_local,
                 .target_rep = target_field_rep,
-                .source_rep = source_field_rep,
+                // This local is the boundary output, not the original field.
+                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                    source_field_rep
+                else
+                    target_field_rep,
             };
         }
         const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
@@ -32850,13 +33330,11 @@ const ProcBodyBuilder = struct {
         const source_field_indices = try self.parent.allocator.alloc(u16, target_field_count);
         defer self.parent.allocator.free(source_field_indices);
 
-        const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
-        const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
         var field_index: usize = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(source_record_rep, source_view, target_view, target_label) orelse
+                    const source_field = self.findRecordFieldByLabel(source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
                         boxyLowerInvariant("concrete record boundary source was missing target field");
                     target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
                         try self.addFrameLocalForRep(target_child.rep)
@@ -32882,7 +33360,11 @@ const ProcBodyBuilder = struct {
             field.* = .{
                 .local = field_local,
                 .target_rep = target_field_rep,
-                .source_rep = source_field_rep,
+                // This local is the boundary output, not the original field.
+                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                    source_field_rep
+                else
+                    target_field_rep,
             };
         }
         const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
@@ -32948,19 +33430,13 @@ const ProcBodyBuilder = struct {
 
         const target_elem = self.repQuery().requiredSingleChild(target_list_rep, .list_elem);
         const source_elem = self.repQuery().requiredSingleChild(source_list_rep, .list_elem);
-        var target_elem_desc_local = try self.reserveDescriptorLocalForRep(target_elem.rep);
-        if (target_elem_desc_local == null and
+        // This list owns its element descriptor identity. A representation's
+        // existing descriptor local can still describe live source values.
+        const target_elem_desc_local = if (self.parent.plan.representations.items[@intFromEnum(target_elem.rep)].descriptor != null or
             self.parent.layoutNeedsNestedBoxyDesc(self.parent.listElementLayout(target_layout)))
-        {
-            target_elem_desc_local = try self.addFrameLocal(.opaque_ptr);
-        }
-        if (target_elem_desc_local) |elem_desc_local| {
-            if (self.parent.result.store.getLocal(target).boxy_desc) |target_desc| {
-                if (target_desc.localOrNull() == elem_desc_local) {
-                    target_elem_desc_local = try self.addFrameLocal(.opaque_ptr);
-                }
-            }
-        }
+            try self.addFrameLocal(.opaque_ptr)
+        else
+            null;
 
         const len = try self.addFrameLocal(.u64);
         const capacity = try self.addFrameLocal(.u64);
@@ -32969,6 +33445,17 @@ const ProcBodyBuilder = struct {
         const initial_list = try self.addFrameLocal(target_layout);
         const acc = try self.addFrameLocal(target_layout);
         const source_elem_desc_info = try self.descriptorForSourceListElement(source, source_list_rep, source_elem.rep);
+        var elem_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer elem_desc_initializers.deinit(self.parent.allocator);
+        try self.appendResultDescriptorInitializers(&elem_desc_initializers, source_elem_desc_info);
+        // Storage conversion needs a target-shaped descriptor even when the
+        // source descriptor omitted zero-sized or statically known fields.
+        // Materialize once outside the loop, including for an empty list.
+        const target_elem_desc_info = if (target_elem_desc_local != null and self.parent.listElementLayout(source_layout) != self.parent.listElementLayout(target_layout))
+            try self.adapterDescriptorForCallBoundary(target_elem.rep, source_elem.rep, source_elem_desc_info, &elem_desc_initializers)
+        else
+            source_elem_desc_info;
+        try self.appendResultDescriptorInitializers(&elem_desc_initializers, target_elem_desc_info);
         const target_desc_info = if (target_elem_desc_local) |elem_desc_local|
             try self.constructedListDescriptorForElementLocal(target, target_rep, elem_desc_local)
         else
@@ -33003,14 +33490,14 @@ const ProcBodyBuilder = struct {
         initial_jump = try self.assignUnaryLowLevel(len, .list_len, source, initial_jump);
         initial_jump = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, initial_jump);
         if (target_elem_desc_local) |elem_desc_local| {
-            const source_elem_desc = source_elem_desc_info.desc orelse
-                boxyLowerInvariant("boxy list boundary initial element descriptor had no source descriptor");
+            const target_elem_desc = target_elem_desc_info.desc orelse
+                boxyLowerInvariant("boxy list boundary initial element descriptor had no target descriptor");
             initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = elem_desc_local,
-                .desc = source_elem_desc,
+                .desc = target_elem_desc,
                 .next = initial_jump,
             } });
-            initial_jump = try self.prependOptionalDescriptorMaterialization(source_elem_desc_info.materialize, initial_jump);
+            initial_jump = try self.prependDescriptorArgMaterializations(elem_desc_initializers.items, initial_jump);
         }
         initial_jump = try self.prependConstructedDescriptorRebindForRep(source_rep, initial_jump);
 
@@ -33079,6 +33566,10 @@ const ProcBodyBuilder = struct {
         else if (self.representationBoundaryIsDirect(target_elem_rep, source_elem_rep) or
             self.repsUseSameDynamicBoxStorage(target_elem_rep, source_elem_rep))
             source_elem
+        else if (target_elem_desc_local != null)
+            // The enclosing list owns this element descriptor. Reserve the
+            // value with that descriptor instead of creating a second identity.
+            try self.addFrameLocal(target_storage_layout)
         else
             try self.addFrameBoundaryTargetLocalForRep(target_elem_rep);
         if (target_elem != source_elem) {
@@ -33113,7 +33604,7 @@ const ProcBodyBuilder = struct {
                     target_storage_layout,
                 ),
                 .source_desc = source_desc,
-                .target_desc = source_desc,
+                .target_desc = if (target_elem_desc_local) |local| .{ .local = local } else try self.parent.staticDescRefForRep(target_elem_rep),
                 .source_mode = .move,
                 .next = continuation,
             } });
@@ -35746,7 +36237,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn hostRuntimeLayoutForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Layouts.RuntimeLayout {
-        return self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].host;
+        return .{ .concrete = self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx() };
     }
 
     fn descriptorStorageRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
@@ -36146,22 +36637,15 @@ const ProcBodyBuilder = struct {
         const call_rep = self.parent.plan.representations.items[@intFromEnum(call_rep_id)];
         if (call_rep.kind != .nominal) return;
 
-        const call_substitutions = self.parent.plan.nominalBackingArgSubstitutionSlice(
-            call_rep.nominal_backing_arg_substitutions,
-        );
-        for (self.parent.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
-            var exact_call_arg_rep: ?Plan.TypeRepId = null;
-            for (call_substitutions) |call_substitution| {
-                if (call_substitution.arg_index != backing_substitution.arg_index) continue;
-                if (exact_call_arg_rep != null) {
-                    boxyLowerInvariant("boxy nominal backing substitution found duplicate call arguments");
-                }
-                exact_call_arg_rep = call_substitution.actual_rep;
-            }
-            const exact_rep = exact_call_arg_rep orelse
-                boxyLowerInvariant("boxy nominal backing substitution was missing a call argument");
-            if (backing_substitution.formal_rep == exact_rep) continue;
-            const put = try substitutions.getOrPut(backing_substitution.formal_rep);
+        var substitutions_iter = self.parent.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        while (substitutions_iter.next()) |backing_substitution| {
+            const exact_rep = self.parent.plan.nominalBackingActual(
+                call_rep.nominal_backing_arg_substitutions,
+                backing_substitution.arg_index,
+            ) orelse boxyLowerInvariant("boxy nominal backing substitution was missing a call argument");
+            const formal_rep = backing_substitution.formal_rep orelse continue;
+            if (formal_rep == exact_rep) continue;
+            const put = try substitutions.getOrPut(formal_rep);
             if (put.found_existing and put.value_ptr.* != exact_rep) {
                 boxyLowerInvariant("boxy nominal backing substitution assigned one backing formal to two call arguments");
             }
@@ -36424,7 +36908,6 @@ const ProcBodyBuilder = struct {
     fn findRecordFieldByLabel(
         self: *const ProcBodyBuilder,
         record_rep_id: Plan.TypeRepId,
-        source_view: ProcedureModuleView,
         target_view: ProcedureModuleView,
         target_label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
     ) ?MatchedRecordField {
@@ -36433,7 +36916,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |source_label| {
-                    if (Plan.recordFieldNameMatches(viewNames(source_view), source_label, viewNames(target_view), target_label)) {
+                    if (Plan.recordFieldNameMatches(viewNames(procedureModuleById(self.parent.modules, child.source_type.module)), source_label, viewNames(target_view), target_label)) {
                         return .{
                             .index = index,
                             .rep = child.rep,
@@ -36678,33 +37161,33 @@ const ProcBodyBuilder = struct {
     fn lirTagName(
         self: *ProcBodyBuilder,
         tag_name: names.TagNameId,
-    ) Allocator.Error!base.StringLiteral.Idx {
-        return try self.parent.result.store.insertString(self.module.canonical_names.tagLabelText(tag_name));
+    ) Allocator.Error!LIR.BoxyNameId {
+        return try self.parent.result.store.insertBoxyName(self.module.canonical_names.tagLabelText(tag_name));
     }
 
     fn lirTagNameForRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
         tag_name: names.TagNameId,
-    ) Allocator.Error!base.StringLiteral.Idx {
+    ) Allocator.Error!LIR.BoxyNameId {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         const module = procedureModuleById(self.parent.modules, rep.source_type.module);
-        return try self.parent.result.store.insertString(module.canonical_names.tagLabelText(tag_name));
+        return try self.parent.result.store.insertBoxyName(module.canonical_names.tagLabelText(tag_name));
     }
 
     fn lirTagNameForVariant(
         self: *ProcBodyBuilder,
         variant: Plan.TagVariant,
-    ) Allocator.Error!base.StringLiteral.Idx {
-        return try self.parent.result.store.insertString(self.tagVariantNameText(variant));
+    ) Allocator.Error!LIR.BoxyNameId {
+        return try self.parent.result.store.insertBoxyName(self.tagVariantNameText(variant));
     }
 
     fn lirTagNameForLookup(
         self: *ProcBodyBuilder,
         variant: TagVariantLookup,
-    ) Allocator.Error!base.StringLiteral.Idx {
+    ) Allocator.Error!LIR.BoxyNameId {
         const module = procedureModuleById(self.parent.modules, variant.name_module);
-        return try self.parent.result.store.insertString(module.canonical_names.tagLabelText(variant.name));
+        return try self.parent.result.store.insertBoxyName(module.canonical_names.tagLabelText(variant.name));
     }
 
     fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u16 {
@@ -37146,11 +37629,11 @@ fn appendRequestedLayouts(
 
     const root_types = modules.root.module.checked_types.view();
     for (roots.layout_requests, 0..) |checked_type, index| {
-        const rep_id = plan.root_reps.items[root_rep_start + index];
+        const rep_id = plan.hostRepFor(plan.root_reps.items[root_rep_start + index]);
         try result.requested_layouts.append(allocator, .{
             .ty = root_types.rootKey(checked_type),
             .checked_type = checked_type,
-            .layout_idx = layout_plan.rep_layouts[@intFromEnum(rep_id)].host.layoutIdx(),
+            .layout_idx = layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx(),
             .plan = try const_plans.constPlanForRep(rep_id),
         });
     }
@@ -37160,7 +37643,7 @@ fn appendRequestedLayouts(
         try result.requested_layouts.append(allocator, .{
             .ty = root_types.rootKey(checked_type),
             .checked_type = checked_type,
-            .layout_idx = layout_plan.rep_layouts[@intFromEnum(rep_id)].host.layoutIdx(),
+            .layout_idx = layout_plan.rep_layouts[@intFromEnum(plan.hostRepFor(rep_id))].worker.layoutIdx(),
             .plan = try const_plans.constPlanForRep(rep_id),
         });
     }
@@ -37399,7 +37882,7 @@ const ConstPlanBuilder = struct {
         const owned_entries = try entries.toOwnedSlice(self.allocator);
         const id: LirProgram.ErasedFnsId = @enumFromInt(@as(u32, @intCast(self.result.erased_fns.items.len)));
         try self.result.erased_fns.append(self.allocator, .{
-            .layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].host.layoutIdx(),
+            .layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx(),
             .entries = owned_entries,
         });
         return id;
@@ -37467,8 +37950,8 @@ const ConstPlanBuilder = struct {
         variant: Plan.TagVariant,
         discriminant: usize,
     ) Allocator.Error!LirProgram.ConstTagVariant {
-        const root_names = &self.modules.root.module.canonical_names;
-        const name = try self.allocator.dupe(u8, root_names.tagLabelText(variant.name));
+        const variant_names = procedureModuleById(self.modules, variant.name_module).canonical_names;
+        const name = try self.allocator.dupe(u8, variant_names.tagLabelText(variant.name));
         errdefer self.allocator.free(name);
 
         const payload_children = self.plan.childSlice(variant.payloads);
@@ -37747,7 +38230,7 @@ test "boxy lowerer resolves procedure-template workers to checked bodies" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(9), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     var plan = Plan.ProgramPlan.init(gpa);
     defer plan.deinit();
@@ -37788,7 +38271,7 @@ test "boxy lowerer resolves top-level direct bindings to checked bodies" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(7), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     var bindings = [_]checked.TopLevelProcedureBinding{
         .{
@@ -37799,7 +38282,7 @@ test "boxy lowerer resolves top-level direct bindings to checked bodies" {
             } },
         },
     };
-    checked_module.top_level_procedure_bindings = .{ .bindings = &bindings };
+    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len } };
 
     var plan = Plan.ProgramPlan.init(gpa);
     defer plan.deinit();
@@ -37843,7 +38326,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
             .checked_fn_root = @enumFromInt(1),
         },
     };
-    checked_module.callable_eval_templates = .{ .templates = &callable_templates };
+    checked_module.callable_eval_templates = .{ .templates = .{ .items = &callable_templates, .capacity = callable_templates.len } };
 
     const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
@@ -37912,7 +38395,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
             .target = .comptime_only,
         },
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     var bindings = [_]checked.TopLevelProcedureBinding{
         .{
@@ -37920,7 +38403,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
             .body = .{ .callable_eval_template = @enumFromInt(fixtureTableIndex(0)) },
         },
     };
-    checked_module.top_level_procedure_bindings = .{ .bindings = &bindings };
+    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len } };
 
     var plan = Plan.ProgramPlan.init(gpa);
     defer plan.deinit();
@@ -37983,7 +38466,7 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -38114,7 +38597,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     var resolved_records = [_]checked.ResolvedValueRefRecord{
         .{
@@ -38216,7 +38699,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -38353,7 +38836,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
         checkedTemplate(root_template, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
         checkedTemplate(callee_template, @enumFromInt(1), @enumFromInt(1)),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     var bindings = [_]checked.TopLevelProcedureBinding{
         .{
@@ -38364,7 +38847,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
             } },
         },
     };
-    checked_module.top_level_procedure_bindings = .{ .bindings = &bindings };
+    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len } };
 
     var resolved_records = [_]checked.ResolvedValueRefRecord{
         .{
@@ -38532,7 +39015,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         checkedTemplate(import_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
         checkedTemplate(import_helper_template, @enumFromInt(1), @enumFromInt(1)),
     };
-    import_checked_module.checked_procedure_templates = .{ .templates = &import_templates };
+    import_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &import_templates, .capacity = import_templates.len } };
     var import_bindings = [_]checked.TopLevelProcedureBinding{
         .{
             .source_scheme = typeSchemeKey(3),
@@ -38542,7 +39025,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             } },
         },
     };
-    import_checked_module.top_level_procedure_bindings = .{ .bindings = &import_bindings };
+    import_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &import_bindings, .capacity = import_bindings.len } };
     const import_helper_use = checked.ProcedureUseTemplate{
         .binding = .{ .top_level = .{ .artifact = import_checked_module.key, .binding = @enumFromInt(fixtureTableIndex(0)) } },
         .source_fn_ty_template = canonicalTypeKey(3),
@@ -38633,7 +39116,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     var root_templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(root_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    root_checked_module.checked_procedure_templates = .{ .templates = &root_templates };
+    root_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &root_templates, .capacity = root_templates.len } };
 
     const imported_use = checked.ProcedureUseTemplate{
         .binding = .{ .imported = imported_binding },
@@ -38803,7 +39286,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     var bindings = [_]checked.TopLevelProcedureBinding{
         .{
@@ -38814,7 +39297,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
             } },
         },
     };
-    checked_module.top_level_procedure_bindings = .{ .bindings = &bindings };
+    checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len } };
 
     var resolved_records = [_]checked.ResolvedValueRefRecord{
         .{
@@ -38931,7 +39414,7 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39007,7 +39490,7 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39093,7 +39576,7 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39196,7 +39679,7 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39274,7 +39757,7 @@ test "boxy lowerer emits checked runtime error expressions as terminal runtime_e
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39361,7 +39844,7 @@ test "boxy lowerer emits checked runtime error statements as terminal runtime_er
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39472,7 +39955,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39604,7 +40087,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39727,7 +40210,7 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -39883,7 +40366,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -40070,7 +40553,7 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -40260,7 +40743,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -40441,7 +40924,7 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -40627,7 +41110,7 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -40710,7 +41193,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
             .literal = try testIntNumeral(42),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -40773,7 +41256,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -40856,7 +41339,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
             .literal = try testSmallDecNumeral(value),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -40919,7 +41402,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41012,7 +41495,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
         .source_region = base.Region.zero(),
         .data = .{ .str_literal = .{
             .literal = @enumFromInt(fixtureTableIndex(0)),
-            .conversion = null,
+            .guard = null,
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -41075,7 +41558,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41166,7 +41649,7 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41271,7 +41754,7 @@ test "boxy lowerer emits short-circuit checked boolean and" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41376,7 +41859,7 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41520,7 +42003,7 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41634,7 +42117,7 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41760,7 +42243,7 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41856,7 +42339,7 @@ test "boxy lowerer emits checked string segment literals" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -41939,7 +42422,7 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42045,7 +42528,7 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42154,7 +42637,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42251,7 +42734,7 @@ test "boxy lowerer emits checked expect expressions before unit result" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42340,7 +42823,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42479,7 +42962,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42601,7 +43084,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42713,7 +43196,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -42849,7 +43332,7 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -43033,7 +43516,7 @@ test "boxy lowerer destructures tuple declaration patterns" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -43236,7 +43719,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(4), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -43400,7 +43883,7 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -43514,7 +43997,7 @@ test "boxy lowerer emits tuple construction in element order" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -43632,7 +44115,7 @@ test "boxy lowerer emits tuple access as field_read" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -43746,7 +44229,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -43871,7 +44354,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -44013,7 +44496,7 @@ test "boxy lowerer emits record field access using layout field index" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -44132,7 +44615,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -44387,7 +44870,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(5), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -44570,7 +45053,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(5), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -44777,7 +45260,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(6), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -44892,7 +45375,7 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -44998,7 +45481,7 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45107,7 +45590,7 @@ test "boxy lowerer emits list construction with committed element layout" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45244,7 +45727,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45388,7 +45871,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45506,7 +45989,7 @@ test "boxy lowerer emits empty list construction" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45599,7 +46082,7 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45704,7 +46187,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45814,7 +46297,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -45956,7 +46439,7 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -46065,7 +46548,7 @@ test "boxy lowerer inspects concrete Box payloads" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -46253,7 +46736,7 @@ test "boxy lowerer emits checked integer division low-level calls" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,
@@ -46346,7 +46829,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 11,
@@ -46545,7 +47028,7 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     });
 
     var plan = try Plan.analyzeProgram(gpa, .{
-        .checked_types = checked_module.checked_types.view(),
+        .root_module = .{ .module = &checked_module, .roots = undefined },
         .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(2))},
     }, .{});
     defer plan.deinit();
@@ -46840,7 +47323,7 @@ fn lowerListMapCanReuseFixture(
     var templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(template_ref, @enumFromInt(4), @enumFromInt(fixtureTableIndex(0))),
     };
-    checked_module.checked_procedure_templates = .{ .templates = &templates };
+    checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len } };
 
     const root = checked.RootRequest{
         .order = 0,

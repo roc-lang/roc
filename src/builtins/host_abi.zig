@@ -63,13 +63,25 @@ else
 /// held in lockstep with `shim_symbols.runtime_set` by the comptime check
 /// below; mirrors that cannot import this module (the glue templates'
 /// generated output) are pinned by the glue ABI lock tests instead.
+///
+/// These function-pointer types can be used without linking a host.
+pub const ExternHostFns = struct {
+    pub const roc_alloc = *const fn (length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+    pub const roc_dealloc = *const fn (ptr: *anyopaque, alignment: usize) callconv(.c) void;
+    pub const roc_realloc = *const fn (ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+    pub const roc_dbg = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
+    pub const roc_expect_failed = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
+    pub const roc_crashed = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
+};
+
+/// Resolve the canonical runtime operations using their shared symbol names.
 pub const extern_host = struct {
-    pub extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
-    pub extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
-    pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
-    pub extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
-    pub extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
-    pub extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
+    pub const roc_alloc = @extern(ExternHostFns.roc_alloc, .{ .name = shim_symbols.roc_alloc });
+    pub const roc_dealloc = @extern(ExternHostFns.roc_dealloc, .{ .name = shim_symbols.roc_dealloc });
+    pub const roc_realloc = @extern(ExternHostFns.roc_realloc, .{ .name = shim_symbols.roc_realloc });
+    pub const roc_dbg = @extern(ExternHostFns.roc_dbg, .{ .name = shim_symbols.roc_dbg });
+    pub const roc_expect_failed = @extern(ExternHostFns.roc_expect_failed, .{ .name = shim_symbols.roc_expect_failed });
+    pub const roc_crashed = @extern(ExternHostFns.roc_crashed, .{ .name = shim_symbols.roc_crashed });
 };
 
 comptime {

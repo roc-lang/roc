@@ -10,16 +10,22 @@ type=file
 # EXPECTED
 CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle.md:1:2:1:3
 # PROBLEMS
-── ✗ circular value definition ──────── top_level_destructure_value_cycle.md:1:2
-
-The value x is part of a recursive non-function definition cycle.
-
-{x}={x}
- ^
-
-Only functions can be recursive. Non-function top-level values must be fully
-computable without depending on themselves through other values.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Circular Value Definition")
+		(region (start 1 2) (end 1 3))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "x")
+			(reflow " is part of a recursive non-function definition cycle."))
+		(document
+			(reflow "Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.")
+			(line-break)
+			(line-break)
+			(source-region (file "top_level_destructure_value_cycle.md") (start 1 2) (end 1 3) (annotation error) (line-text "{x}={x}")))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,CloseCurly,OpAssign,OpenCurly,LowerIdent,CloseCurly,

@@ -198,7 +198,7 @@ const ReturnSlotRewriter = struct {
         } });
     }
 
-    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
         if (stmt == .assign_struct) {
             const s = stmt.assign_struct;
             if (cloner.directReturnOf(s.next, s.target)) return try self.cloneStructReturn(cloner, s);

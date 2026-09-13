@@ -13,7 +13,7 @@ platform "foo"
     targets: {
         inputs_dir: "targets/",
         x64glibc: { inputs: [app] },
-        wasm32: { inputs: ["libhost.a", app], output: Shared },
+        wasm32: { inputs: ["libhost.a", app], output: Shared, exports: [] },
         arm64mac: { inputs: ["libhost.a", app], output: Shared },
         x64musl: { inputs: [app], output: Archive },
     }
@@ -32,7 +32,7 @@ KwProvides,OpenCurly,CloseCurly,
 KwTargets,OpColon,OpenCurly,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,OpenSquare,KwApp,CloseSquare,CloseCurly,Comma,
-LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,OpenSquare,StringStart,StringPart,StringEnd,Comma,KwApp,CloseSquare,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Comma,
+LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,OpenSquare,StringStart,StringPart,StringEnd,Comma,KwApp,CloseSquare,Comma,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,OpenSquare,CloseSquare,CloseCurly,Comma,
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,OpenSquare,StringStart,StringPart,StringEnd,Comma,KwApp,CloseSquare,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Comma,
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,OpenSquare,KwApp,CloseSquare,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Comma,
 CloseCurly,
@@ -61,6 +61,7 @@ platform "foo"
 		wasm32: {
 			inputs: ["libhost.a", app],
 			output: Shared,
+			exports: [],
 		},
 		arm64mac: {
 			inputs: ["libhost.a", app],

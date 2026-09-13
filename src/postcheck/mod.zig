@@ -44,6 +44,7 @@ pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
 
 test "postcheck declarations are referenced" {
+    std.testing.refAllDecls(@import("record_fields.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("common.zig"));
     std.testing.refAllDecls(@import("monotype/ast.zig"));

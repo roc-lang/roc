@@ -15,19 +15,27 @@ f = |x| match x {
 # EXPECTED
 REDUNDANT PATTERN - match_redundant_exact_numeral.md:2:9:6:2
 # PROBLEMS
-── ● redundant pattern ──────────────────── match_redundant_exact_numeral.md:2:9
-
-The second branch of this match is redundant.
-
-f = |x| match x {
-    1e-40 => 1
-    1e-40 => 2
-    _ => 0
-}
-
-This pattern can never match because earlier patterns already cover all the
-values it would match.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Redundant Pattern")
+		(region (start 2 9) (end 6 2))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "second")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "is redundant."))
+		(document
+			(source-region (file "match_redundant_exact_numeral.md") (start 2 9) (end 6 2) (annotation error) (line-text "f = |x| match x {\n    1e-40 => 1\n    1e-40 => 2\n    _ => 0\n}"))
+			(line-break)
+			(reflow "This pattern can never match because earlier patterns already cover all the values it would match."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,

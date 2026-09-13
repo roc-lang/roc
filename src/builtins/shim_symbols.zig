@@ -67,6 +67,19 @@ pub const runtime_set = [_][:0]const u8{
     roc_crashed,
 };
 
+/// Export the six fixed host callbacks using canonical names. Callback types
+/// remain those supplied by the canonical ABI or the generated-ABI fixture.
+/// Visibility is explicit because static runtime hosts hide their callbacks,
+/// while independently compiled generated-ABI fixtures use default visibility.
+pub fn exportRuntimeFns(comptime fns: anytype, comptime visibility: std.builtin.SymbolVisibility) void {
+    @export(fns.alloc, .{ .name = roc_alloc, .visibility = visibility });
+    @export(fns.dealloc, .{ .name = roc_dealloc, .visibility = visibility });
+    @export(fns.realloc, .{ .name = roc_realloc, .visibility = visibility });
+    @export(fns.dbg, .{ .name = roc_dbg, .visibility = visibility });
+    @export(fns.expect_failed, .{ .name = roc_expect_failed, .visibility = visibility });
+    @export(fns.crashed, .{ .name = roc_crashed, .visibility = visibility });
+}
+
 comptime {
     // Every constant in this module spells the symbol it names.
     for (@typeInfo(@This()).@"struct".decls) |decl| {

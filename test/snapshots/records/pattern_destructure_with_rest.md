@@ -12,36 +12,48 @@ match person {
 ~~~
 # EXPECTED
 NAME NOT IN SCOPE - pattern_destructure_with_rest.md:1:7:1:13
-DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
-DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
+MISSING METHOD - pattern_destructure_with_rest.md:2:33:2:80
 # PROBLEMS
-── ✗ name not in scope ──────────────────── pattern_destructure_with_rest.md:1:7
-
-Nothing is named person in this scope.
-
-match person {
-      ^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:33
-
-Str.len does not exist.
-
-{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-                            ^^^^^^^
-
-Str is in scope, but it has no associated len.
-
-── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:55
-
-Str.len does not exist.
-
-{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-                                                  ^^^^^^^
-
-Str is in scope, but it has no associated len.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 7) (end 1 13))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "person")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "pattern_destructure_with_rest.md") (start 1 7) (end 1 13) (annotation error) (line-text "match person {"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 2 33) (end 2 80))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "is_gt")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "pattern_destructure_with_rest.md") (start 2 33) (end 2 80) (annotation error) (line-text "    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "is_gt")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[LearnAboutStringsInRoc(Str)]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -94,21 +106,9 @@ match person {
 									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
-					(e-binop (op "gt")
-						(e-call
-							(e-runtime-error (tag "nested_value_not_found"))
-							(e-lookup-local
-								(p-assign (ident "first_name"))))
-						(e-call
-							(e-runtime-error (tag "nested_value_not_found"))
-							(e-field-access
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "others"))))
-								(segments
-									(segment (name "last_name") (mode "required")))))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Bool"))
 ~~~

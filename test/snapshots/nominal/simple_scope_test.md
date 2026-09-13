@@ -16,15 +16,22 @@ Outer := [A].{
 # EXPECTED
 NAME NOT IN SCOPE - simple_scope_test.md:6:17:6:26
 # PROBLEMS
-── ✗ name not in scope ─────────────────────────────── simple_scope_test.md:6:17
-
-Nothing is named inner_val in this scope.
-
-outer_val = inner_val
-            ^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 6 17) (end 6 26))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "inner_val")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "simple_scope_test.md") (start 6 17) (end 6 26) (annotation error) (line-text "    outer_val = inner_val")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

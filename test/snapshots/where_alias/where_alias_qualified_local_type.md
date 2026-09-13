@@ -41,9 +41,9 @@ EndOfFile,
 					(ty-var (raw "a"))
 					(where
 						(method (mod-of "a") (name "to_str")
-							(args
-								(ty-var (raw "a")))
-							(ty (name "Str")))))))
+							(ty-fn
+								(ty-var (raw "a"))
+								(ty (name "Str"))))))))
 		(s-type-anno (name "describe")
 			(ty-fn
 				(ty-var (raw "a"))
@@ -99,9 +99,9 @@ describe = |value| value.to_str()
 		(ty-rigid-var (name "a"))
 		(where
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-lookup (name "Str") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-lookup (name "Str") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure

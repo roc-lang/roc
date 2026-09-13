@@ -65,6 +65,7 @@ fn parseAndCanonicalizeSource(
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = module_envs,
     });
 
@@ -203,6 +204,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer can.deinit();
@@ -319,6 +321,7 @@ test "import validation - type module associated values are importable via expos
             .builtin_module_env = importer_builtin_ctx.builtin_module.env,
             .builtin_indices = importer_builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
@@ -416,6 +419,7 @@ test "import validation - exposed nested type associated function resolves via s
             .builtin_module_env = importer_builtin_ctx.builtin_module.env,
             .builtin_indices = importer_builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
@@ -519,6 +523,7 @@ test "import validation - exposing a type module's main type by name is not a re
             .builtin_module_env = importer_builtin_ctx.builtin_module.env,
             .builtin_indices = importer_builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
@@ -602,6 +607,7 @@ test "aliased package-qualified import resolves before the import statement" {
             .builtin_module_env = app_builtin_ctx.builtin_module.env,
             .builtin_indices = app_builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer app_can.deinit();
@@ -684,6 +690,7 @@ test "unresolved exposed value is not imported as external lookup target zero" {
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
@@ -895,6 +902,7 @@ test "imported type-module tag rejects alias target" {
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer can.deinit();
@@ -980,6 +988,7 @@ test "imported nested associated types resolve by qualified export key" {
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer can.deinit();

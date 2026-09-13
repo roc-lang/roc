@@ -6,6 +6,7 @@
 //! Run with: zig build run-test-wasm-static-lib
 
 const std = @import("std");
+const shim_symbols = @import("shim_symbols");
 const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
@@ -136,8 +137,8 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_
 
     // Register host functions
     try env_imports.addHostFunction("roc_panic", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_panic, &global_host_context);
-    try env_imports.addHostFunction("roc_dbg", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_dbg, &global_host_context);
-    try env_imports.addHostFunction("roc_expect_failed", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_expect_failed, &global_host_context);
+    try env_imports.addHostFunction(shim_symbols.roc_dbg, &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_dbg, &global_host_context);
+    try env_imports.addHostFunction(shim_symbols.roc_expect_failed, &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_expect_failed, &global_host_context);
     try env_imports.addHostFunction("echo", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.echo, &global_host_context);
 
     // Use a reasonable stack for the interpreter (256KB - same as playground tests)

@@ -47,6 +47,11 @@ pub const InternalBuiltinTypeKind = enum(u8) {
 
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
+    pub const BindingMutability = enum(u1) {
+        immutable,
+        mutable,
+    };
+
     not_implemented: struct {
         feature: StringLiteral.Idx,
         region: Region,
@@ -228,6 +233,11 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
         original_region: Region,
+    },
+    binding_name_does_not_match_mutability: struct {
+        ident: Ident.Idx,
+        mutability: BindingMutability,
+        region: Region,
     },
     type_redeclared: struct {
         name: Ident.Idx,
@@ -530,6 +540,7 @@ pub const Diagnostic = union(enum) {
             .record_default_reference_cycle => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
+            .binding_name_does_not_match_mutability => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
             .tuple_elem_not_canonicalized => |d| d.region,
             .file_import_not_found => |d| d.region,
@@ -689,6 +700,33 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("Choose a different name for this identifier, or remove the duplicate definition.");
+        return report;
+    }
+
+    /// Explain why a parsed root cannot supply an executable entrypoint.
+    /// Shared by root preparation and canonicalization diagnostic rendering.
+    pub fn buildExecutionRequiresAppOrDefaultAppReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) Allocator.Error!Report {
+        var report = try Report.init(allocator, "Execution Requires App Or Default App", "This file cannot be executed because it is not an app or default-app module.", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addReflowingText("Add either:");
+        try report.document.addLineBreak();
+        try report.document.addInlineCode("app");
+        try report.document.addReflowingText(" header at the top of the file");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("or:");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("a ");
+        try report.document.addInlineCode("main!");
+        try report.document.addReflowingText(" function with 1 argument (for default-app)");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(region_info, .error_highlight, filename, source, line_starts);
         return report;
     }
 

@@ -1,4 +1,5 @@
 #include "roc_platform_abi.h"
+#include "canonical_host_abi.h"
 
 RocU8x16 roc_c_lock_u8x16(RocU8x16 value) { return value; }
 RocI8x16 roc_c_lock_i8x16(RocI8x16 value) { return value; }

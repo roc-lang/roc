@@ -5272,6 +5272,10 @@ pub const WipFunction = struct {
     debug_values: std.AutoArrayHashMapUnmanaged(Instruction.Index, void),
     extra: std.ArrayList(u32),
 
+    /// Fixed entry allocations in creation order. Materialized as a single
+    /// reversed prefix so repeated prepend operations do not move the body.
+    entry_allocas: std.ArrayList(Instruction.Index) = .empty,
+
     pub const Cursor = struct { block: Block.Index, instruction: u32 = 0 };
 
     pub const Block = struct {
@@ -5732,6 +5736,42 @@ pub const WipFunction = struct {
             }),
         });
         return instruction.toValue();
+    }
+
+    /// Prepend a fixed allocation to the function entry, deferring the list
+    /// movement until finalization. The returned value is immediately usable.
+    pub fn allocaInEntry(
+        self: *WipFunction,
+        ty: Type,
+        len: Value,
+        alignment: Alignment,
+        addr_space: AddrSpace,
+        name: []const u8,
+    ) Allocator.Error!Value {
+        assert(len == .none or len.toConst() != null);
+        try self.entry_allocas.ensureUnusedCapacity(self.builder.gpa, 1);
+        const saved_cursor = self.cursor;
+        defer self.cursor = saved_cursor;
+        const entry: Block.Index = .entry;
+        self.cursor = .{ .block = entry, .instruction = @intCast(entry.ptr(self).instructions.items.len) };
+        const result = try self.alloca(.normal, ty, len, alignment, addr_space, name);
+        self.entry_allocas.appendAssumeCapacity(entry.ptr(self).instructions.pop().?);
+        return result;
+    }
+
+    pub fn flushEntryAllocas(self: *WipFunction) Allocator.Error!void {
+        const count = self.entry_allocas.items.len;
+        if (count == 0) return;
+        const entry: Block.Index = .entry;
+        const body = &entry.ptr(self).instructions;
+        try body.ensureUnusedCapacity(self.builder.gpa, count);
+        const old_len = body.items.len;
+        body.items.len += count;
+        std.mem.copyBackwards(Instruction.Index, body.items[count..], body.items[0..old_len]);
+        for (self.entry_allocas.items, 0..) |instruction, index|
+            body.items[count - index - 1] = instruction;
+        self.entry_allocas.clearRetainingCapacity();
+        if (self.cursor.block == entry) self.cursor.instruction += @intCast(count);
     }
 
     pub fn load(
@@ -6339,6 +6379,7 @@ pub const WipFunction = struct {
     }
 
     pub fn finish(self: *WipFunction) Allocator.Error!void {
+        try self.flushEntryAllocas();
         const gpa = self.builder.gpa;
         const function = self.function.ptr(self.builder);
         const params_len = self.function.typeOf(self.builder).functionParameters(self.builder).len;
@@ -6868,6 +6909,7 @@ pub const WipFunction = struct {
     }
 
     pub fn deinit(self: *WipFunction) void {
+        self.entry_allocas.deinit(self.builder.gpa);
         self.extra.deinit(self.builder.gpa);
         self.debug_values.deinit(self.builder.gpa);
         self.debug_locations.deinit(self.builder.gpa);

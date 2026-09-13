@@ -717,7 +717,7 @@ pub fn convertPattern(
 
     return switch (pattern) {
         // Simple binding patterns match anything
-        .assign, .underscore => .anything,
+        .assign, .var_assign, .underscore => .anything,
 
         // As patterns: convert the inner pattern
         .as => |p| convertPattern(allocator, store, numeral_keys, p.pattern),
@@ -1009,7 +1009,7 @@ fn openNominalBacking(
         return opened;
     }
 
-    var var_map = std.AutoHashMap(Var, Var).init(type_store.gpa);
+    var var_map = collections.DenseMap(Var, Var).init(type_store.gpa);
     defer var_map.deinit();
     const opened = try types.instantiate.instantiateNominalBacking(
         type_store,
@@ -1018,6 +1018,7 @@ fn openNominalBacking(
         decl,
         args,
         .outermost,
+        .instantiation,
     );
 
     try cache.record(decl_idx, args_start, opened);

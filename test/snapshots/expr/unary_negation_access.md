@@ -8,19 +8,9 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
+NIL
 # PROBLEMS
-── ✗ polymorphic value ──────────────────────────── unary_negation_access.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
--rec1.field
-^^^^^^^^^^^
-
-Its type is:
-a where [a.negate : a -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+NIL
 # TOKENS
 ~~~zig
 OpUnaryMinus,LowerIdent,NoSpaceDotLowerIdent,
@@ -40,16 +30,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "negate") (constraint-fn-var 207)
-	(receiver
-		(e-field-access
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(segments
-				(segment (name "field") (mode "required")))))
-	(args))
+(e-unary-minus
+	(e-field-access
+		(receiver
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(segments
+			(segment (name "field") (mode "required")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.negate : a -> a]"))
+(expr (type "Error"))
 ~~~

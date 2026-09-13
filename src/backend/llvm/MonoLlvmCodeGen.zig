@@ -231,6 +231,24 @@ fn llvmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     std.debug.panic("LLVM codegen invariant violated: " ++ fmt, args);
 }
 
+/// Statement budget for a proc with no loop to be inlined everywhere: a
+/// checked wrapper around one operation.
+const max_wrapper_inline_stmts: usize = 32;
+/// Statement budget for a leaf proc to be inlined everywhere: a helper the
+/// size of a compressor's match extender, whose per-call cost in its callers'
+/// loops exceeds the work it does.
+const max_leaf_inline_stmts: usize = 400;
+/// Statement budget for a proc whose every callee is itself inlined
+/// everywhere, which makes it a leaf once those are expanded, to be inlined
+/// at call sites nested in at least two loops of the caller: a compressor's
+/// match search built on such a helper, called once per input position with
+/// a dozen words of arguments and results passing through memory. A site that
+/// deep pays the call often enough to be worth the body; one in an outer loop
+/// alone, run once per block, would only crowd the caller's inner loops.
+const max_expanded_leaf_inline_stmts: usize = 900;
+/// Loop nesting a call site needs before an expanded leaf is inlined there.
+const min_inline_site_loop_depth: u32 = 2;
+
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
     pub const EntrypointAbi = enum {
@@ -247,6 +265,15 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     allocator: Allocator,
+    /// Per proc, whether it is marked always-inline; see
+    /// `computeInlineEverywhere`.
+    inline_everywhere: std.ArrayList(bool) = .empty,
+    /// Per proc, whether its calls from deep inside a caller's loops are
+    /// marked always-inline; see `computeInlineEverywhere`.
+    inline_at_loop_sites: std.ArrayList(bool) = .empty,
+    /// For the proc being compiled, how many of its loops each statement
+    /// lies inside; absent means none.
+    stmts_in_loops: std.AutoHashMap(u32, u32),
     target: std.Target,
     triple: []const u8,
     data_layout: []const u8,
@@ -316,6 +343,14 @@ pub const MonoLlvmCodeGen = struct {
     stmt_entry_blocks: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
     loop_continue_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
+    /// Reusable store-indexed columns. Only a procedure's explicit inventory
+    /// is invalidated at its end; growing the store initializes only new rows.
+    local_slot_storage: std.ArrayList(LocalSlot) = .empty,
+    deferred_str_capture_storage: std.ArrayList(?DeferredStrCapture) = .empty,
+    /// Deterministic regression metric for initialization/invalidation work.
+    /// Allocation accounting alone cannot detect repeated whole-table clearing.
+    local_scratch_rows_visited: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
+    /// Active function's view. Synthetic helpers temporarily install no locals.
     local_slots: []LocalSlot = &.{},
     deferred_str_captures: []?DeferredStrCapture = &.{},
     /// Number of non-null entries in `deferred_str_captures`. Deferred
@@ -503,6 +538,7 @@ pub const MonoLlvmCodeGen = struct {
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
             .stmt_incoming_counts = std.AutoHashMap(u32, u32).init(allocator),
             .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
+            .stmts_in_loops = std.AutoHashMap(u32, u32).init(allocator),
             .loop_continue_blocks = .empty,
             .loop_break_blocks = .empty,
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -547,6 +583,12 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
+        self.inline_everywhere.deinit(self.allocator);
+        self.inline_at_loop_sites.deinit(self.allocator);
+        self.stmts_in_loops.deinit();
+        self.local_slot_storage.deinit(self.allocator);
+        self.deferred_str_capture_storage.deinit(self.allocator);
+        self.deferred_str_capture_actives.deinit(self.allocator);
         self.debug_types.deinit();
         self.debug_inline_callsites.deinit();
         self.debug_inline_subprograms.deinit();
@@ -1395,6 +1437,8 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        try self.ensureLocalScratch();
+        try self.computeInlineEverywhere(procs);
         for (procs, 0..) |proc, i| {
             if (proc.is_static_initializer) continue;
             try self.declareProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
@@ -1488,7 +1532,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("dict_thunk_runtime_desc")
         else
             null;
-        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(3), args_buf, runtime_out_desc, false);
+        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(3), args_buf, runtime_out_desc, false, false);
 
         const return_desc = if (runtime_out_desc) |runtime_desc_ptr|
             try self.loadPointer(runtime_desc_ptr)
@@ -1623,7 +1667,16 @@ pub const MonoLlvmCodeGen = struct {
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        try attrs_wip.addFnAttr(.inlinehint, builder);
+        if (self.enable_default_platform_diagnostics) {
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+        } else {
+            const inline_everywhere = self.inline_everywhere.items.len > @intFromEnum(proc_id) and self.inline_everywhere.items[@intFromEnum(proc_id)];
+            if (inline_everywhere) {
+                try attrs_wip.addFnAttr(.alwaysinline, builder);
+            } else {
+                try attrs_wip.addFnAttr(.inlinehint, builder);
+            }
+        }
         // Every parameter except the return slot is a distinct object no
         // callee can reach another way: RocOps is host-provided and never
         // stored in a Roc value, the argument pack is a fresh caller-local
@@ -1656,7 +1709,6 @@ pub const MonoLlvmCodeGen = struct {
                 } }, builder);
             }
             if (self.enable_default_platform_diagnostics) {
-                try attrs_wip.addFnAttr(.@"noinline", builder);
                 try attrs_wip.addFnAttr(.{ .string = .{
                     .kind = builder.string("disable-tail-calls") catch return error.OutOfMemory,
                     .value = builder.string("true") catch return error.OutOfMemory,
@@ -1730,11 +1782,11 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         const outer_deferred_str_captures = self.deferred_str_captures;
-        const outer_deferred_str_capture_count = self.deferred_str_capture_count;
-        const outer_deferred_str_capture_actives = self.deferred_str_capture_actives;
+        // Procedure bodies are emitted serially by compileAllProcSpecs. Helper
+        // emission saves/restores the active views without owning this storage.
+        std.debug.assert(self.deferred_str_capture_count == 0);
+        std.debug.assert(self.deferred_str_capture_actives.items.len == 0);
         defer {
-            self.deferred_str_capture_actives.deinit(self.allocator);
-            self.deferred_str_capture_actives = outer_deferred_str_capture_actives;
             self.wip = outer_wip;
             self.rc_arg_scratch = outer_rc_scratch;
             self.roc_ops_arg = outer_roc_ops;
@@ -1748,7 +1800,6 @@ pub const MonoLlvmCodeGen = struct {
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
             self.deferred_str_captures = outer_deferred_str_captures;
-            self.deferred_str_capture_count = outer_deferred_str_capture_count;
         }
 
         self.join_points.clearRetainingCapacity();
@@ -1759,6 +1810,7 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_break_blocks.clearRetainingCapacity();
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
+        if (proc.body) |body| try self.collectStmtsInLoops(body) else self.stmts_in_loops.clearRetainingCapacity();
 
         const outer_subprogram = self.current_subprogram;
         const outer_debug_file = self.current_debug_file;
@@ -1850,12 +1902,12 @@ pub const MonoLlvmCodeGen = struct {
         self.current_runtime_ret_desc = proc.runtime_ret_desc;
         self.current_ret_layout = proc.ret_layout;
 
-        self.local_slots = try self.allocator.alloc(LocalSlot, self.store.localCount());
-        defer self.allocator.free(self.local_slots);
-        self.deferred_str_captures = try self.allocator.alloc(?DeferredStrCapture, self.store.localCount());
-        defer self.allocator.free(self.deferred_str_captures);
-        self.deferred_str_capture_actives = .empty;
-        @memset(self.deferred_str_captures, null);
+        self.local_slots = self.local_slot_storage.items;
+        self.deferred_str_captures = self.deferred_str_capture_storage.items;
+        // Install cleanup before allocating any LLVM slots, including for OOM.
+        // Specialized siblings can share LocalIds but never LLVM slot values.
+        defer self.clearProcLocalSlots(proc);
+        defer self.clearDeferredStrCaptures();
         try self.allocProcLocalSlots(proc);
         try self.unpackProcArgs(proc);
         if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
@@ -2032,7 +2084,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.boxyOutDescPtr("entry_runtime_desc")
             else
                 null;
-            try self.callProcFunctionIndex(proc_fn.?, proc, ret_slot, args_buf, runtime_out_desc, false);
+            try self.callProcFunctionIndex(proc_fn.?, proc, ret_slot, args_buf, runtime_out_desc, false, false);
         }
 
         if (ret_registers) |registers| {
@@ -2127,7 +2179,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("entry_runtime_desc")
         else
             null;
-        try self.callProcFunctionIndex(proc_fn, proc, ret_ptr, args_buf, runtime_out_desc, false);
+        try self.callProcFunctionIndex(proc_fn, proc, ret_ptr, args_buf, runtime_out_desc, false, false);
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -2286,18 +2338,42 @@ pub const MonoLlvmCodeGen = struct {
         return result;
     }
 
-    fn allocProcLocalSlots(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
-        const unallocated = LocalSlot{
-            .ptr = undefined,
-            .layout_idx = .zst,
-            .size = 0,
-            .alignment = LlvmBuilder.Alignment.fromByteUnits(1),
-            .allocated = false,
-        };
-        for (self.local_slots) |*local_slot| {
-            local_slot.* = unallocated;
+    fn ensureLocalScratch(self: *MonoLlvmCodeGen) Error!void {
+        const count = self.store.localCount();
+        const old_slots_len = self.local_slot_storage.items.len;
+        if (count > old_slots_len) {
+            try self.local_slot_storage.resize(self.allocator, count);
+            // Other fields are read only after allocProcLocalSlot sets them.
+            for (self.local_slot_storage.items[old_slots_len..]) |*local_slot| {
+                if (builtin.is_test) self.local_scratch_rows_visited += 1;
+                local_slot.* = .{
+                    .ptr = undefined,
+                    .layout_idx = .zst,
+                    .size = 0,
+                    .alignment = LlvmBuilder.Alignment.fromByteUnits(1),
+                    .allocated = false,
+                };
+            }
         }
+        const old_captures_len = self.deferred_str_capture_storage.items.len;
+        if (count > old_captures_len) {
+            try self.deferred_str_capture_storage.resize(self.allocator, count);
+            @memset(self.deferred_str_capture_storage.items[old_captures_len..], null);
+            if (builtin.is_test) self.local_scratch_rows_visited += count - old_captures_len;
+        }
+    }
 
+    fn clearProcLocalSlots(self: *MonoLlvmCodeGen, proc: LirProcSpec) void {
+        for ([_]LocalSpan{ proc.args, proc.frame_locals }) |span| {
+            const locals = self.store.getLocalSpan(span);
+            for (0..locals.len) |i| {
+                if (builtin.is_test) self.local_scratch_rows_visited += 1;
+                self.local_slots[@intFromEnum(GuardedList.at(locals, i))].allocated = false;
+            }
+        }
+    }
+
+    fn allocProcLocalSlots(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
         const proc_args = self.store.getLocalSpan(proc.args);
         for (0..proc_args.len) |i| {
             const local_id = GuardedList.at(proc_args, i);
@@ -2344,28 +2420,16 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
 
-        var resume_cursor = wip.cursor;
         const resume_debug_location = wip.debug_location;
-        defer {
-            wip.cursor = resume_cursor;
-            wip.debug_location = resume_debug_location;
-        }
-
-        const entry_block: LlvmBuilder.Function.Block.Index = .entry;
-        wip.cursor = .{ .block = entry_block };
+        defer wip.debug_location = resume_debug_location;
         wip.debug_location = .no_location;
-        const allocated = wip.alloca(
-            .normal,
+        return wip.allocaInEntry(
             ty,
             builder.intValue(.i32, element_count) catch return error.OutOfMemory,
             alignment,
             .default,
             name,
         ) catch return error.OutOfMemory;
-
-        // Inserting at instruction zero shifts an active entry-block cursor.
-        if (resume_cursor.block == entry_block) resume_cursor.instruction += 1;
-        return allocated;
     }
 
     fn unpackProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
@@ -2753,6 +2817,194 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// What the always-inline decision reads off a body: its statement count,
+    /// whether it loops, whether it calls through a value it cannot name, and
+    /// the procs it calls directly.
+    const InlineShape = struct {
+        count: usize = 0,
+        has_loop: bool = false,
+        opaque_call: bool = false,
+        callees: std.ArrayList(LirProcSpecId) = .empty,
+    };
+
+    /// Decide which procs are worth inlining at every call site. LLVM sizes a
+    /// proc only after the builtins it calls have been expanded into it, so a
+    /// checked wrapper around one operation, or a helper whose bounds checks
+    /// each expand into a compare-and-branch pair, looks far larger to it
+    /// than its LIR is. Two shapes are inlined everywhere: a handful of
+    /// statements with no loop, and a leaf of moderate size. A third, a
+    /// larger proc whose every callee is one of those, is inlined at the
+    /// call sites nested deep in a caller's loops, where the call is paid
+    /// often.
+    fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        const shapes = try self.allocator.alloc(InlineShape, procs.len);
+        defer {
+            for (shapes) |*shape| shape.callees.deinit(self.allocator);
+            self.allocator.free(shapes);
+        }
+        @memset(shapes, .{});
+        for (procs, 0..) |proc, i| {
+            if (proc.is_static_initializer) continue;
+            if (proc.body) |body| try self.inlineShapeOf(body, &shapes[i]);
+        }
+        self.inline_everywhere.clearRetainingCapacity();
+        try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
+        self.inline_at_loop_sites.clearRetainingCapacity();
+        try self.inline_at_loop_sites.appendNTimes(self.allocator, false, procs.len);
+        for (procs, 0..) |proc, i| {
+            if (proc.body == null or proc.is_static_initializer) continue;
+            const shape = &shapes[i];
+            const wrapper = shape.count <= max_wrapper_inline_stmts and !shape.has_loop;
+            const leaf = shape.count <= max_leaf_inline_stmts and shape.callees.items.len == 0 and !shape.opaque_call;
+            self.inline_everywhere.items[i] = wrapper or leaf;
+        }
+        // A proc with one call site is LLVM's to inline: it does so once the
+        // callee has been simplified on its own, which comes out ahead of
+        // forcing the raw body in first. The forced sites are for procs with
+        // several callers, which LLVM prices by their expanded size.
+        const call_sites = try self.allocator.alloc(u32, procs.len);
+        defer self.allocator.free(call_sites);
+        @memset(call_sites, 0);
+        for (shapes) |shape| {
+            for (shape.callees.items) |callee| call_sites[@intFromEnum(callee)] += 1;
+        }
+        for (procs, 0..) |proc, i| {
+            if (proc.body == null or proc.is_static_initializer or self.inline_everywhere.items[i]) continue;
+            const shape = &shapes[i];
+            if (shape.opaque_call or shape.count > max_expanded_leaf_inline_stmts or call_sites[i] < 2) continue;
+            var expanded_leaf = true;
+            for (shape.callees.items) |callee| {
+                if (!self.inline_everywhere.items[@intFromEnum(callee)]) {
+                    expanded_leaf = false;
+                    break;
+                }
+            }
+            self.inline_at_loop_sites.items[i] = expanded_leaf;
+        }
+    }
+
+    /// Record how many loops each statement of `body` lies inside: a loop is
+    /// a join that one of the statements reachable from its body jumps back
+    /// to, and its members are everything so reachable.
+    fn collectStmtsInLoops(self: *MonoLlvmCodeGen, body: CFStmtId) Error!void {
+        self.stmts_in_loops.clearRetainingCapacity();
+        var visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer visited.deinit();
+        var work = std.ArrayList(CFStmtId).empty;
+        defer work.deinit(self.allocator);
+        var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
+        defer joins.deinit(self.allocator);
+        try work.append(self.allocator, body);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (entry.found_existing) continue;
+            const stmt = self.store.getCFStmt(stmt_id);
+            if (stmt == .join) try joins.append(self.allocator, .{ .id = stmt.join.id, .body = stmt.join.body });
+            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+        }
+        for (joins.items) |join| {
+            visited.clearRetainingCapacity();
+            var members = std.ArrayList(CFStmtId).empty;
+            defer members.deinit(self.allocator);
+            var loops = false;
+            try work.append(self.allocator, join.body);
+            while (work.pop()) |stmt_id| {
+                const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+                if (entry.found_existing) continue;
+                try members.append(self.allocator, stmt_id);
+                const stmt = self.store.getCFStmt(stmt_id);
+                if (stmt == .jump and stmt.jump.target == join.id) loops = true;
+                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+            }
+            if (!loops) continue;
+            for (members.items) |member| {
+                const depth = try self.stmts_in_loops.getOrPut(@intFromEnum(member));
+                if (!depth.found_existing) depth.value_ptr.* = 0;
+                depth.value_ptr.* += 1;
+            }
+        }
+    }
+
+    fn inlineShapeOf(self: *MonoLlvmCodeGen, body: CFStmtId, shape: *InlineShape) Error!void {
+        var visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer visited.deinit();
+        var work = std.ArrayList(CFStmtId).empty;
+        defer work.deinit(self.allocator);
+        var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
+        defer joins.deinit(self.allocator);
+        try work.append(self.allocator, body);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (entry.found_existing) continue;
+            shape.count += 1;
+            const stmt = self.store.getCFStmt(stmt_id);
+            switch (stmt) {
+                .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
+                .assign_call => |call| try shape.callees.append(self.allocator, call.proc),
+                .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn => shape.opaque_call = true,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => {},
+            }
+            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+        }
+        if (shape.count > max_wrapper_inline_stmts) return;
+        // A loop is a join reached again from inside its own body.
+        for (joins.items) |join| {
+            visited.clearRetainingCapacity();
+            try work.append(self.allocator, join.body);
+            while (work.pop()) |stmt_id| {
+                const entry = try visited.getOrPut(@intFromEnum(stmt_id));
+                if (entry.found_existing) continue;
+                const stmt = self.store.getCFStmt(stmt_id);
+                if (stmt == .jump and stmt.jump.target == join.id) {
+                    shape.has_loop = true;
+                    work.clearRetainingCapacity();
+                    return;
+                }
+                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
+            }
+        }
+    }
+
     fn noteStmtIncoming(self: *MonoLlvmCodeGen, stack: *std.ArrayList(CFStmtId), stmt_id: CFStmtId) Error!void {
         const key = @intFromEnum(stmt_id);
         const gop = try self.stmt_incoming_counts.getOrPut(key);
@@ -3003,7 +3255,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable, assign.simd_concat_count);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -3036,7 +3288,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = debug_stmt.next });
             },
             .expect => |expect_stmt| {
-                try self.emitExpect(expect_stmt.condition);
+                try self.emitExpect(expect_stmt.condition, expect_stmt.site);
                 try work.append(wa, .{ .node = expect_stmt.next });
             },
             .runtime_error => {
@@ -3649,6 +3901,7 @@ pub const MonoLlvmCodeGen = struct {
         args_ptr: LlvmBuilder.Value,
         out_desc_ptr: ?LlvmBuilder.Value,
         is_cold: bool,
+        inline_here: bool,
     ) Error!void {
         if ((proc.runtime_ret_desc != null) != (out_desc_ptr != null)) {
             llvmInvariantFmt(
@@ -3658,14 +3911,14 @@ pub const MonoLlvmCodeGen = struct {
         }
         if (self.host_call_mode == .extern_symbols) {
             if (out_desc_ptr) |desc_ptr| {
-                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold);
+                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold, inline_here);
             } else {
-                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold);
+                _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold, inline_here);
             }
         } else if (out_desc_ptr) |desc_ptr| {
-            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr, desc_ptr }, is_cold);
+            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr, desc_ptr }, is_cold, inline_here);
         } else {
-            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr }, is_cold);
+            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.inProcessContext(), ret_ptr, args_ptr }, is_cold, inline_here);
         }
     }
 
@@ -3719,7 +3972,11 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("direct_call_desc")
         else
             null;
-        try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold);
+        const inline_here = !is_cold and !self.enable_default_platform_diagnostics and
+            self.inline_at_loop_sites.items.len > @intFromEnum(proc_id) and
+            self.inline_at_loop_sites.items[@intFromEnum(proc_id)] and
+            if (self.current_source_stmt) |stmt| (self.stmts_in_loops.get(@intFromEnum(stmt)) orelse 0) >= min_inline_site_loop_depth else false;
+        try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold, inline_here);
         if (out_desc) |desc_local| {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
@@ -4189,7 +4446,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64, interchangeable: layout.WidthValues(bool)) Error!void {
+    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64, interchangeable: layout.WidthValues(bool), simd_concat_count: ?u5) Error!void {
         try self.prepareLocalWrite(target);
         const arg_locals = self.store.getLocalSpan(args);
         if (!op.acceptsStrViewArgs()) {
@@ -4298,7 +4555,7 @@ pub const MonoLlvmCodeGen = struct {
             .simd_sum_lanes_wrap,
             .simd_clmul_lo,
             .simd_clmul_hi,
-            => try self.emitSimdLowLevel(target, op, arg_locals),
+            => try self.emitSimdLowLevel(target, op, arg_locals, simd_concat_count),
             .num_negate, .num_negate_checked => try self.emitNumericNegate(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs, .num_abs_checked => try self.emitNumericAbs(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
@@ -5613,7 +5870,7 @@ pub const MonoLlvmCodeGen = struct {
         return wip.select(.normal, above, high, at_least_low, "") catch return error.OutOfMemory;
     }
 
-    fn emitSimdLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
+    fn emitSimdLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype, concat_count: ?u5) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
@@ -5789,7 +6046,7 @@ pub const MonoLlvmCodeGen = struct {
             .simd_sum_lanes_wrap,
             .simd_clmul_lo,
             .simd_clmul_hi,
-            => try self.emitSimdComplex(target, op, args, vector, destination_vector),
+            => try self.emitSimdComplex(target, op, args, vector, destination_vector, concat_count),
         }
     }
 
@@ -5819,6 +6076,7 @@ pub const MonoLlvmCodeGen = struct {
         args: anytype,
         vector: layout.Vector,
         destination_vector: ?layout.Vector,
+        concat_count: ?u5,
     ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -5967,7 +6225,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeSimdLocal(target, wip.shuffleVector(lhs, rhs, try self.simdShuffleMask(indices[0..count]), "") catch return error.OutOfMemory);
             },
             .simd_table_lookup => try self.emitSimdTableLookup(target, args),
-            .simd_concat_shift_bytes => try self.emitSimdConcatShift(target, args),
+            .simd_concat_shift_bytes => try self.emitSimdConcatShift(target, args, concat_count),
             .simd_widen_lo, .simd_widen_hi => {
                 const destination = destination_vector orelse return error.CompilationFailed;
                 const half = try self.simdShuffleHalf(try self.loadSimdLocal(GuardedList.at(args, 0)), vector, op == .simd_widen_hi);
@@ -6044,17 +6302,12 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const value = try self.loadSimdLocal(GuardedList.at(args, 0));
         const result_ty = self.scalarType(self.localLayout(target));
-        var result = builder.intValue(result_ty, 0) catch return error.OutOfMemory;
-        for (0..vector.laneCount()) |i| {
-            const lane = wip.extractElement(value, builder.intValue(.i32, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            const sign = wip.bin(.lshr, lane, builder.intValue(lane.typeOfWip(wip), vector.laneBits() - 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            const bit = try self.coerceScalar(sign, result_ty, false);
-            const positioned = if (i == 0)
-                bit
-            else
-                wip.bin(.shl, bit, builder.intValue(result_ty, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            result = wip.bin(.@"or", result, positioned, "") catch return error.OutOfMemory;
-        }
+        // A packed predicate preserves exactly one MSB per lane, including
+        // arbitrary non-comparison inputs, without scalarizing the vector.
+        const signs = wip.icmp(.slt, value, builder.zeroInitValue(try self.simdType(vector)) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const mask_ty = builder.intType(vector.laneCount()) catch return error.OutOfMemory;
+        const mask = wip.cast(.bitcast, signs, mask_ty, "") catch return error.OutOfMemory;
+        const result = try self.coerceScalar(mask, result_ty, false);
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
     }
 
@@ -6120,11 +6373,19 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeSimdLocal(target, result);
     }
 
-    fn emitSimdConcatShift(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    fn emitSimdConcatShift(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, known_count: ?u5) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const lhs_vector = try self.loadSimdLocal(GuardedList.at(args, 0));
         const rhs_vector = try self.loadSimdLocal(GuardedList.at(args, 1));
+        if (known_count) |count| {
+            std.debug.assert(count <= 16);
+            var indices: [16]u32 = undefined;
+            for (&indices, 0..) |*index, i| index.* = @as(u32, count) + @as(u32, @intCast(i));
+            const result = wip.shuffleVector(lhs_vector, rhs_vector, try self.simdShuffleMask(&indices), "") catch return error.OutOfMemory;
+            try self.storeSimdLocal(target, result);
+            return;
+        }
         const count_arg = GuardedList.at(args, 2);
         const count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), .i128, false);
         const zero = builder.intValue(.i128, 0) catch return error.OutOfMemory;
@@ -7621,6 +7882,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn clearDeferredStrCaptures(self: *MonoLlvmCodeGen) void {
         for (self.deferred_str_capture_actives.items) |index| {
+            if (builtin.is_test) self.local_scratch_rows_visited += 1;
             self.deferred_str_captures[index] = null;
         }
         self.deferred_str_capture_count = 0;
@@ -7633,6 +7895,7 @@ pub const MonoLlvmCodeGen = struct {
         const capture_slot = &self.deferred_str_captures[@intFromEnum(local)];
         if (capture_slot.* == null) {
             self.deferred_str_capture_actives.append(self.allocator, @intFromEnum(local)) catch return error.OutOfMemory;
+            self.deferred_str_capture_count += 1;
         }
         capture_slot.* = capture;
     }
@@ -7712,9 +7975,7 @@ pub const MonoLlvmCodeGen = struct {
         const capture = self.deferredStrCapture(source) orelse return false;
         if (!self.isStrLocal(target)) return error.CompilationFailed;
         if (target != source) {
-            try self.prepareLocalWrite(target);
-            self.deferred_str_captures[@intFromEnum(target)] = capture;
-            self.deferred_str_capture_count += 1;
+            try self.installDeferredStrCapture(target, capture);
         }
         return true;
     }
@@ -7802,7 +8063,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
 
-    fn emitExpect(self: *MonoLlvmCodeGen, condition: LocalId) Error!void {
+    fn emitExpect(self: *MonoLlvmCodeGen, condition: LocalId, site: ?lir.LIR.ExpectSiteId) Error!void {
         try self.materializeLocalIfDeferred(condition);
         const wip = self.wip orelse return error.CompilationFailed;
         const ok_block = wip.block(0, "expect_ok") catch return error.OutOfMemory;
@@ -7810,9 +8071,41 @@ pub const MonoLlvmCodeGen = struct {
         const cond = try self.loadBool(self.slot(condition).ptr);
         _ = wip.brCond(cond, ok_block, fail_block, .then_likely) catch return error.OutOfMemory;
         wip.cursor = .{ .block = fail_block };
+        if (site) |observed_site| {
+            const done_block = wip.block(0, "expect_done") catch return error.OutOfMemory;
+            try self.incrementExpectCounter(observed_site, false);
+            _ = wip.br(done_block) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = ok_block };
+            try self.incrementExpectCounter(observed_site, true);
+            _ = wip.br(done_block) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = done_block };
+            return;
+        }
         try self.emitStaticRocOpsMessageCall(.expect_failed, "expect failed");
         _ = wip.br(ok_block) catch return error.OutOfMemory;
         wip.cursor = .{ .block = ok_block };
+    }
+
+    fn incrementExpectCounter(self: *MonoLlvmCodeGen, site: lir.LIR.ExpectSiteId, passed: bool) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const pointer_offset = if (passed)
+            in_process_abi.expectPassedOffset(self.targetWordSize())
+        else
+            in_process_abi.expectFailedOffset(self.targetWordSize());
+        const counters = try self.loadPointer(try self.offsetPtr(self.inProcessContext(), pointer_offset));
+        const counter = try self.offsetPtr(counters, @intFromEnum(site) * @sizeOf(u64));
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(@alignOf(u64));
+        const old = wip.load(.normal, .i64, counter, alignment, "") catch return error.OutOfMemory;
+        const next = wip.callIntrinsic(
+            .normal,
+            .none,
+            .@"uadd.sat",
+            &.{.i64},
+            &.{ old, builder.intValue(.i64, 1) catch return error.OutOfMemory },
+            "",
+        ) catch return error.OutOfMemory;
+        _ = wip.store(.normal, next, counter, alignment) catch return error.OutOfMemory;
     }
 
     fn emitCrashIf(self: *MonoLlvmCodeGen, condition: LlvmBuilder.Value, msg: []const u8) Error!void {
@@ -7980,7 +8273,7 @@ pub const MonoLlvmCodeGen = struct {
             // Symbol ABI: call the host's runtime symbol directly:
             // roc_dbg(bytes: [*]const u8, len: usize).
             const fn_ty = builder.fnType(.void, &.{ ptr_ty, self.ptrSizedIntType() }, .normal) catch return error.OutOfMemory;
-            const func = try self.declareExternSymbol("roc_dbg", fn_ty);
+            const func = try self.declareExternSymbol(shim_symbols.roc_dbg, fn_ty);
             _ = wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), &.{
                 try self.staticBytes(msg),
                 builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
@@ -8011,6 +8304,22 @@ pub const MonoLlvmCodeGen = struct {
     fn emitStrLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: StrLiteral) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const bytes = self.store.getStringLiteral(literal);
+        const RocStr = builtins.str.RocStr;
+        if (bytes.len < RocStr.word_count * self.targetWordSize()) {
+            // Construct the complete value here. Inlining the runtime constructor
+            // makes LLVM rediscover these constants through partial-byte stores
+            // and expensive scalar promotion in large callers.
+            const words = smallStrLiteralWords(bytes, self.targetWordSize(), self.target.cpu.arch.endian());
+            var constants: [RocStr.word_count]LlvmBuilder.Constant = undefined;
+            for (words, &constants) |word, *constant| {
+                constant.* = builder.intConst(self.ptrSizedIntType(), word) catch return error.OutOfMemory;
+            }
+            const ty = builder.arrayType(RocStr.word_count, self.ptrSizedIntType()) catch return error.OutOfMemory;
+            const value = builder.arrayConst(ty, &constants) catch return error.OutOfMemory;
+            const wip = self.wip orelse return error.CompilationFailed;
+            _ = wip.store(.normal, value.toValue(), out, self.targetPointerAlignment()) catch return error.OutOfMemory;
+            return;
+        }
         try self.callBuiltinVoid(
             builtinSymbol(.str_from_literal),
             &.{ try self.ptrType(), try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() },
@@ -11014,8 +11323,8 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperCall(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
         const func = (try self.declareRcHelper(helper_key, atomicity)) orelse return;
         switch (helper_key.op) {
-            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, self.rocOps() }, false),
-            .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, self.rocOps() }, false),
+            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, self.rocOps() }, false, false),
+            .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, self.rocOps() }, false, false),
         }
     }
 
@@ -11298,9 +11607,9 @@ pub const MonoLlvmCodeGen = struct {
             };
         }
         return switch (callback) {
-            .dbg => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_dbg")),
-            .expect_failed => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_expect_failed")),
-            .crashed => @intCast(@offsetOf(builtins.host_abi.RocOps, "roc_crashed")),
+            .dbg => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_dbg)),
+            .expect_failed => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_expect_failed)),
+            .crashed => @intCast(@offsetOf(builtins.host_abi.RocOps, shim_symbols.roc_crashed)),
         };
     }
 
@@ -12761,14 +13070,18 @@ pub const MonoLlvmCodeGen = struct {
         return func;
     }
 
-    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool) Error!LlvmBuilder.Value {
+    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool, inline_here: bool) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        if (is_cold) {
+        if (is_cold or inline_here) {
             var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
             defer attrs.deinit(builder);
-            try attrs.addFnAttr(.cold, builder);
-            try attrs.addFnAttr(.@"noinline", builder);
+            if (is_cold) {
+                try attrs.addFnAttr(.cold, builder);
+                try attrs.addFnAttr(.@"noinline", builder);
+            } else {
+                try attrs.addFnAttr(.alwaysinline, builder);
+            }
             return wip.call(.normal, .ccc, attrs.finish(builder) catch return error.OutOfMemory, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
         }
         return wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
@@ -12879,8 +13192,228 @@ fn repeatedByte(byte: u8, width: u8) u128 {
     return result;
 }
 
+/// Encode the runtime's inline RocStr layout as target-width integer constants.
+/// The final byte is the length/flag byte regardless of target endianness.
+fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.Endian) [builtins.str.RocStr.word_count]u64 {
+    const RocStr = builtins.str.RocStr;
+    std.debug.assert(word_size == 2 or word_size == 4 or word_size == 8);
+    const str_size = RocStr.word_count * word_size;
+    std.debug.assert(bytes.len < str_size);
+    var encoded: [RocStr.word_count * @sizeOf(u64)]u8 = @splat(0);
+    @memcpy(encoded[0..bytes.len], bytes);
+    encoded[str_size - 1] = RocStr.smallStrFlagByte(bytes.len);
+    var words: [RocStr.word_count]u64 = undefined;
+    for (&words, 0..) |*word, word_index| {
+        const offset = word_index * word_size;
+        word.* = switch (word_size) {
+            2 => std.mem.readInt(u16, encoded[offset..][0..2], endian),
+            4 => std.mem.readInt(u32, encoded[offset..][0..4], endian),
+            8 => std.mem.readInt(u64, encoded[offset..][0..8], endian),
+            else => unreachable,
+        };
+    }
+    return words;
+}
+
+test "LLVM small string constants match the runtime constructor" {
+    const RocStr = builtins.str.RocStr;
+    // Include embedded NUL and UTF-8 in partial and full words.
+    const contents = "a\x00é🙂bc\x00é🙂defghijkl";
+    for (0..@sizeOf(RocStr)) |len| {
+        var runtime_value = RocStr.fromSliceSmall(contents[0..len]);
+        const encoded = smallStrLiteralWords(contents[0..len], @sizeOf(usize), builtin.cpu.arch.endian());
+        var native_words: [RocStr.word_count]usize = undefined;
+        for (encoded, &native_words) |word, *native_word| native_word.* = @intCast(word);
+        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&runtime_value), std.mem.asBytes(&native_words));
+    }
+}
+
+test "LLVM small string constants preserve target layout at every length" {
+    const contents = "a\x00é🙂bc\x00é🙂defghijkl";
+    inline for (.{ u16, u32, u64 }) |Word| {
+        const size = builtins.str.RocStr.word_count * @sizeOf(Word);
+        inline for (.{ std.builtin.Endian.little, std.builtin.Endian.big }) |endian| {
+            for (0..size) |len| {
+                const words = smallStrLiteralWords(contents[0..len], @sizeOf(Word), endian);
+                var memory: [size]u8 = undefined;
+                for (words, 0..) |word, index| {
+                    std.mem.writeInt(Word, memory[index * @sizeOf(Word) ..][0..@sizeOf(Word)], @intCast(word), endian);
+                }
+                try std.testing.expectEqualSlices(u8, contents[0..len], memory[0..len]);
+                for (memory[len .. size - 1]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
+                try std.testing.expectEqual(@as(u8, 0x80) | @as(u8, @intCast(len)), memory[size - 1]);
+            }
+        }
+    }
+}
+
 test "LLVM erased callable explicit arguments exclude capture and reuse" {
     try std.testing.expectEqual(@as(usize, 3), try MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 5));
     try std.testing.expectEqual(@as(usize, 5), try MonoLlvmCodeGen.explicitProcParamCount(.roc, 5));
     try std.testing.expectError(error.CompilationFailed, MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 1));
+}
+
+test "LLVM fixed stack slots dominate entry and loop uses" {
+    const allocator = std.testing.allocator;
+    const byte_alignment = LlvmBuilder.Alignment.fromByteUnits(@alignOf(u8));
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var codegen = MonoLlvmCodeGen.init(allocator, &store, &.{}, &.{}, &.{});
+    defer codegen.deinit();
+    var builder = try codegen.createBuilder("stack_slots");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    const function = try builder.addFunction(try builder.fnType(.void, &.{}, .normal), try builder.strtabString("slots"), .default);
+    var wip = try LlvmBuilder.WipFunction.init(&builder, .{ .function = function, .strip = true });
+    defer wip.deinit();
+    codegen.wip = &wip;
+    const entry = try wip.block(0, "entry");
+    const loop = try wip.block(1, "loop");
+    wip.cursor = .{ .block = entry };
+    const first = try codegen.allocEntryBlockSlot(.i8, 1, byte_alignment, "first");
+    _ = try wip.store(.normal, try builder.intValue(.i8, 1), first, byte_alignment);
+    const second = try codegen.allocEntryBlockSlot(.i8, 1, byte_alignment, "second");
+    _ = try wip.store(.normal, try builder.intValue(.i8, 2), second, byte_alignment);
+    const branch = try wip.br(loop);
+    wip.cursor = .{ .block = loop };
+    const loop_slot = try codegen.allocEntryBlockSlot(.i8, 1, byte_alignment, "loop_slot");
+    try std.testing.expectEqual(loop, wip.cursor.block);
+    try std.testing.expectEqual(@as(u32, 0), wip.cursor.instruction);
+    _ = try wip.store(.normal, try builder.intValue(.i8, 3), loop_slot, byte_alignment);
+    _ = try wip.br(loop);
+    try wip.flushEntryAllocas();
+    const instructions = entry.ptrConst(&wip).instructions.items;
+    try std.testing.expectEqual(loop_slot, instructions[0].toValue());
+    try std.testing.expectEqual(second, instructions[1].toValue());
+    try std.testing.expectEqual(first, instructions[2].toValue());
+    try std.testing.expectEqual(branch, instructions[instructions.len - 1]);
+    const expected = [_]LlvmBuilder.Function.Instruction.Tag{ .alloca, .alloca, .alloca, .store, .store, .br };
+    for (instructions, expected) |instruction, tag| {
+        try std.testing.expectEqual(tag, wip.instructions.get(@intFromEnum(instruction)).tag);
+    }
+    try codegen.finishCurrentWipFunction();
+}
+
+test "issue 11132: scratch clearing follows proc inventories and survives module reuse" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+
+    // Most of the global ID space does not belong to these procedures.
+    for (0..4096) |_| _ = try store.addLocal(.{ .layout_idx = .i64 });
+    const shared = try store.addLocal(.{ .layout_idx = .i64 });
+    const args = try store.addLocalSpan(&.{shared});
+    const body = try store.addCFStmt(.{ .ret = .{ .value = shared } });
+    const proc_count = 32;
+    var procs: [proc_count]LirProcSpecId = undefined;
+    for (&procs, 0..) |*proc, i| {
+        proc.* = try store.addProcSpec(.{
+            .name = lir.LIR.Symbol.fromRaw(i),
+            .args = args,
+            .frame_locals = args,
+            .body = body,
+            .ret_layout = .i64,
+        });
+    }
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, &.{}, &.{}, &.{}, builtin.target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+
+    var first = try codegen.generateEntrypointModule("scratch_reuse", &.{});
+    defer first.deinit();
+    // Each column is initialized once; each proc invalidates its argument and
+    // frame inventory. No clearing work may scale with procs * global locals.
+    const proc_work = 2 * proc_count;
+    try std.testing.expectEqual(2 * store.localCount() + proc_work, codegen.local_scratch_rows_visited);
+    for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
+    const slots_ptr = codegen.local_slot_storage.items.ptr;
+    const captures_ptr = codegen.deferred_str_capture_storage.items.ptr;
+
+    const before = codegen.local_scratch_rows_visited;
+    var second = try codegen.generateEntrypointModule("scratch_reuse", &.{});
+    defer second.deinit();
+    try std.testing.expectEqual(proc_work, codegen.local_scratch_rows_visited - before);
+    try std.testing.expectEqual(slots_ptr, codegen.local_slot_storage.items.ptr);
+    try std.testing.expectEqual(captures_ptr, codegen.deferred_str_capture_storage.items.ptr);
+    try std.testing.expectEqualSlices(u32, first.bitcode, second.bitcode);
+
+    // A failure after slots were allocated must leave the instance reusable.
+    store.setProcSpecBody(procs[0], null);
+    try std.testing.expectError(error.CompilationFailed, codegen.generateEntrypointModule("scratch_reuse", &.{}));
+    try std.testing.expect(codegen.local_slots.len == 0);
+    for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
+    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_count);
+    store.setProcSpecBody(procs[0], body);
+    var after_failure = try codegen.generateEntrypointModule("scratch_reuse", &.{});
+    defer after_failure.deinit();
+    try std.testing.expectEqualSlices(u32, first.bitcode, after_failure.bitcode);
+}
+
+test "issue 11132: scratch allocation failure and store growth initialize only new rows" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    _ = try store.addLocal(.{ .layout_idx = .str });
+    // Fail the capture table allocation after the slot table succeeds.
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 1 });
+    var codegen = MonoLlvmCodeGen.init(failing.allocator(), &store, &.{}, &.{}, &.{});
+    defer codegen.deinit();
+    try std.testing.expectError(error.OutOfMemory, codegen.ensureLocalScratch());
+    try std.testing.expectEqual(@as(usize, 1), codegen.local_scratch_rows_visited);
+    try std.testing.expect(!codegen.local_slot_storage.items[0].allocated);
+    failing.fail_index = std.math.maxInt(usize);
+    try codegen.ensureLocalScratch();
+    try std.testing.expectEqual(@as(usize, 2), codegen.local_scratch_rows_visited);
+    _ = try store.addLocal(.{ .layout_idx = .str });
+    try codegen.ensureLocalScratch();
+    try std.testing.expectEqual(@as(usize, 4), codegen.local_scratch_rows_visited);
+    for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
+    for (codegen.deferred_str_capture_storage.items) |capture| try std.testing.expect(capture == null);
+}
+
+test "issue 11132: installed and propagated deferred captures are counted and cleared" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const source = try store.addLocal(.{ .layout_idx = .str });
+    const first = try store.addLocal(.{ .layout_idx = .str });
+    const second = try store.addLocal(.{ .layout_idx = .str });
+    var codegen = MonoLlvmCodeGen.init(gpa, &store, &.{}, &.{}, &.{});
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    try codegen.ensureLocalScratch();
+    codegen.deferred_str_captures = codegen.deferred_str_capture_storage.items;
+    const capture = MonoLlvmCodeGen.DeferredStrCapture{
+        .source_local = source,
+        // No materialization occurs here; only the source identity is read.
+        .source = undefined,
+        .start_ptr = undefined,
+        .end_ptr = undefined,
+        .pending_rc_count = 0,
+        .pending_rc_atomicity = .atomic,
+    };
+    try codegen.installDeferredStrCapture(first, capture);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try std.testing.expect(try codegen.propagateDeferredStrCapture(second, first));
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_actives.items.len);
+    try std.testing.expect(try codegen.propagateDeferredStrCapture(first, first));
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
+    codegen.clearDeferredStrCapture(first);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try codegen.installDeferredStrCapture(first, capture);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
+    codegen.clearDeferredStrCaptures();
+    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_actives.items.len);
+    try std.testing.expect(codegen.deferredStrCapture(first) == null);
+    try std.testing.expect(codegen.deferredStrCapture(second) == null);
+    // Reusing the same IDs in another procedure starts with empty capture state.
+    try codegen.installDeferredStrCapture(second, capture);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    codegen.clearDeferredStrCaptures();
 }

@@ -4,6 +4,15 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+/// Debug-only work counter for exact sparse range queries.
+pub var range_query_node_visits: u64 = 0;
+
+/// Debug-only work counter for sparse enumeration, independent of ID width.
+pub var iterator_node_visits: u64 = 0;
+
+/// Debug-only count of non-shared, nonempty nodes examined by structural difference.
+pub var difference_node_visits: u64 = 0;
+
 /// A bounded-depth radix tree whose absent entries have one caller-declared
 /// value. Copying a snapshot shares its root; changing one entry allocates
 /// only the nodes on that entry's path. Depth grows only as needed and is
@@ -67,6 +76,99 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             return leaf.values[index & radix_mask];
         }
 
+        /// Enumerates non-default entries in ascending index order. The
+        /// iterator borrows this root, so shared updates may proceed while
+        /// iterating; unique updates require finishing the iteration first.
+        pub fn iterator(self: *const Self) Iterator {
+            return self.iteratorDirection(.forward);
+        }
+
+        /// Enumerates occupied entries in the requested exact index order.
+        pub fn iteratorDirection(self: *const Self, direction: @FieldType(std.bit_set.IteratorOptions, "direction")) Iterator {
+            var result = Iterator{ .depth = self.depth, .reverse = direction == .reverse };
+            if (self.root) |root| result.push(root, 0);
+            return result;
+        }
+
+        /// Bounded-stack traversal of the borrowed immutable root.
+        pub const Iterator = struct {
+            /// A non-default entry and its exact snapshot index.
+            pub const Entry = struct { index: u32, value: T };
+            const Frame = struct { node: *const anyopaque, base: u32, slot: u8 = 0 };
+
+            frames: [max_branch_depth + 1]Frame = undefined,
+            len: usize = 0,
+            depth: u8,
+            reverse: bool,
+
+            fn push(self: *Iterator, node: *const anyopaque, base: u32) void {
+                if (@import("builtin").mode == .Debug) iterator_node_visits += 1;
+                self.frames[self.len] = .{ .node = node, .base = base };
+                self.len += 1;
+            }
+
+            /// Returns the next occupied entry, skipping absent subtrees.
+            pub fn next(self: *Iterator) ?Entry {
+                while (self.len != 0) {
+                    const frame = &self.frames[self.len - 1];
+                    if (frame.slot == radix) {
+                        self.len -= 1;
+                        continue;
+                    }
+                    const slot = if (self.reverse) radix - 1 - frame.slot else frame.slot;
+                    frame.slot += 1;
+                    const remaining_depth = self.depth + 1 - self.len;
+                    if (remaining_depth == 0) {
+                        const leaf: *const Leaf = @ptrCast(@alignCast(frame.node));
+                        const value = leaf.values[slot];
+                        if (!std.meta.eql(value, empty)) return .{ .index = frame.base + slot, .value = value };
+                    } else {
+                        const branch: *const Branch = @ptrCast(@alignCast(frame.node));
+                        if (branch.children[slot]) |child| {
+                            const shift: u5 = @intCast(leaf_bits + (remaining_depth - 1) * radix_bits);
+                            self.push(child, frame.base | (@as(u32, slot) << shift));
+                        }
+                    }
+                }
+                return null;
+            }
+        };
+
+        /// Whether a half-open index range contains a non-default entry.
+        /// Canonical empty subtrees are null, so fully covered subtrees need
+        /// no descent. Only the two range boundaries can descend at each
+        /// level, independently of the range's width or population.
+        pub fn hasNonEmptyInRange(self: *const Self, start: u32, end: u64) bool {
+            std.debug.assert(start <= end and end <= @as(u64, 1) << 32);
+            if (start == end) return false;
+            return rangeHasValue(self.root, self.depth, 0, start, end);
+        }
+
+        fn rangeHasValue(maybe_node: ?*const anyopaque, depth: u8, base: u64, start: u64, end: u64) bool {
+            if (@import("builtin").mode == .Debug) range_query_node_visits += 1;
+            const node = maybe_node orelse return false;
+            const width = @as(u64, 1) << @as(u6, @intCast(leaf_bits + @as(usize, depth) * radix_bits));
+            if (end <= base or start >= base + width) return false;
+            if (start <= base and base + width <= end) return true;
+            if (depth == 0) {
+                const leaf: *const Leaf = @ptrCast(@alignCast(node));
+                const first: usize = @intCast(@max(start, base) - base);
+                const last: usize = @intCast(@min(end, base + width) - base);
+                for (leaf.values[first..last]) |value| {
+                    if (!std.meta.eql(value, empty)) return true;
+                }
+                return false;
+            }
+            const branch: *const Branch = @ptrCast(@alignCast(node));
+            const child_width = width / radix;
+            const first: usize = @intCast((@max(start, base) - base) / child_width);
+            const last: usize = @intCast((@min(end, base + width) - 1 - base) / child_width + 1);
+            for (first..last) |slot| {
+                if (rangeHasValue(branch.children[slot], depth - 1, base + slot * child_width, start, end)) return true;
+            }
+            return false;
+        }
+
         pub fn put(self: *Self, index: u32, value: T) Allocator.Error!void {
             if (std.meta.eql(self.get(index), value)) return;
             const required_depth = depthFor(index);
@@ -102,6 +204,47 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             if (self.root == other.root) return true;
             std.debug.assert(self.depth == other.depth);
             return eqlNode(self.root, other.root, self.depth);
+        }
+
+        /// Enumerates nonempty left entries in differing subtrees in ascending
+        /// index order. Equal roots and absent left subtrees are skipped; the
+        /// callback must treat equal values as no difference. Both snapshots
+        /// borrow immutable roots for the duration of the traversal.
+        pub fn differenceWith(
+            self: *const Self,
+            other: *const Self,
+            context: anytype,
+            comptime emitFn: fn (@TypeOf(context), u32, T, T) Allocator.Error!void,
+        ) Allocator.Error!void {
+            std.debug.assert(self.depth == other.depth);
+            try differenceNode(self.root, other.root, self.depth, 0, context, emitFn);
+        }
+
+        fn differenceNode(
+            lhs: ?*const anyopaque,
+            rhs: ?*const anyopaque,
+            depth: u8,
+            base: u32,
+            context: anytype,
+            comptime emitFn: fn (@TypeOf(context), u32, T, T) Allocator.Error!void,
+        ) Allocator.Error!void {
+            if (lhs == rhs or lhs == null) return;
+            if (@import("builtin").mode == .Debug) difference_node_visits += 1;
+            if (depth == 0) {
+                const left: *const Leaf = @ptrCast(@alignCast(lhs.?));
+                const right: ?*const Leaf = @ptrCast(@alignCast(rhs));
+                for (left.values, 0..) |value, slot| {
+                    if (std.meta.eql(value, empty)) continue;
+                    try emitFn(context, base + @as(u32, @intCast(slot)), value, if (right) |leaf| leaf.values[slot] else empty);
+                }
+            } else {
+                const left: *const Branch = @ptrCast(@alignCast(lhs.?));
+                const right: ?*const Branch = @ptrCast(@alignCast(rhs));
+                const shift: u5 = @intCast(leaf_bits + (depth - 1) * radix_bits);
+                for (left.children, 0..) |child, slot| {
+                    try differenceNode(child, if (right) |branch| branch.children[slot] else null, depth - 1, base | (@as(u32, @intCast(slot)) << shift), context, emitFn);
+                }
+            }
         }
 
         /// Pointwise meet over two snapshots. `meetFn` must be idempotent and
@@ -363,4 +506,142 @@ test "persistent sparse snapshots share forks and meet exactly" {
     try std.testing.expectEqual(@as(u32, 9), left.get(70_000));
     try std.testing.expectEqual(@as(u32, 0), left.get(90_000));
     try std.testing.expect(left.eql(&left.clone()));
+}
+
+test "sparse range queries are exact across tree boundaries and shared updates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(u32, 0);
+    var original = Sparse.init(arena.allocator(), 1);
+    const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
+    for (keys) |key| try original.putUnique(key, 1);
+    var changed = original.clone();
+    for (keys, 0..) |key, i| {
+        if (i % 2 == 0) try changed.put(key, 0);
+    }
+    const boundaries = [_]u64{ 0, 1, 7, 8, 9, 63, 64, 65, 511, 512, 513, 99999, 100000, std.math.maxInt(u32), @as(u64, 1) << 32 };
+    for (boundaries[0 .. boundaries.len - 1]) |start| {
+        for (boundaries) |end| {
+            if (end < start) continue;
+            var original_expected = false;
+            var changed_expected = false;
+            for (keys, 0..) |key, i| {
+                if (start <= key and key < end) {
+                    original_expected = true;
+                    if (i % 2 != 0) changed_expected = true;
+                }
+            }
+            try std.testing.expectEqual(original_expected, original.hasNonEmptyInRange(@intCast(start), end));
+            try std.testing.expectEqual(changed_expected, changed.hasNonEmptyInRange(@intCast(start), end));
+        }
+    }
+    // A nearly full u32 range containing no entries must not scan its width.
+    const before = range_query_node_visits;
+    try std.testing.expect(!original.hasNonEmptyInRange(100000, std.math.maxInt(u32)));
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expect(range_query_node_visits - before <= 2 * 8 * 11);
+    }
+    for (keys) |key| try changed.put(key, 0);
+    try std.testing.expect(!changed.hasNonEmptyInRange(0, @as(u64, 1) << 32));
+    try std.testing.expect(original.hasNonEmptyInRange(0, @as(u64, 1) << 32));
+}
+
+test "sparse iteration preserves forks and skips absent history" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(i32, 0);
+    var original = Sparse.init(arena.allocator(), 0);
+    var empty_iter = original.iterator();
+    try std.testing.expectEqual(null, empty_iter.next());
+
+    const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
+    for (keys, 0..) |key, i| try original.putUnique(key, @intCast(i + 1));
+    var changed = original.clone();
+    var original_iter = original.iterator();
+    for (keys) |key| try changed.put(key, 0);
+    try changed.put(99999, -1);
+    for (keys, 0..) |key, i| {
+        const entry = original_iter.next().?;
+        try std.testing.expectEqual(key, entry.index);
+        try std.testing.expectEqual(@as(i32, @intCast(i + 1)), entry.value);
+    }
+    try std.testing.expectEqual(null, original_iter.next());
+
+    const before = iterator_node_visits;
+    var changed_iter = changed.iterator();
+    try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = 99999, .value = -1 }, changed_iter.next().?);
+    try std.testing.expectEqual(null, changed_iter.next());
+    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits - before <= 11);
+}
+
+test "sparse structural difference skips shared subtrees and preserves exact values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(u64, 0);
+    var owned = Sparse.init(arena.allocator(), 512);
+    for (0..512) |index| try owned.putUnique(@intCast(index), 15);
+    var keep = owned.clone();
+    try keep.put(3, 5);
+    try keep.put(6, 0);
+    const Difference = struct {
+        const Entry = struct { index: u32, lhs: u64, rhs: u64 };
+        entries: std.ArrayList(Entry) = .empty,
+        calls: usize = 0,
+
+        fn emit(self: *@This(), index: u32, lhs: u64, rhs: u64) std.mem.Allocator.Error!void {
+            self.calls += 1;
+            if (lhs != rhs) try self.entries.append(std.testing.allocator, .{ .index = index, .lhs = lhs, .rhs = rhs });
+        }
+    };
+    var difference: Difference = .{};
+    defer difference.entries.deinit(std.testing.allocator);
+    const before = difference_node_visits;
+    try owned.differenceWith(&keep, &difference, Difference.emit);
+    try std.testing.expectEqualSlices(Difference.Entry, &.{
+        .{ .index = 3, .lhs = 15, .rhs = 5 },
+        .{ .index = 6, .lhs = 15, .rhs = 0 },
+    }, difference.entries.items);
+    // Only the changed leaf and its two ancestors are visited. All other
+    // leaves share pointers, so even their callbacks are skipped.
+    try std.testing.expectEqual(@as(usize, 8), difference.calls);
+    if (@import("builtin").mode == .Debug) try std.testing.expectEqual(@as(u64, 3), difference_node_visits - before);
+
+    difference.entries.clearRetainingCapacity();
+    difference.calls = 0;
+    try owned.differenceWith(&owned, &difference, Difference.emit);
+    try std.testing.expectEqual(@as(usize, 0), difference.calls);
+    var absent = Sparse.init(arena.allocator(), 512);
+    try absent.differenceWith(&owned, &difference, Difference.emit);
+    try std.testing.expectEqual(@as(usize, 0), difference.calls);
+    try keep.differenceWith(&absent, &difference, Difference.emit);
+    try std.testing.expectEqual(@as(usize, 511), difference.entries.items.len);
+    var iter = keep.iterator();
+    for (difference.entries.items) |entry| {
+        const expected = iter.next().?;
+        try std.testing.expectEqual(expected.index, entry.index);
+        try std.testing.expectEqual(expected.value, entry.lhs);
+        try std.testing.expectEqual(@as(u64, 0), entry.rhs);
+    }
+    try std.testing.expectEqual(null, iter.next());
+}
+
+test "sparse reverse iteration carries values across radix boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(u32, 0);
+    var state = Sparse.init(arena.allocator(), 1);
+    const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
+    for (keys, 0..) |key, index| try state.putUnique(key, @intCast(index + 1));
+    var iter = state.iteratorDirection(.reverse);
+    var remaining = keys.len;
+    while (remaining != 0) {
+        remaining -= 1;
+        const entry = iter.next().?;
+        try std.testing.expectEqual(keys[remaining], entry.index);
+        try std.testing.expectEqual(@as(u32, @intCast(remaining + 1)), entry.value);
+    }
+    try std.testing.expectEqual(null, iter.next());
+    state.clear();
+    var empty_iter = state.iteratorDirection(.reverse);
+    try std.testing.expectEqual(null, empty_iter.next());
 }

@@ -11,7 +11,7 @@ pub const ErrorCode = enum(i32) {
     invalid_params = -32602,
     internal_error = -32603,
     server_not_initialized = -32002,
-    request_failed = -32003,
+    request_failed = -32803,
     server_cancelled = -32802,
     content_modified = -32801,
     request_cancelled = -32800,
@@ -34,7 +34,10 @@ pub const JsonId = union(enum) {
     string: []u8,
 
     pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidIdType})!JsonId {
-        if (std.meta.activeTag(value) == .integer) return .{ .integer = value.integer };
+        if (std.meta.activeTag(value) == .integer) {
+            if (std.math.cast(i32, value.integer) == null) return error.InvalidIdType;
+            return .{ .integer = value.integer };
+        }
         if (std.meta.activeTag(value) == .string) return .{ .string = try copyString(allocator, value.string) };
         return error.InvalidIdType;
     }
@@ -47,7 +50,10 @@ pub const JsonId = union(enum) {
     }
 
     pub fn deinit(self: *JsonId, allocator: std.mem.Allocator) void {
-        if (std.meta.activeTag(self.*) == .string) allocator.free(self.string);
+        switch (self.*) {
+            .integer => {},
+            .string => |text| allocator.free(text),
+        }
         self.* = undefined;
     }
 
@@ -89,55 +95,64 @@ pub const InitializeParams = struct {
         if (std.meta.activeTag(value) != .object) return error.InvalidParams;
         const obj = value.object;
 
-        var params = InitializeParams{};
-
-        if (obj.get("processId")) |pid_node| {
-            if (std.meta.activeTag(pid_node) == .integer) {
-                params.process_id = pid_node.integer;
-            } else if (std.meta.activeTag(pid_node) != .null) {
-                return error.InvalidParams;
-            }
-        }
-
-        if (obj.get("rootUri")) |uri_node| {
-            const uri_text: ?[]const u8 = if (std.meta.activeTag(uri_node) == .string)
-                uri_node.string
-            else if (std.meta.activeTag(uri_node) == .null)
-                null
+        const process_id_value = obj.get("processId") orelse return error.InvalidParams;
+        const process_id: ?i64 = if (std.meta.activeTag(process_id_value) == .integer)
+            if (std.math.cast(i32, process_id_value.integer) != null)
+                process_id_value.integer
             else
-                return error.InvalidParams;
-            if (uri_text) |text| {
-                params.root_uri = try copyString(allocator, text);
-            }
-        }
+                return error.InvalidParams
+        else if (std.meta.activeTag(process_id_value) == .null)
+            null
+        else
+            return error.InvalidParams;
 
+        const root_uri_value = obj.get("rootUri") orelse return error.InvalidParams;
+        const root_uri_text: ?[]const u8 = if (std.meta.activeTag(root_uri_value) == .string)
+            root_uri_value.string
+        else if (std.meta.activeTag(root_uri_value) == .null)
+            null
+        else
+            return error.InvalidParams;
+
+        const capabilities_value = obj.get("capabilities") orelse return error.InvalidParams;
+        if (std.meta.activeTag(capabilities_value) != .object) return error.InvalidParams;
+
+        var client_name: ?[]const u8 = null;
+        var client_version: ?[]const u8 = null;
         if (obj.get("clientInfo")) |client_node| {
             if (std.meta.activeTag(client_node) != .object) return error.InvalidParams;
             const client_obj = client_node.object;
             const name_value = client_obj.get("name") orelse return error.InvalidParams;
             if (std.meta.activeTag(name_value) != .string) return error.InvalidParams;
-            const name_string = name_value.string;
+            client_name = name_value.string;
 
+            if (client_obj.get("version")) |version_value| {
+                if (std.meta.activeTag(version_value) != .string) return error.InvalidParams;
+                client_version = version_value.string;
+            }
+        }
+
+        var params = InitializeParams{ .process_id = process_id };
+        errdefer params.deinit(allocator);
+
+        if (root_uri_text) |text| {
+            params.root_uri = try copyString(allocator, text);
+        }
+
+        if (client_name) |name| {
             var info = ClientInfo{
-                .name = try copyString(allocator, name_string),
+                .name = try copyString(allocator, name),
             };
+            errdefer info.deinit(allocator);
 
-            if (client_obj.get("version")) |ver_node| {
-                const ver_text: ?[]u8 = if (std.meta.activeTag(ver_node) == .string)
-                    try copyString(allocator, ver_node.string)
-                else if (std.meta.activeTag(ver_node) == .null)
-                    null
-                else
-                    return error.InvalidParams;
-                info.version = ver_text;
+            if (client_version) |version| {
+                info.version = try copyString(allocator, version);
             }
 
             params.client_info = info;
         }
 
-        if (obj.get("capabilities")) |caps_node| {
-            params.capabilities_json = try stringifyValue(allocator, caps_node);
-        }
+        params.capabilities_json = try stringifyValue(allocator, capabilities_value);
 
         return params;
     }

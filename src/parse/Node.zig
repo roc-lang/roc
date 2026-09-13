@@ -66,7 +66,7 @@ pub const Tag = enum {
     /// * rhs - value node index
     decl,
     /// A declaration of a reassignable binding
-    /// Example: `var a_ = some_expr`
+    /// Example: `var $a_ = some_expr`
     /// * main_token - pattern node index
     /// * lhs - value node index
     @"var",
@@ -299,10 +299,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     string_patt,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// A codepoint literal pattern, with an optional type suffix.
+    /// * main_token - Token index containing the codepoint
+    /// * lhs - Ident index of the optional type suffix
+    /// * rhs - Whether lhs contains a type suffix Ident index
     single_quote_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
@@ -368,12 +368,12 @@ pub const Tag = enum {
     /// * lhs - Ident index of the type
     /// * rhs - NumericLiteral.Idx
     typed_frac,
-    /// A character literal enclosed in single quotes
-    /// Example: 'a'
-    /// * main_token - Token index containing the character
+    /// A codepoint literal enclosed in single quotes
+    /// Example: 'a' or 'a'.U8
+    /// * main_token - Token index containing the codepoint
     /// * region - Source region containing the single quote literal
-    /// * lhs - Unused
-    /// * rhs - Unused
+    /// * lhs - Ident index of the optional type suffix
+    /// * rhs - Whether lhs contains a type suffix Ident index
     single_quote,
     /// DESCRIPTION
     /// Example: EXAMPLE
@@ -457,6 +457,9 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     arrow_call,
+    /// A pipe whose final target-owned postfix is a method call.
+    /// Uses the same payload layout as arrow_call.
+    arrow_method_call,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - node index of left expression

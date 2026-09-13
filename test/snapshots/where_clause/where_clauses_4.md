@@ -14,13 +14,19 @@ decodeThings = ...
 # EXPECTED
 UNDECLARED TYPE - where_clauses_4.md:4:10:4:17
 # PROBLEMS
-── ✗ undeclared type ─────────────────────────────────── where_clauses_4.md:4:10
-
-The type Decode is not declared in this scope.
-
-where [a.Decode]
-        ^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 4 10) (end 4 17))
+		(headline
+			(reflow "The type ")
+			(annotated code "Decode")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "where_clauses_4.md") (start 4 10) (end 4 17) (annotation error) (line-text "\twhere [a.Decode]")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

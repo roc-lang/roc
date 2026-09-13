@@ -16,7 +16,7 @@ const Ident = base.Ident;
 /// Helper to create an Ident.Idx for testing
 fn testIdent(idx: u29) Ident.Idx {
     return .{
-        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+        .attributes = .{ .effectful = false, .ignored = false, .reserved = false },
         .idx = idx,
     };
 }

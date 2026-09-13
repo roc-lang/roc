@@ -23,18 +23,30 @@ outerFunc = |_| {
 # EXPECTED
 DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
 # PROBLEMS
-── ● duplicate definition ───────────────────────────── can_basic_scoping.md:7:5
-
-The name x is being redeclared here:
-
-x = 20  # Should shadow top-level x
-^
-
-In this scope, x was already defined in can_basic_scoping.md:2:1:
-
-x = 5
-^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 7 5) (end 7 6))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "x")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_basic_scoping.md") (start 7 5) (end 7 6) (annotation error) (line-text "    x = 20  # Should shadow top-level x"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "x")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_basic_scoping.md")
+				(line 2)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_basic_scoping.md") (start 2 1) (end 2 2) (annotation dim) (line-text "x = 5")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,

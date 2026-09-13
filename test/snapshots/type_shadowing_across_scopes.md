@@ -25,99 +25,153 @@ BUILTIN TYPE SHADOWED - type_shadowing_across_scopes.md:1:1:1:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
-── ✗ expected type field ─────────────────── type_shadowing_across_scopes.md:9:5
-
-I was parsing a record type, and I expected a field name.
-
-Try : [Success, Failure]
-^^^
-
-Record type fields start with lowercase names, _, or named underscores,
-followed by : and the field type.
-
-For example:
-    { name : Str, age : U64 }
-
-I found Try here.
-Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
-
-── ✗ expected record type separator ─────── type_shadowing_across_scopes.md:9:21
-
-I was parsing a record type, and I expected `,` or `}`.
-
-Try : [Success, Failure]
-                ^^^^^^^
-
-Separate record type fields with commas and close the record type with }.
-
-For example:
-    { name : Str, age : U64 }
-
-I found Failure here.
-Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
-
-── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:9:28
-
-I was parsing a statement, and this token cannot start a statement here.
-
-Try : [Success, Failure]
-                       ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found ] here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:10:1
-
-I was parsing a statement, and this token cannot start a statement here.
-
-}
-^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found } here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ● builtin type shadowed ───────────────── type_shadowing_across_scopes.md:1:1
-
-The type Try shadows a builtin type.
-
-Try(a, b) : [Ok(a), Err(b)]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This may make the builtin type inaccessible in this scope.
-
-── ● unused variable ────────────────────── type_shadowing_across_scopes.md:4:16
-
-Variable data is defined here and then never used:
-
-processData = |data|
-               ^^^^
-
-If you don't need this variable, prefix it with an underscore like _data to
-suppress this warning.
-
-── ✗ malformed type ─────────────────────── type_shadowing_across_scopes.md:9:21
-
-This type annotation is malformed or contains invalid syntax.
-
-Try : [Success, Failure]
-                ^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Expected Type Field")
+		(region (start 9 5) (end 9 8))
+		(headline
+			(reflow "I was parsing a record type, and I expected a field name."))
+		(document
+			(reflow "Record type fields start with lowercase names, ")
+			(annotated code "_")
+			(reflow ", or named underscores, followed by ")
+			(annotated code ":")
+			(reflow " and the field type.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ name : Str, age : U64 }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "Try")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with uppercase letters are used for tags, type names, and mod names in Roc.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_shadowing_across_scopes.md") (start 9 5) (end 9 8) (annotation error) (line-text "    Try : [Success, Failure]"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Record Type Separator")
+		(region (start 9 21) (end 9 28))
+		(headline
+			(reflow "I was parsing a record type, and I expected `,` or `}`."))
+		(document
+			(reflow "Separate record type fields with commas and close the record type with ")
+			(annotated code "}")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ name : Str, age : U64 }")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "Failure")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with uppercase letters are used for tags, type names, and mod names in Roc.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_shadowing_across_scopes.md") (start 9 21) (end 9 28) (annotation error) (line-text "    Try : [Success, Failure]"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 9 28) (end 9 29))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "]")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_shadowing_across_scopes.md") (start 9 28) (end 9 29) (annotation error) (line-text "    Try : [Success, Failure]"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 10 1) (end 10 2))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "}")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_shadowing_across_scopes.md") (start 10 1) (end 10 2) (annotation error) (line-text "}"))))
+	(report
+		(severity warning)
+		(title "Builtin Type Shadowed")
+		(region (start 1 1) (end 1 28))
+		(headline
+			(text "The type ")
+			(annotated symbol-unqualified "Try")
+			(text " shadows a builtin type."))
+		(document
+			(reflow "This may make the builtin type inaccessible in this scope.")
+			(line-break)
+			(source-region (file "type_shadowing_across_scopes.md") (start 1 1) (end 1 28) (annotation warning) (line-text "Try(a, b) : [Ok(a), Err(b)]"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 4 16) (end 4 20))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "data")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_data")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_shadowing_across_scopes.md") (start 4 16) (end 4 20) (annotation error) (line-text "processData = |data|"))))
+	(report
+		(severity runtime_error)
+		(title "Malformed Type")
+		(region (start 9 21) (end 9 28))
+		(headline
+			(reflow "This type annotation is malformed or contains invalid syntax."))
+		(document
+			(source-region (file "type_shadowing_across_scopes.md") (start 9 21) (end 9 28) (annotation error) (line-text "    Try : [Success, Failure]")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,

@@ -68,12 +68,16 @@ pub const Config = struct {
     /// Maximum decompressed size for any single package bundle, in bytes.
     /// Null means unlimited. Platform bundles are always exempt.
     max_package_expanded_bytes: ?u64 = default_max_package_expanded_bytes,
-    /// Maximum combined content size attributable to any single direct
-    /// dependency of the root, in bytes. Null means unlimited.
+    /// Maximum combined content size attributable to any single non-platform
+    /// direct dependency of the root, in bytes. Null means unlimited.
     max_transitive_expanded_bytes: ?u64 = default_max_transitive_expanded_bytes,
+    /// Maximum combined content size attributable to a direct platform
+    /// dependency of the root, in bytes. Null means unlimited.
+    max_platform_transitive_expanded_bytes: ?u64 = default_max_platform_transitive_expanded_bytes,
 
     pub const default_max_package_expanded_bytes: u64 = 10 * 1024 * 1024;
     pub const default_max_transitive_expanded_bytes: u64 = 100 * 1024 * 1024;
+    pub const default_max_platform_transitive_expanded_bytes: u64 = 512 * 1024 * 1024;
 };
 
 /// The kind of module header a package's root file has.
@@ -90,7 +94,7 @@ pub const HeaderKind = enum {
 pub const ScannedDep = struct {
     alias: []const u8,
     spec: []const u8,
-    /// True only for the platform entry of an app header.
+    /// True for a platform-marked dependency in an app or package header.
     is_platform: bool,
     /// Present only for compiler-owned platform references such as `platform glue`.
     compiler_owned_platform: ?CompilerOwnedPlatform = null,
@@ -163,6 +167,9 @@ pub const Resolved = struct {
     arena: *std.heap.ArenaAllocator,
     /// Index 0 is always the root package.
     packages: []Package,
+    /// The one platform selected by the complete dependency graph, or null
+    /// when the graph has no platform dependency.
+    selected_platform_index: ?u32,
 
     pub const root_index: u32 = 0;
 
@@ -177,7 +184,7 @@ pub const Resolved = struct {
     pub const Dep = struct {
         alias: []const u8,
         target: u32,
-        /// True only for the root app's platform dependency.
+        /// True for a platform-marked dependency.
         is_platform: bool,
         /// The version this package's header declared for the dependency,
         /// when it differs from what solving could pick. Compare with the
@@ -336,7 +343,7 @@ const Missing = struct {
     group: []const u8,
     url: []const u8,
     hash: []const u8,
-    /// True if any edge requiring this download is the app's platform edge,
+    /// True if any edge requiring this download is a platform dependency,
     /// which exempts the bundle from the per-package size limit.
     platform_exempt: bool,
 };
@@ -888,7 +895,7 @@ pub const Resolver = struct {
                     try self.addDiagnostic(
                         "Package Too Large",
                         "The package at\n\n    {s}\n\nexpands to more than the per-package limit of {d} bytes.\n\n" ++
-                            "You can raise the limit with the --max-package-bytes flag, or stop depending on this package.",
+                            "You can raise the limit with the --max-package-mb flag, or stop depending on this package.",
                         .{ task.missing.url, self.config.max_package_expanded_bytes orelse 0 },
                     );
                     continue;
@@ -916,9 +923,11 @@ pub const Resolver = struct {
     /// package any round has ever pulled into the graph (including retracted
     /// ones, and including already-cached ones).
     fn checkTransitiveLimits(self: *Resolver, root_node: FetchedPackage) Allocator.Error!void {
-        const limit = self.config.max_transitive_expanded_bytes orelse return;
-
         for (root_node.deps) |dep| {
+            const limit = (if (dep.is_platform)
+                self.config.max_platform_transitive_expanded_bytes
+            else
+                self.config.max_transitive_expanded_bytes) orelse continue;
             const start_group = (try self.groupKeyForDep(root_node.root_dir, dep)) orelse continue;
 
             var seen_groups: std.StringHashMapUnmanaged(void) = .{};
@@ -970,7 +979,7 @@ pub const Resolver = struct {
                 try self.addDiagnostic(
                     "Dependency Tree Too Large",
                     "Depending on\n\n    {s}\n\nhas pulled more than {d} bytes of packages into the build ({d} bytes so far).\n\n" ++
-                        "You can raise the limit with the --max-transitive-bytes flag, or stop depending on this package.",
+                        "You can raise the limit with the --max-transitive-mb flag, or stop depending on this package.",
                     .{ dep.spec, limit, total },
                 );
             }
@@ -1070,6 +1079,13 @@ pub const Resolver = struct {
                 },
             }
         }
+        if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
+
+        // Platform selection is graph-wide and exact. Ordinary package
+        // dependencies may participate in compatible version solving, but a
+        // platform is part of the app/package execution contract and every
+        // declaration must name the identical source.
+        const selected_platform_edge = try self.validatePlatformSelection(walk_result);
         if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
 
         // App pinning: the root app's versioned URL deps are exact. Any edge
@@ -1257,9 +1273,73 @@ pub const Resolver = struct {
             package.deps = list.items;
         }
 
+        const selected_platform_index: ?u32 = if (root_node.kind == .platform)
+            Resolved.root_index
+        else if (selected_platform_edge) |edge| blk: {
+            const group = switch (edge.target) {
+                .url => |target| target.group,
+                .local => |group| group,
+                .compiler_owned => |platform| compiler_platforms.groupKey(platform),
+                .invalid => unreachable,
+            };
+            break :blk group_to_index.get(group).?;
+        } else null;
+
         return .{
             .arena = result_arena,
             .packages = packages.items,
+            .selected_platform_index = selected_platform_index,
+        };
+    }
+
+    fn validatePlatformSelection(self: *Resolver, walk_result: *const WalkResult) Allocator.Error!?Edge {
+        var selected: ?Edge = null;
+
+        // A root declaration is authoritative. If this is a package-root graph
+        // with only transitive declarations, source-order BFS provides a stable
+        // representative after equality has been checked.
+        for (walk_result.edges.items) |edge| {
+            if (edge.is_platform and edge.parent == null and edge.target != .invalid) {
+                selected = edge;
+                break;
+            }
+        }
+        if (selected == null) {
+            for (walk_result.edges.items) |edge| {
+                if (edge.is_platform and edge.target != .invalid) {
+                    selected = edge;
+                    break;
+                }
+            }
+        }
+        const expected = selected orelse return null;
+
+        for (walk_result.edges.items) |edge| {
+            if (!edge.is_platform or edge.target == .invalid) continue;
+            if (platformTargetsEqual(expected.target, edge.target)) continue;
+
+            const expected_owner = try self.describeOwner(walk_result, expected.parent);
+            const actual_owner = try self.describeOwner(walk_result, edge.parent);
+            try self.addDiagnostic(
+                "Platform Dependency Mismatch",
+                "{s} selects this platform:\n\n    {s}\n\n" ++
+                    "but {s} selects a different platform:\n\n    {s}\n\n" ++
+                    "Every app and package in one build must declare the identical platform version and content hash.",
+                .{ expected_owner, expected.spec, actual_owner, edge.spec },
+            );
+        }
+        return expected;
+    }
+
+    fn platformTargetsEqual(a: Edge.Target, b: Edge.Target) bool {
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+        return switch (a) {
+            .url => |left| std.mem.eql(u8, left.group, b.url.group) and
+                left.version.eql(b.url.version) and
+                std.mem.eql(u8, left.hash, b.url.hash),
+            .local => |left| std.mem.eql(u8, left, b.local),
+            .compiler_owned => |left| left == b.compiler_owned,
+            .invalid => false,
         };
     }
 
@@ -1286,7 +1366,7 @@ pub const Resolver = struct {
         if (target_kind == .platform) {
             try self.addDiagnostic(
                 "Invalid Package Dependency",
-                "{s} depends on {s}, which is a platform. Only apps may depend on platforms.",
+                "{s} depends on {s}, which is a platform. Mark this dependency with the `platform` keyword.",
                 .{ owner, edge.spec },
             );
         }
@@ -1529,7 +1609,22 @@ pub fn scanParsedHeader(
             break :blk .app;
         },
         .package => |p| blk: {
-            try appendPackagesCollection(allocator, ast, p.packages, null, p.roc_version, &deps);
+            if (p.platform_idx) |platform_idx| {
+                const platform_field = ast.store.getRecordField(platform_idx);
+                if (platform_field.value.asSupplied()) |value_expr| {
+                    const platform_expr = ast.store.getExpr(value_expr);
+                    if (platform_expr == .string) {
+                        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
+                        try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
+                    } else if (platform_expr == .ident) {
+                        const ident = platform_expr.ident;
+                        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
+                        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
+                        try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
+                    } else return error.HeaderParseFailed;
+                } else return error.HeaderParseFailed;
+            }
+            try appendPackagesCollection(allocator, ast, p.packages, p.platform_idx, p.roc_version, &deps);
             break :blk .package;
         },
         .platform => |p| blk: {
@@ -2013,6 +2108,42 @@ test "scanHeaderSource accepts compiler-owned glue platform" {
     try std.testing.expectEqualStrings("platform glue", fetched.deps[0].spec);
     try std.testing.expect(fetched.deps[0].is_platform);
     try std.testing.expectEqual(CompilerOwnedPlatform.glue, fetched.deps[0].compiler_owned_platform.?);
+}
+
+test "scanHeaderSource accepts a package platform dependency" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const fetched = try scanHeaderSource(
+        gpa,
+        gpa,
+        "/tmp/main.roc",
+        "package [Wrapper] { pf: platform \"../platform/main.roc\", util: \"../util/main.roc\" }\n",
+    );
+
+    try std.testing.expectEqual(HeaderKind.package, fetched.kind);
+    try std.testing.expectEqual(@as(usize, 2), fetched.deps.len);
+    try std.testing.expectEqualStrings("pf", fetched.deps[0].alias);
+    try std.testing.expect(fetched.deps[0].is_platform);
+    try std.testing.expectEqualStrings("util", fetched.deps[1].alias);
+    try std.testing.expect(!fetched.deps[1].is_platform);
+}
+
+test "scanHeaderSource rejects multiple package platform dependencies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    try std.testing.expectError(
+        error.HeaderParseFailed,
+        scanHeaderSource(
+            gpa,
+            gpa,
+            "/tmp/main.roc",
+            "package [Wrapper] { one: platform \"../one/main.roc\", two: platform \"../two/main.roc\" }\n",
+        ),
+    );
 }
 
 test "scanHeaderSource rejects malformed package headers" {
@@ -2521,6 +2652,39 @@ test "transitive size limit counts each direct dependency's reachable packages" 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqualStrings("Dependency Tree Too Large", resolver.diagnostics.items[0].title);
     try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, a_url) != null);
+    try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, "--max-transitive-mb") != null);
+}
+
+test "platform dependencies have a larger transitive size limit" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const platform_url = "https://example.com/pf/1.0.0/hashPf.tar.zst";
+    const package_url = "https://example.com/pkg/1.0.0/hashPkg.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "pf", .spec = platform_url, .is_platform = true },
+            .{ .alias = "pkg", .spec = package_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(platform_url, .{ .kind = .platform, .content_bytes = 4500 });
+    try registry.urls.put(package_url, .{ .content_bytes = 4500 });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{
+        .max_package_expanded_bytes = null,
+        .max_transitive_expanded_bytes = 4000,
+        .max_platform_transitive_expanded_bytes = 5000,
+    });
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
+    const diagnostic = resolver.diagnostics.items[0];
+    try std.testing.expectEqualStrings("Dependency Tree Too Large", diagnostic.title);
+    try std.testing.expect(std.mem.find(u8, diagnostic.message, package_url) != null);
 }
 
 test "per-package size limit is enforced for packages but not platforms" {
@@ -2553,9 +2717,10 @@ test "per-package size limit is enforced for packages but not platforms" {
     const diagnostic = resolver.diagnostics.items[0];
     try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, a_url) != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.message, "--max-package-mb") != null);
 }
 
-test "packages may not depend on platforms or apps" {
+test "platform targets must be marked and packages may not depend on apps" {
     const gpa = std.testing.allocator;
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
@@ -2578,6 +2743,62 @@ test "packages may not depend on platforms or apps" {
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqual(@as(usize, 2), resolver.diagnostics.items.len);
+}
+
+test "package platform dependencies select one exact local platform" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/workspace/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "pf", .spec = "platform/main.roc", .is_platform = true },
+            .{ .alias = "wrapper", .spec = "wrapper/main.roc", .is_platform = false },
+        },
+    });
+    try registry.locals.put("/workspace/platform/main.roc", .{ .kind = .platform });
+    try registry.locals.put("/workspace/wrapper/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "pf", .spec = "../platform/main.roc", .is_platform = true }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/workspace/main.roc");
+    defer resolved.deinit();
+
+    const selected = resolved.selected_platform_index.?;
+    try std.testing.expectEqual(HeaderKind.platform, resolved.packages[selected].kind);
+    const sep = std.fs.path.sep_str;
+    try std.testing.expectEqualStrings(sep ++ "workspace" ++ sep ++ "platform" ++ sep ++ "main.roc", resolved.packages[selected].identity);
+}
+
+test "compatible platform versions with different hashes are rejected" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const platform_100 = "https://example.com/pf/1.0.0/hashPf1oo.tar.zst";
+    const platform_110 = "https://example.com/pf/1.1.0/hashPf11o.tar.zst";
+    const wrapper_url = "https://example.com/wrapper/1.0.0/hashWrapper.tar.zst";
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "pf", .spec = platform_110, .is_platform = true },
+            .{ .alias = "wrapper", .spec = wrapper_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(platform_100, .{ .kind = .platform });
+    try registry.urls.put(platform_110, .{ .kind = .platform });
+    try registry.urls.put(wrapper_url, .{
+        .deps = &.{.{ .alias = "pf", .spec = platform_100, .is_platform = true }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Platform Dependency Mismatch", resolver.diagnostics.items[0].title);
 }
 
 test "local package cycles are reported" {

@@ -38,22 +38,22 @@ EndOfFile,
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "to_str")
-					(args
-						(ty-var (raw "a")))
-					(ty (name "Str")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty (name "Str"))))))
 		(s-type-decl
 			(header (name ".Comparable")
 				(args))
 			(ty-var (raw "a"))
 			(where
 				(method (mod-of "a") (name "order_relative_to")
-					(args
-						(ty-var (raw "a")))
-					(ty-tag-union
-						(tags
-							(ty (name "Before"))
-							(ty (name "Same"))
-							(ty (name "After")))))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-tag-union
+							(tags
+								(ty (name "Before"))
+								(ty (name "Same"))
+								(ty (name "After"))))))))
 		(s-type-decl
 			(header (name ".Sortable")
 				(args))
@@ -117,20 +117,20 @@ describe = |value| value.to_str()
 		(ty-rigid-var (name "a"))
 		(where
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-fn (effectful false)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-lookup (name "Str") (builtin))))))
 	(s-where-alias-decl
 		(ty-header (name "Comparable"))
 		(ty-rigid-var (name "a"))
 		(where
 			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "order_relative_to")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-tag-union
-					(ty-tag-name (name "Before"))
-					(ty-tag-name (name "Same"))
-					(ty-tag-name (name "After"))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-tag-union
+						(ty-tag-name (name "Before"))
+						(ty-tag-name (name "Same"))
+						(ty-tag-name (name "After")))))))
 	(s-where-alias-decl
 		(ty-header (name "Sortable"))
 		(ty-rigid-var (name "a"))

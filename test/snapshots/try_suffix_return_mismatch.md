@@ -46,113 +46,354 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:14:6:14:15
 TYPE MISMATCH - try_suffix_return_mismatch.md:20:7:20:18
 TYPE MISMATCH - try_suffix_return_mismatch.md:30:8:30:18
 # PROBLEMS
-── ● trailing `?` ─────────────────────────── try_suffix_return_mismatch.md:9:10
-
-It's usually a mistake to use a postfix ? on values being returned implicitly
-at the end of a function like this:
-
-parse(t)?
-        ^
-
-This is because ? is syntax sugar for doing a match on a Try value like this:
-
-    match value_before_question_mark {
-        Ok(ok_payload) => ok_payload
-        Err(err_payload) => return Err(err_payload)
-    }
-
-When you use ? on the value at the end of a function, it changes "implicitly
-return this Try value" to "return this Try value if it's an Err, but if it's
-Ok, unwrap its Ok payload and return that instead" - which can only possibly
-type-check when returning Try(Try(..., ...), ...), which is so unusual that
-using ? here is almost always a mistake in practice.
-
-Usually removing the ? here is what makes the most sense, but if you really
-want this behavior, make it clear by using an explicit match instead of the ?
-syntax sugar.
-
-── ✗ type mismatch ─────────────────────────── try_suffix_return_mismatch.md:8:6
-
-This ? may return early with a type that doesn't match the function body.
-
-t = parse(s)?
-    ^^^^^^^^^
-
-If this Try is an Err, then the ? after it immediately returns an Err whose payload has this type:
-
-    [BadInput]
-
-Returning an Err with that type only works if the function itself returns a Try with a compatible error type, but this function's return type is:
-
-    Str
-
-Hint: The function body ends with a ?:
-
-parse(t)?
-        ^
-That ? unwraps the Try the body would otherwise return. Removing it may fix
-this.
-
-── ✗ type mismatch ────────────────────────── try_suffix_return_mismatch.md:14:6
-
-This ? may return early with a type that doesn't match the function body.
-
-t = parse(s)?
-    ^^^^^^^^^
-
-If this Try is an Err, then the ? after it immediately returns an Err whose
-payload has this type:
-
-    [BadInput]
-
-Returning an Err with that type only works if the function itself returns a Try
-with a compatible error type, but this function's return type is:
-
-    Str
-
-Hint: The error types from all ? operators and the function body must be
-compatible, since any of them could be the actual return value.
-
-── ✗ type mismatch ────────────────────────── try_suffix_return_mismatch.md:20:7
-
-This ? may return early with a type that doesn't match the function body.
-
-_x = xs.first()?
-     ^^^^^^^^^^^
-
-If this Try is an Err, then the ? after it immediately returns an Err whose
-payload has this type:
-
-    [ListWasEmpty, ..]
-
-Returning an Err with that type only works if the function itself returns a Try
-with a compatible error type, but this function's return type is:
-
-    U64
-
-Hint: The error types from all ? operators and the function body must be
-compatible, since any of them could be the actual return value.
-
-── ✗ type mismatch ────────────────────────── try_suffix_return_mismatch.md:30:8
-
-This ? may return early with a type that doesn't match the function body.
-
-_x = l.first()?
-     ^^^^^^^^^^
-
-If this Try is an Err, then the ? after it immediately returns an Err whose
-payload has this type:
-
-    [ListWasEmpty, ..]
-
-Returning an Err with that type only works if the function itself returns a Try
-with a compatible error type, but this function's return type is:
-
-    {}
-
-Hint: The error types from all ? operators and the function body must be
-compatible, since any of them could be the actual return value.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Trailing `?`")
+		(region (start 9 10) (end 9 11))
+		(headline
+			(reflow "It's usually a mistake to use a postfix ")
+			(annotated code "?")
+			(reflow " on values being returned implicitly at the end of a function like this:"))
+		(document
+			(source-region (file "try_suffix_return_mismatch.md") (start 9 10) (end 9 11) (annotation warning) (line-text "\tparse(t)?"))
+			(line-break)
+			(reflow "This is because ")
+			(annotated code "?")
+			(reflow " is syntax sugar for doing a ")
+			(annotated code "match")
+			(reflow " on a ")
+			(annotated code "Try")
+			(reflow " value like this:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(annotated keyword "match")
+			(text " ")
+			(annotated symbol-unqualified "value_before_question_mark")
+			(text " {")
+			(line-break)
+			(indent 2)
+			(annotated tag "Ok")
+			(text "(")
+			(annotated symbol-unqualified "ok_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated symbol-unqualified "ok_payload")
+			(line-break)
+			(indent 2)
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ") ")
+			(annotated operator "=>")
+			(text " ")
+			(annotated keyword "return")
+			(text " ")
+			(annotated tag "Err")
+			(text "(")
+			(annotated symbol-unqualified "err_payload")
+			(text ")")
+			(line-break)
+			(indent 1)
+			(text "}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "When you use ")
+			(annotated code "?")
+			(reflow " on the value at the end of a function, it changes \"implicitly return this ")
+			(annotated code "Try")
+			(reflow " value\" to \"return this ")
+			(annotated code "Try")
+			(reflow " value if it's an ")
+			(annotated code "Err")
+			(reflow ", but if it's ")
+			(annotated code "Ok")
+			(reflow ", unwrap its ")
+			(annotated code "Ok")
+			(reflow " payload and return that instead\" - which can only possibly type-check when returning ")
+			(annotated code "Try(Try(..., ...), ...)")
+			(reflow ", which is so unusual that using ")
+			(annotated code "?")
+			(reflow " here is almost always a mistake in practice.")
+			(line-break)
+			(line-break)
+			(reflow "Usually removing the ")
+			(annotated code "?")
+			(reflow " here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ")
+			(annotated code "match")
+			(reflow " instead of the ")
+			(annotated code "?")
+			(reflow " syntax sugar.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 8 6) (end 8 15))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "try_suffix_return_mismatch.md") (start 8 6) (end 8 15) (annotation error) (line-text "\tt = parse(s)?"))
+			(line-break)
+			(reflow "If this")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "is an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ",")
+			(reflow " ")
+			(reflow "then the")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "after it immediately returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "whose payload has this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[BadInput]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Returning an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "with that type only works if the function itself returns a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "with a compatible error type, but this function's return type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The function body ends with a")
+			(reflow " ")
+			(annotated code "?")
+			(reflow ":")
+			(line-break)
+			(line-break)
+			(source-region (file "try_suffix_return_mismatch.md") (start 9 10) (end 9 11) (annotation error) (line-text "\tparse(t)?"))
+			(line-break)
+			(reflow "That")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "unwraps the")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "the body would otherwise return. Removing it may fix this.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 14 6) (end 14 15))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "try_suffix_return_mismatch.md") (start 14 6) (end 14 15) (annotation error) (line-text "\tt = parse(s)?"))
+			(line-break)
+			(reflow "If this")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "is an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ",")
+			(reflow " ")
+			(reflow "then the")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "after it immediately returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "whose payload has this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[BadInput]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Returning an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "with that type only works if the function itself returns a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "with a compatible error type, but this function's return type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The error types from all")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 20 7) (end 20 18))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "try_suffix_return_mismatch.md") (start 20 7) (end 20 18) (annotation error) (line-text "\t_x = xs.first()?"))
+			(line-break)
+			(reflow "If this")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "is an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ",")
+			(reflow " ")
+			(reflow "then the")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "after it immediately returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "whose payload has this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[ListWasEmpty, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Returning an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "with that type only works if the function itself returns a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "with a compatible error type, but this function's return type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U64")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The error types from all")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 30 8) (end 30 18))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "try_suffix_return_mismatch.md") (start 30 8) (end 30 18) (annotation error) (line-text "\t\t_x = l.first()?"))
+			(line-break)
+			(reflow "If this")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "is an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ",")
+			(reflow " ")
+			(reflow "then the")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "after it immediately returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "whose payload has this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[ListWasEmpty, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Returning an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "with that type only works if the function itself returns a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "with a compatible error type, but this function's return type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The error types from all")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

@@ -31,9 +31,9 @@ EndOfFile,
 				(ty-var (raw "b")))
 			(where
 				(method (mod-of "a") (name "convert")
-					(args
-						(ty-var (raw "a")))
-					(ty-var (raw "b")))))
+					(ty-fn
+						(ty-var (raw "a"))
+						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "convert_me"))
 			(e-ellipsis))))
@@ -54,9 +54,9 @@ NO CHANGE
 				(ty-rigid-var (name "b")))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert")
-					(args
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))))
 ~~~
 # TYPES
 ~~~clojure

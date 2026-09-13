@@ -15,21 +15,34 @@ main = "${y}"
 # EXPECTED
 TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
-── ✗ type mismatch ────────────────────────────────────────── issue_9075.md:6:11
-
-This expression is used in an unexpected way.
-
-main = "${y}"
-          ^
-
-It has the type:
-
-    Dec
-
-But you are trying to use it as:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 6 11) (end 6 12))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "issue_9075.md") (start 6 11) (end 6 12) (annotation error) (line-text "main = \"${y}\""))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,LowerIdent,

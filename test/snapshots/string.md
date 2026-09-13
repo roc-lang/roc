@@ -31,103 +31,143 @@ UNEXPECTED STATEMENT - string.md:13:1:13:2
 UNEXPECTED STATEMENT - string.md:13:2:13:3
 UNEXPECTED STATEMENT - string.md:13:3:13:3
 # PROBLEMS
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:4:3
-
-This Unicode escape sequence is not valid.
-
-"\u",
- ^^
-
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:5:3
-
-This Unicode escape sequence is not valid.
-
-"\u)",
- ^^
-
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:6:3
-
-This Unicode escape sequence is not valid.
-
-"\u(",
- ^^^
-
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:7:3
-
-This Unicode escape sequence is not valid.
-
-"\u()",
- ^^^^
-
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:8:3
-
-This Unicode escape sequence is not valid.
-
-"\u(K)",
- ^^^^^
-
-── ✗ invalid escape sequence ──────────────────────────────────── string.md:13:2
-
-This escape sequence is not recognized.
-
-"\
-
-
-── ✗ unclosed string ──────────────────────────────────────────── string.md:13:1
-
-This string is missing a closing quote.
-
-"\
-^^
-
-── ✗ unexpected statement ─────────────────────────────────────── string.md:13:1
-
-I was parsing a statement, and this token cannot start a statement here.
-
-"\
-^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found " here.
-
-── ✗ unexpected statement ─────────────────────────────────────── string.md:13:2
-
-I was parsing a statement, and this token cannot start a statement here.
-
-"\
- ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found \ here.
-
-Tip: Roc syntax does not use single backslashes. Roc lambda syntax is |arg1,
-arg2| body, and double backslash (\\) begins a line in a multiline string.
-
-── ✗ unexpected statement ─────────────────────────────────────── string.md:13:3
-
-I was parsing a statement, and this token cannot start a statement here.
-
-"\
-  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I reached the end of the file before this construct was complete.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 4 3) (end 4 5))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "string.md") (start 4 3) (end 4 5) (annotation error) (line-text "\t\"\\u\","))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 5 3) (end 5 5))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "string.md") (start 5 3) (end 5 5) (annotation error) (line-text "\t\"\\u)\","))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 6 3) (end 6 6))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "string.md") (start 6 3) (end 6 6) (annotation error) (line-text "\t\"\\u(\","))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 7 3) (end 7 7))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "string.md") (start 7 3) (end 7 7) (annotation error) (line-text "\t\"\\u()\","))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Unicode Escape Sequence")
+		(region (start 8 3) (end 8 8))
+		(headline
+			(reflow "This Unicode escape sequence is not valid."))
+		(document
+			(source-region (file "string.md") (start 8 3) (end 8 8) (annotation error) (line-text "\t\"\\u(K)\","))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Escape Sequence")
+		(region (start 13 2) (end 14 1))
+		(headline
+			(reflow "This escape sequence is not recognized."))
+		(document
+			(source-region (file "string.md") (start 13 2) (end 14 1) (annotation error) (line-text "\"\\\n"))))
+	(report
+		(severity runtime_error)
+		(title "Unclosed String")
+		(region (start 13 1) (end 13 3))
+		(headline
+			(reflow "This string is missing a closing quote."))
+		(document
+			(source-region (file "string.md") (start 13 1) (end 13 3) (annotation error) (line-text "\"\\"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 13 1) (end 13 2))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "\"")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "string.md") (start 13 1) (end 13 2) (annotation error) (line-text "\"\\"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 13 2) (end 13 3))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "\\")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(text "Tip: ")
+			(reflow "Roc syntax does not use single backslashes. Roc lambda syntax is ")
+			(annotated code "|arg1, arg2| body")
+			(reflow ", and double backslash (")
+			(annotated code "\\\\")
+			(reflow ") begins a line in a multiline string.")
+			(line-break)
+			(line-break)
+			(source-region (file "string.md") (start 13 2) (end 13 3) (annotation error) (line-text "\"\\"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 13 3) (end 13 3))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "string.md") (start 13 3) (end 13 3) (annotation error) (line-text "\"\\")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

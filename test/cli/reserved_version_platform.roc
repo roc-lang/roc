@@ -3,6 +3,6 @@ app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/down
 import cli.Stdout
 import cli.Arg exposing [Arg]
 
-main! : List Arg => Result {} _
+main! : List(Arg) => Try({}, _)
 main! = |_args|
     Stdout.line!("Hello, World!")

@@ -5915,7 +5915,7 @@ test "call_indirect—roc_alloc uses 2-arg callback type, not RocCall type" {
 
     // Import roc_alloc with the 2-arg type
     module.enableTable();
-    const roc_alloc_idx = try module.addImport("env", "roc_alloc", roc_ops_type);
+    const roc_alloc_idx = try module.addImport("env", shim_symbols.roc_alloc, roc_ops_type);
 
     // Verify the import's type index is the 2-arg type, not the 3-arg type
     try std.testing.expectEqual(roc_ops_type, module.imports.items[roc_alloc_idx].type_idx);
@@ -5983,22 +5983,22 @@ test "function table—all RocOps functions have valid table entries after linki
     module.enableTable();
 
     // Import all 6 RocOps callbacks and add them to the table
-    const roc_alloc_idx = try module.addImport("env", "roc_alloc", roc_ops_type);
+    const roc_alloc_idx = try module.addImport("env", shim_symbols.roc_alloc, roc_ops_type);
     const roc_alloc_table = try module.addTableElement(roc_alloc_idx);
 
-    const roc_dealloc_idx = try module.addImport("env", "roc_dealloc", roc_ops_type);
+    const roc_dealloc_idx = try module.addImport("env", shim_symbols.roc_dealloc, roc_ops_type);
     const roc_dealloc_table = try module.addTableElement(roc_dealloc_idx);
 
-    const roc_realloc_idx = try module.addImport("env", "roc_realloc", roc_ops_type);
+    const roc_realloc_idx = try module.addImport("env", shim_symbols.roc_realloc, roc_ops_type);
     const roc_realloc_table = try module.addTableElement(roc_realloc_idx);
 
-    const roc_dbg_idx = try module.addImport("env", "roc_dbg", roc_ops_type);
+    const roc_dbg_idx = try module.addImport("env", shim_symbols.roc_dbg, roc_ops_type);
     const roc_dbg_table = try module.addTableElement(roc_dbg_idx);
 
-    const roc_expect_failed_idx = try module.addImport("env", "roc_expect_failed", roc_ops_type);
+    const roc_expect_failed_idx = try module.addImport("env", shim_symbols.roc_expect_failed, roc_ops_type);
     const roc_expect_failed_table = try module.addTableElement(roc_expect_failed_idx);
 
-    const roc_crashed_idx = try module.addImport("env", "roc_crashed", roc_ops_type);
+    const roc_crashed_idx = try module.addImport("env", shim_symbols.roc_crashed, roc_ops_type);
     const roc_crashed_table = try module.addTableElement(roc_crashed_idx);
 
     // Verify all 6 have sequential table indices
@@ -6034,9 +6034,9 @@ test "function table—hosted functions added to table with correct indices" {
     module.enableTable();
 
     // Add RocOps callbacks first (as the codegen does)
-    const roc_alloc_idx = try module.addImport("env", "roc_alloc", roc_ops_type);
+    const roc_alloc_idx = try module.addImport("env", shim_symbols.roc_alloc, roc_ops_type);
     _ = try module.addTableElement(roc_alloc_idx);
-    const roc_dealloc_idx = try module.addImport("env", "roc_dealloc", roc_ops_type);
+    const roc_dealloc_idx = try module.addImport("env", shim_symbols.roc_dealloc, roc_ops_type);
     _ = try module.addTableElement(roc_dealloc_idx);
 
     // Now add hosted functions—they follow the RocOps entries in the table
@@ -6072,7 +6072,7 @@ test "findFunctionIdxBySuffix—ignores imported symbols and finds defined host 
     defer module.deinit();
 
     const type_idx = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    _ = try module.addImport("env", "roc_dbg", type_idx);
+    _ = try module.addImport("env", shim_symbols.roc_dbg, type_idx);
     module.import_fn_count = 1;
 
     const callback_idx = try module.addFunction(type_idx);
@@ -6081,7 +6081,7 @@ test "findFunctionIdxBySuffix—ignores imported symbols and finds defined host 
         .{ .kind = .function, .flags = 0, .name = "host.roc_dbg", .index = callback_idx },
     });
 
-    try std.testing.expectEqual(callback_idx, module.findFunctionIdxBySuffix("roc_dbg").?);
+    try std.testing.expectEqual(callback_idx, module.findFunctionIdxBySuffix(shim_symbols.roc_dbg).?);
 }
 
 test "ensureTableElement—reuses existing table entry" {
@@ -6128,8 +6128,8 @@ fn buildMergeHostModule(allocator: Allocator) Allocator.Error!Self {
     _ = try module.addFuncType(&.{}, &.{});
 
     // 2 imports
-    _ = try module.addImport("env", "roc_alloc", 0);
-    _ = try module.addImport("env", "roc_dealloc", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
+    _ = try module.addImport("env", shim_symbols.roc_dealloc, 0);
     module.import_fn_count = 2;
 
     // 1 defined function (type 1: () -> void)
@@ -6196,7 +6196,7 @@ fn buildMergeBuiltinsModule(allocator: Allocator) Allocator.Error!Self {
     _ = try module.addFuncType(&.{.i32}, &.{.i32});
 
     // 1 import (roc_alloc—shared with host)
-    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
     module.import_fn_count = 1;
 
     // 2 defined functions
@@ -6301,12 +6301,12 @@ test "mergeModule rejects same-name imports with different signatures" {
     var host = Self.init(allocator);
     defer host.deinit();
     const host_type = try host.addFuncType(&.{.i32}, &.{});
-    _ = try host.addImport("env", "roc_crashed", host_type);
+    _ = try host.addImport("env", shim_symbols.roc_crashed, host_type);
 
     var source = Self.init(allocator);
     defer source.deinit();
     const source_type = try source.addFuncType(&.{ .i32, .i32 }, &.{});
-    _ = try source.addImport("env", "roc_crashed", source_type);
+    _ = try source.addImport("env", shim_symbols.roc_crashed, source_type);
 
     try std.testing.expectError(error.FunctionTypeMismatch, host.mergeModule(&source));
 }
@@ -6662,8 +6662,8 @@ test "resolveCodeRelocations—table_index_sleb resolves to table index not func
     _ = try module.addFuncType(&.{}, &.{});
 
     // 2 imports
-    _ = try module.addImport("env", "roc_alloc", 0);
-    _ = try module.addImport("env", "roc_dealloc", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
+    _ = try module.addImport("env", shim_symbols.roc_dealloc, 0);
     module.import_fn_count = 2;
 
     // 3 defined functions (global indices 2, 3, 4)
@@ -6787,7 +6787,7 @@ test "BuiltinSymbols—all symbols found after merge" {
     // Type 0: () -> void
     _ = try module.addFuncType(&.{}, &.{});
     // 1 import (roc_alloc)
-    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
     module.import_fn_count = 1;
 
     // Add a defined function symbol for each builtin that BuiltinSymbols expects.
@@ -7052,12 +7052,12 @@ test "verifyNoBuiltinImports—passes when only RocOps imports remain" {
     defer module.deinit();
 
     _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    _ = try module.addImport("env", "roc_alloc", 0);
-    _ = try module.addImport("env", "roc_dealloc", 0);
-    _ = try module.addImport("env", "roc_realloc", 0);
-    _ = try module.addImport("env", "roc_dbg", 0);
-    _ = try module.addImport("env", "roc_expect_failed", 0);
-    _ = try module.addImport("env", "roc_crashed", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
+    _ = try module.addImport("env", shim_symbols.roc_dealloc, 0);
+    _ = try module.addImport("env", shim_symbols.roc_realloc, 0);
+    _ = try module.addImport("env", shim_symbols.roc_dbg, 0);
+    _ = try module.addImport("env", shim_symbols.roc_expect_failed, 0);
+    _ = try module.addImport("env", shim_symbols.roc_crashed, 0);
 
     try module.verifyNoBuiltinImports();
 }
@@ -7068,7 +7068,7 @@ test "verifyNoBuiltinImports—fails if roc_str_trim import still present" {
     defer module.deinit();
 
     _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
     _ = try module.addImport("env", "roc_str_trim", 0); // stale builtin import
 
     const result = module.verifyNoBuiltinImports();
@@ -7081,7 +7081,7 @@ test "verifyNoBuiltinImports—allows non-roc imports" {
     defer module.deinit();
 
     _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
     _ = try module.addImport("env", "custom_platform_fn", 0); // non-roc import is fine
 
     try module.verifyNoBuiltinImports();
@@ -7121,7 +7121,7 @@ test "sealRocObject keeps only provides global and localizes compiler support" {
     defer module.deinit();
 
     const type_idx = try module.addFuncType(&.{}, &.{});
-    _ = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+    _ = try module.addFunctionImportWithSymbol("env", shim_symbols.roc_alloc, type_idx);
 
     const entry = try module.addDefinedFunction(type_idx);
     const entry_symbol_idx = try module.addDefinedFunctionSymbol(entry.local, "roc_main", 0);
@@ -7141,7 +7141,7 @@ test "sealRocObject keeps only provides global and localizes compiler support" {
         WasmLinking.SymFlag.EXPORTED | WasmLinking.SymFlag.NO_STRIP,
     );
 
-    try module.sealRocObject(&.{"roc_main"}, &.{"roc_alloc"});
+    try module.sealRocObject(&.{"roc_main"}, &.{shim_symbols.roc_alloc});
 
     const entry_symbol = module.linking.symbol_table.items[entry_symbol_idx.raw()];
     try std.testing.expect(!entry_symbol.isLocal());
@@ -7171,7 +7171,7 @@ test "sealRocObject rejects an undeclared compiler-owned import" {
 
     try std.testing.expectError(
         error.UnexpectedUndefinedFunctionSymbol,
-        module.sealRocObject(&.{"roc_main"}, &.{"roc_alloc"}),
+        module.sealRocObject(&.{"roc_main"}, &.{shim_symbols.roc_alloc}),
     );
 }
 
@@ -7212,7 +7212,7 @@ test "sealed symbol flags patch an existing relocatable object in place" {
     defer module.deinit();
 
     const type_idx = try module.addFuncType(&.{}, &.{});
-    const imported = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+    const imported = try module.addFunctionImportWithSymbol("env", shim_symbols.roc_alloc, type_idx);
     const entry = try module.addDefinedFunction(type_idx);
     _ = try module.addDefinedFunctionSymbol(entry.local, "roc_main", WasmLinking.SymFlag.EXPORTED);
     const support = try module.addDefinedFunction(type_idx);
@@ -7225,7 +7225,7 @@ test "sealed symbol flags patch an existing relocatable object in place" {
 
     const object_bytes = try module.encodeRelocatable(allocator);
     defer allocator.free(object_bytes);
-    try module.sealRocObject(&.{"roc_main"}, &.{"roc_alloc"});
+    try module.sealRocObject(&.{"roc_main"}, &.{shim_symbols.roc_alloc});
     try module.patchRelocatableSymbolFlags(object_bytes);
 
     var patched = try Self.preload(allocator, object_bytes, .relocatable_for_sealing);
@@ -7314,7 +7314,7 @@ test "verifyNoLinkObjectContract - rejects function imports and non-env ABI impo
         defer module.deinit();
 
         const type_idx = try module.addFuncType(&.{}, &.{});
-        _ = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+        _ = try module.addFunctionImportWithSymbol("env", shim_symbols.roc_alloc, type_idx);
 
         // Symbol-ABI references to platform symbols are env function imports.
         try module.verifyNoLinkObjectContract();
@@ -7325,7 +7325,7 @@ test "verifyNoLinkObjectContract - rejects function imports and non-env ABI impo
         defer module.deinit();
 
         const type_idx = try module.addFuncType(&.{}, &.{});
-        _ = try module.addFunctionImportWithSymbol("not_env", "roc_alloc", type_idx);
+        _ = try module.addFunctionImportWithSymbol("not_env", shim_symbols.roc_alloc, type_idx);
 
         try std.testing.expectError(error.UnexpectedFunctionImport, module.verifyNoLinkObjectContract());
     }
@@ -7975,7 +7975,7 @@ fn buildEncodeTestModule(allocator: Allocator) Allocator.Error!Self {
     _ = try module.addFuncType(&.{.i32}, &.{.i32});
 
     // One remaining import (e.g. roc_alloc)
-    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", shim_symbols.roc_alloc, 0);
     module.import_fn_count = 1;
 
     // Simulate dead_import_dummy_count = 1 (one import was removed during linking)
@@ -8249,7 +8249,7 @@ test "preload + merge + encode roundtrip with real builtins" {
     var app_module = Self.init(allocator);
 
     const roc_ops_type_idx = try app_module.addFuncType(&.{ .i32, .i32 }, &.{});
-    for ([_][]const u8{ "roc_alloc", "roc_dealloc", "roc_realloc", "roc_dbg", "roc_expect_failed", "roc_crashed" }) |name| {
+    for ([_][]const u8{ shim_symbols.roc_alloc, shim_symbols.roc_dealloc, shim_symbols.roc_realloc, shim_symbols.roc_dbg, shim_symbols.roc_expect_failed, shim_symbols.roc_crashed }) |name| {
         _ = try app_module.addImport("env", name, roc_ops_type_idx);
     }
 

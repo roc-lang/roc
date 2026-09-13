@@ -24,39 +24,51 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
 TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
-── ✗ underscore in type alias ────────────── underscore_error_propagation.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadBase := _
-^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ type mismatch ───────────────────────── underscore_error_propagation.md:6:9
-
-This string literal is being used where a non-string type is needed.
-
-value = "test"
-        ^^^^^^
-
-The type was determined to be:
-
-    BadDerived
-
-── ✗ type mismatch ─────────────────────── underscore_error_propagation.md:13:13
-
-This string literal is being used where a non-string type is needed.
-
-goodValue = "test"
-            ^^^^^^
-
-The type was determined to be:
-
-    GoodDerived
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_propagation.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadBase := _"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 6 9) (end 6 15))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "underscore_error_propagation.md") (start 6 9) (end 6 15) (annotation error) (line-text "value = \"test\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadDerived")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 13 13) (end 13 19))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "underscore_error_propagation.md") (start 13 13) (end 13 19) (annotation error) (line-text "goodValue = \"test\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "GoodDerived")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

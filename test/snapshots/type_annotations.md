@@ -39,110 +39,127 @@ DECLARATION HAS NO VALUE - type_annotations.md:11:1:11:32
 DECLARATION HAS NO VALUE - type_annotations.md:13:1:15:2
 DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 # PROBLEMS
-── ✗ undeclared type ─────────────────────────────────── type_annotations.md:3:7
-
-The type Thing is not declared in this scope.
-
-bar : Thing(_a, _b, _)
-      ^^^^^
-
-── ✗ undeclared type ────────────────────────────────── type_annotations.md:9:14
-
-The type String is not declared in this scope.
-
-main! : List(String) -> Try({}, _)
-             ^^^^^^
-
-── ✗ undeclared type ───────────────────────────────── type_annotations.md:11:13
-
-The type Value is not declared in this scope.
-
-tag_tuple : Value((_a, _b, _c))
-            ^^^^^
-
-── ● declaration has no value ────────────────────────── type_annotations.md:1:1
-
-This declaration has a type annotation but no implementation.
-
-foo : U64
-^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ────────────────────────── type_annotations.md:3:1
-
-This declaration has a type annotation but no implementation.
-
-bar : Thing(_a, _b, _)
-^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ────────────────────────── type_annotations.md:5:1
-
-This declaration has a type annotation but no implementation.
-
-baz : (_a, _b, _c)
-^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ────────────────────────── type_annotations.md:7:1
-
-This declaration has a type annotation but no implementation.
-
-add_one : (U8, U16 -> U32)
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ────────────────────────── type_annotations.md:9:1
-
-This declaration has a type annotation but no implementation.
-
-main! : List(String) -> Try({}, _)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ───────────────────────── type_annotations.md:11:1
-
-This declaration has a type annotation but no implementation.
-
-tag_tuple : Value((_a, _b, _c))
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ───────────────────────── type_annotations.md:13:1
-
-This declaration has a type annotation but no implementation.
-
-closed_record_with_comma : {
-    a : U8,
-}
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ───────────────────────── type_annotations.md:17:1
-
-This declaration has a type annotation but no implementation.
-
-open_record_with_comma : {
-    a : U8,
-    ..,
-}
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 3 7) (end 3 12))
+		(headline
+			(reflow "The type ")
+			(annotated code "Thing")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_annotations.md") (start 3 7) (end 3 12) (annotation error) (line-text "bar : Thing(_a, _b, _)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 9 14) (end 9 20))
+		(headline
+			(reflow "The type ")
+			(annotated code "String")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_annotations.md") (start 9 14) (end 9 20) (annotation error) (line-text "main! : List(String) -> Try({}, _)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 11 13) (end 11 18))
+		(headline
+			(reflow "The type ")
+			(annotated code "Value")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_annotations.md") (start 11 13) (end 11 18) (annotation error) (line-text "tag_tuple : Value((_a, _b, _c))"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 1 1) (end 1 10))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 1 1) (end 1 10) (annotation error) (line-text "foo : U64"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 3 1) (end 3 23))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 3 1) (end 3 23) (annotation error) (line-text "bar : Thing(_a, _b, _)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 5 1) (end 5 19))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 5 1) (end 5 19) (annotation error) (line-text "baz : (_a, _b, _c)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 7 1) (end 7 27))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 7 1) (end 7 27) (annotation error) (line-text "add_one : (U8, U16 -> U32)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 9 1) (end 9 35))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 9 1) (end 9 35) (annotation error) (line-text "main! : List(String) -> Try({}, _)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 11 1) (end 11 32))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 11 1) (end 11 32) (annotation error) (line-text "tag_tuple : Value((_a, _b, _c))"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 13 1) (end 15 2))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 13 1) (end 15 2) (annotation error) (line-text "closed_record_with_comma : {\n\ta : U8,\n}"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 17 1) (end 20 2))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "type_annotations.md") (start 17 1) (end 20 2) (annotation error) (line-text "open_record_with_comma : {\n\ta : U8,\n\t..,\n}"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

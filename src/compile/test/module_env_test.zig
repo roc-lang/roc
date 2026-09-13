@@ -35,10 +35,10 @@ test "ModuleEnv.Serialized roundtrip" {
     try original.recordBindingScheme(@enumFromInt(42));
     try original.recordBindingScheme(@enumFromInt(7));
     try original.recordBindingScheme(@enumFromInt(42));
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(12), 34);
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(7), @enumFromInt(91), @enumFromInt(56), 78);
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(13), 35);
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(12), 34);
+    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(12), 34, false, false);
+    try original.recordBindingSchemeCodecRequirement(@enumFromInt(7), @enumFromInt(91), @enumFromInt(56), 78, true, true);
+    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(13), 35, false, false);
+    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(12), 34, false, false);
     original.top_level_value_defs = .{ .span = .{ .start = 17, .len = 2 } };
     original.value_binding_defs = .{ .span = .{ .start = 23, .len = 4 } };
     _ = try original.provided_low_level_defs.append(gpa, .{
@@ -122,6 +122,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(@as(u32, 91), codec_requirements_7[0].scheme_root);
     try std.testing.expectEqual(@as(u32, 56), codec_requirements_7[0].receiver_var);
     try std.testing.expectEqual(@as(u32, 78), codec_requirements_7[0].constraint_index);
+    try std.testing.expectEqual(@as(u32, 1), codec_requirements_7[0].requires_instantiation);
+    try std.testing.expectEqual(@as(u32, 1), codec_requirements_7[0].is_synthetic);
     const codec_requirements_42 = env.bindingSchemeCodecRequirementsForNode(@enumFromInt(42));
     try std.testing.expectEqual(@as(usize, 2), codec_requirements_42.len);
     try std.testing.expectEqual(@as(u32, 90), codec_requirements_42[0].scheme_root);

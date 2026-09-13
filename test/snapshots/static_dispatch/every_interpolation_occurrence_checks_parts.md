@@ -18,17 +18,25 @@ main = build(1.U64, "not a number")
 # EXPECTED
 TYPE MISMATCH - every_interpolation_occurrence_checks_parts.md:9:21:9:35
 # PROBLEMS
-── ✗ type mismatch ───────── every_interpolation_occurrence_checks_parts.md:9:21
-
-This string literal is being used where a non-string type is needed.
-
-main = build(1.U64, "not a number")
-                    ^^^^^^^^^^^^^^
-
-The type was determined to be:
-
-    U64
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 9 21) (end 9 35))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "every_interpolation_occurrence_checks_parts.md") (start 9 21) (end 9 35) (annotation error) (line-text "main = build(1.U64, \"not a number\")"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U64")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -160,7 +168,7 @@ main = build(1.U64, "not a number")
 								(e-literal (string "")))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 354)
+		(e-call (constraint-fn-var 353)
 			(e-lookup-local
 				(p-assign (ident "build")))
 			(e-typed-int (value "1") (type "U64"))

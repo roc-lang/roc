@@ -15,34 +15,65 @@ match nestedList {
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
 POLYMORPHIC VALUE - nested_list_scoping.md:1:1:5:2
 # PROBLEMS
-── ✗ missing method ──────────────────────────────── nested_list_scoping.md:4:17
-
-The value before this * operator has a type that doesn't have a times method.
-
-[x, [y]] => x * y
-            ^^^^^
-
-The value's type, which does not have a method named times, is:
-
-    List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]
-
-Hint: The * operator calls a method named times on the value preceding it,
-passing the value after the operator as the one argument.
-
-── ✗ polymorphic value ────────────────────────────── nested_list_scoping.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
-match nestedList {
-    [[x], [y]] => x + y
-    [[x, y]] => x - y
-    [x, [y]] => x * y
-}
-
-Its type is:
-a where [a.minus : a, a -> a, a.plus : a, a -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 4 17) (end 4 22))
+		(headline
+			(reflow "The value before this")
+			(reflow " ")
+			(annotated operator "*")
+			(reflow " ")
+			(reflow "operator has a type that doesn't have a")
+			(reflow " ")
+			(annotated code "times")
+			(reflow " ")
+			(reflow "method."))
+		(document
+			(source-region (file "nested_list_scoping.md") (start 4 17) (end 4 22) (annotation error) (line-text "    [x, [y]] => x * y"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "times")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The")
+			(reflow " ")
+			(annotated operator "*")
+			(reflow " ")
+			(reflow "operator calls a method named")
+			(reflow " ")
+			(annotated code "times")
+			(reflow " ")
+			(reflow "on the value preceding it, passing the value after the operator as the one argument.")))
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 1 1) (end 5 2))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "nested_list_scoping.md") (start 1 1) (end 5 2) (annotation error) (line-text "match nestedList {\n    [[x], [y]] => x + y\n    [[x, y]] => x - y\n    [x, [y]] => x * y\n}"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "a where [a.minus : a, a -> a, a.plus : a, a -> a]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

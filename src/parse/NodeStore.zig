@@ -105,6 +105,7 @@ const ExprNodeTag = enum {
     method_call,
     tuple_access,
     arrow_call,
+    arrow_method_call,
     lambda,
     apply,
     suffix_single_question,
@@ -603,10 +604,11 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
         .package => |package| {
             node.tag = .package_header;
             node.data.lhs = @intFromEnum(package.exposes);
-            node.data.rhs = @intFromEnum(package.packages);
-            // A package header has no name token, so the optional `roc`
-            // version pin fits in main_token without an extra_data record.
-            node.main_token = try packOptionalIndex(package.roc_version);
+            const ed_start = try store.reserveExtraDataStart(3);
+            store.extra_data.appendAssumeCapacity(@intFromEnum(package.packages));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(package.roc_version));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(package.platform_idx));
+            node.data.rhs = ed_start;
             node.region = package.region;
         },
         .platform => |platform| {
@@ -972,6 +974,10 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.tag = .single_quote_patt;
             node.region = sq.region;
             node.main_token = sq.token;
+            if (sq.type_ident) |type_ident| {
+                node.data.lhs = @bitCast(type_ident);
+                node.data.rhs = @intFromBool(true);
+            }
         },
         .record => |r| {
             node.tag = .record_patt;
@@ -1071,6 +1077,10 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .single_quote;
             node.region = e.region;
             node.main_token = e.token;
+            if (e.type_ident) |type_ident| {
+                node.data.lhs = @bitCast(type_ident);
+                node.data.rhs = @intFromBool(true);
+            }
         },
         .string_part => |e| {
             node.tag = .string_part;
@@ -1188,7 +1198,10 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @intFromEnum(ta.expr);
         },
         .arrow_call => |ld| {
-            node.tag = .arrow_call;
+            node.tag = switch (ld.target_kind) {
+                .ordinary => .arrow_call,
+                .method_call => .arrow_method_call,
+            };
             node.region = ld.region;
             node.main_token = ld.operator;
             node.data.lhs = @intFromEnum(ld.left);
@@ -1453,12 +1466,8 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             node.tag = .where_mod_method;
             node.region = c.region;
             node.main_token = c.var_tok;
-            const ed_start = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, c.name_tok);
-            try store.extra_data.append(store.gpa, @intFromEnum(c.args));
-            try store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno));
-            node.data.lhs = @intCast(ed_start);
-            node.data.rhs = @intFromBool(c.effectful);
+            node.data.lhs = c.name_tok;
+            node.data.rhs = @intFromEnum(c.anno);
         },
         .mod_alias => |c| {
             node.tag = .where_mod_alias;
@@ -1775,10 +1784,12 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
             } };
         },
         .package_header => {
+            const ed_start = node.data.rhs;
             return .{ .package = .{
                 .exposes = @enumFromInt(node.data.lhs),
-                .packages = @enumFromInt(node.data.rhs),
-                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, node.main_token),
+                .packages = @enumFromInt(store.extra_data.items[ed_start]),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
+                .platform_idx = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 2]),
                 .region = node.region,
             } };
         },
@@ -2181,6 +2192,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
         .single_quote_patt => {
             return .{ .single_quote = .{
                 .token = node.main_token,
+                .type_ident = if (node.data.rhs != 0) @bitCast(node.data.lhs) else null,
                 .region = node.region,
             } };
         },
@@ -2316,6 +2328,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .single_quote => {
             return .{ .single_quote = .{
                 .token = node.main_token,
+                .type_ident = if (node.data.rhs != 0) @bitCast(node.data.lhs) else null,
                 .region = node.region,
             } };
         },
@@ -2472,6 +2485,16 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
                 .region = node.region,
+                .target_kind = .ordinary,
+            } };
+        },
+        .arrow_method_call => {
+            return .{ .arrow_call = .{
+                .left = @enumFromInt(node.data.lhs),
+                .right = @enumFromInt(node.data.rhs),
+                .operator = node.main_token,
+                .region = node.region,
+                .target_kind = .method_call,
             } };
         },
         .lambda => {
@@ -2740,17 +2763,11 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
         std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
     switch (tag) {
         .where_mod_method => {
-            const ed_start = @as(usize, @intCast(node.data.lhs));
-            const name_tok = store.extra_data.items[ed_start];
-            const args = store.extra_data.items[ed_start + 1];
-            const ret_anno = store.extra_data.items[ed_start + 2];
             return .{ .mod_method = .{
                 .region = node.region,
                 .var_tok = node.main_token,
-                .name_tok = name_tok,
-                .args = @enumFromInt(args),
-                .ret_anno = @enumFromInt(ret_anno),
-                .effectful = node.data.rhs != 0,
+                .name_tok = node.data.lhs,
+                .anno = @enumFromInt(node.data.rhs),
             } };
         },
         .where_mod_alias => {

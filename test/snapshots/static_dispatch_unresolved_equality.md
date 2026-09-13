@@ -12,18 +12,24 @@ result = poly() == poly()
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
 # PROBLEMS
-── ✗ missing method ──────────────── static_dispatch_unresolved_equality.md:3:10
-
-This is trying to compare values with ==, but their type is an unresolved type
-variable, which has no methods.
-
-result = poly() == poly()
-         ^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 3 10) (end 3 16))
+		(headline
+			(reflow "This is trying to compare values with")
+			(reflow " ")
+			(annotated code "==")
+			(reflow ", but their type is an unresolved type variable, which has no methods."))
+		(document
+			(source-region (file "static_dispatch_unresolved_equality.md") (start 3 10) (end 3 16) (annotation error) (line-text "result = poly() == poly()"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,KwCrash,StringStart,StringPart,StringEnd,CloseCurly,

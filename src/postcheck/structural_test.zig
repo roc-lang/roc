@@ -106,7 +106,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
 
     try expectContains(lower_call, "if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {");
-    try expectContains(lower_call, "var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
+    try expectContains(lower_call, "const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
@@ -115,8 +115,8 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
-    try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                try self.evidenceForUseSite(record.expr),");
-    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference)");
+    try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                (try self.evidenceForUseSite(record.expr)).vector,");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
     try expectContains(lower_source, "try self.restoreConstFnAtNode(view, fn_id, request_fn_node)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
@@ -455,7 +455,7 @@ test "Monotype iterator result completion stays out of relation replay and retai
     const dispatch_result = sourceSliceBetween(
         lower_source,
         "fn callableDispatchResultTypeNodeInPhase(",
-        "fn materializeEvidence(",
+        "fn materializeConstFnEvidence(",
     );
     try expectContains(dispatch_result, "if (phase == .expression_lowering)");
     try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
@@ -722,9 +722,13 @@ test "Monotype indirect calls retain graph-native function provenance" {
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret)");
     try expectNotContains(lower_source, "instantiateCallTypeFromCallerAtType");
 
-    const direct_prepare = std.mem.find(u8, call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)").?;
+    const direct_prepare = std.mem.find(u8, call_source, "try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args)").?;
     const direct_specialize = std.mem.find(u8, call_source, "const callee = try self.fnTemplateForDirectCallAtNode").?;
     try std.testing.expect(direct_prepare < direct_specialize);
+    const direct_complete = std.mem.find(u8, call_source, "try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node)").?;
+    try std.testing.expect(direct_prepare < direct_complete);
+    const prepare_source = sourceSliceBetween(lower_source, "fn prepareDirectCallArgsAtNodes(", "fn completedDirectCalleeAtNode(");
+    try expectContains(prepare_source, "try self.prepareExprSpanAtNodes(checked_args, arg_nodes)");
 }
 
 test "Monotype open specialization lookup covers the complete function interface" {
@@ -740,8 +744,7 @@ test "Monotype open specialization lookup covers the complete function interface
         "fn lowerExprAtTypeCell(",
     );
     inline for (.{ template_source, nested_source }) |lookup_source| {
-        try expectContains(lookup_source, "functionInterfaceIterator(request_fn_node)");
-        try expectContains(lookup_source, "classMemberIterator(interface_node)");
+        try expectContains(lookup_source, "functionInterfaceClassIterator(request_fn_node)");
         try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
         try expectContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
@@ -752,6 +755,15 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
+    try expectContains(template_source, "template_spec_lookup.openPairs(lookup_prefix)");
+    try expectContains(template_source, "if (open_pairs.len != 0)");
+    try expectContains(template_source, ".interface_roots = interface_roots.items");
+    try expectContains(template_source, "template_specs_by_template.get(template_ref)");
+    try expectNotContains(template_source, "classMemberIterator(");
+    try expectNotContains(template_source, "for (source_ctx.draft.template_specs.items");
+    const prefix_lookup = sourceSliceBetween(lower_source, "fn DraftSpecLookup(", "const EagerTemplateResolution");
+    try expectContains(prefix_lookup, "self.graph.sameClass(pair.node, root)");
+    try expectContains(nested_source, "classMemberIterator(interface_class)");
     try expectContains(template_source, "draftTemplateSpecLookupRequestNode(spec)");
     try expectContains(nested_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
     const interface_registration = sourceSliceBetween(
@@ -760,7 +772,7 @@ test "Monotype open specialization lookup covers the complete function interface
         "fn draftNestedSpecRequestNode(",
     );
     try expectContains(interface_registration, "indexed_nodes.getOrPut(interface_node)");
-    try expectContains(interface_registration, "draftOpenRequestKey(interface_node)");
+    try expectContains(interface_registration, ".node = interface_node");
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
 }
 
@@ -1075,7 +1087,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     try expectContains(seal_source, "try graph.freezeRelations()");
     try expectContains(seal_source, "try self.emitDraftDeferredInspects(body_draft, graph, &sealer)");
     try expectContains(lower_source, "try self.prepareDraftInspectMethods(body_draft, graph, boundary)");
-    try expectContains(lower_source, "try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize)");
+    try expectContains(lower_source, "try self.methodTargetCalleeAtNode(lookup, request_node, null)");
     try expectContains(lower_source, "ctx.frozen_inspect_method_calls = &prepared_methods");
     const freeze = std.mem.find(u8, seal_source, "try graph.freezeRelations()").?;
     const emit = std.mem.find(u8, seal_source, "try self.emitDraftDeferredInspects").?;
@@ -1479,7 +1491,7 @@ test "each primitive mapping has exactly one definition" {
     };
     const single_definition = [_][]const u8{
         "fn primitiveLayout(",
-        "fn primitiveInspectLowLevelOp(",
+        "fn primitiveInspectLowering(",
         "fn hasherWriteOp(",
     };
     for (single_definition) |decl| {
@@ -1488,7 +1500,7 @@ test "each primitive mapping has exactly one definition" {
         try std.testing.expectEqual(@as(usize, 1), total);
     }
     try expectContains(@embedFile("common.zig"), "pub fn primitiveLayout(");
-    try expectContains(@embedFile("common.zig"), "pub fn primitiveInspectLowLevelOp(");
+    try expectContains(@embedFile("common.zig"), "pub fn primitiveInspectLowering(");
     try expectContains(@embedFile("common.zig"), "pub fn hasherWriteOp(");
 
     // The primitive-to-owner table lives beside `CheckedPrimitive` itself, so

@@ -16,15 +16,22 @@ Foo := [Whatever].{
 # EXPECTED
 NAME NOT IN SCOPE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
-── ✗ name not in scope ─────────── canon_revamp_undefined_in_assoc_error.md:3:18
-
-Nothing is named ghostName in this scope.
-
-callsGhost = ghostName
-             ^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 3 18) (end 3 27))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ghostName")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "canon_revamp_undefined_in_assoc_error.md") (start 3 18) (end 3 27) (annotation error) (line-text "    callsGhost = ghostName")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

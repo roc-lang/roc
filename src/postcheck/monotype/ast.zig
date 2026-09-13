@@ -3,6 +3,7 @@
 //! This is closed, monomorphic, and source-level dispatch-free.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const base = @import("base");
 const check = @import("check");
 const can = @import("can");
@@ -156,6 +157,8 @@ pub const CodecContractIdentity = struct {
     kind: CodecContractKind,
     constructor_ty_digest: names.TypeDigest,
     constructor_ty: Type.TypeId,
+    shape_ty_digest: names.TypeDigest,
+    shape_ty: Type.TypeId,
 };
 
 /// Function template plus source and monomorphic type identities.
@@ -280,7 +283,7 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
 /// Compute a digest for a Monotype function template. Takes the type store
 /// mutable because type digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
     writeBytes(&hasher, &template.evidence_digest.bytes);
@@ -296,8 +299,8 @@ pub fn fnEvidenceDigest(
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) EvidenceDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v2");
+    var hasher = TypeDigestHasher.init();
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v5");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
@@ -328,13 +331,17 @@ pub fn fnEvidenceDigest(
                     writeBytes(&hasher, &checked_structural.callable_key.bytes);
                     writeOptionalU32(
                         &hasher,
-                        if (checked_structural.generated_codec_derivation) |derivation|
+                        if (checked_structural.generated_codec_identity) |derivation|
                             @intFromEnum(derivation)
                         else
                             null,
                     );
                 } else writeU8(&hasher, 0);
             },
+            .from_callable => |use| {
+                writeU8(&hasher, @intFromBool(use.independent_callable));
+            },
+            .from_scheme => |index| writeU32(&hasher, index),
             .unreachable_value, .checked_error => {},
         }
     }
@@ -370,12 +377,17 @@ pub fn fnEvidenceEql(
                 .target => |right_target| {
                     if (!fnEvidenceTargetEql(left_target, right_target)) return false;
                 },
-                .structural, .unreachable_value, .checked_error => return false,
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => return false,
             },
             .structural => |left_structural| switch (right) {
-                .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
-                .target, .unreachable_value, .checked_error => return false,
+                .structural => |right_structural| if (!left_structural.identityEql(right_structural)) return false,
+                .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => return false,
             },
+            .from_callable => |left_use| switch (right) {
+                .from_callable => |right_use| if (!std.meta.eql(left_use, right_use)) return false,
+                .target, .structural, .from_scheme, .unreachable_value, .checked_error => return false,
+            },
+            .from_scheme => |index| if (right != .from_scheme or right.from_scheme != index) return false,
             .unreachable_value => if (right != .unreachable_value) return false,
             .checked_error => if (right != .checked_error) return false,
         }
@@ -410,7 +422,7 @@ fn methodTargetIdentityEql(
 }
 
 fn writeMethodTarget(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *TypeDigestHasher,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
 ) void {
@@ -436,7 +448,7 @@ fn writeMethodTarget(
     writeBytes(hasher, &callable_key.bytes);
 }
 
-fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: static_dispatch.StructuralDerivation) void {
+fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispatch.StructuralDerivation) void {
     writeU8(hasher, @intFromEnum(derivation));
     switch (derivation) {
         .map, .map_effectful => |plan| {
@@ -447,7 +459,7 @@ fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: s
     }
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
     if (value) |actual| {
         writeU8(hasher, 1);
         writeU32(hasher, actual);
@@ -493,9 +505,34 @@ test "function evidence identity uses checked callable type keys" {
     right[0].target.instantiation.?.callable_key.bytes[0] = 9;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+
+    const symbolic_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
+    };
+    const symbolic_left = [_]check.ConstStore.ConstFnEvidence{
+        .{ .from_callable = .{ .independent_callable = false } },
+        .unreachable_value,
+    };
+    const symbolic_right = [_]check.ConstStore.ConstFnEvidence{
+        .unreachable_value,
+        .{ .from_callable = .{ .independent_callable = false } },
+    };
+    // The vector position owns the symbolic requirement's identity.
+    try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &symbolic_right, &symbolic_frames, 0));
+    try std.testing.expect(!std.meta.eql(
+        fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
+        fnEvidenceDigest(&symbolic_right, &symbolic_frames, 0),
+    ));
+    var independent = symbolic_left;
+    independent[0].from_callable.independent_callable = true;
+    try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &independent, &symbolic_frames, 0));
+    try std.testing.expect(!std.meta.eql(
+        fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
+        fnEvidenceDigest(&independent, &symbolic_frames, 0),
+    ));
 }
 
-fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
+fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
     switch (fn_def) {
         .local_template => |template| {
             writeBytes(hasher, "local_template");
@@ -548,29 +585,29 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
     }
 }
 
-fn writeHostedFn(hasher: *std.crypto.hash.sha2.Sha256, hosted: HostedFn) void {
+fn writeHostedFn(hasher: *TypeDigestHasher, hosted: HostedFn) void {
     writeProcTemplate(hasher, hosted.template);
     writeU32(hasher, @intFromEnum(hosted.external_symbol_name));
     writeU32(hasher, hosted.dispatch_index);
 }
 
-fn writeProcTemplate(hasher: *std.crypto.hash.sha2.Sha256, template: names.ProcTemplate) void {
+fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     const module_digest = names.procTemplateModuleDigest(template);
     hasher.update(&module_digest.bytes);
     writeU32(hasher, @intFromEnum(template.proc_base));
     writeU32(hasher, @intFromEnum(template.template));
 }
 
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeU8(hasher: *std.crypto.hash.sha2.Sha256, value: u8) void {
+fn writeU8(hasher: *TypeDigestHasher, value: u8) void {
     hasher.update(&.{value});
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
@@ -586,9 +623,9 @@ pub const Local = struct {
     /// replaces every non-null value with the final local's program-global
     /// post-check identity.
     capture_id: ?checked.CaptureId = null,
-    /// Checked-stage identity used only when a compile-time result stores this
-    /// capture back into `ConstStore`. This provenance is never a runtime
-    /// capture join key.
+    /// Checked capture provenance for pre-lift target-key normalization and
+    /// `ConstStore` publication. Alternative binders use their arm's
+    /// representative key; durable runtime capture identity remains separate.
     checked_capture_id: ?checked.CaptureId = null,
 };
 
@@ -636,7 +673,7 @@ pub const CallValue = struct {
 /// One explicit capture operand supplied at a lifted function reference /
 /// direct call site. `id` is the `CaptureId` of the target function's capture
 /// slot this operand fills; `value` is the expression that supplies it. Operand
-/// spans are stored sorted by `id`, parallel to the target's canonically-sorted
+/// spans after lifting are sorted by `id`, parallel to the target's canonically-sorted
 /// capture slots, so every operand↔slot join is an exact keyed lookup with no
 /// load-bearing order. At the lift boundary, the id's namespace explicitly
 /// distinguishes a provisional checked key from an already-lifted key.
@@ -653,16 +690,10 @@ pub const LiftedFunctionValue = struct {
     captures: Span(CaptureOperand) = Span(CaptureOperand).empty(),
 };
 
-/// Explicit operand for one checked closure capture before lifting. The `local`
-/// identifies the checked capture in the closure creation context; `value` is
-/// the expression that supplies it there. At the lift boundary, both this local
-/// and the target slot use their checked capture identity when present and their
-/// generated capture identity otherwise. Lifting joins only on that explicit
-/// provisional key, then records the operand with the target's lifted key.
-pub const FnDefCapture = struct {
-    local: LocalId,
-    value: ExprId,
-};
+/// Explicit operand for one closure capture before lifting. The producer records
+/// the target slot's provisional key independently of the supplying expression.
+/// Lifting normalizes this key through the target slot's identity exactly once.
+pub const FnDefCapture = CaptureOperand;
 
 /// Reference to a Monotype function value before lifting. `captures` contains
 /// keyed explicit values recorded at the checked closure creation site.
@@ -1289,7 +1320,7 @@ pub const ProgramView = struct {
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return .spec_type_out_of_bounds;
             if (spec.identity.codec_contract) |contract| {
-                if (!self.typeRefInBounds(contract.constructor_ty)) return .spec_type_out_of_bounds;
+                if (!self.typeRefInBounds(contract.constructor_ty) or !self.typeRefInBounds(contract.shape_ty)) return .spec_type_out_of_bounds;
             }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return .spec_type_out_of_bounds;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return .spec_type_out_of_bounds;
@@ -2544,4 +2575,67 @@ fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
         .source_fn_key = .{},
         .mono_fn_ty = mono_fn_ty,
     };
+}
+
+test "codec function evidence identity excludes per-use replay addresses" {
+    const allocator = std.testing.allocator;
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(allocator);
+    // Allocate distinct replay addresses with the same checked root key.
+    var replay_types: [4]checked.CheckedTypeId = undefined;
+    for (&replay_types) |*ty| {
+        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true);
+        try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
+    }
+    // Fill the proof table and its indices before building stored evidence.
+    var derivations: [3]static_dispatch.GeneratedCodecDerivation = undefined;
+    var derivation_ids: [3]static_dispatch.GeneratedCodecDerivationId = undefined;
+    for (&derivations, &derivation_ids, 0..) |*derivation, *id, index| {
+        id.* = @enumFromInt(@as(u32, @intCast(index)));
+        const ty = replay_types[if (index == 1) 2 else 0];
+        derivation.* = .{
+            .identity = if (index == 1) derivation_ids[0] else id.*,
+            .kind = if (index == 2) .parser else .encoder,
+            .source_constructor_ty = ty,
+            .source_runtime_ty = ty,
+            .source_shape_ty = ty,
+            .source_body_shape_ty = ty,
+            .source_encoding_ty = ty,
+            .source_state_ty = ty,
+            .source_error_ty = ty,
+            .constructor_ty = ty,
+            .runtime_ty = ty,
+            .shape_ty = ty,
+            .body_shape_ty = ty,
+            .encoding_ty = ty,
+            .state_ty = ty,
+            .error_ty = ty,
+        };
+    }
+    const Evidence = check.ConstStore.ConstFnEvidence;
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const left = [_]Evidence{.{ .structural = .{
+        .derivation = .encoder,
+        .checked = .{
+            .view = .{ .bytes = [_]u8{1} ** 32 },
+            .dispatcher_key = types.view().rootKey(replay_types[0]),
+            .dispatcher_ty = replay_types[0],
+            .callable_key = types.view().rootKey(replay_types[1]),
+            .callable_ty = replay_types[1],
+            .generated_codec_derivation = derivation_ids[0],
+            .generated_codec_identity = derivations[0].identity,
+        },
+    } }};
+    var right = left;
+    right[0].structural.checked.?.dispatcher_ty = replay_types[2];
+    right[0].structural.checked.?.callable_ty = replay_types[3];
+    right[0].structural.checked.?.generated_codec_derivation = derivation_ids[1];
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+    right[0].structural.checked.?.generated_codec_derivation = derivation_ids[2];
+    right[0].structural.checked.?.generated_codec_identity = derivations[2].identity;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }

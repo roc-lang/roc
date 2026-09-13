@@ -38,6 +38,7 @@ const MethodOwnerLookup = struct {
 fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
     return switch (pattern) {
         .assign => |p| p.ident,
+        .var_assign => |p| p.ident,
         .as => |p| p.ident,
         .applied_tag,
         .nominal,

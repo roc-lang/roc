@@ -1715,6 +1715,7 @@ fn runCrashTest(
 fn canDiagnosticIsError(diag: anytype) bool {
     return switch (diag) {
         .shadowing_warning,
+        .binding_name_does_not_match_mutability,
         .unused_variable,
         .used_underscore_variable,
         .type_shadowed_warning,

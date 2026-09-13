@@ -15,21 +15,42 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 # PROBLEMS
-── ✗ type mismatch ───────────────────── numeric_let_generalize_in_block.md:4:20
-
-The first argument being passed to this function has the wrong type.
-
-b = Dec.to_str(n)
-               ^
-
-This argument has the type:
-
-    I64
-
-But the function needs the first argument to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 20) (end 4 21))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
+		(document
+			(source-region (file "numeric_let_generalize_in_block.md") (start 4 20) (end 4 21) (annotation error) (line-text "    b = Dec.to_str(n)"))
+			(line-break)
+			(reflow "This argument has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "I64")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the function needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

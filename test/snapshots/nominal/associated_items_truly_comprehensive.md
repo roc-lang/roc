@@ -485,57 +485,74 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:1
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:20:167:24
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:31
 # PROBLEMS
-── ✗ name not in scope ────────── associated_items_truly_comprehensive.md:382:20
-
-Nothing is named val4 in this scope.
-
-val3 = val4 + 1                                 # Unqualified
-       ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────── associated_items_truly_comprehensive.md:388:12
-
-Nothing is named val2 in this scope.
-
-val1 = val2 + 1                                         # Unqualified
-       ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ circular value definition ── associated_items_truly_comprehensive.md:167:13
-
-The value associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3 is part
-of a recursive non-function definition cycle.
-
-val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-^^^^
-
-Only functions can be recursive. Non-function top-level values must be fully
-computable without depending on themselves through other values.
-
-── ✗ circular value definition ── associated_items_truly_comprehensive.md:167:20
-
-The value associated_items_truly_comprehensive.D3_Pattern2.L2.val2 is part of a
-recursive non-function definition cycle.
-
-val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-       ^^^^
-
-Only functions can be recursive. Non-function top-level values must be fully
-computable without depending on themselves through other values.
-
-── ✗ circular value definition ── associated_items_truly_comprehensive.md:167:27
-
-The value associated_items_truly_comprehensive.D3_Pattern2.val1 is part of a
-recursive non-function definition cycle.
-
-val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-              ^^^^
-
-Only functions can be recursive. Non-function top-level values must be fully
-computable without depending on themselves through other values.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 382 20) (end 382 24))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "val4")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_truly_comprehensive.md") (start 382 20) (end 382 24) (annotation error) (line-text "            val3 = val4 + 1                                 # Unqualified"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 388 12) (end 388 16))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "val2")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_truly_comprehensive.md") (start 388 12) (end 388 16) (annotation error) (line-text "    val1 = val2 + 1                                         # Unqualified"))))
+	(report
+		(severity runtime_error)
+		(title "Circular Value Definition")
+		(region (start 167 13) (end 167 17))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3")
+			(reflow " is part of a recursive non-function definition cycle."))
+		(document
+			(reflow "Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_truly_comprehensive.md") (start 167 13) (end 167 17) (annotation error) (line-text "            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)"))))
+	(report
+		(severity runtime_error)
+		(title "Circular Value Definition")
+		(region (start 167 20) (end 167 24))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "associated_items_truly_comprehensive.D3_Pattern2.L2.val2")
+			(reflow " is part of a recursive non-function definition cycle."))
+		(document
+			(reflow "Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_truly_comprehensive.md") (start 167 20) (end 167 24) (annotation error) (line-text "            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)"))))
+	(report
+		(severity runtime_error)
+		(title "Circular Value Definition")
+		(region (start 167 27) (end 167 31))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "associated_items_truly_comprehensive.D3_Pattern2.val1")
+			(reflow " is part of a recursive non-function definition cycle."))
+		(document
+			(reflow "Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.")
+			(line-break)
+			(line-break)
+			(source-region (file "associated_items_truly_comprehensive.md") (start 167 27) (end 167 31) (annotation error) (line-text "            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

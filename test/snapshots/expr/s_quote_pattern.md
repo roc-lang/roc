@@ -7,26 +7,35 @@ type=expr
 ~~~roc
 match ... {
 	['#'] => ...
-	['a', 'b'] => ...
+	['a'.U8, 'b'.U8] => ...
 	_ => ...
 }
 ~~~
 # EXPECTED
 UNCONDITIONAL CONDITION - s_quote_pattern.md:1:7:1:10
 # PROBLEMS
-── ● unconditional condition ──────────────────────────── s_quote_pattern.md:1:7
-
-This match value is known at compile time, so this match will always inspect
-the same value.
-
-match ... {
-      ^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 1 7) (end 1 10))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "match value")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this match will always inspect the same value."))
+		(document
+			(source-region (file "s_quote_pattern.md") (start 1 7) (end 1 10) (annotation warning) (line-text "match ... {")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
 OpenSquare,SingleQuote,CloseSquare,OpFatArrow,TripleDot,
-OpenSquare,SingleQuote,Comma,SingleQuote,CloseSquare,OpFatArrow,TripleDot,
+OpenSquare,SingleQuote,NoSpaceDotUpperIdent,Comma,SingleQuote,NoSpaceDotUpperIdent,CloseSquare,OpFatArrow,TripleDot,
 Underscore,OpFatArrow,TripleDot,
 CloseCurly,
 EndOfFile,
@@ -42,8 +51,8 @@ EndOfFile,
 			(e-ellipsis))
 		(branch
 			(p-list
-				(p-single-quote (raw "'a'"))
-				(p-single-quote (raw "'b'")))
+				(p-single-quote (raw "'a'") (type "U8"))
+				(p-single-quote (raw "'b'") (type "U8")))
 			(e-ellipsis))
 		(branch
 			(p-underscore)

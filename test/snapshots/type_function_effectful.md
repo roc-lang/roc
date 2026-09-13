@@ -16,35 +16,55 @@ main! = |_| {}
 AMBIGUOUS FUNCTION TYPE - type_function_effectful.md:3:31:3:33
 UNEXPECTED STATEMENT - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-── ✗ ambiguous function type ─────────────────── type_function_effectful.md:3:31
-
-I was parsing a function type, and multiple arrows need parentheses.
-
-runEffect! : (_a => _b) -> _a => _b
-                              ^^
-
-Use parentheses to say whether the function returns another function or takes a
-function as an argument.
-
-For example:
-    a -> (b -> c)
-    (a -> b) -> c
-
-── ✗ unexpected statement ────────────────────── type_function_effectful.md:3:34
-
-I was parsing a statement, and this token cannot start a statement here.
-
-runEffect! : (_a => _b) -> _a => _b
-                                 ^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found _b here.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Ambiguous Function Type")
+		(region (start 3 31) (end 3 33))
+		(headline
+			(reflow "I was parsing a function type, and multiple arrows need parentheses."))
+		(document
+			(reflow "Use parentheses to say whether the function returns another function or takes a function as an argument.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a -> (b -> c)")
+			(line-break)
+			(indent 1)
+			(text "(a -> b) -> c")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "type_function_effectful.md") (start 3 31) (end 3 33) (annotation error) (line-text "runEffect! : (_a => _b) -> _a => _b"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 3 34) (end 3 36))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "_b")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_function_effectful.md") (start 3 34) (end 3 36) (annotation error) (line-text "runEffect! : (_a => _b) -> _a => _b")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

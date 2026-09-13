@@ -87,7 +87,9 @@ const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
 const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
 
-const Relocation = @import("Relocation.zig").Relocation;
+const Relocation = @import("Relocation.zig").IndexedRelocation;
+const collections = @import("collections");
+const SymbolTable = @import("SymbolTable.zig");
 const coff = @import("object/coff.zig");
 
 const StaticStringData = @import("StaticStringData.zig");
@@ -272,6 +274,9 @@ pub const ComptimeHooks = struct {
     call_enter: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
     call_exit: *const fn (*RocOps) callconv(.c) void,
 };
+
+/// Compiler-internal callback emitted only for native test execution.
+pub const ExpectObserverHook = *const fn (*RocOps, u32, u8) callconv(.c) void;
 
 /// Builtin function identifiers, shared across every backend via the
 /// builtin registry. Object-file generation emits `symbolName()` relocations;
@@ -829,20 +834,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         layout_store: *const LayoutStore,
 
         /// Readonly data symbols for non-SSO strings in object-file output.
-        static_strings: []const StaticStringData.Entry,
+        static_strings: StaticStringData.View,
         /// Resolved readonly values used only by in-process native execution.
         native_static_data: []const usize,
         /// Compile-time execution normalizes every produced NaN before it can
         /// enter static data. Ordinary runtime code preserves target NaN bits.
         float_nan_mode: builtins.float_bits.NanMode,
-        /// Owned names for generated internal static-data relocation targets.
-        static_data_symbol_names: std.ArrayList([]u8),
+        /// Borrowed producer declarations and cached IDs for internal static roots.
+        static_data_symbols: collections.DenseMap(lir.LIR.StaticDataId, StaticDataSymbol),
+        literal_symbols: collections.DenseMap(u32, SymbolTable.Id),
+        builtin_symbols: collections.DenseMap(BuiltinFn, SymbolTable.Id),
+        boxy_symbols: collections.DenseMap(BoxyBuiltinFn, SymbolTable.Id),
+        hosted_symbols: collections.DenseMap(base.StringLiteral.Idx, SymbolTable.Id),
 
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
 
         /// Map from LIR local id to value location (register or stack slot)
         local_locations: std.AutoHashMap(u32, ValueLocation),
+        local_location_undo: std.ArrayList(LocalLocationUndo),
 
         /// Exact reverse index for locals which currently live in vector registers.
         /// Most locals are stack-resident, so call boundaries must never search the
@@ -1018,6 +1028,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
         comptime_hooks: ?ComptimeHooks = null,
+        expect_observer_hook: ?ExpectObserverHook = null,
 
         /// Scratch buffer for argument locations during lambda body inlining
         scratch_arg_locs: base.Scratch(ValueLocation),
@@ -1180,6 +1191,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         };
 
+        const StaticDataSymbol = struct { name: []const u8, symbol: ?SymbolTable.Id = null };
+
         const FloatLocation = struct {
             reg: FloatReg,
             width: FloatWidth,
@@ -1239,6 +1252,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             code: []const u8,
             /// Relocations for external references
             relocations: []const Relocation,
+            /// Name column owning the relocation IDs.
+            symbol_names: []const []const u8,
             /// Layout of the result
             result_layout: layout.Idx,
             /// Offset from start of code where execution should begin
@@ -1277,6 +1292,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             symbols: []const ExportedSymbol,
             /// Relocations for external references
             relocations: []const Relocation,
+            /// Name column owning the relocation IDs.
+            symbol_names: []const []const u8,
         };
 
         /// Errors that can occur during code generation
@@ -1286,7 +1303,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             allocator: Allocator,
             store: *const LirStore,
             layout_store_opt: *const LayoutStore,
-            static_strings: []const StaticStringData.Entry,
+            static_strings: StaticStringData.View,
             boxy_worker_procs: []const lir.LIR.LirProcSpecId,
             float_nan_mode: builtins.float_bits.NanMode,
             cpu_level: CpuLevel,
@@ -1308,7 +1325,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             allocator: Allocator,
             store: *const LirStore,
             layout_store_opt: *const LayoutStore,
-            static_strings: []const StaticStringData.Entry,
+            static_strings: StaticStringData.View,
             erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
             erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
             boxy_worker_procs: []const lir.LIR.LirProcSpecId,
@@ -1325,12 +1342,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static_strings = static_strings,
                 .native_static_data = &.{},
                 .float_nan_mode = float_nan_mode,
-                .static_data_symbol_names = .empty,
+                .static_data_symbols = .init(allocator),
+                .literal_symbols = .init(allocator),
+                .builtin_symbols = .init(allocator),
+                .boxy_symbols = .init(allocator),
+                .hosted_symbols = .init(allocator),
                 .erased_arg_desc_offsets = erased_arg_desc_offsets,
                 .erased_arg_desc_params = erased_arg_desc_params,
                 .boxy_worker_procs = boxy_worker_procs,
                 .boxy_runtime_used = boxy_worker_procs.len != 0,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
+                .local_location_undo = .empty,
                 .vector_local_by_reg = .initFill(null),
                 .vector_local_mask = 0,
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
@@ -1367,16 +1389,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.comptime_hooks = hooks;
         }
 
+        pub fn setExpectObserverHook(self: *Self, hook: ?ExpectObserverHook) void {
+            self.expect_observer_hook = hook;
+        }
+
         pub fn setNativeStaticData(self: *Self, addresses: []const usize) void {
             self.native_static_data = addresses;
+        }
+
+        /// Bind the materializer's root declarations before emitting object or shim code.
+        pub fn setStaticDataSymbols(self: *Self, exports: []const @import("StaticDataExport.zig").StaticDataExport) Allocator.Error!void {
+            std.debug.assert(self.codegen.symbols.names.items.len == 0);
+            self.static_data_symbols.clearRetainingCapacity();
+            for (exports) |data_export| {
+                if (data_export.value_id) |id| try self.static_data_symbols.putNoClobber(id, .{ .name = data_export.symbol_name });
+            }
         }
 
         /// Clean up resources
         pub fn deinit(self: *Self) void {
             self.codegen.deinit();
-            self.clearStaticDataSymbolNames();
-            self.static_data_symbol_names.deinit(self.allocator);
+            self.clearSymbolCaches();
+            self.static_data_symbols.deinit();
+            self.literal_symbols.deinit();
+            self.builtin_symbols.deinit();
+            self.boxy_symbols.deinit();
+            self.hosted_symbols.deinit();
             self.local_locations.deinit();
+            self.local_location_undo.deinit(self.allocator);
             self.join_points.deinit();
             self.stmt_locations.deinit();
             self.precomputed_overflow_results.deinit();
@@ -1413,7 +1453,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Reset the code generator for generating a new expression
         pub fn reset(self: *Self) void {
             self.codegen.reset();
-            self.clearStaticDataSymbolNames();
+            self.clearSymbolCaches();
             self.clearLocalLocationsRetainingCapacity();
             self.join_points.clearRetainingCapacity();
             self.stmt_locations.clearRetainingCapacity();
@@ -1445,11 +1485,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.loop_break_patches.clearRetainingCapacity();
         }
 
-        fn clearStaticDataSymbolNames(self: *Self) void {
-            for (self.static_data_symbol_names.items) |name| {
-                self.allocator.free(name);
-            }
-            self.static_data_symbol_names.clearRetainingCapacity();
+        fn clearSymbolCaches(self: *Self) void {
+            var symbols = self.static_data_symbols.valueIterator();
+            while (symbols.next()) |symbol| symbol.symbol = null;
+            self.literal_symbols.clearRetainingCapacity();
+            self.builtin_symbols.clearRetainingCapacity();
+            self.boxy_symbols.clearRetainingCapacity();
+            self.hosted_symbols.clearRetainingCapacity();
         }
 
         fn cloneJoinPointJumpsMap(
@@ -1503,13 +1545,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
         }
 
-        const StmtEnvSnapshot = struct {
-            local_locations: std.AutoHashMap(u32, ValueLocation),
-            free_float: u32,
+        const LocalLocationUndo = struct {
+            key: u32,
+            prev: ?ValueLocation,
+        };
 
-            fn deinit(self: *StmtEnvSnapshot) void {
-                self.local_locations.deinit();
-            }
+        /// All binding changes, including vector spills, pass through this journal.
+        fn setLocalLocation(self: *Self, key: u32, value: ValueLocation) Allocator.Error!void {
+            try self.local_location_undo.append(self.allocator, .{
+                .key = key,
+                .prev = self.local_locations.get(key),
+            });
+            errdefer _ = self.local_location_undo.pop();
+            try self.local_locations.put(key, value);
+        }
+
+        const StmtEnvSnapshot = struct {
+            undo_mark: usize,
+            free_float: u32,
         };
 
         fn captureStmtEnv(self: *Self) Allocator.Error!StmtEnvSnapshot {
@@ -1517,14 +1570,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // vector register containing the value produced along one path.
             try self.spillAllVectorLocals();
             return .{
-                .local_locations = try self.local_locations.clone(),
+                .undo_mark = self.local_location_undo.items.len,
                 .free_float = self.codegen.free_float,
             };
         }
 
-        fn restoreStmtEnv(self: *Self, snapshot: *const StmtEnvSnapshot) Allocator.Error!void {
-            self.local_locations.deinit();
-            self.local_locations = try snapshot.local_locations.clone();
+        fn restoreStmtEnv(self: *Self, snapshot: *const StmtEnvSnapshot) void {
+            std.debug.assert(snapshot.undo_mark <= self.local_location_undo.items.len);
+            while (self.local_location_undo.items.len > snapshot.undo_mark) {
+                const undo = self.local_location_undo.pop().?;
+                if (undo.prev) |prev| {
+                    // A replacement never removed the key, so replay cannot allocate.
+                    std.debug.assert(self.local_locations.contains(undo.key));
+                    self.local_locations.putAssumeCapacity(undo.key, prev);
+                } else {
+                    const removed = self.local_locations.remove(undo.key);
+                    std.debug.assert(removed);
+                }
+            }
             self.clearVectorLocalResidency();
             self.codegen.free_float = snapshot.free_float;
         }
@@ -1720,6 +1783,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return CodeResult{
                 .code = code_copy,
                 .relocations = self.codegen.relocations.items,
+                .symbol_names = self.codegen.symbols.names.items,
                 .result_layout = result_layout,
                 .entry_offset = prologue_start,
             };
@@ -9256,13 +9320,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .{ @tagName(value_loc.vector_reg.kind), @tagName(expected_kind) },
                     );
                 }
-                try self.local_locations.put(key, value_loc);
+                try self.setLocalLocation(key, value_loc);
                 self.trackVectorLocal(key, value_loc.vector_reg.reg);
                 return;
             }
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
-            try self.local_locations.put(key, stable_loc);
+            try self.setLocalLocation(key, stable_loc);
             try self.emitNormalizeFloatNanInStableLocation(stable_loc, local_layout);
             try self.emitDebugAssertValidBoxLocal(local, stable_loc);
             try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -9686,7 +9750,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 ValueLocation{ .immediate_i64 = 0 }
             else
                 self.stackLocationForLayout(local_layout, self.codegen.allocStackSlot(size));
-            try self.local_locations.put(key, stable_loc);
+            try self.setLocalLocation(key, stable_loc);
         }
 
         fn stableLocationStackOffset(stable_loc: ValueLocation) i32 {
@@ -17212,7 +17276,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.generation_mode.threadsRocOps()) {
                 try builder.callReg(hosted_target_reg);
             } else {
-                try builder.callRelocatable(self.store.getString(hosted.symbol), self.allocator, &self.codegen.relocations);
+                try builder.callRelocatable(try self.hostedSymbol(hosted.symbol), self.allocator, &self.codegen.relocations);
             }
 
             // Register-class return: store each result register into the return slot.
@@ -17894,7 +17958,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             switch (self.generation_mode) {
                 .shim_execution, .object_file => {
-                    try builder.callRelocatable(boxy_fn.symbolName(), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.boxySymbol(boxy_fn), self.allocator, &self.codegen.relocations);
                 },
                 .native_execution => {
                     const table = self.boxy_native_fns orelse std.debug.panic(
@@ -17914,7 +17978,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(self.roc_ops_reg orelse unreachable);
-            try builder.callRelocatable("roc_boxy_init_embedded", self.allocator, &self.codegen.relocations);
+            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded"), self.allocator, &self.codegen.relocations);
         }
 
         /// Resolve a boxy descriptor reference to an 8-byte stack slot holding
@@ -18496,28 +18560,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self: *Self,
             local_key: u32,
         ) Allocator.Error!void {
-            const value_ptr = self.local_locations.getPtr(local_key) orelse {
+            const value = self.local_locations.get(local_key) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("LIR/codegen invariant violated: tracked vector local {d} is absent", .{local_key});
                 }
                 unreachable;
             };
-            if (value_ptr.* != .vector_reg) {
+            if (value != .vector_reg) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: tracked vector local {d} is {s}", .{ local_key, @tagName(value_ptr.*) });
+                    std.debug.panic("LIR/codegen invariant violated: tracked vector local {d} is {s}", .{ local_key, @tagName(value) });
                 }
                 unreachable;
             }
-            const vector = value_ptr.vector_reg;
+            const vector = value.vector_reg;
             const local: LocalId = @enumFromInt(local_key);
             const layout_idx = self.localLayout(local);
             const slot = self.codegen.allocStackSlot(16);
             try self.codegen.emitStoreStackV128(slot, vector.reg);
-            value_ptr.* = .{ .stack = .{
+            try self.setLocalLocation(local_key, .{ .stack = .{
                 .offset = slot,
                 .size = .qword,
                 .layout_idx = layout_idx,
-            } };
+            } });
             self.untrackVectorLocal(local_key, vector.reg);
             self.codegen.freeFloat(vector.reg);
         }
@@ -18535,6 +18599,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 resident_mask &= resident_mask - 1;
             }
             self.local_locations.clearRetainingCapacity();
+            self.local_location_undo.clearRetainingCapacity();
             self.clearVectorLocalResidency();
         }
 
@@ -18626,7 +18691,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.call(builtin_fn.wrapperAddress());
                 },
                 .shim_execution => {
-                    try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
                 },
                 .object_file => {
                     if (builtin_fn.payload() == .jit_only) {
@@ -18635,7 +18700,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .{builtin_fn.symbolName()},
                         );
                     }
-                    try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
                 },
             }
         }
@@ -18651,7 +18716,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.call(adapter_addr);
                 },
                 .shim_execution, .object_file => {
-                    try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
                 },
             }
         }
@@ -18834,16 +18899,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(dst_reg, @bitCast(@as(u64, builtin_fn.wrapperAddress())));
                 },
                 .shim_execution, .object_file => {
-                    try self.codegen.emitLoadDataAddress(dst_reg, builtin_fn.symbolName());
+                    try self.codegen.emitLoadDataAddress(dst_reg, try self.builtinSymbol(builtin_fn));
                 },
             }
         }
 
         fn emitStaticDataAddress(self: *Self, dst_reg: GeneralReg, id: lir.LIR.StaticDataId) Allocator.Error!void {
-            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
-            errdefer self.allocator.free(symbol_name);
-            try self.static_data_symbol_names.append(self.allocator, symbol_name);
-            try self.codegen.emitLoadDataAddress(dst_reg, symbol_name);
+            const entry = self.static_data_symbols.getPtr(id) orelse {
+                if (builtin.mode == .Debug) std.debug.panic("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@intFromEnum(id)});
+                unreachable;
+            };
+            if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name);
+            try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
+        }
+
+        fn builtinSymbol(self: *Self, function: BuiltinFn) Allocator.Error!SymbolTable.Id {
+            if (self.builtin_symbols.get(function)) |symbol| return symbol;
+            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName());
+            try self.builtin_symbols.put(function, symbol);
+            return symbol;
+        }
+
+        fn boxySymbol(self: *Self, function: BoxyBuiltinFn) Allocator.Error!SymbolTable.Id {
+            if (self.boxy_symbols.get(function)) |symbol| return symbol;
+            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName());
+            try self.boxy_symbols.put(function, symbol);
+            return symbol;
+        }
+
+        fn hostedSymbol(self: *Self, name: base.StringLiteral.Idx) Allocator.Error!SymbolTable.Id {
+            if (self.hosted_symbols.get(name)) |symbol| return symbol;
+            const symbol = try self.codegen.symbols.intern(self.allocator, self.store.getString(name));
+            try self.hosted_symbols.put(name, symbol);
+            return symbol;
         }
 
         fn emitHotReloadEnterForHostCallable(self: *Self) Allocator.Error!?i32 {
@@ -20529,6 +20617,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return null;
         }
 
+        /// One reference-count helper the code generator compiled: the cache
+        /// key that identifies it and where its code starts.
+        pub const CompiledRcHelper = struct {
+            key: u64,
+            start_offset: usize,
+
+            fn startsBefore(_: void, lhs: CompiledRcHelper, rhs: CompiledRcHelper) bool {
+                return lhs.start_offset < rhs.start_offset;
+            }
+        };
+
+        /// Every compiled reference-count helper in code order, so object
+        /// symbol publication is deterministic. Caller owns the slice.
+        pub fn compiledRcHelpers(self: *const Self, allocator: Allocator) Allocator.Error![]CompiledRcHelper {
+            const result = try allocator.alloc(CompiledRcHelper, self.compiled_rc_helpers.count());
+            var i: usize = 0;
+            var iter = self.compiled_rc_helpers.iterator();
+            while (iter.next()) |entry| : (i += 1) {
+                result[i] = .{ .key = entry.key_ptr.*, .start_offset = entry.value_ptr.* };
+            }
+            std.mem.sort(CompiledRcHelper, result, {}, CompiledRcHelper.startsBefore);
+            return result;
+        }
+
         /// Returns object-file symbol metadata for a compiled LIR procedure.
         ///
         /// This is used by native object emission to let readonly static data
@@ -20575,6 +20687,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_vector_local_mask = self.vector_local_mask;
             var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
             defer saved_local_locations.deinit();
+            const saved_local_location_undo = try self.allocator.dupe(LocalLocationUndo, self.local_location_undo.items);
+            defer {
+                // Clearing the procedure scope retains at least the caller's capacity.
+                self.local_location_undo.clearRetainingCapacity();
+                self.local_location_undo.appendSliceAssumeCapacity(saved_local_location_undo);
+                self.allocator.free(saved_local_location_undo);
+            }
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
             defer saved_join_points.deinit();
             var saved_stmt_locations = self.stmt_locations.clone() catch return error.OutOfMemory;
@@ -21665,7 +21784,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(local_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
                 if (size_align.size == 0) {
-                    try self.local_locations.put(localKey(local), .{ .immediate_i64 = 0 });
+                    try self.setLocalLocation(localKey(local), .{ .immediate_i64 = 0 });
                 } else {
                     const local_offset = self.codegen.allocStackSlot(size_align.size);
                     const args_ptr_reg = try self.allocTempGeneral();
@@ -21681,7 +21800,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(args_ptr_reg);
-                    try self.local_locations.put(localKey(local), self.stackLocationForLayout(local_layout, local_offset));
+                    try self.setLocalLocation(localKey(local), self.stackLocationForLayout(local_layout, local_offset));
                 }
             }
 
@@ -21694,7 +21813,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
-            try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
+            try self.setLocalLocation(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
 
             const params_start: usize = proc.erased_arg_desc_params.start;
             const params_end = params_start + proc.erased_arg_desc_params.len;
@@ -21742,14 +21861,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyBuiltin(&builder, .nested_desc);
                     try self.emitStore(.w64, frame_ptr, desc_slot, ret_reg_0);
                 }
-                try self.local_locations.put(
+                try self.setLocalLocation(
                     localKey(param.local),
                     self.stackLocationForLayout(.opaque_ptr, desc_slot),
                 );
             }
 
             const reuse_local = GuardedList.at(locals, explicit_count + 1);
-            try self.local_locations.put(localKey(reuse_local), self.stackLocationForLayout(self.localLayout(reuse_local), reuse_ptr_slot));
+            try self.setLocalLocation(localKey(reuse_local), self.stackLocationForLayout(self.localLayout(reuse_local), reuse_ptr_slot));
         }
 
         fn bindProcParams(
@@ -21879,7 +21998,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const local = GuardedList.at(locals, param_idx);
 
                 if (num_regs == 0) {
-                    try self.local_locations.put(localKey(local), .{ .immediate_i64 = 0 });
+                    try self.setLocalLocation(localKey(local), .{ .immediate_i64 = 0 });
                     continue;
                 }
 
@@ -21901,7 +22020,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, stack_offset, size);
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.local_locations.put(localKey(local), stable_loc);
+                    try self.setLocalLocation(localKey(local), stable_loc);
                     continue;
                 }
 
@@ -21921,7 +22040,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_reg);
                     }
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.local_locations.put(localKey(local), stable_loc);
+                    try self.setLocalLocation(localKey(local), stable_loc);
                     reg_idx += num_regs;
                 } else {
                     const caller_base = self.callerStackArgBaseReg();
@@ -21929,7 +22048,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyFromCallerStack(caller_base, stack_arg_offset, stack_offset, num_regs);
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.local_locations.put(localKey(local), stable_loc);
+                    try self.setLocalLocation(localKey(local), stable_loc);
                     stack_arg_offset += @as(i32, num_regs) * 8;
                     reg_idx = max_arg_regs;
                 }
@@ -22762,11 +22881,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .expect => |expect_stmt| {
                             const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
-                            try self.emitCmpImm(cond_reg, 0);
-                            const skip_patch = try self.emitJumpIfNotEqual();
-                            self.codegen.freeGeneral(cond_reg);
-                            try self.emitRocExpectFailed();
-                            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                            if (expect_stmt.site) |site| {
+                                const hook = self.expect_observer_hook orelse {
+                                    std.debug.panic("test expect reached dev codegen without an observer hook", .{});
+                                };
+                                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                                try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+                                try builder.addImmArg(@intFromEnum(site));
+                                try builder.addRegArg(cond_reg);
+                                try builder.call(@intFromPtr(hook));
+                                self.codegen.freeGeneral(cond_reg);
+                            } else {
+                                try self.emitCmpImm(cond_reg, 0);
+                                const skip_patch = try self.emitJumpIfNotEqual();
+                                self.codegen.freeGeneral(cond_reg);
+                                try self.emitRocExpectFailed();
+                                self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                            }
                             try work.append(wa, .{ .node = expect_stmt.next });
                         },
 
@@ -22894,7 +23025,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.emitCmpImm(cond_reg, @bitCast(branch.value));
                                 const else_patch = try self.emitJumpIfNotEqual();
                                 self.codegen.freeGeneral(cond_reg);
-                                try self.restoreStmtEnv(&switch_env);
+                                self.restoreStmtEnv(&switch_env);
 
                                 const state = try self.allocator.create(SwitchState1);
                                 state.* = .{
@@ -22941,7 +23072,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const else_patch = try self.emitJumpIfNotEqual();
                             self.codegen.freeGeneral(compare_reg);
                             self.codegen.freeGeneral(cond_reg);
-                            try self.restoreStmtEnv(&switch_env);
+                            self.restoreStmtEnv(&switch_env);
 
                             const state = try self.allocator.create(SwitchState1);
                             state.* = .{
@@ -23121,7 +23252,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .switch_branch => |state| {
                     self.current_stmt_id = state.owner;
-                    try self.restoreStmtEnv(&state.switch_env);
+                    self.restoreStmtEnv(&state.switch_env);
                     const cond_loc = try self.emitValueLocal(state.cond);
                     const cond_reg = try self.ensureInGeneralReg(cond_loc);
                     const branch = GuardedList.at(state.branches, state.index);
@@ -23148,7 +23279,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .switch_default => |state| {
                     self.current_stmt_id = state.owner;
-                    try self.restoreStmtEnv(&state.switch_env);
+                    self.restoreStmtEnv(&state.switch_env);
                     try work.append(wa, .{ .switch_end = state });
                     try work.append(wa, .{ .node = state.default_branch });
                 },
@@ -23159,8 +23290,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (state.end_patches.items) |patch| {
                         self.codegen.patchJump(patch, end_offset);
                     }
-                    try self.restoreStmtEnv(&state.switch_env);
-                    state.switch_env.deinit();
+                    self.restoreStmtEnv(&state.switch_env);
                     state.end_patches.deinit(self.allocator);
                     self.allocator.destroy(state);
                 },
@@ -23169,7 +23299,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = state.owner;
                     state.end_patch = try self.codegen.emitJump();
                     self.codegen.patchJump(state.else_patch, self.codegen.currentOffset());
-                    try self.restoreStmtEnv(&state.switch_env);
+                    self.restoreStmtEnv(&state.switch_env);
                     try work.append(wa, .{ .switch1_end = state });
                     try work.append(wa, .{ .node = state.default_branch });
                 },
@@ -23177,8 +23307,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .switch1_end => |state| {
                     self.current_stmt_id = state.owner;
                     self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
-                    try self.restoreStmtEnv(&state.switch_env);
-                    state.switch_env.deinit();
+                    self.restoreStmtEnv(&state.switch_env);
                     self.allocator.destroy(state);
                 },
 
@@ -23189,7 +23318,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (state.miss_patches.items) |patch| {
                         self.codegen.patchJump(patch, miss_offset);
                     }
-                    try self.restoreStmtEnv(&state.before_env);
+                    self.restoreStmtEnv(&state.before_env);
                     try work.append(wa, .{ .str_match_end = state });
                     try work.append(wa, .{ .node = state.on_miss });
                 },
@@ -23197,15 +23326,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_match_end => |state| {
                     self.current_stmt_id = state.owner;
                     self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
-                    try self.restoreStmtEnv(&state.before_env);
-                    state.before_env.deinit();
+                    self.restoreStmtEnv(&state.before_env);
                     state.miss_patches.deinit(self.allocator);
                     self.allocator.destroy(state);
                 },
 
                 .str_match_set_arm => |state| {
                     self.current_stmt_id = state.owner;
-                    try self.restoreStmtEnv(&state.before_env);
+                    self.restoreStmtEnv(&state.before_env);
                     if (builtin.mode == .Debug and state.index >= state.arms.len) {
                         std.debug.panic("Dev/codegen invariant violated: string-match-set arm index exceeded arm count", .{});
                     }
@@ -23230,7 +23358,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     state.miss_patches.deinit(self.allocator);
                     state.miss_patches = std.ArrayList(usize).empty;
                     state.index += 1;
-                    try self.restoreStmtEnv(&state.before_env);
+                    self.restoreStmtEnv(&state.before_env);
                     if (state.index < state.arms.len) {
                         try work.append(wa, .{ .str_match_set_arm = state });
                     } else {
@@ -23240,7 +23368,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .str_match_set_miss => |state| {
                     self.current_stmt_id = state.owner;
-                    try self.restoreStmtEnv(&state.before_env);
+                    self.restoreStmtEnv(&state.before_env);
                     try work.append(wa, .{ .str_match_set_end = state });
                     try work.append(wa, .{ .node = state.on_miss });
                 },
@@ -23251,8 +23379,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (state.end_patches.items) |patch| {
                         self.codegen.patchJump(patch, end_offset);
                     }
-                    try self.restoreStmtEnv(&state.before_env);
-                    state.before_env.deinit();
+                    self.restoreStmtEnv(&state.before_env);
                     state.miss_patches.deinit(self.allocator);
                     state.end_patches.deinit(self.allocator);
                     self.allocator.destroy(state);
@@ -23345,7 +23472,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .discard => {},
                             .view => |local| {
                                 const loc = ValueLocation{ .stack_str = capture_offset };
-                                try self.local_locations.put(localKey(local), loc);
+                                try self.setLocalLocation(localKey(local), loc);
                                 try self.emitDebugAssertValidStrLocal(local, loc);
                             },
                         }
@@ -23362,7 +23489,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .discard => {},
                         .view => |local| {
                             const loc = ValueLocation{ .stack_str = capture_offset };
-                            try self.local_locations.put(localKey(local), loc);
+                            try self.setLocalLocation(localKey(local), loc);
                             try self.emitDebugAssertValidStrLocal(local, loc);
                         },
                     }
@@ -23705,8 +23832,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.offset))));
                     },
                     .shim_execution, .object_file => {
-                        const symbol_name = self.staticStringSymbol(literal.backing);
-                        try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                        const symbol = try self.staticStringSymbol(literal.backing);
+                        try self.codegen.emitLoadDataAddress(ptr_reg, symbol);
                         try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.offset);
                     },
                 }
@@ -23724,8 +23851,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (whole_backing) {
                             try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len << 1));
                         } else {
-                            const symbol_name = self.staticStringSymbol(literal.backing);
-                            try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                            const symbol = try self.staticStringSymbol(literal.backing);
+                            try self.codegen.emitLoadDataAddress(ptr_reg, symbol);
                             try self.emitAddUsizeImm(ptr_reg, ptr_reg, 1);
                         }
                     },
@@ -23761,8 +23888,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.bytes.offset))));
                     },
                     .shim_execution, .object_file => {
-                        const symbol_name = self.staticStringSymbol(literal.bytes.backing);
-                        try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                        const symbol = try self.staticStringSymbol(literal.bytes.backing);
+                        try self.codegen.emitLoadDataAddress(ptr_reg, symbol);
                         try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.bytes.offset);
                     },
                 }
@@ -23784,8 +23911,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (whole_backing) {
                             try self.codegen.emitLoadImm(ptr_reg, @as(i64, literal.len) << 1);
                         } else {
-                            const symbol_name = self.staticStringSymbol(literal.bytes.backing);
-                            try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                            const symbol = try self.staticStringSymbol(literal.bytes.backing);
+                            try self.codegen.emitLoadDataAddress(ptr_reg, symbol);
                             try self.emitAddUsizeImm(ptr_reg, ptr_reg, 1);
                         }
                     },
@@ -23817,20 +23944,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn staticStringEntry(self: *Self, str_idx: base.StringLiteral.Idx) StaticStringData.Entry {
-            for (self.static_strings) |entry| {
-                if (entry.id == str_idx) return entry;
-            }
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "Dev/codegen invariant violated: non-SSO string literal {d} has no readonly data symbol",
-                    .{@intFromEnum(str_idx)},
-                );
-            }
-            unreachable;
+            return self.static_strings.find(str_idx) orelse {
+                if (builtin.mode == .Debug) std.debug.panic("Dev/codegen invariant violated: literal {d} has no readonly data entry", .{@intFromEnum(str_idx)});
+                unreachable;
+            };
         }
 
-        fn staticStringSymbol(self: *Self, str_idx: base.StringLiteral.Idx) []const u8 {
-            return self.staticStringEntry(str_idx).symbol_name;
+        fn staticStringSymbol(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!SymbolTable.Id {
+            const ordinal = self.static_strings.ordinal(str_idx).?;
+            if (self.literal_symbols.get(ordinal)) |symbol| return symbol;
+            const symbol = try self.codegen.symbols.internInternal(self.allocator, self.static_strings.entries[ordinal].symbol_name);
+            try self.literal_symbols.put(ordinal, symbol);
+            return symbol;
         }
 
         fn verifyStaticStringBytes(str_bytes: []const u8) void {
@@ -23917,17 +24042,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 // Object files call the host's fixed runtime symbol directly:
                 // symbol(bytes: [*]const u8, len: usize).
-                const symbol_name: []const u8 = if (field_offset == @offsetOf(RocOps, "roc_crashed"))
-                    "roc_crashed"
-                else if (field_offset == @offsetOf(RocOps, "roc_expect_failed"))
-                    "roc_expect_failed"
+                const symbol_name: []const u8 = if (field_offset == @offsetOf(RocOps, builtins.shim_symbols.roc_crashed))
+                    builtins.shim_symbols.roc_crashed
+                else if (field_offset == @offsetOf(RocOps, builtins.shim_symbols.roc_expect_failed))
+                    builtins.shim_symbols.roc_expect_failed
                 else
-                    "roc_dbg";
+                    builtins.shim_symbols.roc_dbg;
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, msg_slot);
                 try builder.addImmArg(msg_len_val);
-                try builder.callRelocatable(symbol_name, self.allocator, &self.codegen.relocations);
+                try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol_name), self.allocator, &self.codegen.relocations);
             }
         }
 
@@ -23961,7 +24086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // their declaring module (the host consumes the pending location
             // per expect event; see CompileTimeHost.rocExpectFailed).
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_expect_failed"), "expect failed");
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_expect_failed), "expect failed");
         }
 
         fn emitComptimeBranchTaken(
@@ -24045,7 +24170,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a roc_crashed call via RocOps with a static message.
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
         }
 
         /// Same as `emitRocCrash`, but reuses a per-proc shared msg/args slot.
@@ -24053,7 +24178,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// run (the program exits immediately after).
         fn emitRocCrashShared(self: *Self, msg: []const u8) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
+            try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, builtins.shim_symbols.roc_crashed), msg);
         }
 
         fn emitTrap(self: *Self) Allocator.Error!void {
@@ -25249,6 +25374,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.unwind_functions.items;
         }
 
+        /// Borrow the name column owning the generated relocation IDs.
+        pub fn getSymbolNames(self: *const Self) []const []const u8 {
+            return self.codegen.symbols.names.items;
+        }
+
         /// Get relocations for the generated code buffer.
         pub fn getRelocations(self: *Self) []const Relocation {
             return self.codegen.relocations.items;
@@ -25578,7 +25708,7 @@ fn compileRootWithFloatNanMode(
     const allocator = std.testing.allocator;
     // The callers of this run the code they get back, so it is held to what
     // the machine running the tests executes.
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, .{}, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -25742,7 +25872,7 @@ test "code generator initialization" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 }
 
@@ -25772,7 +25902,7 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
         allocator,
         &store,
         &test_state.layout_store,
-        &.{},
+        .{},
         &.{},
         &.{},
         &.{worker_proc},
@@ -25788,6 +25918,147 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
     try std.testing.expect(!codegen.boxy_dict_thunks.contains(@intFromEnum(ordinary_proc)));
 }
 
+test "statement environments restore nested bindings and overwrites without allocation" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    defer codegen.deinit();
+
+    const before = try addLocal(&store, .u64);
+    const outer_local = try addLocal(&store, .u64);
+    const inner_local = try addLocal(&store, .u64);
+    // Failed table growth must not leave a journal entry for an absent binding.
+    codegen.local_locations.allocator = std.testing.failing_allocator;
+    try std.testing.expectError(error.OutOfMemory, codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 10 }));
+    codegen.local_locations.allocator = allocator;
+    try std.testing.expectEqual(@as(u32, 0), codegen.local_locations.count());
+    try std.testing.expectEqual(@as(usize, 0), codegen.local_location_undo.items.len);
+    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 10 });
+    const outer = try codegen.captureStmtEnv();
+    try codegen.setLocalLocation(@intFromEnum(outer_local), .{ .immediate_i64 = 20 });
+    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 11 });
+    const inner = try codegen.captureStmtEnv();
+    try codegen.setLocalLocation(@intFromEnum(inner_local), .{ .immediate_i64 = 30 });
+    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 12 });
+    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 13 });
+    _ = codegen.codegen.allocStackSlot(16);
+    const stack_offset = codegen.codegen.stack_offset;
+    _ = codegen.codegen.allocFloat().?;
+
+    // Capture (without pending spills) and every restore must need no allocator.
+    const saved_allocator = codegen.allocator;
+    const saved_map_allocator = codegen.local_locations.allocator;
+    codegen.allocator = std.testing.failing_allocator;
+    codegen.local_locations.allocator = std.testing.failing_allocator;
+    defer {
+        codegen.allocator = saved_allocator;
+        codegen.local_locations.allocator = saved_map_allocator;
+    }
+    _ = try codegen.captureStmtEnv();
+    codegen.restoreStmtEnv(&inner);
+    try std.testing.expectEqual(@as(i64, 11), codegen.local_locations.get(@intFromEnum(before)).?.immediate_i64);
+    try std.testing.expectEqual(@as(i64, 20), codegen.local_locations.get(@intFromEnum(outer_local)).?.immediate_i64);
+    try std.testing.expect(!codegen.local_locations.contains(@intFromEnum(inner_local)));
+    try std.testing.expectEqual(inner.free_float, codegen.codegen.free_float);
+    try std.testing.expectEqual(inner.undo_mark, codegen.local_location_undo.items.len);
+    codegen.restoreStmtEnv(&inner);
+    codegen.restoreStmtEnv(&outer);
+    codegen.restoreStmtEnv(&outer);
+    try std.testing.expectEqual(@as(i64, 10), codegen.local_locations.get(@intFromEnum(before)).?.immediate_i64);
+    try std.testing.expectEqual(@as(u32, 1), codegen.local_locations.count());
+    try std.testing.expectEqual(outer.undo_mark, codegen.local_location_undo.items.len);
+    try std.testing.expectEqual(outer.free_float, codegen.codegen.free_float);
+    try std.testing.expectEqual(stack_offset, codegen.codegen.stack_offset);
+
+    codegen.clearLocalLocationsRetainingCapacity();
+    try std.testing.expectEqual(@as(u32, 0), codegen.local_locations.count());
+    try std.testing.expectEqual(@as(usize, 0), codegen.local_location_undo.items.len);
+}
+
+test "statement environments spill vectors before marks and undo arm spills in reverse" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    defer codegen.deinit();
+
+    const before = try addLocal(&store, .u8x16);
+    const arm_local = try addLocal(&store, .u8x16);
+    const reg = codegen.codegen.allocFloat().?;
+    try codegen.setLocalLocation(@intFromEnum(before), .{ .vector_reg = .{ .reg = reg, .kind = .u8x16 } });
+    codegen.trackVectorLocal(@intFromEnum(before), reg);
+    const outer = try codegen.captureStmtEnv();
+    const before_loc = codegen.local_locations.get(@intFromEnum(before)).?;
+    try std.testing.expect(before_loc == .stack);
+    try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
+
+    // Each sibling binds the same local, then an inner capture spills it.
+    for (0..2) |_| {
+        const arm_reg = codegen.codegen.allocFloat().?;
+        try codegen.setLocalLocation(@intFromEnum(arm_local), .{ .vector_reg = .{ .reg = arm_reg, .kind = .u8x16 } });
+        codegen.trackVectorLocal(@intFromEnum(arm_local), arm_reg);
+        const inner = try codegen.captureStmtEnv();
+        try std.testing.expect(codegen.local_locations.get(@intFromEnum(arm_local)).? == .stack);
+        codegen.restoreStmtEnv(&inner);
+        try std.testing.expect(codegen.local_locations.contains(@intFromEnum(arm_local)));
+        codegen.restoreStmtEnv(&outer);
+        try std.testing.expect(!codegen.local_locations.contains(@intFromEnum(arm_local)));
+        try std.testing.expect(std.meta.eql(before_loc, codegen.local_locations.get(@intFromEnum(before)).?));
+        try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
+        try std.testing.expectEqual(@as(?u32, null), codegen.vector_local_by_reg.get(arm_reg));
+        try std.testing.expectEqual(outer.free_float, codegen.codegen.free_float);
+        try std.testing.expectEqual(outer.undo_mark, codegen.local_location_undo.items.len);
+    }
+
+    // Also discard a vector that is still resident at the end of an arm.
+    const arm_reg = codegen.codegen.allocFloat().?;
+    try codegen.setLocalLocation(@intFromEnum(arm_local), .{ .vector_reg = .{ .reg = arm_reg, .kind = .u8x16 } });
+    codegen.trackVectorLocal(@intFromEnum(arm_local), arm_reg);
+    codegen.restoreStmtEnv(&outer);
+    try std.testing.expect(!codegen.local_locations.contains(@intFromEnum(arm_local)));
+    try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
+    try std.testing.expectEqual(@as(?u32, null), codegen.vector_local_by_reg.get(arm_reg));
+    try std.testing.expectEqual(outer.free_float, codegen.codegen.free_float);
+}
+
+test "statement environment journal survives procedure scopes" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    defer codegen.deinit();
+
+    _ = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .u64);
+    const local = try addLocal(&store, .u64);
+    const before = try codegen.captureStmtEnv();
+    try codegen.setLocalLocation(@intFromEnum(local), .{ .immediate_i64 = 10 });
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try std.testing.expectEqual(@as(i64, 10), codegen.local_locations.get(@intFromEnum(local)).?.immediate_i64);
+    try std.testing.expectEqual(@as(usize, 1), codegen.local_location_undo.items.len);
+    codegen.restoreStmtEnv(&before);
+    try std.testing.expectEqual(@as(u32, 0), codegen.local_locations.count());
+    try std.testing.expectEqual(@as(usize, 0), codegen.local_location_undo.items.len);
+}
+
 test "vector spill residency is independent of scalar local count" {
     if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
         return error.SkipZigTest;
@@ -25799,12 +26070,12 @@ test "vector spill residency is independent of scalar local count" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const vector_local = try addLocal(&store, .u8x16);
     const vector_reg = codegen.codegen.allocFloat().?;
-    try codegen.local_locations.put(@intFromEnum(vector_local), .{ .vector_reg = .{
+    try codegen.setLocalLocation(@intFromEnum(vector_local), .{ .vector_reg = .{
         .reg = vector_reg,
         .kind = .u8x16,
     } });
@@ -25812,7 +26083,7 @@ test "vector spill residency is independent of scalar local count" {
 
     for (0..4096) |_| {
         const scalar_local = try addLocal(&store, .u64);
-        try codegen.local_locations.put(@intFromEnum(scalar_local), .{ .immediate_i64 = 0 });
+        try codegen.setLocalLocation(@intFromEnum(scalar_local), .{ .immediate_i64 = 0 });
     }
 
     try codegen.spillAllVectorLocals();
@@ -25864,7 +26135,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     } });
     const args = try store.addLocalSpan(&.{ start, end });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const HostCodeGen = @TypeOf(codegen.codegen);
@@ -25936,7 +26207,7 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
         .next = alias1_stmt,
     } });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
     const HostCodeGen = @TypeOf(codegen.codegen);
     if (comptime builtin.cpu.arch == .aarch64) {
@@ -25980,7 +26251,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const list = try addLocal(&store, list_layout);
     const args = try store.addLocalSpan(&.{ a, b, c, d, list });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -26006,7 +26277,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
     const arg_plan = try store.internErasedCallArgsPlan(&test_state.layout_store, &.{.u64});
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -26041,7 +26312,7 @@ test "Windows dictionary thunk ABI reads result descriptor pointer from caller s
     const proc = store.getProcSpec(proc_id);
 
     const WinCodeGen = LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.proc_registry.put(@intFromEnum(proc_id), .{
@@ -26079,7 +26350,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const stack_arg = try addLocal(&store, .u64);
     const args = try store.addLocalSpan(&.{ a0, a1, a2, a3, a4, a5, a6, a7, stack_arg });
 
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -26103,7 +26374,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     defer test_state.deinit();
 
     const ArmCodeGen = LirCodeGen(.arm64mac);
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
@@ -27008,7 +27279,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
@@ -27035,7 +27306,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
         test_state.layout_store.getLayout(.f32),
     });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));
@@ -27258,4 +27529,44 @@ test "issue 10748: hosted call promotes narrow integer arguments that overflow t
     try std.testing.expectEqual(@as(u64, 8), overflow_hosted_args.last_register);
     try std.testing.expectEqual(@as(u8, 200), overflow_hosted_args.u8_value);
     try std.testing.expectEqual(@as(i16, -300), overflow_hosted_args.i16_value);
+}
+
+test "symbol producer caches reuse identities and reset with generated code" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    const literal = try store.insertString("a readonly literal with more than twenty three bytes");
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
+        var strings = try StaticStringData.build(allocator, &store, target);
+        defer strings.deinit();
+        var codegen = try LirCodeGen(target).init(allocator, &store, &test_state.layout_store, strings.view(), &.{}, .preserve, .default);
+        defer codegen.deinit();
+        try std.testing.expectEqual(@as(usize, 0), codegen.getSymbolNames().len);
+        const data_id: lir.LIR.StaticDataId = @enumFromInt(7);
+        try codegen.setStaticDataSymbols(&.{.{
+            .symbol_name = "test_static_root",
+            .value_id = data_id,
+            .bytes = &.{},
+            .alignment = 8,
+        }});
+        const builtin_symbol = try codegen.builtinSymbol(.str_concat);
+        for (0..128) |_| {
+            try std.testing.expectEqual(builtin_symbol, try codegen.builtinSymbol(.str_concat));
+            _ = try codegen.staticStringSymbol(literal);
+            try codegen.emitStaticDataAddress(if (comptime target.toCpuArch() == .x86_64) .RAX else .X0, data_id);
+        }
+        try std.testing.expectEqual(@as(usize, 3), codegen.getSymbolNames().len);
+        try std.testing.expectEqual(@as(usize, 2), codegen.codegen.symbols.required_definitions.items.len);
+        const old_data_symbol = codegen.static_data_symbols.get(data_id).?.symbol.?;
+        codegen.reset();
+        try std.testing.expectEqual(@as(usize, 0), codegen.getSymbolNames().len);
+        try codegen.emitStaticDataAddress(if (comptime target.toCpuArch() == .x86_64) .RAX else .X0, data_id);
+        const new_data_symbol = codegen.static_data_symbols.get(data_id).?.symbol.?;
+        try std.testing.expect(old_data_symbol != new_data_symbol);
+        try std.testing.expectEqualStrings("test_static_root", codegen.getSymbolNames()[@intFromEnum(new_data_symbol)]);
+        const literal_symbol = try codegen.staticStringSymbol(literal);
+        try std.testing.expectEqualStrings(strings.find(literal).?.symbol_name, codegen.getSymbolNames()[@intFromEnum(literal_symbol)]);
+    }
 }

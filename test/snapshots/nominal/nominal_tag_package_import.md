@@ -16,20 +16,33 @@ blue = CC.Color.RGB(0,0,255)
 MOD NOT FOUND - nominal_tag_package_import.md:5:10:5:16
 MOD NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 # PROBLEMS
-── ✗ mod not found ─────────────────────── nominal_tag_package_import.md:5:10
-
-This Color type is declared to be in styles.Color, which does not exist.
-
-blue : CC.Color
-         ^^^^^^
-
-── ✗ mod not found ─────────────────────── nominal_tag_package_import.md:6:10
-
-This Color type is declared to be in styles.Color, which does not exist.
-
-blue = CC.Color.RGB(0,0,255)
-         ^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 5 10) (end 5 16))
+		(headline
+			(text "This ")
+			(annotated code "Color")
+			(reflow " type is declared to be in ")
+			(annotated code "styles.Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_tag_package_import.md") (start 5 10) (end 5 16) (annotation error) (line-text "blue : CC.Color"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 10) (end 6 16))
+		(headline
+			(text "This ")
+			(annotated code "Color")
+			(reflow " type is declared to be in ")
+			(annotated code "styles.Color")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_tag_package_import.md") (start 6 10) (end 6 16) (annotation error) (line-text "blue = CC.Color.RGB(0,0,255)")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,
