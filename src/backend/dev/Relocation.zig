@@ -90,6 +90,10 @@ pub const IndexedRelocation = union(enum) {
     },
     local_data: @FieldType(Relocation, "local_data"),
     jmp_to_return: @FieldType(Relocation, "jmp_to_return"),
+    /// A relocation superseded by a stub that carries its own relocations.
+    /// Consumers skip it; it keeps its slot so recorded relocation indices
+    /// stay valid.
+    retired,
 
     pub fn getOffset(self: IndexedRelocation) u64 {
         return switch (self) {
@@ -97,6 +101,7 @@ pub const IndexedRelocation = union(enum) {
             .linked_data => |r| r.offset,
             .local_data => |r| r.offset,
             .jmp_to_return => |r| r.inst_loc,
+            .retired => 0,
         };
     }
 
@@ -109,6 +114,7 @@ pub const IndexedRelocation = union(enum) {
                 r.inst_loc += delta;
                 r.offset += delta;
             },
+            .retired => {},
         }
     }
 };

@@ -4247,9 +4247,16 @@ record the same continuation proof rather than relying on downstream discovery.
 The explicit `InlineMode` controls the optional specialization work:
 
 - `.none` skips Monotype Lifted SpecConstr and produces an empty solved inline
-  plan. Dev and interpreter modes select this.
+  plan. The interpreter selects this.
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
-  decisions from Lambda Solved. Size and speed modes select this.
+  decisions from Lambda Solved. Dev, size and speed modes select this. A
+  single-use body folds into its unique caller only while that caller's
+  absorbed bodies, each counted with what it absorbed itself, stay within a
+  fixed budget of lifted expression nodes; a body that does not fit remains a
+  procedure. Exact single-use inlining never grows the program, but without
+  the bound one procedure could absorb an entire program, which puts its
+  generated code beyond direct branch reach and its frame beyond cheap
+  addressing.
 - optimized eval and focused lowering tests may select `.wrappers` directly.
 
 The mode is compiler input supplied to the checked pipeline. SpecConstr and the

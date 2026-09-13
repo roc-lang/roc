@@ -140,7 +140,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@intFromEnum(f.symbol)], if (cpu_arch == .x86_64) -4 else 0),
                     .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@intFromEnum(d.symbol)], d.kind),
-                    .local_data, .jmp_to_return => {},
+                    .local_data, .jmp_to_return, .retired => {},
                 }
             }
             for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@intFromEnum(rel.symbol)], rel.addend);
@@ -171,7 +171,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 .linked_data => |d| {
                     referenced[@intFromEnum(d.symbol)] = true;
                 },
-                .local_data, .jmp_to_return => {},
+                .local_data, .jmp_to_return, .retired => {},
             };
             for (rodata_relocations) |rel| referenced[@intFromEnum(rel.symbol)] = true;
 
@@ -191,7 +191,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(f.symbol)], true),
                     .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(d.symbol)], true, d.kind),
-                    .local_data, .jmp_to_return => {},
+                    .local_data, .jmp_to_return, .retired => {},
                 }
             }
             for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@intFromEnum(rel.symbol)], true, rel.addend);
@@ -265,7 +265,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(f.symbol)]),
                     .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@intFromEnum(d.symbol)], d.kind),
-                    .local_data, .jmp_to_return => {},
+                    .local_data, .jmp_to_return, .retired => {},
                 }
             }
             for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@intFromEnum(rel.symbol)], rel.addend);

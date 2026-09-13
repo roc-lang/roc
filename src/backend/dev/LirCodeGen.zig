@@ -1001,6 +1001,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// - native_execution: Code runs in-process (dev evaluator), direct function pointers work
         /// - object_file: Generating relocatable object files, use symbol references for builtins
         generation_mode: GenerationMode = .native_execution,
+        /// Set by `finishImage`; the code and relocations are complete only after it.
+        image_finished: bool = false,
 
         /// Whether shim-executed host-callable functions and boxed callbacks
         /// participate in the hot-reload code reference protocol.
@@ -17231,7 +17233,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.generation_mode.threadsRocOps()) {
                 try builder.callReg(hosted_target_reg);
             } else {
-                try builder.callRelocatable(try self.hostedSymbol(hosted.symbol), self.allocator, &self.codegen.relocations);
+                try builder.callRelocatable(try self.hostedSymbol(hosted.symbol), &self.codegen);
             }
 
             // Register-class return: store each result register into the return slot.
@@ -17913,7 +17915,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             switch (self.generation_mode) {
                 .shim_execution, .object_file => {
-                    try builder.callRelocatable(try self.boxySymbol(boxy_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.boxySymbol(boxy_fn), &self.codegen);
                 },
                 .native_execution => {
                     const table = self.boxy_native_fns orelse std.debug.panic(
@@ -17933,7 +17935,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(self.roc_ops_reg orelse unreachable);
-            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded"), self.allocator, &self.codegen.relocations);
+            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded"), &self.codegen);
         }
 
         /// Resolve a boxy descriptor reference to an 8-byte stack slot holding
@@ -18645,7 +18647,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.call(builtin_fn.wrapperAddress());
                 },
                 .shim_execution => {
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
                 .object_file => {
                     if (builtin_fn.payload() == .jit_only) {
@@ -18654,7 +18656,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .{builtin_fn.symbolName()},
                         );
                     }
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
             }
         }
@@ -18670,7 +18672,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.call(adapter_addr);
                 },
                 .shim_execution, .object_file => {
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), self.allocator, &self.codegen.relocations);
+                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
             }
         }
@@ -24008,7 +24010,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, msg_slot);
                 try builder.addImmArg(msg_len_val);
-                try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol_name), self.allocator, &self.codegen.relocations);
+                try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol_name), &self.codegen);
             }
         }
 
@@ -25320,6 +25322,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         pub fn getGeneratedCode(self: *Self) []const u8 {
+            self.assertImageFinished();
             return self.codegen.getCode();
         }
 
@@ -25335,7 +25338,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Get relocations for the generated code buffer.
         pub fn getRelocations(self: *Self) []const Relocation {
+            self.assertImageFinished();
             return self.codegen.relocations.items;
+        }
+
+        /// Call once every procedure, helper and wrapper of the image is
+        /// emitted, before the code and relocations are read out.
+        pub fn finishImage(self: *Self) Allocator.Error!void {
+            if (self.image_finished) return;
+            if (comptime target.toCpuArch() == .aarch64) try self.codegen.finishImage();
+            self.image_finished = true;
+        }
+
+        fn assertImageFinished(self: *const Self) void {
+            if (builtin.mode == .Debug and !self.image_finished) {
+                std.debug.panic("generated code was read before finishImage", .{});
+            }
         }
     };
 }

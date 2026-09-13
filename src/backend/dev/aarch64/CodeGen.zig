@@ -555,13 +555,24 @@ pub fn CodeGen(comptime target: RocTarget) type {
         // sites veneers before they age out of direct reach of the emission
         // point, and `patchJump`/`patchCall` place a veneer on demand when a
         // target that is already known turns out to be far away.
+        //
+        // Calls to linked symbols are resolved by the linker or the image
+        // loader, which can only reach +/-128 MiB from the BL as well and
+        // cannot insert a thunk inside this single code blob. Such a site
+        // is registered too; once it ages, or once the finished image is at
+        // least as long as the direct reach, it branches to a stub that
+        // loads the symbol's address with page relocations and jumps there.
+        // Images shorter than the reach keep their direct BLs: a linker can
+        // thunk those at the blob's end, which every site reaches.
 
-        pub const BranchSiteKind = enum(u8) { jump, cond_jump, call };
+        pub const BranchSiteKind = enum(u8) { jump, cond_jump, call, extern_call };
 
         pub const BranchSite = struct {
             loc: usize,
             kind: BranchSiteKind,
             cond: Emit.Condition = .eq,
+            /// Index of the site's `linked_function` relocation (`extern_call`).
+            reloc_index: u32 = 0,
             veneer: ?usize = null,
             target: ?usize = null,
 
@@ -573,7 +584,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
             fn directWordLoc(self: BranchSite) usize {
                 return switch (self.kind) {
                     .cond_jump => self.loc + 4,
-                    .jump, .call => self.loc,
+                    .jump, .call, .extern_call => self.loc,
+                };
+            }
+
+            fn veneerBytes(self: BranchSite) usize {
+                return switch (self.kind) {
+                    .extern_call => extern_stub_bytes,
+                    .jump, .cond_jump, .call => pcrel_veneer_bytes,
                 };
             }
         };
@@ -583,7 +601,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// buffers exercise veneers, and the margins scale with it.
         pub const direct_branch_reach_bytes: usize = 1 << 27;
         /// ADR, MOVZ, MOVK, ADD/SUB, BR.
-        pub const veneer_bytes: usize = 5 * 4;
+        pub const pcrel_veneer_bytes: usize = 5 * 4;
+        /// ADRP, ADD, BR.
+        pub const extern_stub_bytes: usize = 3 * 4;
 
         /// Room kept when deciding that a direct encoding fits, so a prologue
         /// prepended in front of a body afterwards (a few hundred bytes) can
@@ -706,6 +726,16 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return patch_loc;
         }
 
+        /// Emit a BL to a linked symbol, recorded as a `linked_function`
+        /// relocation and registered so a far image can redirect it to a stub.
+        pub fn emitExternCall(self: *Self, symbol: SymbolTable.Id) Allocator.Error!void {
+            const loc = self.currentOffset();
+            try self.emit.bl(0);
+            const reloc_index: u32 = @intCast(self.relocations.items.len);
+            try self.relocations.append(self.allocator, .{ .linked_function = .{ .offset = @intCast(loc), .symbol = symbol } });
+            try self.registerBranchSite(.{ .loc = loc, .kind = .extern_call, .reloc_index = reloc_index });
+        }
+
         /// Call a target whose code offset is already known: a direct BL when
         /// it is in reach, otherwise the inline PC-relative address sequence
         /// followed by BLR. `patchDirectCall` re-encodes either form.
@@ -737,7 +767,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Patch a jump target
         pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
-            if (builtin.mode == .Debug and self.branch_sites.items[index].kind == .call) {
+            if (builtin.mode == .Debug and self.branch_sites.items[index].kind != .jump and self.branch_sites.items[index].kind != .cond_jump) {
                 std.debug.panic("AArch64 patchJump called for the call site at 0x{x}", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
@@ -747,7 +777,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn patchCall(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
             if (builtin.mode == .Debug and self.branch_sites.items[index].kind != .call) {
-                std.debug.panic("AArch64 patchCall called for the jump site at 0x{x}", .{patch_loc});
+                std.debug.panic("AArch64 patchCall called for a site at 0x{x} that is not a pending call", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
         }
@@ -782,6 +812,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
+                .extern_call => unreachable,
             }
             self.markBranchSiteResolved(index, target_loc);
         }
@@ -799,7 +830,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (self.branch_sites.items[index].veneer) |veneer| return veneer;
             // An island of one, reachable because `maybeEmitBranchIsland`
             // keeps every open site within direct reach of the emission point.
-            try self.emit.b(@intCast(4 + veneer_bytes));
+            try self.emit.b(@intCast(4 + pcrel_veneer_bytes));
             const veneer = self.currentOffset();
             try self.emitVeneerPlaceholder();
             self.attachVeneer(index, veneer);
@@ -809,6 +840,32 @@ pub fn CodeGen(comptime target: RocTarget) type {
         fn emitVeneerPlaceholder(self: *Self) Allocator.Error!void {
             try self.emit.pcRelAddrSequence(.IP0, .IP1, 0, 0, false);
             try self.emit.brReg(.IP0);
+        }
+
+        /// Give an `extern_call` site a stub: ADRP/ADD carrying page
+        /// relocations against the symbol, then BR. The site's own branch
+        /// relocation retires and its BL branches to the stub instead.
+        fn emitExternStub(self: *Self, index: u32) Allocator.Error!void {
+            const site = self.branch_sites.items[index];
+            std.debug.assert(site.kind == .extern_call and site.veneer == null);
+            const symbol = self.relocations.items[site.reloc_index].linked_function.symbol;
+            const stub = self.currentOffset();
+            try self.emit.adrp(.IP0);
+            try self.emit.addRegRegImm12(.w64, .IP0, .IP0, 0);
+            try self.emit.brReg(.IP0);
+            self.relocations.items[site.reloc_index] = .retired;
+            try self.relocations.append(self.allocator, .{ .linked_data = .{ .offset = @intCast(stub), .symbol = symbol, .kind = .page21 } });
+            try self.relocations.append(self.allocator, .{ .linked_data = .{ .offset = @intCast(stub + 4), .symbol = symbol, .kind = .pageoff12 } });
+            self.attachVeneer(index, stub);
+            self.writeInst(site.loc, encodeBl(@divExact(branchByteOffset(site.loc, stub), 4)));
+            self.markBranchSiteResolved(index, stub);
+        }
+
+        fn placeVeneer(self: *Self, index: u32) Allocator.Error!void {
+            if (self.branch_sites.items[index].kind == .extern_call) return self.emitExternStub(index);
+            const veneer = self.currentOffset();
+            try self.emitVeneerPlaceholder();
+            self.attachVeneer(index, veneer);
         }
 
         fn attachVeneer(self: *Self, index: u32, veneer: usize) void {
@@ -825,7 +882,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         fn islandNeeded(self: *const Self, oldest_loc: usize, open_count: usize, limit: usize) bool {
             const age = self.emit.buf.items.len - oldest_loc;
-            return age + open_count * veneer_bytes + self.islandGapMargin() + self.branchShiftMargin() >= limit;
+            return age + open_count * pcrel_veneer_bytes + self.islandGapMargin() + self.branchShiftMargin() >= limit;
         }
 
         fn oldestOpenUnveneeredSite(self: *Self) ?BranchSite {
@@ -853,6 +910,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             // the reach, so consecutive islands do not chase each other
             // statement by statement.
             var count: usize = 0;
+            var island_bytes: usize = 0;
             var remaining = self.branch_open_unveneered;
             var i = self.branch_open_scan;
             while (i < self.branch_sites.items.len) : (i += 1) {
@@ -860,19 +918,45 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 if (!site.needsVeneer()) continue;
                 if (!self.islandNeeded(site.loc, remaining, self.branch_reach_limit / 2)) break;
                 count += 1;
+                island_bytes += site.veneerBytes();
                 remaining -= 1;
             }
             std.debug.assert(count > 0);
 
-            try self.emit.b(@intCast(4 + count * veneer_bytes));
+            try self.emit.b(@intCast(4 + island_bytes));
             i = self.branch_open_scan;
             var placed: usize = 0;
             while (placed < count) : (i += 1) {
                 if (!self.branch_sites.items[i].needsVeneer()) continue;
-                const veneer = self.currentOffset();
-                try self.emitVeneerPlaceholder();
-                self.attachVeneer(@intCast(i), veneer);
+                try self.placeVeneer(@intCast(i));
                 placed += 1;
+            }
+        }
+
+        /// Call once every instruction of the image is emitted. An image at
+        /// least as long as the direct reach cannot rely on the linker or
+        /// loader to reach linked symbols from every site, so every remaining
+        /// direct BL to a linked symbol gets a stub here; every such site is
+        /// still within reach of this point.
+        pub fn finishImage(self: *Self) Allocator.Error!void {
+            if (builtin.mode == .Debug) {
+                for (self.branch_sites.items) |site| {
+                    if (site.kind != .extern_call and site.target == null) {
+                        std.debug.panic("AArch64 branch site at 0x{x} was never patched", .{site.loc});
+                    }
+                }
+            }
+            if (self.currentOffset() < self.branch_reach_limit) return;
+            var island_bytes: usize = 0;
+            for (self.branch_sites.items) |site| {
+                if (site.kind == .extern_call and site.needsVeneer()) island_bytes += extern_stub_bytes;
+            }
+            if (island_bytes == 0) return;
+            try self.emit.b(@intCast(4 + island_bytes));
+            var index: u32 = 0;
+            while (index < self.branch_sites.items.len) : (index += 1) {
+                const site = self.branch_sites.items[index];
+                if (site.kind == .extern_call and site.needsVeneer()) try self.emitExternStub(index);
             }
         }
 
@@ -914,7 +998,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
                     if (loc_moved != veneer_moved) {
                         const word_loc = site.directWordLoc();
                         const words = @divExact(branchByteOffset(word_loc, veneer), 4);
-                        const kind: BranchSiteKind = if (site.kind == .cond_jump) .jump else site.kind;
+                        const kind: BranchSiteKind = switch (site.kind) {
+                            .cond_jump => .jump,
+                            .extern_call => .call,
+                            .jump, .call => site.kind,
+                        };
                         self.writeInst(word_loc, encodeDirectBranch(kind, words));
                     }
                     if (veneer_moved != target_moved) self.writePcRelSequence(veneer, target_loc, .IP0, .IP1);
@@ -973,7 +1061,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return switch (kind) {
                 .jump => encodeB(offset_words),
                 .call => encodeBl(offset_words),
-                .cond_jump => unreachable,
+                .cond_jump, .extern_call => unreachable,
             };
         }
 
@@ -998,14 +1086,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
         /// Emit function call with relocation
         pub fn emitCall(self: *Self, symbol: SymbolTable.Id) Allocator.Error!void {
-            const offset = self.currentOffset();
-            try self.emit.bl(0); // Placeholder
-            try self.relocations.append(self.allocator, .{
-                .linked_function = .{
-                    .offset = @intCast(offset),
-                    .symbol = symbol,
-                },
-            });
+            try self.emitExternCall(symbol);
         }
     };
 }
@@ -1164,7 +1245,7 @@ test "patch conditional jump expands far targets" {
 }
 
 const TestEmit = EmitMod.Emit(.arm64linux);
-const test_veneer_bytes = LinuxCodeGen.veneer_bytes;
+const test_veneer_bytes = LinuxCodeGen.pcrel_veneer_bytes;
 const br_ip0_inst: u32 = 0xD61F0200;
 const blr_ip0_inst: u32 = 0xD63F0200;
 
@@ -1379,4 +1460,81 @@ test "compaction drops resolved sites and keeps open ones findable" {
     const target = cg.currentOffset();
     try cg.patchCall(call, target);
     try expectDirectBranch(0b100101, testInst(&cg, call), call, target);
+}
+
+const TestDataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
+const adrp_ip0_zero_inst: u32 = 0x90000010;
+const add_ip0_ip0_zero_inst: u32 = 0x91000210;
+
+fn expectExternStub(cg: *LinuxCodeGen, call: usize, stub: usize, reloc_index: usize) !void {
+    try expectDirectBranch(0b100101, testInst(cg, call), call, stub);
+    try std.testing.expectEqual(adrp_ip0_zero_inst, testInst(cg, stub));
+    try std.testing.expectEqual(add_ip0_ip0_zero_inst, testInst(cg, stub + 4));
+    try std.testing.expectEqual(br_ip0_inst, testInst(cg, stub + 8));
+    try std.testing.expect(cg.relocations.items[reloc_index] == .retired);
+    const page = cg.relocations.items[cg.relocations.items.len - 2].linked_data;
+    const page_off = cg.relocations.items[cg.relocations.items.len - 1].linked_data;
+    try std.testing.expectEqual(@as(u64, stub), page.offset);
+    try std.testing.expectEqual(TestDataRelocationKind.page21, page.kind);
+    try std.testing.expectEqual(@as(u64, stub + 4), page_off.offset);
+    try std.testing.expectEqual(TestDataRelocationKind.pageoff12, page_off.kind);
+    try std.testing.expectEqual(page.symbol, page_off.symbol);
+}
+
+test "extern call sites get stubs once the image reaches the direct reach" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+    cg.branch_reach_limit = 4096;
+
+    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_far_target");
+    const call = cg.currentOffset();
+    try cg.emitExternCall(symbol);
+    try testPad(&cg, 8192);
+    const island = cg.currentOffset();
+    try cg.finishImage();
+
+    const stub = island + 4;
+    try std.testing.expectEqual(stub + LinuxCodeGen.extern_stub_bytes, cg.currentOffset());
+    try expectDirectBranch(0b000101, testInst(&cg, island), island, stub + LinuxCodeGen.extern_stub_bytes);
+    try std.testing.expectEqual(@as(usize, 3), cg.relocations.items.len);
+    try expectExternStub(&cg, call, stub, 0);
+    try std.testing.expectEqual(symbol, cg.relocations.items[1].linked_data.symbol);
+}
+
+test "extern call sites stay direct in an image within reach" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+    cg.branch_reach_limit = 4096;
+
+    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_near_target");
+    try testPad(&cg, 64);
+    const call = cg.currentOffset();
+    try cg.emitExternCall(symbol);
+    try testPad(&cg, 64);
+    const end = cg.currentOffset();
+    try cg.finishImage();
+
+    try std.testing.expectEqual(end, cg.currentOffset());
+    try std.testing.expectEqual(@as(usize, 1), cg.relocations.items.len);
+    try std.testing.expectEqual(@as(u64, call), cg.relocations.items[0].linked_function.offset);
+    try expectDirectBranch(0b100101, testInst(&cg, call), call, call);
+}
+
+test "island gives an aging extern call site a stub" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+    cg.branch_reach_limit = 65536;
+
+    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_aging_target");
+    const call = cg.currentOffset();
+    try cg.emitExternCall(symbol);
+    try testPad(&cg, 60000);
+    const island = cg.currentOffset();
+    try cg.maybeEmitBranchIsland();
+
+    const stub = island + 4;
+    try std.testing.expectEqual(stub + LinuxCodeGen.extern_stub_bytes, cg.currentOffset());
+    try expectDirectBranch(0b000101, testInst(&cg, island), island, stub + LinuxCodeGen.extern_stub_bytes);
+    try expectExternStub(&cg, call, stub, 0);
+    try std.testing.expectEqual(@as(usize, 0), cg.branch_open_unveneered);
 }

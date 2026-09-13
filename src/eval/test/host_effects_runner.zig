@@ -406,6 +406,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             arg_layouts,
             proc.ret_layout,
         );
+        try codegen.finishImage();
         var exec_mem = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
             codegen.getGeneratedCode(),
             entrypoint.offset,
