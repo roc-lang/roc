@@ -354,6 +354,10 @@ pub const Interpreter = struct {
     static_strings: backend.StaticStringData.Table,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
+    /// Explicit compile-time slot readiness callback; ordinary runtime images
+    /// are already complete and leave this unset.
+    static_data_demand: ?StaticDataDemand = null,
+
     /// Static erased callables use the ordinary target payload ABI. This table
     /// supplies the interpreter-only proc identity without rewriting that data.
     static_erased_callables: []const StaticErasedCallable,
@@ -393,6 +397,7 @@ pub const Interpreter = struct {
     /// interpreted. This is independent of the physical proc call stack.
     active_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// Source location captured when the current evaluation first failed.
+    failure_origins: []const ?LIR.ComptimeFailureOrigin = &.{},
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
@@ -412,6 +417,11 @@ pub const Interpreter = struct {
     };
 
     pub const Error = boxy_runtime.Error;
+
+    pub const StaticDataDemand = struct {
+        context: *anyopaque,
+        ensure: *const fn (*anyopaque, LIR.StaticDataId) Error!void,
+    };
 
     /// Explicit hosted-call data produced by LIR and the interpreter's ABI
     /// packing. Integrations consume this without reconstructing hosted
@@ -3548,16 +3558,24 @@ pub const Interpreter = struct {
                     current = join_point.body;
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
-                .crash => |crash_stmt| switch (crash_stmt.msg) {
-                    .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
-                    .local => |message_local| {
-                        const message_value = try self.getLocalChecked(frame, message_local);
-                        const message = self.readRocStr(message_value);
-                        self.recordActiveFailureLocIfUnset();
-                        self.roc_env.reportCrash(message);
-                        self.dropValue(message_value, self.store.getLocal(message_local).layout_idx);
-                        return error.Crash;
-                    },
+                .crash => |crash_stmt| {
+                    if (@intFromEnum(current) < self.failure_origins.len) {
+                        if (self.failure_origins[@intFromEnum(current)]) |origin| {
+                            self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
+                            self.failed_stmt_region = origin.region orelse base.Region.zero();
+                        }
+                    }
+                    switch (crash_stmt.msg) {
+                        .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
+                        .local => |message_local| {
+                            const message_value = try self.getLocalChecked(frame, message_local);
+                            const message = self.readRocStr(message_value);
+                            self.recordActiveFailureLocIfUnset();
+                            self.roc_env.reportCrash(message);
+                            self.dropValue(message_value, self.store.getLocal(message_local).layout_idx);
+                            return error.Crash;
+                        },
+                    }
                 },
                 .expect_err => |expect_err_stmt| {
                     const message_value = try self.getLocalChecked(frame, expect_err_stmt.message);
@@ -4298,6 +4316,14 @@ pub const Interpreter = struct {
         return val;
     }
 
+    pub fn failStaticDataDemand(self: *LirInterpreter, message: []const u8) Error {
+        const owned = self.allocator.dupe(u8, message) catch return error.OutOfMemory;
+        if (self.roc_env.crash_message) |old| self.allocator.free(old);
+        self.roc_env.crash_message = owned;
+        self.roc_env.crashed = true;
+        return error.Crash;
+    }
+
     fn evalStaticDataLiteral(self: *LirInterpreter, id: LIR.StaticDataId, target_layout: layout_mod.Idx) Error!Value {
         const index: usize = @intFromEnum(id);
         if (index >= self.static_data.len) {
@@ -4306,6 +4332,7 @@ pub const Interpreter = struct {
                 .{index},
             );
         }
+        if (self.static_data_demand) |demand| try demand.ensure(demand.context, id);
         const result = try self.alloc(target_layout);
         const size = self.helper.sizeOf(target_layout);
         if (size != 0) {

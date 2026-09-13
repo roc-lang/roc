@@ -8266,11 +8266,12 @@ test "shared CTFE and runtime requests specialize once across workers and target
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "shared_work/app/Helper.roc",
         .data =
-        \\module [twice, answer]
-        \\twice : I64 -> I64
-        \\twice = |n| n + n
-        \\answer : I64
-        \\answer = twice(21)
+        \\Helper := [].{
+        \\    twice : I64 -> I64
+        \\    twice = |n| n + n
+        \\    answer : I64
+        \\    answer = twice(21)
+        \\}
         ,
     });
     try tmp_dir.dir.writeFile(std.testing.io, .{
@@ -8356,11 +8357,12 @@ test "successful compile-time dbg replays from warm checked cache without evalua
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "debug_cache/app/Helper.roc",
         .data =
-        \\module [value]
-        \\value : I64
-        \\value = {
-        \\    dbg "successful cached dbg"
-        \\    42
+        \\Helper := [].{
+        \\    value : I64
+        \\    value = {
+        \\        dbg "successful cached dbg"
+        \\        42
+        \\    }
         \\}
         ,
     });
@@ -8407,6 +8409,14 @@ test "successful compile-time dbg replays from warm checked cache without evalua
         try coord.coordinatorLoop();
         try coord.finishCheckedProgram(.none);
         try std.testing.expect(!coord.hasUserErrors());
+        var debug_packages = coord.packages.iterator();
+        while (debug_packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                if (std.mem.eql(u8, mod.name, "Helper")) {
+                    try std.testing.expectEqual(@as(usize, 0), mod.reports.items.len);
+                }
+            }
+        }
         if (helper_key == null) {
             var packages = coord.packages.iterator();
             while (packages.next()) |package| {

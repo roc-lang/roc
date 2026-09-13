@@ -80,7 +80,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Al
             .value = .{ .static_data = failure_slot },
             .next = load_failed,
         } };
-        try program.comptime_value_guards.append(allocator, .{ .entry = use.stmt, .success = success, .value_slot = use.slot });
+        try program.comptime_value_guards.append(allocator, .{ .entry = use.stmt, .success = success, .value_slot = use.slot, .crash = crash });
         try guards.put(use.stmt, .{ .locals = .{ record, failed, message } });
     }
     var locals: std.ArrayList(LIR.LocalId) = .empty;

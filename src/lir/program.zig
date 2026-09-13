@@ -413,6 +413,7 @@ pub const StaticDataValue = struct {
 
 /// Exact post-ARC guard identity consumed by successful-root completion.
 pub const ComptimeValueGuard = struct {
+    crash: LIR.CFStmtId,
     entry: LIR.CFStmtId,
     success: LIR.CFStmtId,
     value_slot: LIR.StaticDataId,

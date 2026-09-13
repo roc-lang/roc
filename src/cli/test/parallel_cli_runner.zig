@@ -6789,6 +6789,11 @@ fn customIssue11344SharedHelper(io: std.Io, allocator: Allocator, env: *const Ca
         .args = &.{ "check", "--jobs=4" },
         .roc_file = fixture,
     })) |failure| return failure;
+    const checked_cache_entries = countCheckedModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to count shared-helper module cache entries: {}", .{err});
+    if (checked_cache_entries == 0) {
+        return customFailure(allocator, timer, "expected shared-helper check to populate the checked-module cache", .{});
+    }
     for ([_][]const []const u8{
         &.{ "--opt=dev", "--no-cache", "--jobs=1" },
         &.{ "--opt=dev", "--no-cache", "--jobs=4" },

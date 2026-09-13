@@ -265,12 +265,13 @@ pub const GenerationMode = enum {
 
 /// Compiler-internal callbacks emitted only for native compile-time evaluation.
 pub const ComptimeHooks = struct {
+    ensure_static_value: *const fn (*RocOps, u32) callconv(.c) void,
     branch_taken: *const fn (*RocOps, u32, u32) callconv(.c) void,
     exhaustiveness_failed: *const fn (*RocOps, u32) callconv(.c) void,
-    /// (roc_ops, region start, region end, source file, line, column): the
+    /// (roc_ops, region start, region end, source file, line, column, statement): the
     /// statement's resolved location rides along with its region so the host
     /// knows which module's source the byte offsets belong to.
-    failure_region: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
+    failure_region: *const fn (*RocOps, u32, u32, u32, u32, u32, u32) callconv(.c) void,
     call_enter: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
     call_exit: *const fn (*RocOps) callconv(.c) void,
 };
@@ -854,6 +855,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Map from LIR local id to value location (register or stack slot)
         local_locations: std.AutoHashMap(u32, ValueLocation),
+        local_location_undo: std.ArrayList(LocalLocationUndo) = .empty,
+        stmt_env_depth: usize = 0,
 
         /// Exact reverse index for locals which currently live in vector registers.
         /// Most locals are stack-resident, so call boundaries must never search the
@@ -1416,6 +1419,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_symbols.deinit();
             self.hosted_symbols.deinit();
             self.local_locations.deinit();
+            self.local_location_undo.deinit(self.allocator);
             self.join_points.deinit();
             self.stmt_locations.deinit();
             self.precomputed_overflow_results.deinit();
@@ -1544,28 +1548,58 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
         }
 
+        const LocalLocationUndo = struct { key: u32, previous: ?ValueLocation };
+
         const StmtEnvSnapshot = struct {
-            local_locations: std.AutoHashMap(u32, ValueLocation),
+            owner: *Self,
+            checkpoint: usize,
             free_float: u32,
 
             fn deinit(self: *StmtEnvSnapshot) void {
-                self.local_locations.deinit();
+                std.debug.assert(self.owner.stmt_env_depth != 0);
+                self.owner.stmt_env_depth -= 1;
+                if (self.owner.stmt_env_depth == 0) self.owner.local_location_undo.clearRetainingCapacity();
             }
         };
+
+        /// Record exactly the binding changed by code generation. Branch
+        /// checkpoints share the untouched procedure inventory, including
+        /// locations preallocated for locals belonging to other branches.
+        fn putLocalLocation(self: *Self, key: u32, value: ValueLocation) Allocator.Error!void {
+            if (self.stmt_env_depth == 0) return self.local_locations.put(key, value);
+            try self.local_location_undo.ensureUnusedCapacity(self.allocator, 1);
+            const entry = try self.local_locations.getOrPut(key);
+            self.local_location_undo.appendAssumeCapacity(.{
+                .key = key,
+                .previous = if (entry.found_existing) entry.value_ptr.* else null,
+            });
+            entry.value_ptr.* = value;
+        }
 
         fn captureStmtEnv(self: *Self) Allocator.Error!StmtEnvSnapshot {
             // Branch environments must not depend on a volatile physical
             // vector register containing the value produced along one path.
             try self.spillAllVectorLocals();
+            self.stmt_env_depth += 1;
             return .{
-                .local_locations = try self.local_locations.clone(),
+                .owner = self,
+                .checkpoint = self.local_location_undo.items.len,
                 .free_float = self.codegen.free_float,
             };
         }
 
         fn restoreStmtEnv(self: *Self, snapshot: *const StmtEnvSnapshot) Allocator.Error!void {
-            self.local_locations.deinit();
-            self.local_locations = try snapshot.local_locations.clone();
+            std.debug.assert(snapshot.owner == self);
+            std.debug.assert(snapshot.checkpoint <= self.local_location_undo.items.len);
+            while (self.local_location_undo.items.len > snapshot.checkpoint) {
+                const undo = self.local_location_undo.pop().?;
+                if (undo.previous) |previous| {
+                    self.local_locations.getPtr(undo.key).?.* = previous;
+                } else {
+                    const removed = self.local_locations.remove(undo.key);
+                    std.debug.assert(removed);
+                }
+            }
             self.clearVectorLocalResidency();
             self.codegen.free_float = snapshot.free_float;
         }
@@ -9299,13 +9333,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .{ @tagName(value_loc.vector_reg.kind), @tagName(expected_kind) },
                     );
                 }
-                try self.local_locations.put(key, value_loc);
+                try self.putLocalLocation(key, value_loc);
                 self.trackVectorLocal(key, value_loc.vector_reg.reg);
                 return;
             }
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
-            try self.local_locations.put(key, stable_loc);
+            try self.putLocalLocation(key, stable_loc);
             try self.emitNormalizeFloatNanInStableLocation(stable_loc, local_layout);
             try self.emitDebugAssertValidBoxLocal(local, stable_loc);
             try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -9729,7 +9763,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 ValueLocation{ .immediate_i64 = 0 }
             else
                 self.stackLocationForLayout(local_layout, self.codegen.allocStackSlot(size));
-            try self.local_locations.put(key, stable_loc);
+            try self.putLocalLocation(key, stable_loc);
         }
 
         fn stableLocationStackOffset(stable_loc: ValueLocation) i32 {
@@ -18556,11 +18590,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const layout_idx = self.localLayout(local);
             const slot = self.codegen.allocStackSlot(16);
             try self.codegen.emitStoreStackV128(slot, vector.reg);
-            value_ptr.* = .{ .stack = .{
+            try self.putLocalLocation(local_key, .{ .stack = .{
                 .offset = slot,
                 .size = .qword,
                 .layout_idx = layout_idx,
-            } };
+            } });
             self.untrackVectorLocal(local_key, vector.reg);
             self.codegen.freeFloat(vector.reg);
         }
@@ -18571,6 +18605,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn clearLocalLocationsRetainingCapacity(self: *Self) void {
+            std.debug.assert(self.stmt_env_depth == 0);
+            self.local_location_undo.clearRetainingCapacity();
             var resident_mask = self.vector_local_mask;
             while (resident_mask != 0) {
                 const reg_index: u5 = @intCast(@ctz(resident_mask));
@@ -20666,6 +20702,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
+            std.debug.assert(self.stmt_env_depth == 0);
             const key: u32 = @intFromEnum(proc_id);
             const stack_probe_required = proc.stack_probe == .required;
             // Save current state - procedure has its own scope that shouldn't pollute caller
@@ -21003,6 +21040,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Restore state
+            std.debug.assert(self.stmt_env_depth == 0);
             self.codegen.stack_offset = saved_stack_offset;
             self.codegen.callee_saved_used = saved_callee_saved_used;
             self.codegen.callee_saved_available = saved_callee_saved_available;
@@ -21777,7 +21815,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(local_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
                 if (size_align.size == 0) {
-                    try self.local_locations.put(localKey(local), .{ .immediate_i64 = 0 });
+                    try self.putLocalLocation(localKey(local), .{ .immediate_i64 = 0 });
                 } else {
                     const local_offset = self.codegen.allocStackSlot(size_align.size);
                     const args_ptr_reg = try self.allocTempGeneral();
@@ -21793,7 +21831,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(args_ptr_reg);
-                    try self.local_locations.put(localKey(local), self.stackLocationForLayout(local_layout, local_offset));
+                    try self.putLocalLocation(localKey(local), self.stackLocationForLayout(local_layout, local_offset));
                 }
             }
 
@@ -21806,7 +21844,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
-            try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
+            try self.putLocalLocation(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
 
             const params_start: usize = proc.erased_arg_desc_params.start;
             const params_end = params_start + proc.erased_arg_desc_params.len;
@@ -21854,14 +21892,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyBuiltin(&builder, .nested_desc);
                     try self.emitStore(.w64, frame_ptr, desc_slot, ret_reg_0);
                 }
-                try self.local_locations.put(
+                try self.putLocalLocation(
                     localKey(param.local),
                     self.stackLocationForLayout(.opaque_ptr, desc_slot),
                 );
             }
 
             const reuse_local = GuardedList.at(locals, explicit_count + 1);
-            try self.local_locations.put(localKey(reuse_local), self.stackLocationForLayout(self.localLayout(reuse_local), reuse_ptr_slot));
+            try self.putLocalLocation(localKey(reuse_local), self.stackLocationForLayout(self.localLayout(reuse_local), reuse_ptr_slot));
         }
 
         fn bindProcParams(
@@ -21991,7 +22029,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const local = GuardedList.at(locals, param_idx);
 
                 if (num_regs == 0) {
-                    try self.local_locations.put(localKey(local), .{ .immediate_i64 = 0 });
+                    try self.putLocalLocation(localKey(local), .{ .immediate_i64 = 0 });
                     continue;
                 }
 
@@ -22013,7 +22051,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, stack_offset, size);
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.local_locations.put(localKey(local), stable_loc);
+                    try self.putLocalLocation(localKey(local), stable_loc);
                     continue;
                 }
 
@@ -22033,7 +22071,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_reg);
                     }
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.local_locations.put(localKey(local), stable_loc);
+                    try self.putLocalLocation(localKey(local), stable_loc);
                     reg_idx += num_regs;
                 } else {
                     const caller_base = self.callerStackArgBaseReg();
@@ -22041,7 +22079,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyFromCallerStack(caller_base, stack_arg_offset, stack_offset, num_regs);
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.local_locations.put(localKey(local), stable_loc);
+                    try self.putLocalLocation(localKey(local), stable_loc);
                     stack_arg_offset += @as(i32, num_regs) * 8;
                     reg_idx = max_arg_regs;
                 }
@@ -22620,7 +22658,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .boxy_dynamic_frac_literal => |lit| try self.generateBoxyDynamicFracLiteral(assign.target, lit),
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
                                 .null_ptr => .{ .immediate_i64 = 0 },
-                                .static_data => |id| try self.generateStaticDataLiteral(id, self.localLayout(assign.target)),
+                                .static_data => |id| blk: {
+                                    if (self.comptime_hooks) |hooks| {
+                                        try self.spillAllVectorLocals();
+                                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                                        try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+                                        try builder.addImmArg(@intCast(@intFromEnum(id)));
+                                        try builder.call(@intFromPtr(hooks.ensure_static_value));
+                                    }
+                                    break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
+                                },
                                 .proc_ref => |proc_id| blk: {
                                     const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
                                     const reg = try self.allocTempGeneral();
@@ -23469,7 +23516,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .discard => {},
                             .view => |local| {
                                 const loc = ValueLocation{ .stack_str = capture_offset };
-                                try self.local_locations.put(localKey(local), loc);
+                                try self.putLocalLocation(localKey(local), loc);
                                 try self.emitDebugAssertValidStrLocal(local, loc);
                             },
                         }
@@ -23486,7 +23533,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .discard => {},
                         .view => |local| {
                             const loc = ValueLocation{ .stack_str = capture_offset };
-                            try self.local_locations.put(localKey(local), loc);
+                            try self.putLocalLocation(localKey(local), loc);
                             try self.emitDebugAssertValidStrLocal(local, loc);
                         },
                     }
@@ -24119,7 +24166,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stmt_id = self.current_stmt_id orelse return;
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const region = self.store.stmtRegion(stmt_id);
-            if (region.isEmpty()) return;
             const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -24129,6 +24175,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intCast(loc.file));
             try builder.addImmArg(@intCast(loc.line));
             try builder.addImmArg(@intCast(loc.column));
+            try builder.addImmArg(@intCast(@intFromEnum(stmt_id)));
             try builder.call(@intFromPtr(hooks.failure_region));
         }
 
@@ -27442,4 +27489,41 @@ test "dev explicit procedure demand leaves runtime-only body uncompiled" {
     try std.testing.expect(codegen.compiledProcSymbol(runtime) == null);
     try std.testing.expect(codegen.compiledProcSymbol(compile_time) != null);
     try std.testing.expectEqual(@as(usize, 2), store.procSpecCount());
+}
+
+test "branch location checkpoints restore only changed bindings in a wide procedure" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    defer codegen.deinit();
+    for (0..4096) |index| try codegen.putLocalLocation(@intCast(index), .{ .immediate_i64 = @intCast(index) });
+    var outer = try codegen.captureStmtEnv();
+    defer outer.deinit();
+    try std.testing.expectEqual(@as(usize, 0), codegen.local_location_undo.items.len);
+    try codegen.putLocalLocation(7, .{ .immediate_i64 = 100 });
+    try codegen.putLocalLocation(5000, .{ .immediate_i64 = 200 });
+    {
+        var inner = try codegen.captureStmtEnv();
+        defer inner.deinit();
+        try codegen.putLocalLocation(7, .{ .immediate_i64 = 300 });
+        try codegen.putLocalLocation(6000, .{ .immediate_i64 = 400 });
+        try std.testing.expectEqual(@as(usize, 4), codegen.local_location_undo.items.len);
+        try codegen.restoreStmtEnv(&inner);
+        try std.testing.expectEqual(@as(i64, 100), codegen.local_locations.get(7).?.immediate_i64);
+        try std.testing.expect(codegen.local_locations.get(6000) == null);
+        try std.testing.expectEqual(@as(usize, 2), codegen.local_location_undo.items.len);
+    }
+    try codegen.restoreStmtEnv(&outer);
+    try std.testing.expectEqual(@as(i64, 7), codegen.local_locations.get(7).?.immediate_i64);
+    try std.testing.expect(codegen.local_locations.get(5000) == null);
+    try std.testing.expectEqual(@as(usize, 4096), codegen.local_locations.count());
+    try std.testing.expectEqual(@as(usize, 0), codegen.local_location_undo.items.len);
+    // A sibling begins at the same exact environment without scanning it.
+    try codegen.putLocalLocation(8, .{ .immediate_i64 = 500 });
+    try codegen.restoreStmtEnv(&outer);
+    try std.testing.expectEqual(@as(i64, 8), codegen.local_locations.get(8).?.immediate_i64);
 }

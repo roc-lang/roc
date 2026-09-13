@@ -782,6 +782,15 @@ no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
+The guard pass also records each guard's crash statement identity. Failed root
+publication associates those statements with the original evaluated failure's
+source location and region. Published origins remain stable. A suspended invocation may demand another
+root, whose completion publishes additional origins before that invocation resumes. Native compile-time failure hooks receive the emitted statement ID;
+the host and interpreter consume the same published origin table when a guard
+propagates a failure. They never reconstruct the original source from the
+value's use site or from checked bodies. The table is diagnostic session data,
+not part of the runtime frozen value representation.
+
 A shared expect that reassigns surrounding variables uses an ordinary Monotype
 `if_` whose condition is the explicit `inline_expects_enabled` consumer input.
 Its run arm executes the expect and returns the resulting variable-state tuple;
@@ -13825,6 +13834,25 @@ same whole-program callable-flow solving as local callables.
 Compile-time dependency summaries are produced from explicit checked root data
 and `ConstStore` dependencies. They are not discovered by a later stage scanning
 bodies for missing data.
+
+Shared compile-time execution uses demand-driven slot publication. Each canonical
+value and failure slot carries its producer's exact checked module and root ID.
+Before reading a static slot, the compile-time interpreter or native hook asks
+the session to ensure that producer has completed. Ordinary materialized slots
+are already ready. A pending producer runs synchronously with independent host,
+return storage, and execution state; publication completes before the suspended
+read resumes. Completed producers never run again. Re-entering an active
+producer reports an actual cyclic compile-time value dependency through the
+ordinary compile-time crash path. No execution is probed, abandoned, or retried.
+
+All declared roots are still requested for diagnostics. Session execution is
+serial and nested demands execute on the same thread; lowering and specialization
+retain their independent parallelism. This preserves the executed dependency
+path for conditional and erased calls without approximating it by every latent
+closure body. Runtime consumers have no demand hook and receive only completed
+slot images. Operational failures unwind through the host boundary and retain
+their original error identity instead of becoming language crashes.
+
 
 ## LirImage And Hosted Functions
 

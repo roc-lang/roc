@@ -9,6 +9,13 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const lir = @import("lir");
+const FinalizeError = @import("check").CheckedArtifact.CompileTimeFinalizer.Error;
+
+pub const SlotDemand = struct {
+    pub const Error = FinalizeError || error{CompileTimeDependencyCycle};
+    context: *anyopaque,
+    ensure: *const fn (*anyopaque, lir.LIR.StaticDataId) Error!void,
+};
 const sljmp = @import("sljmp");
 
 const Allocator = std.mem.Allocator;
@@ -31,6 +38,7 @@ pub const Termination = enum {
     crashed,
     comptime_exhaustiveness,
     host_oom,
+    host_error,
 };
 
 /// A failed inline `expect` observed during native compile-time evaluation,
@@ -85,6 +93,12 @@ failed_region: ?base.Region = null,
 /// Resolved source location of the failing LIR statement (file entry names
 /// the declaring module), captured alongside `failed_region`.
 failed_loc: ?base.SourceLoc = null,
+/// Published producer origins, indexed by the emitted LIR statement.
+failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
+slot_demand: ?SlotDemand = null,
+operational_error: ?FinalizeError = null,
+timing_io: ?std.Io = null,
+suspended_ns: u64 = 0,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
@@ -128,6 +142,8 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     self.comptime_failed_site = null;
     self.failed_region = null;
     self.failed_loc = null;
+    self.operational_error = null;
+    self.suspended_ns = 0;
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
@@ -222,6 +238,33 @@ pub fn crashMessage(self: *const CompileTimeHost) ?[]const u8 {
     return null;
 }
 
+pub fn startDemandTiming(self: *CompileTimeHost) i128 {
+    return if (self.timing_io) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
+}
+
+pub fn finishDemandTiming(self: *CompileTimeHost, started: i128) void {
+    if (self.timing_io) |io| self.suspended_ns += @intCast(@max(0, std.Io.Timestamp.now(io, .awake).nanoseconds - started));
+}
+
+/// A static read demands completion of its explicitly identified producer.
+pub fn rocComptimeEnsureStaticValue(roc_ops: *RocOps, slot: u32) callconv(.c) void {
+    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+    const demand = self.slot_demand orelse return;
+    const started = self.startDemandTiming();
+    const result = demand.ensure(demand.context, @enumFromInt(slot));
+    self.finishDemandTiming(started);
+    result catch |err| switch (err) {
+        error.CompileTimeDependencyCycle => {
+            const message = "cyclic compile-time value dependency";
+            rocCrashed(roc_ops, message.ptr, message.len);
+        },
+        else => |operational| {
+            self.operational_error = operational;
+            self.jump(.host_error);
+        },
+    };
+}
+
 /// Dev-backend hook called when a compile-time branch marker is reached.
 pub fn rocComptimeBranchTaken(roc_ops: *RocOps, site_raw: u32, branch_index: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
@@ -243,8 +286,16 @@ pub fn rocComptimeExhaustivenessFailed(roc_ops: *RocOps, site_raw: u32) callconv
 /// Dev-backend hook recording the source region for an imminent failure,
 /// together with the failing statement's resolved location (whose file entry
 /// names the declaring module).
-pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
+pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+    if (stmt < self.failure_origins.len) {
+        if (self.failure_origins[stmt]) |origin| {
+            self.failed_region = origin.region;
+            self.failed_loc = origin.loc;
+            return;
+        }
+    }
+    if (start_offset == end_offset) return;
     self.failed_region = base.Region.from_raw_offsets(start_offset, end_offset);
     self.failed_loc = .{ .file = file, .line = line, .column = column };
 }
