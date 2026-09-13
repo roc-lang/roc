@@ -2385,6 +2385,17 @@ checked module address. If a checked type mentions an owner checked module id
 that is not present in lowering visibility, the checked module producer is
 incomplete.
 
+Builtin identity and declaration backing are independent. `Dict` and `Set`
+retain their builtin dispatch identities, while their storage comes from the
+ordinary checked declarations in `Builtin.roc`. Each checked type store owns a
+fixed builtin-identity-to-declaration-id index, populated when declarations are
+recorded or imported and serialized with the store. Both post-check strategies
+consume that index directly; they do not scan source statements to find builtin
+backings or duplicate the containers' storage definitions. Declaration formals
+and backing templates remain shared checked data. Each strategy substitutes the
+actual arguments only when lowering a reachable use, with Boxy preserving the
+explicit nested descriptors and ordinary LIR ownership contract.
+
 ### Platform/App Relation
 
 The app↔platform correspondence is assigned once, at check time, and carried
@@ -8067,17 +8078,20 @@ During active Monotype specialization, unresolved checked variables and row
 extensions remain instantiation graph nodes. They are not represented by
 durable Monotype `TypeId`s.
 
-Open draft specialization indexes retain permanent interface node ids. A lookup
-visits each current union-find class once and probes all its permanent members;
-repeated argument or return positions do not repeat those probes. Candidate
-inspection does not merge existing classes during this scan. Its visited set
-is local to the scan and uses pooled scratch, so a later lookup observes any
-intervening unions. Evidence, capture, and exact interface checks still decide
-whether a candidate may be reused. Probe work is proportional to interface
-positions plus the members of distinct classes, even when many positions share
-one class. The index interns the exact family and evidence-digest prefix once
-per request, using an append-only index-local ID in each interface key. Growing
-the index during recursive lowering does not invalidate those IDs. Request
+Open draft specialization indexes retain permanent interface node ids. Template
+lookup collects the request's distinct interface classes once, then tests only
+the permanent-node/candidate pairs registered under its exact family/evidence
+prefix against those classes. A prefix with no open registrations skips this
+probe entirely. Later unions require no rekeying: class equality is tested at
+lookup time. Resolved template lookup also indexes candidates by the explicit
+procedure template reference, preserving reuse through different checked roots
+without scanning unrelated templates. Nested lookup visits each current
+interface class once and probes its permanent members. Candidate inspection
+does not merge classes, and evidence, capture, recursive-edge, and exact
+interface checks remain authoritative. The index interns the exact family and
+evidence-digest prefix once per request, using an append-only index-local ID in
+each interface key. Growing the index during recursive lowering does not
+invalidate those IDs. Request
 kinds remain disjoint, and interning a prefix does not replace exact candidate
 validation. Permanent-node requests use the prefix ID and node ID directly in
 a separate index; only structural type and open-shape requests carry digests.
@@ -9882,6 +9896,9 @@ construction: they are established in the worker prologue or inside a
 descriptor-binding snapshot window whose initializer is prepended above
 everything lowered while the bind is visible.
 
+Worker prologues initialize captured descriptor inputs and reconstructed
+argument roots before body descriptor templates that capture those roots.
+
 An applied-tag worker argument pattern is irrefutable only when its planned
 checked representation contains exactly one tag variant with that checked tag
 identity. Lowering validates that data, reserves the payload binders, and uses
@@ -10120,6 +10137,12 @@ original call operand root plus the exact instantiated descendant; it never
 changes to a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
+Nested backing traversal composes the call-side declaration substitutions as
+well as the worker-side substitutions. For `Set(Str)`, the call-side backing's
+`Dict(item, {})` argument is the instantiated `Str`, even when `item` and the
+worker's corresponding formal live in different checked modules. These scoped
+substitutions reuse the shared templates and never mutate checked types.
+
 Nominal substitution identity does not demand a runtime representation. Boxy
 interns checked type bindings separately from representations; a binding receives
 a representation only when type analysis reaches it through an explicit runtime
@@ -10140,6 +10163,10 @@ the aggregate descriptor consumes those adapted field values. Each field's
 descriptor source therefore names the boundary's output representation; a
 proven direct transfer retains the source representation. The pre-conversion
 representation cannot describe a field whose storage the adapter changed.
+A bare type parameter has no storage shape of its own. Constructing a tag or
+record payload at that destination preserves the supplying expression's exact
+payload descriptor; an adapted destination with a declared storage shape uses
+the destination descriptor.
 
 Nominal construction consumes the same explicit backing parameter substitution.
 The shared backing representation fixes storage; its descriptor binds each
@@ -10219,6 +10246,10 @@ separately materialized target descriptor describing the bytes it will produce
 or consume. Argument binding, match-condition binding, result binding, and
 container item extraction copy descriptor identities into fresh locals; they
 never repurpose the source value's descriptor local as operation scratch space.
+List storage adapters materialize the target item descriptor before entering
+the loop, using the same descriptor construction as call boundaries. That
+descriptor also describes an empty target list; changing an item layout
+never reuses a source descriptor whose nested fields describe different storage.
 ARC treats a same-value alias as borrow-capable only when its source and target
 name the exact same explicit Boxy RC descriptor reference. A distinct
 descriptor reference is an ownership boundary: the alias receives a moved or

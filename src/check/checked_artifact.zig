@@ -3121,17 +3121,18 @@ fn checkedNominalTypeKey(nominal: CheckedNominalType) canonical.NominalTypeKey {
     };
 }
 
-fn builtinNominalHasDeclarationBacking(builtin_nominal: CheckedBuiltinNominal) bool {
+/// Whether the builtin's representation comes from its checked Roc declaration.
+pub fn builtinNominalHasDeclarationBacking(builtin_nominal: CheckedBuiltinNominal) bool {
     return switch (builtinRuntimeEncoding(builtin_nominal)) {
         .primitive,
         .list,
         .box,
-        .dict,
-        .set,
         .parse_tag_union_spec,
         .fields,
         .field,
         => false,
+        .dict,
+        .set,
         .bool_tag_union,
         .try_nominal,
         .iterator,
@@ -3346,6 +3347,12 @@ fn reconstructCheckedTypeVariable(pool_owner: anytype, v: StoredTypeVariable) Ch
 /// non-optional `var_names` pointer always points at a valid (empty) interner.
 var empty_view_var_names: canonical.NameInterner = .{};
 
+// Builtin identity selects its declaration directly, independently of the
+// declaring module's source statement numbering. Zero means absent; stored
+// declaration ids are offset by one so the index is compact serializable POD.
+const BuiltinNominalDeclarationIndex = [@typeInfo(CheckedBuiltinNominal).@"enum".fields.len]u32;
+const empty_builtin_nominal_declarations: BuiltinNominalDeclarationIndex = @splat(0);
+
 /// Borrowed, read-only view over a `CheckedTypeStore`'s relocated slices plus its
 /// `var_names` interner, so type accessors can resolve ids without holding the owning
 /// store (used by both a live store and a deserialized, buffer-backed one).
@@ -3355,6 +3362,7 @@ pub const CheckedTypeStoreView = struct {
     scheme_index: collections.SafeList(u32) = .{},
     stored_payloads: []const StoredCheckedTypePayload = &.{},
     nominal_declarations: []const CheckedNominalDeclaration = &.{},
+    builtin_nominal_declarations: *const BuiltinNominalDeclarationIndex = &empty_builtin_nominal_declarations,
     type_id_pool: []const CheckedTypeId = &.{},
     record_field_pool: []const CheckedRecordField = &.{},
     declared_field_pool: []const CheckedDeclaredField = &.{},
@@ -3554,10 +3562,22 @@ pub const CheckedTypeStoreView = struct {
         return declaration;
     }
 
+    /// Direct declaration access from checked builtin identity. Intrinsic
+    /// builtins need not have a source declaration in this store.
+    pub fn builtinNominalDeclaration(
+        self: CheckedTypeStoreView,
+        builtin_nominal: CheckedBuiltinNominal,
+    ) ?CheckedNominalDeclaration {
+        const entry = self.builtin_nominal_declarations[@intFromEnum(builtin_nominal)];
+        if (entry == 0) return null;
+        return self.nominalDeclarationById(@enumFromInt(entry - 1));
+    }
+
     pub fn nominalDeclarationForPayload(
         self: CheckedTypeStoreView,
         nominal: CheckedNominalType,
     ) ?CheckedNominalDeclaration {
+        if (nominal.builtin) |builtin_nominal| return self.builtinNominalDeclaration(builtin_nominal);
         return self.nominalDeclaration(checkedNominalTypeKey(nominal));
     }
 
@@ -4322,6 +4342,7 @@ pub const CheckedTypeStore = struct {
     scheme_index: collections.SafeList(u32) = .{},
     payloads: std.ArrayList(StoredCheckedTypePayload) = .empty,
     nominal_declarations: std.ArrayList(CheckedNominalDeclaration) = .empty,
+    builtin_nominal_declarations: BuiltinNominalDeclarationIndex = empty_builtin_nominal_declarations,
     /// Flat pool of `CheckedTypeId`s for alias/nominal/function args, tuples,
     /// tag args, scheme generalized vars, and decl formal args.
     type_id_pool: std.ArrayList(CheckedTypeId) = .empty,
@@ -4840,6 +4861,7 @@ pub const CheckedTypeStore = struct {
             .scheme_index = self.scheme_index,
             .stored_payloads = self.payloads.items,
             .nominal_declarations = self.nominal_declarations.items,
+            .builtin_nominal_declarations = &self.builtin_nominal_declarations,
             .type_id_pool = self.type_id_pool.items,
             .record_field_pool = self.record_field_pool.items,
             .declared_field_pool = self.declared_field_pool.items,
@@ -5178,7 +5200,7 @@ pub const CheckedTypeStore = struct {
         self: *const CheckedTypeStore,
         nominal: CheckedNominalType,
     ) ?CheckedNominalDeclaration {
-        return self.nominalDeclaration(checkedNominalTypeKey(nominal));
+        return self.view().nominalDeclarationForPayload(nominal);
     }
 
     pub fn nominalBackingTemplateForPayload(
@@ -5342,6 +5364,7 @@ pub const CheckedTypeStore = struct {
         scheme_index: collections.SafeList(u32).Serialized = .{ .offset = 0, .len = 0, .capacity = 0 },
         payloads: SerializedSlice(StoredCheckedTypePayload) = .{},
         nominal_declarations: SerializedSlice(CheckedNominalDeclaration) = .{},
+        builtin_nominal_declarations: artifact_serialize.SerializedScalar(BuiltinNominalDeclarationIndex, empty_builtin_nominal_declarations) = .{},
         type_id_pool: SerializedSlice(CheckedTypeId) = .{},
         record_field_pool: SerializedSlice(CheckedRecordField) = .{},
         declared_field_pool: SerializedSlice(CheckedDeclaredField) = .{},
@@ -6962,6 +6985,7 @@ fn appendCheckedNominalDeclarationFromPayload(
                 checkedDeclaredFieldSliceEql(existing.declaredFields(store), nominal.declared_fields) and
                 checkedNominalRecordFieldRootKeySliceEql(store, existing.declaredRecordFields(store), declared_record_fields))
             {
+                indexBuiltinNominalDeclaration(store, nominal.builtin, existing.id);
                 return;
             }
             checkedArtifactInvariant("checked artifact attempted to publish conflicting nominal declarations", .{});
@@ -6980,8 +7004,9 @@ fn appendCheckedNominalDeclarationFromPayload(
     const pf = try store.appendTypeIds(allocator, padding_copy);
     const df = try store.appendDeclaredFields(allocator, declared_copy);
     const rf = try store.appendNominalRecordFields(allocator, declared_record_fields);
+    const declaration_id: CheckedNominalDeclarationId = @enumFromInt(@as(u32, @intCast(declarations.items.len)));
     try declarations.append(allocator, .{
-        .id = @enumFromInt(@as(u32, @intCast(declarations.items.len))),
+        .id = declaration_id,
         .nominal = nominal_key,
         .source_statement = nominal.source_decl orelse
             checkedArtifactInvariant("checked nominal declaration payload had no source declaration", .{}),
@@ -6996,6 +7021,21 @@ fn appendCheckedNominalDeclarationFromPayload(
         .rf_start = rf.start,
         .rf_len = rf.len,
     });
+    indexBuiltinNominalDeclaration(store, nominal.builtin, declaration_id);
+}
+
+fn indexBuiltinNominalDeclaration(
+    store: *CheckedTypeStore,
+    builtin_nominal: ?CheckedBuiltinNominal,
+    declaration_id: CheckedNominalDeclarationId,
+) void {
+    const owner = builtin_nominal orelse return;
+    const slot = &store.builtin_nominal_declarations[@intFromEnum(owner)];
+    const entry = @intFromEnum(declaration_id) + 1;
+    if (slot.* != 0 and slot.* != entry) {
+        checkedArtifactInvariant("builtin identity referenced conflicting nominal declarations", .{});
+    }
+    slot.* = entry;
 }
 
 fn checkedTypeIdSliceEql(a: []const CheckedTypeId, b: []const CheckedTypeId) bool {
@@ -7259,18 +7299,13 @@ fn importedViewForKey(imports: CheckedImportViews, key: CheckedModuleArtifactKey
 fn ownerViewAndDeclForImportedNominal(
     imports: CheckedImportViews,
     owner_module: ModuleId,
-    source_decl: ?u32,
     representation: CheckedNominalRepresentationRef,
 ) ?OwnerNominalDecl {
     return switch (representation) {
-        .builtin => blk: {
+        .builtin => |builtin_nominal| blk: {
             const view = importedViewForKey(imports, owner_module) orelse return null;
-            const source_statement = source_decl orelse return null;
-            for (view.checked_types.nominal_declarations) |declaration| {
-                if (declaration.source_statement != source_statement) continue;
-                break :blk .{ .view = view, .decl = declaration };
-            }
-            break :blk null;
+            const declaration = view.checked_types.builtinNominalDeclaration(builtin_nominal) orelse return null;
+            break :blk .{ .view = view, .decl = declaration };
         },
         .imported_declaration => |imported| blk: {
             const view = importedViewForKey(imports, imported.artifact) orelse return null;
@@ -7360,7 +7395,7 @@ fn embedReachableImportedNominalDecls(
         // embedded on an earlier iteration.
         if (store.nominalDeclaration(key) != null) continue;
 
-        const owner = ownerViewAndDeclForImportedNominal(imports, owner_module, source_decl, representation) orelse
+        const owner = ownerViewAndDeclForImportedNominal(imports, owner_module, representation) orelse
             switch (representation) {
                 .opaque_without_backing => continue,
                 .builtin => {
@@ -31353,7 +31388,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 95 makes stored callable-derived evidence own its vector slot
     // instead of retaining a parameter index from a forwarding scheme.
     // Version 96 uses 128-bit type and evidence content hashes.
-    const serialized_layout_version: u32 = 97;
+    // Version 97 stores the builtin-identity-to-declaration index.
+    // Version 98 uses 256-bit SHA-256 type and evidence content hashes.
+    const serialized_layout_version: u32 = 98;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37255,6 +37292,56 @@ test "ConstTemplateTable serialize/deserialize round-trip (ArrayList-backed)" {
     try artifact_serialize.expectSlicesByteEqual(ConstTemplate, store.templates.items, rt.loaded.templates.items);
 }
 
+test "issue 11290: builtin backing declarations survive serialization with shared formals" {
+    const gpa = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x90} ** 32));
+    var store = CheckedTypeStore{};
+    defer store.deinit(gpa);
+
+    // Publish in a different order from the builtin enum, with unrelated
+    // statement ids. Lookup must follow builtin identity, not either order.
+    const empty: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.roots.append(gpa, .{ .id = empty, .key = .{ .bytes = @splat(0) } });
+    try store.payloads.append(gpa, .empty_record);
+    for ([_]CheckedBuiltinNominal{ .set, .dict }) |owner| {
+        const root: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+        const args = try gpa.alloc(CheckedTypeId, if (owner == .dict) 2 else 1);
+        @memset(args, empty);
+        const payload = try store.commitPayload(gpa, .{ .nominal = .{
+            .name = try names.internTypeName(if (owner == .dict) "Dict" else "Set"),
+            .origin_module = module_identity,
+            .owner_module = testCheckedArtifactKey(0x90),
+            .source_decl = 100 + @as(u32, @intFromEnum(owner)),
+            .builtin = owner,
+            .is_opaque = false,
+            .representation = .{ .builtin = owner },
+            .args = args,
+        } });
+        try store.roots.append(gpa, .{ .id = root, .key = .{ .bytes = @splat(@intFromEnum(owner)) } });
+        try store.payloads.append(gpa, payload);
+        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{});
+        // Re-publication reuses both the template and its index entry.
+        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{});
+    }
+    try std.testing.expectEqual(@as(usize, 2), store.nominal_declarations.items.len);
+
+    const rt = try artifact_serialize.roundTripForTest(gpa, CheckedTypeStore, &store);
+    defer gpa.free(rt.buffer);
+    for ([_]CheckedTypeStoreView{ store.view(), rt.loaded.view() }) |view| {
+        for ([_]CheckedBuiltinNominal{ .dict, .set }) |owner| {
+            const declaration = view.builtinNominalDeclaration(owner).?;
+            const nominal = view.payload(declaration.declaration_root).nominal;
+            try std.testing.expectEqual(owner, nominal.builtin.?);
+            try std.testing.expectEqual(empty, view.nominalBackingTemplateForPayload(nominal).?);
+            try std.testing.expectEqual(@as(usize, if (owner == .dict) 2 else 1), declaration.formalArgs(view).len);
+            try std.testing.expectEqual(declaration.id, view.nominalDeclarationForPayload(nominal).?.id);
+        }
+        try std.testing.expect(view.builtinNominalDeclaration(.list) == null);
+    }
+}
+
 test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, ranges" {
     const gpa = std.testing.allocator;
     const CW = collections.CompactWriter;
@@ -37919,8 +38006,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x99, 0x28, 0x81, 0x9D, 0xFA, 0x2D, 0x14, 0x94, 0x9F, 0x80, 0xA3, 0xF7, 0x8A, 0x46, 0x53, 0x36,
-        0xB2, 0x17, 0xCF, 0x56, 0xFF, 0x7A, 0xC1, 0xDF, 0xF5, 0xB6, 0x1A, 0xDC, 0xD9, 0x24, 0xB7, 0xC6,
+        0x9F, 0xF4, 0x6E, 0x5A, 0x33, 0xF0, 0xC6, 0x6A, 0x75, 0x42, 0x18, 0x20, 0x78, 0xF9, 0x5B, 0x48,
+        0x48, 0x71, 0xE6, 0x09, 0x6F, 0x40, 0xF8, 0x78, 0x15, 0x06, 0xDB, 0x19, 0x25, 0xC4, 0x7A, 0xE0,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

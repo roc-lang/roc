@@ -6046,49 +6046,48 @@ const Builder = struct {
             }
         }
         if (selection.selected() == null) {
-            var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
-            defer seen_specs.deinit();
-            var interface = try source_ctx.graph.functionInterfaceClassIterator(request_fn_node);
-            defer interface.deinit();
-            while (try interface.next()) |interface_class| {
-                var aliases = source_ctx.graph.classMemberIterator(interface_class);
-                while (aliases.next()) |member| {
-                    const lookup_address = DraftTemplateLookupAddress{
-                        .open = .{
-                            .prefix = lookup_prefix,
-                            .node = member,
-                        },
-                    };
-                    if (source_ctx.draft.template_spec_lookup.get(lookup_address)) |candidate_iterator| {
-                        var candidates = candidate_iterator;
-                        while (candidates.next()) |raw_spec| {
-                            const seen = try seen_specs.getOrPut(raw_spec);
-                            if (seen.found_existing) continue;
-                            const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                            if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
-                            if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                            if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
-                            const exact_interface = source_ctx.graph.sameFunctionInterface(
-                                draftTemplateSpecLookupRequestNode(spec),
-                                request_fn_node,
-                            );
-                            const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
-                                spec.fn_id,
-                            );
-                            const partial_recursive_allowed = active_recursive_edge and
-                                request_edge == .recursive_reference and
-                                substitutionsShareClasses(source_ctx.graph, spec.subst, edge.subst);
-                            if (!draftOpenCandidateQualifies(
-                                spec.state,
-                                exact_interface,
-                                active_recursive_edge,
-                                partial_recursive_allowed,
-                            )) continue;
-                            if (!selection.add(raw_spec, exact_interface)) {
-                                Common.invariant("draft template request matched more than one partial active recursive specialization");
-                            }
-                        }
+            const open_pairs = source_ctx.draft.template_spec_lookup.openPairs(lookup_prefix);
+            // A fresh prefix has no registrations. Avoid even collecting its
+            // interface: no open candidate can exist for this exact family.
+            if (open_pairs.len != 0) {
+                var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
+                defer seen_specs.deinit();
+                var interface_roots: std.ArrayList(NodeId) = .empty;
+                defer interface_roots.deinit(self.allocator);
+                var interface = try source_ctx.graph.functionInterfaceClassIterator(request_fn_node);
+                defer interface.deinit();
+                while (try interface.next()) |root| try interface_roots.append(self.allocator, root);
+                var candidates = DraftTemplateSpecLookup.OpenIterator{
+                    .pairs = open_pairs,
+                    .graph = source_ctx.graph,
+                    .interface_roots = interface_roots.items,
+                };
+                while (candidates.next()) |raw_spec| {
+                    const seen = try seen_specs.getOrPut(raw_spec);
+                    if (seen.found_existing) continue;
+                    const spec = &source_ctx.draft.template_specs.items[raw_spec];
+                    if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                    if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    const exact_interface = source_ctx.graph.sameFunctionInterface(
+                        draftTemplateSpecLookupRequestNode(spec),
+                        request_fn_node,
+                    );
+                    const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
+                        source_ctx.draft.current_owner,
+                        spec.fn_id,
+                    );
+                    const partial_recursive_allowed = active_recursive_edge and
+                        request_edge == .recursive_reference and
+                        substitutionsShareClasses(source_ctx.graph, spec.subst, edge.subst);
+                    if (!draftOpenCandidateQualifies(
+                        spec.state,
+                        exact_interface,
+                        active_recursive_edge,
+                        partial_recursive_allowed,
+                    )) continue;
+                    if (!selection.add(raw_spec, exact_interface)) {
+                        Common.invariant("draft template request matched more than one partial active recursive specialization");
                     }
                 }
             }
@@ -6100,9 +6099,9 @@ const Builder = struct {
             // interface identity for active recursive and partially overlapping
             // requests.
             if (resolved_request_ty) |request_fn_ty| {
-                for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
-                    const raw_spec: u32 = @intCast(raw_spec_usize);
-                    if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
+                const template_candidates = source_ctx.draft.template_specs_by_template.get(template_ref);
+                for (if (template_candidates) |list| list.items else &.{}) |raw_spec| {
+                    const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     // The checked source root selects the template body, but it is
                     // not part of a resolved specialization's identity. Recursive
                     // calls can reach the same template through a different checked
@@ -6250,8 +6249,11 @@ const Builder = struct {
             .codec_contract = codec_contract,
             .fn_id = fn_id,
         });
-        try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
+        const template_bucket = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
+        if (!template_bucket.found_existing) template_bucket.value_ptr.* = .empty;
+        try template_bucket.value_ptr.append(self.allocator, @intCast(spec_index));
+        try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         try updateTemplateSpecInterfaceLookups(
             source_ctx.draft,
             self.allocator,
@@ -7282,14 +7284,10 @@ const Builder = struct {
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
                 break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
             },
-            .builtin => blk: {
+            .builtin => |builtin_nominal| blk: {
                 const source_view = self.moduleForId(nominal.owner_module);
-                const source_decl = nominal.source_decl orelse break :blk null;
-                for (source_view.types.nominal_declarations) |decl| {
-                    if (decl.source_statement != source_decl) continue;
-                    break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
-                }
-                break :blk null;
+                const decl = source_view.types.builtinNominalDeclaration(builtin_nominal) orelse break :blk null;
+                break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
             },
             .opaque_without_backing => null,
         };
@@ -12628,6 +12626,23 @@ fn DraftSpecLookup(comptime Family: type) type {
             evidence_digest: [32]u8,
         };
         const PrefixId = enum(u32) { _ };
+        const OpenPair = struct { node: NodeId, spec: u32 };
+        const OpenIterator = struct {
+            pairs: []const OpenPair,
+            graph: *InstGraph,
+            interface_roots: []const NodeId,
+
+            fn next(self: *OpenIterator) ?u32 {
+                while (self.pairs.len != 0) {
+                    const pair = self.pairs[0];
+                    self.pairs = self.pairs[1..];
+                    for (self.interface_roots) |root| {
+                        if (self.graph.sameClass(pair.node, root)) return pair.spec;
+                    }
+                }
+                return null;
+            }
+        };
         const OpenAddress = struct {
             prefix: PrefixId,
             node: NodeId,
@@ -12667,7 +12682,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         };
 
         allocator: Allocator,
-        prefixes: std.array_hash_map.Auto(Prefix, void),
+        prefixes: std.array_hash_map.Auto(Prefix, std.ArrayList(OpenPair)),
         open_requests: std.AutoHashMap(OpenAddress, Candidates),
         digest_requests: std.AutoHashMap(DigestAddress, Candidates),
         /// Only buckets with multiple candidates own an overflow list. Its
@@ -12689,6 +12704,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             self.digest_requests.deinit();
             for (self.overflow_lists.items) |*list| list.deinit(self.allocator);
             self.overflow_lists.deinit(self.allocator);
+            for (self.prefixes.values()) |*pairs| pairs.deinit(self.allocator);
             self.prefixes.deinit(self.allocator);
         }
 
@@ -12718,9 +12734,17 @@ fn DraftSpecLookup(comptime Family: type) type {
         }
 
         fn add(self: *Self, address: Address, raw_spec: u32) Allocator.Error!void {
+            // Reserve before updating either index so allocation failure cannot
+            // leave a registered candidate absent from the prefix inventory.
+            const pairs: ?*std.ArrayList(OpenPair) = switch (address) {
+                .open => |key| &self.prefixes.values()[@intFromEnum(key.prefix)],
+                .digest => null,
+            };
+            if (pairs) |list| try list.ensureUnusedCapacity(self.allocator, 1);
             const entry = try self.getOrPut(address);
             if (!entry.found_existing) {
                 entry.value_ptr.* = .{ .first = raw_spec };
+                if (pairs) |list| list.appendAssumeCapacity(.{ .node = address.open.node, .spec = raw_spec });
                 return;
             }
             if (entry.value_ptr.first == raw_spec) return;
@@ -12737,6 +12761,7 @@ fn DraftSpecLookup(comptime Family: type) type {
                 try self.overflow_lists.append(self.allocator, list);
                 entry.value_ptr.overflow = overflow;
             }
+            if (pairs) |list| list.appendAssumeCapacity(.{ .node = address.open.node, .spec = raw_spec });
         }
 
         fn internPrefix(self: *Self, family: Family, evidence_digest: [32]u8) Allocator.Error!PrefixId {
@@ -12744,7 +12769,12 @@ fn DraftSpecLookup(comptime Family: type) type {
                 .family = family,
                 .evidence_digest = evidence_digest,
             });
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
             return @enumFromInt(entry.index);
+        }
+
+        fn openPairs(self: *const Self, prefix: PrefixId) []const OpenPair {
+            return self.prefixes.values()[@intFromEnum(prefix)].items;
         }
     };
 }
@@ -13811,6 +13841,7 @@ const BodyDraftStore = struct {
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
     template_specs: std.ArrayList(DraftTemplateSpec),
+    template_specs_by_template: std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)),
     sealed_template_specs: std.ArrayList(SealedTemplateSpec),
     template_spec_by_fn: collections.DenseMap(DraftFnId, u32),
     template_spec_lookup: DraftTemplateSpecLookup,
@@ -13932,6 +13963,7 @@ const BodyDraftStore = struct {
             .nested_defs = .empty,
             .template_specs = .empty,
             .sealed_template_specs = .empty,
+            .template_specs_by_template = std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)).init(allocator),
             .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_spec_lookup = DraftTemplateSpecLookup.init(allocator),
             .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
@@ -14156,6 +14188,9 @@ const BodyDraftStore = struct {
         self.local_proc_contexts.deinit(self.allocator);
         self.template_spec_lookup.deinit();
         self.closed_direct_specializations.deinit();
+        var template_lists = self.template_specs_by_template.valueIterator();
+        while (template_lists.next()) |list| list.deinit(self.allocator);
+        self.template_specs_by_template.deinit();
         self.template_spec_by_fn.deinit();
         self.nested_spec_lookup.deinit();
         self.nested_spec_families.deinit();
@@ -14915,7 +14950,11 @@ const BodyDraftStore = struct {
         self.nested_spec_families.deinit();
         self.nested_spec_lookup = DraftNestedSpecLookup.init(self.allocator);
         self.nested_spec_families = std.AutoHashMap(DraftNestedFamilyAddress, void).init(self.allocator);
+        var template_lists = self.template_specs_by_template.valueIterator();
+        while (template_lists.next()) |list| list.deinit(self.allocator);
+        self.template_specs_by_template.deinit();
         self.template_spec_by_fn.deinit();
+        self.template_specs_by_template = std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)).init(self.allocator);
         self.template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(self.allocator);
         self.closed_direct_specializations.deinit();
         self.closed_direct_specializations = std.AutoHashMap(
@@ -14946,6 +14985,7 @@ const BodyDraftStore = struct {
             !self.nested_spec_lookup.isEmpty() or
             self.nested_spec_families.count() != 0 or
             self.template_specs.items.len != 0 or
+            self.template_specs_by_template.count() != 0 or
             self.nested_specs.items.len != 0 or
             self.spec_job_workspace != null or
             self.mutable_graph_names != null or
@@ -55790,6 +55830,7 @@ test "draft specialization candidates retain insertion order across overflow gro
                         try lookup.add(other, raw_spec);
                         try lookup.add(other, std.math.maxInt(u32));
                     }
+                    try std.testing.expect(lookup.openPairs(prefix).len == 61);
                     var candidates = lookup.get(address).?;
                     try std.testing.expect(candidates.next().? == std.math.maxInt(u32));
                     for (0..20) |i| try std.testing.expect(candidates.next().? == i);
@@ -55809,6 +55850,55 @@ test "draft specialization candidates retain insertion order across overflow gro
     };
     try Scenario.run(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+}
+
+test "draft specialization open lookup follows unions within its prefix" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var lookup = DraftTemplateSpecLookup.init(gpa);
+    defer lookup.deinit();
+    const family = std.mem.zeroes(DraftTemplateFamilyAddress);
+    const prefix = try lookup.internPrefix(family, @splat(0));
+    const other_prefix = try lookup.internPrefix(family, @splat(1));
+    try std.testing.expectEqual(@as(usize, 0), lookup.openPairs(prefix).len);
+    const arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const ret = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const registered = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const unrelated = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = registered } }, 7);
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = registered } }, 8);
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = registered } }, 7);
+    try lookup.add(.{ .open = .{ .prefix = prefix, .node = unrelated } }, 9);
+    try lookup.add(.{ .open = .{ .prefix = other_prefix, .node = arg } }, 10);
+    const roots = [_]NodeId{ arg, ret };
+    var before = DraftTemplateSpecLookup.OpenIterator{ .pairs = lookup.openPairs(prefix), .graph = graph, .interface_roots = &roots };
+    try std.testing.expectEqual(null, before.next());
+    // The registered permanent node becomes an alias only after registration.
+    // Thousands of unrelated registrations join the same live class, but do
+    // not enlarge this prefix's candidate inventory.
+    try graph.unify(arg, registered);
+    for (0..2000) |i| {
+        const node = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+        try lookup.add(.{ .open = .{ .prefix = other_prefix, .node = node } }, @intCast(i + 11));
+        try graph.unify(arg, node);
+    }
+    try std.testing.expectEqual(@as(usize, 3), lookup.openPairs(prefix).len);
+    var after = DraftTemplateSpecLookup.OpenIterator{ .pairs = lookup.openPairs(prefix), .graph = graph, .interface_roots = &roots };
+    try std.testing.expectEqual(@as(?u32, 7), after.next());
+    try std.testing.expectEqual(@as(?u32, 8), after.next());
+    try std.testing.expectEqual(null, after.next());
+    // Return-only overlap must also retain candidates for recursive checks.
+    try graph.unify(ret, unrelated);
+    var returned = DraftTemplateSpecLookup.OpenIterator{ .pairs = lookup.openPairs(prefix), .graph = graph, .interface_roots = &roots };
+    try std.testing.expectEqual(@as(?u32, 7), returned.next());
+    try std.testing.expectEqual(@as(?u32, 8), returned.next());
+    try std.testing.expectEqual(@as(?u32, 9), returned.next());
+    try std.testing.expectEqual(null, returned.next());
 }
 
 test "open draft recursive provenance joins fresh interface cells only while lowering" {
@@ -57488,25 +57578,7 @@ fn instRecordFieldLessThan(
 fn nominalHasDeclarationBacking(nominal: checked.CheckedNominalType) bool {
     return switch (nominal.representation) {
         .opaque_without_backing => false,
-        .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-            .primitive,
-            .list,
-            .box,
-            .dict,
-            .set,
-            .parse_tag_union_spec,
-            .fields,
-            .field,
-            => false,
-            .bool_tag_union,
-            .try_nominal,
-            .iterator,
-            .crypto_sha256_digest,
-            .crypto_sha256_hasher,
-            .crypto_blake3_digest,
-            .crypto_blake3_hasher,
-            => true,
-        },
+        .builtin => |builtin| checked.builtinNominalHasDeclarationBacking(builtin),
         .local_declaration,
         .imported_declaration,
         .local_box_payload_capability,
