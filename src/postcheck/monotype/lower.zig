@@ -12542,7 +12542,7 @@ const DraftTemplateFamilyAddress = struct {
     proc_base: u32,
     template: u32,
     method_scope: [32]u8,
-    source_fn_key: [16]u8,
+    source_fn_key: [32]u8,
 
     fn init(template_ref: names.ProcTemplate, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
         return .{
@@ -12585,7 +12585,7 @@ const DraftNestedFamilyAddress = struct {
     module: [32]u8,
     owner_proc_base: u32,
     owner_template: u32,
-    owner_fn_key: [16]u8,
+    owner_fn_key: [32]u8,
     site: u32,
     /// Explicitly tagged default-root qualifier: the site id is relative to
     /// the declaring module's site table, so a default-root site's family
@@ -12593,7 +12593,7 @@ const DraftNestedFamilyAddress = struct {
     default_root: bool,
     default_root_module: [32]u8,
     method_scope: [32]u8,
-    source_fn_key: [16]u8,
+    source_fn_key: [32]u8,
 
     fn init(nested: Ast.NestedFn, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
         return .{
@@ -12625,7 +12625,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         const Self = @This();
         const Prefix = struct {
             family: Family,
-            evidence_digest: [16]u8,
+            evidence_digest: [32]u8,
         };
         const PrefixId = enum(u32) { _ };
         const OpenAddress = struct {
@@ -12635,7 +12635,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         const DigestAddress = struct {
             prefix: PrefixId,
             kind: enum { closed, open_shape },
-            digest: [16]u8,
+            digest: [32]u8,
         };
         const Address = union(enum) {
             open: OpenAddress,
@@ -12739,7 +12739,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             }
         }
 
-        fn internPrefix(self: *Self, family: Family, evidence_digest: [16]u8) Allocator.Error!PrefixId {
+        fn internPrefix(self: *Self, family: Family, evidence_digest: [32]u8) Allocator.Error!PrefixId {
             const entry = try self.prefixes.getOrPut(self.allocator, .{
                 .family = family,
                 .evidence_digest = evidence_digest,
@@ -13182,8 +13182,11 @@ const CustomCodecCallAddress = struct {
 /// Exact Phase-B address installed from the checker role Phase A selected.
 /// A subject-free role is reusable for every shape and therefore carries no
 /// shape identity. A subject-bearing role carries the full Monotype digest of
-/// Phase A's related shape; exact equality inside one digest bucket protects
-/// correctness from digest collisions without scanning unrelated calls.
+/// Phase A's related shape. The Wyhash below only selects a bucket; `eql`
+/// compares the method name and the whole digest, so a Wyhash collision costs
+/// a probe. The digest comparison itself is trusted as shape identity, which
+/// is sound because `TypeDigest` is cryptographic SHA-256 (see
+/// `base.TypeDigestHasher`).
 const FormatCodecCallAddress = struct {
     kind: CodecKind,
     method_name: []const u8,
@@ -16200,8 +16203,8 @@ const InterfaceReplayStatus = enum { expanding, ready };
 
 const InterfaceReplayAddress = struct {
     family: DraftTemplateFamilyAddress,
-    evidence_digest: [16]u8,
-    provisional_digest: [16]u8,
+    evidence_digest: [32]u8,
+    provisional_digest: [32]u8,
 };
 
 const InterfaceReplayEntry = struct {
@@ -19223,7 +19226,7 @@ const BodyContext = struct {
                 .kind = 0,
                 .binder = @intFromEnum(entry.binder),
                 .local = @intFromEnum(entry.local),
-                .type_digest = .{ .bytes = [_]u8{0} ** 16 },
+                .type_digest = .{ .bytes = [_]u8{0} ** 32 },
             };
             index += 1;
         }
@@ -55680,7 +55683,7 @@ test "draft specialization lookup preserves family evidence and request identity
         var lookup = Lookup.init(allocator);
         defer lookup.deinit();
         const family = std.mem.zeroes(Family);
-        const evidence = [_]u8{0} ** 16;
+        const evidence = [_]u8{0} ** 32;
         const prefix = try lookup.internPrefix(family, evidence);
         try std.testing.expectEqual(prefix, try lookup.internPrefix(family, evidence));
 
@@ -59087,7 +59090,7 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
         // capture, then destroy the workspace before coordinator absorption.
         var index: u32 = 0;
         while (index < 256) : (index += 1) {
-            var digest = [_]u8{0} ** 16;
+            var digest = [_]u8{0} ** 32;
             std.mem.writeInt(u32, digest[0..4], index, .little);
             _ = try workspace.types.internErased(
                 &workspace.name_store,
@@ -59693,8 +59696,8 @@ test "specialization shard diagnostics remain private until coordinator commit" 
 }
 
 test "function context identity excludes draft local allocation ids" {
-    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 16 };
-    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 16 };
+    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 32 };
+    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 32 };
     const original = [_]LexicalBinderEntry{.{
         .kind = 1,
         .binder = 17,

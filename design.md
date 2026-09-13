@@ -2310,30 +2310,45 @@ substitution is memoized by its complete source/formal/actual input and interns
 its result through the same checked-type-digest index. Dispatch callable
 instantiation additionally memoizes the complete target-callable/plan-callable
 pair, so equal checked dispatch edges share one result. Checked-type digest
-construction is memoized over already-stored child roots; 128-bit content hashing
+construction is memoized over already-stored child roots; cryptographic hashing
 is performed once for a new checked-type root, never as a linear search
 mechanism.
 
 Type digests, checked type keys, recursive layout keys, and derived callable
-and evidence digests use the shared `base.TypeDigestHasher`. It feeds the same
-structural byte encoding to two `XxHash3` streams with fixed seeds `0` and
-`0x9e3779b97f4a7c15`, then concatenates their 64-bit results in that order, each
-encoded little-endian, into 16 bytes. All producers for a key domain must agree
-on the encoding, including child digests, length prefixes, identity numbering,
-and domain tags. The hash algorithm does not change type equality or the exact
-payload and topology comparisons already required by interners and evidence
-lookup. Consumers that use digest bytes directly as identity assume accidental
-collisions are negligible at 128-bit width; the hash is non-cryptographic.
+and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
+structural byte encoding, 32 bytes wide. The hash must be cryptographic and
+this wide. A package author controls every byte these digests see, several
+consumers treat equal digests as one type with no structural comparison
+(`CheckedTypeStore.root_index` when imported types are projected, the layout
+store's recursive-graph index, erased callable and generated nominal
+identities inside `typeEql`, format-codec call addresses), and the checker
+accepts a package's code by structural unification before the checked type
+store interns its types by digest. A package containing two structurally different types
+with one digest would therefore type-check and then be lowered with a single
+payload for both: a miscompile with memory-unsafe consequences from a pure
+dependency. A non-cryptographic hash makes such a pair cheap to construct, and
+because the attacker supplies both halves the relevant bound is a birthday
+collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
+digests are also persisted in caches and compared across machines, which rules
+out keying them with a secret. Every 64-bit compiler target is built with the
+CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
+software rounds; only 32-bit targets such as wasm32 compute the digest in
+software.
 
-Module identities, checked module cache keys and filenames, and Monotype cache
-validity and compiler layout hashes remain SHA-256 with 32-byte outputs,
-including when their inputs contain type digests. The type hash algorithm,
-seeds, output byte order, digest widths, and domain versions are part of
-serialized compatibility. Changing them requires
-invalidating affected checked-module and Monotype caches through their explicit
-entry and format versions, as well as updating layout versions and layout-hash
-goldens. Compiler build identity alone does not invalidate caches for an
-uncommitted compiler change.
+All producers for a key domain must agree on the encoding, including child
+digests, length prefixes, identity numbering, and domain tags. The hash
+algorithm does not change type equality or the exact payload and topology
+comparisons already required by interners and evidence lookup. Non-cryptographic
+hashes (`std.hash.Wyhash`) remain in use only as bucket selectors in front of an
+exact comparison of the full key, where a collision costs a probe and never an
+identity. Module identities, checked module cache keys and filenames, and
+Monotype cache validity and compiler layout hashes hash with
+`std.crypto.hash.sha2.Sha256` directly, including when their inputs contain
+type digests. The digest widths and domain versions are part of serialized
+compatibility. Changing them requires invalidating affected checked-module and
+Monotype caches through their explicit entry and format versions, as well as
+updating layout versions and layout-hash goldens. Compiler build identity alone
+does not invalidate caches for an uncommitted compiler change.
 
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field outside `ConstStore` whose only purpose is to feed post-check

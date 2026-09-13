@@ -456,6 +456,9 @@ const NamedRepresentationKey = struct {
 };
 
 const NamedRepresentationKeyContext = struct {
+    // Bucket selector only: the bucket holds a candidate list and
+    // `representationTypesEquivalent` decides reuse, so a collision on these
+    // package-controlled module bytes costs a longer scan, never a shared layout.
     pub fn hash(_: NamedRepresentationKeyContext, key: NamedRepresentationKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, key.kind);
