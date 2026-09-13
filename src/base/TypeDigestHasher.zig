@@ -34,7 +34,6 @@
 //! document the requirement above.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const rounds = @import("sha256_rounds.zig");
 const TypeDigestHasher = @This();
 
@@ -46,10 +45,10 @@ comptime {
     // software path for them, by decision. build.zig adds the feature to the
     // baseline CPU; a `-Dcpu` that drops it is an unsupported target.
     if (!rounds.hasHardwareSupport) {
-        switch (builtin.cpu.arch) {
+        switch (rounds.arch_class) {
             .x86_64 => @compileError("roc requires the x86 SHA extension (`sha`) on x86_64 targets; CPUs without SHA-256 instructions are not supported"),
             .aarch64 => @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported"),
-            else => if (@sizeOf(usize) == 8) {
+            .other => if (@sizeOf(usize) == 8) {
                 @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
             },
         }

@@ -364,13 +364,13 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
 /// than silently getting a slower binary.
 fn addSha256Floor(query: *std.Target.Query) void {
     const arch = query.cpu_arch orelse builtin.target.cpu.arch;
-    switch (arch) {
+    switch (roc_target.classifyCpuArch(arch)) {
         .x86_64 => {
             query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
             query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
         },
         .aarch64 => query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2)),
-        else => {},
+        .aarch64_be, .arm, .wasm32, .other => {},
     }
 }
 
@@ -3366,6 +3366,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     minici_exe.root_module.addImport("build_options", roc_modules.build_options);
+    minici_exe.root_module.addImport("roc_target", roc_modules.roc_target);
 
     const install_zig_lints = b.addInstallArtifact(zig_lints_exe, .{});
     const install_tidy = b.addInstallArtifact(tidy_exe, .{});
@@ -6303,6 +6304,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = .Debug,
                 .imports = &.{
                     .{ .name = "build_options", .module = roc_modules.build_options },
+                    .{ .name = "roc_target", .module = roc_modules.roc_target },
                 },
             }),
             .filters = test_filters,

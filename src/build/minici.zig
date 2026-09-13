@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const target = @import("roc_target");
 
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
@@ -217,10 +218,11 @@ fn setSelectionOnly(selection: *Selection, value: []const u8, arg: []const u8) !
 /// those targets, so on such a machine every artifact minici builds would die
 /// of SIGILL the first time it digests a type. The message says so instead.
 fn requireSha256Hardware() void {
-    const supported = switch (builtin.cpu.arch) {
+    const arch_class = target.classifyCpuArch(builtin.cpu.arch);
+    const supported = switch (arch_class) {
         .x86_64 => x86HasShaExtension(),
         .aarch64 => aarch64HasSha2(),
-        else => true,
+        .aarch64_be, .arm, .wasm32, .other => true,
     };
     if (supported) return;
     std.debug.print(
@@ -231,10 +233,10 @@ fn requireSha256Hardware() void {
         \\A 64-bit CPU without them is not a supported machine for building or running
         \\the roc compiler, so this run stops here rather than failing later with SIGILL.
         \\
-    , .{switch (builtin.cpu.arch) {
+    , .{switch (arch_class) {
         .x86_64 => "the x86 `sha` extension: AMD Zen or Intel Ice Lake / Goldmont and later",
         .aarch64 => "the ARMv8 `sha2` crypto extension",
-        else => unreachable,
+        .aarch64_be, .arm, .wasm32, .other => unreachable,
     }});
     std.process.exit(1);
 }
@@ -268,16 +270,14 @@ fn cpuid(leaf: u32, sub_leaf: u32) CpuidRegisters {
 
 fn aarch64HasSha2() bool {
     if (builtin.cpu.arch != .aarch64) return false;
-    switch (builtin.os.tag) {
+    return switch (target.classifyOs(builtin.os.tag)) {
         // HWCAP_SHA2 is bit 6 of AT_HWCAP on aarch64 Linux.
-        .linux => return (std.os.linux.getauxval(std.elf.AT_HWCAP) & (1 << 6)) != 0,
+        .linux => (std.os.linux.getauxval(std.elf.AT_HWCAP) & (1 << 6)) != 0,
         // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
-        // aarch64 baseline (apple_m1) already assumes it.
-        .macos => return true,
-        // Other aarch64 hosts are not CI machines; trust the build target,
-        // which the compiler baseline already requires to include `sha2`.
-        else => return true,
-    }
+        // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
+        // trust the build target, which also requires `sha2`.
+        .macos, .windows, .freebsd, .openbsd, .netbsd, .other => true,
+    };
 }
 
 fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {

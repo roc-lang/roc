@@ -13,21 +13,93 @@ const builtin = @import("builtin");
 const math = std.math;
 const mem = std.mem;
 
+const ArchClass = enum { x86_64, aarch64, other };
+
+fn classifyArch(arch: std.Target.Cpu.Arch) ArchClass {
+    return switch (arch) {
+        .x86_64 => .x86_64,
+        .aarch64 => .aarch64,
+        .aarch64_be,
+        .alpha,
+        .amdgcn,
+        .arc,
+        .arceb,
+        .arm,
+        .armeb,
+        .avr,
+        .bpfeb,
+        .bpfel,
+        .csky,
+        .hexagon,
+        .hppa,
+        .hppa64,
+        .kalimba,
+        .kvx,
+        .lanai,
+        .loongarch32,
+        .loongarch64,
+        .m68k,
+        .microblaze,
+        .microblazeel,
+        .mips,
+        .mipsel,
+        .mips64,
+        .mips64el,
+        .msp430,
+        .nvptx,
+        .nvptx64,
+        .or1k,
+        .powerpc,
+        .powerpcle,
+        .powerpc64,
+        .powerpc64le,
+        .propeller,
+        .riscv32,
+        .riscv32be,
+        .riscv64,
+        .riscv64be,
+        .s390x,
+        .sh,
+        .sheb,
+        .sparc,
+        .sparc64,
+        .spirv32,
+        .spirv64,
+        .thumb,
+        .thumbeb,
+        .ve,
+        .wasm32,
+        .wasm64,
+        .x86_16,
+        .x86,
+        .xcore,
+        .xtensa,
+        .xtensaeb,
+        => .other,
+    };
+}
+
+/// One SHA-256 message block.
 pub const Block = [64]u8;
+/// The eight-word SHA-256 chaining state.
 pub const State = [8]u32;
 
+/// The initial chaining state defined by FIPS 180-4.
 pub const initial_state = State{
     0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
     0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
 };
 
+/// The target architecture category used to select SHA-256 rounds.
+pub const arch_class = classifyArch(builtin.cpu.arch);
+
 /// Whether the compilation target carries the SHA-256 instructions. On x86_64
 /// that is the SHA extension plus SSSE3 (for `palignr`), which every CPU with
 /// the SHA extension has; on aarch64 it is the `sha2` crypto extension.
-pub const hasHardwareSupport = switch (builtin.cpu.arch) {
+pub const hasHardwareSupport = switch (arch_class) {
     .aarch64 => builtin.zig_backend != .stage2_c and builtin.cpu.has(.aarch64, .sha2),
     .x86_64 => builtin.zig_backend != .stage2_c and builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 }),
-    else => false,
+    .other => false,
 };
 
 const K = [64]u32{
@@ -44,10 +116,10 @@ const K = [64]u32{
 /// Compress every block into `state` using the hardware instructions of the
 /// compilation target. Only callable when `hasHardwareSupport` is true.
 pub fn compressHardware(state: *State, blocks: []const Block) void {
-    switch (builtin.cpu.arch) {
+    switch (arch_class) {
         .aarch64 => for (blocks) |*block| roundAarch64Sha2(state, block),
         .x86_64 => for (blocks) |*block| roundX86Sha(state, block),
-        else => @compileError("SHA-256 hardware compression is only implemented for aarch64 and x86_64"),
+        .other => @compileError("SHA-256 hardware compression is only implemented for aarch64 and x86_64"),
     }
 }
 
