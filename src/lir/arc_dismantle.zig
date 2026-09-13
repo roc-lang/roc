@@ -492,6 +492,15 @@ const Analysis = struct {
         const local_index = @intFromEnum(local);
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
+        // Dismantling splits concrete-layout RC units. A descriptor-managed
+        // value's release is the committed descriptor operation, including
+        // fields whose RC behavior cannot be expressed by a concrete layout.
+        if (self.store.getLocal(local).boxy_desc != null) return false;
+        const ownership_root = if (self.view_root[local_index] != no_index)
+            self.view_root[local_index]
+        else
+            self.projected_root[local_index];
+        if (ownership_root != no_index and self.store.getLocal(@enumFromInt(ownership_root)).boxy_desc != null) return false;
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index and self.view_root[local_index] == no_index) return false;

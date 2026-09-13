@@ -8567,6 +8567,37 @@ test "ARC emission exclusions copy once and preserve solver resources on allocat
     try testing.expectEqualSlices(bool, &.{ true, false, true }, borrow_anchors);
 }
 
+test "ARC releases descriptor-managed aggregates through their committed descriptor" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = erased_box },
+        .{ .index = 1, .layout = .str },
+    });
+    const record = try f.local(record_layout);
+    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(fixtureTableIndex(0)) };
+    f.store.setLocalBoxyDesc(record, desc);
+    const field = try f.local(.str);
+    const ret = try f.ret(field);
+    const read = try f.assignRefField(field, record, 1, ret);
+    const body = try f.assignCall(record, &.{}, read);
+    _ = try f.addProc(&.{}, body, .str);
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(record, .decref));
+    var found_descriptor_release = false;
+    for (0..f.store.cfStmtCount()) |index| {
+        const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(index))));
+        if (stmt != .decref or stmt.decref.value != record) continue;
+        try testing.expectEqualDeep(LIR.RcHelper{ .boxy = desc }, stmt.decref.rc);
+        found_descriptor_release = true;
+    }
+    try testing.expect(found_descriptor_release);
+}
+
 test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

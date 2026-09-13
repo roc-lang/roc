@@ -56327,8 +56327,8 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     defer graph.destroy();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const outer_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
-    const inner_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const outer_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true, false);
+    const inner_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true, false);
     try checked_types.fillSyntheticTypeRoot(gpa, outer_ty, .{ .flex = .{} });
     try checked_types.fillSyntheticTypeRoot(gpa, inner_ty, .{ .flex = .{} });
     const fn_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{outer_ty}, outer_ty);
@@ -56431,8 +56431,8 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
 
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
-    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true, false);
+    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true, false);
     try checked_types.fillSyntheticTypeRoot(gpa, receiver_ty, .{ .flex = .{} });
     try checked_types.fillSyntheticTypeRoot(gpa, other_receiver_ty, .{ .flex = .{} });
     const result_ty = try checked_types.appendSyntheticPayloadRoot(gpa, &frame_names, .empty_record);
@@ -56498,7 +56498,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
 test "specialization evidence equality includes exact target instantiation" {
     var roots: [11]checked.CheckedTypeRoot = undefined;
     for (&roots, 0..) |*root, index| {
-        root.* = .{ .id = @enumFromInt(@as(u32, @intCast(index))), .key = .{} };
+        root.* = .{ .id = @enumFromInt(@as(u32, @intCast(index))), .key = .{}, .contains_identity_variables = true, .composable = false };
         root.key.bytes[0] = @intCast(index);
     }
     // A fresh checked identity may have a distinct raw id while retaining the

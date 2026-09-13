@@ -2584,7 +2584,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     // Allocate distinct replay addresses with the same checked root key.
     var replay_types: [4]checked.CheckedTypeId = undefined;
     for (&replay_types) |*ty| {
-        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true);
+        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true, false);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
     // Fill the proof table and its indices before building stored evidence.
