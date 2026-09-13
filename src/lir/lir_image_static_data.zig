@@ -3,7 +3,6 @@ const std = @import("std");
 const core = @import("lir_core");
 const layout = @import("layout");
 const Program = core.Program;
-const LIR = core.LIR;
 const missing = std.math.maxInt(u32);
 
 /// Offset-based frozen export schema parameterized by the containing image API.

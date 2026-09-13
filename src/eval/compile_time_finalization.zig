@@ -3477,7 +3477,7 @@ test "shared interpreter slots report an active demand cycle as a normal crash" 
     try testInterpreterSlot("cyclic compile-time value dependency", true, true);
 }
 
-fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) !void {
+fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) (FinalizeError || Interpreter.Error || error{ TestExpectedEqual, TestUnexpectedResult, TestExpectedError, TestUnexpectedError, DuplicateStaticDataSymbol, InvalidStaticDataAlignment, InvalidStaticDataRelocation, MissingStaticDataSymbol, UnresolvedStaticFunction })!void {
     const allocator = std.testing.allocator;
     var lowered = lir.CheckedPipeline.LoweredProgram{
         .lir_result = try LirProgram.Result.init(allocator, .native),
@@ -3665,7 +3665,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     }
 }
 
-fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8) !void {
+fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const allocator = std.testing.allocator;
     var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
