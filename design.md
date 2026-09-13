@@ -13071,6 +13071,13 @@ two; architecture-specific code generators own only the one
 floating-point/vector register-allocation mask and instruction encoding. They
 do not own a second local-location map or independently move LIR local values.
 
+Branch environments use an undo journal of local-location writes. Capture
+spills resident vectors before recording a journal mark and the float-register
+mask; restoration replays writes in reverse to that mark and clears vector
+residency. Nested regions retain their enclosing journal prefix. Neither
+operation copies the local-location table, and restoration never rolls back the
+stack-slot allocator: different arms retain distinct stack slots.
+
 Stable does not mean distinct. Before emitting a procedure, `LirCodeGen` walks
 its exact control-flow graph and inventories every definition and indirect
 write. A one-definition `assign_ref.local` may adopt its source's authoritative
