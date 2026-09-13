@@ -821,9 +821,15 @@ fn finishLoweredOutput(
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
-    if (target.specialization_strategy == .lss and target.inline_mode == .none) {
-        try SingleUseInline.run(&lowered.lir_result);
-        try ForwardingJoinInline.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    if (target.specialization_strategy == .lss) {
+        if (target.inline_mode == .none) {
+            try SingleUseInline.run(&lowered.lir_result);
+            try ForwardingJoinInline.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+        }
+        // Every inline mode produces tag-valued joins whose body matches the
+        // tag at once: the iterator-fusion clone in `.none`, and the checked
+        // wrappers substituted at their call sites in `.wrappers`, whose
+        // `Try` results the caller matches immediately.
         try TagCaseFusion.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);

@@ -4768,20 +4768,31 @@ provenance onto the corresponding procedure. LIR and the backends do not
 identify iterators or reconstruct this decision.
 
 For `.none` plus lambda-set specialization, pre-ARC LIR consumes that explicit
-scope with three exact structural rewrites. First, an internal Roc-ABI procedure
+scope with two exact structural rewrites. First, an internal Roc-ABI procedure
 is inlined only when the reachable call inventory proves one direct call, no
 root or first-class escape, and therefore no reachable code growth. Second, a
 one-use forwarding join sinks its consumer only when reachable incoming-edge
 counts prove exclusivity, the outer join is nonrecursive, and the forwarded
 layout contains no reference-counted storage; moving owning continuations needs
-explicit path-ownership data and is not admitted. Third, literal tag edges may
-bypass a join whose body immediately matches that tag. Complete fusion moves
-all arms; partial fusion retains the original path and clones only arms
-whose locally defined values are ownership-neutral. Join scalarization then
-removes aggregate fixed points when every initializer, field read, and tag
-payload read is explicit. Every mutation plan requires disjoint statement
-roles before it changes the graph. These passes visit only stamped procedures, so ordinary dev
-code pays neither their analysis cost nor their structural changes.
+explicit path-ownership data and is not admitted. These two passes visit only
+stamped procedures, so ordinary dev code pays neither their analysis cost nor
+their structural changes.
+
+A third rewrite, tag-case fusion, runs under lambda-set specialization in every
+inline mode and in every procedure: literal tag edges bypass a join whose body
+immediately matches that tag, so the union is never materialized. The
+substituted checked wrappers of `.wrappers` mode produce exactly this shape at
+every call site (a `Try` built on each arm and matched at once by the caller),
+as does the iterator-fusion clone of `.none`. A producer edge may release
+values it has finished with between building the tag and jumping; those
+releases are carried onto the redirected edge. An arm may release the union
+itself; the fused arm releases that variant's payload instead, or nothing when
+the variant owns nothing. Complete fusion moves all arms; partial fusion
+retains the original path for opaque producers and clones the arms, with
+definitions inside a cloned arm renamed. Join scalarization then removes
+aggregate fixed points when every initializer, field read, and tag payload
+read is explicit. Every mutation plan requires disjoint statement roles before
+it changes the graph.
 
 The clone propagates constructor values through ordinary bindings and solves
 loop fixed points over their leaves. As a result, `.none` mode does not rebuild
