@@ -46900,7 +46900,7 @@ test "boxy lowerer emits requested layout metadata for layout-only plans" {
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
-    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(1) });
+    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(1), .composable = true });
     try checked_module.checked_types.payloads.append(gpa, .{
         .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}),
     });
@@ -46936,8 +46936,8 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
 
-    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(1) });
-    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(1), .key = typeKey(2) });
+    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(1), .composable = true });
+    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(1), .key = typeKey(2), .composable = true });
     try checked_module.checked_types.payloads.append(gpa, .{
         .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}),
     });
@@ -47013,9 +47013,9 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     const tag_a = try checked_module.canonical_names.internTagLabel("A");
     const tag_b = try checked_module.canonical_names.internTagLabel("B");
 
-    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(0) });
-    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(1), .key = typeKey(1) });
-    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(2), .key = typeKey(2) });
+    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(0), .composable = true });
+    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(1), .key = typeKey(1), .composable = true });
+    try checked_module.checked_types.roots.append(gpa, .{ .id = @enumFromInt(2), .key = typeKey(2), .composable = true });
     try checked_module.checked_types.type_id_pool.append(gpa, @enumFromInt(fixtureTableIndex(0)));
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 0 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 0, .args_len = 1 });

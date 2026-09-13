@@ -12,6 +12,19 @@ const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 const canonical = @import("canonical_names.zig");
+const source_type_graph = @import("source_type_graph.zig");
+const encoding = @import("type_key_encoding.zig");
+
+/// The shared fixed-width child-reference encoder.
+pub const writeChildKeyReference = encoding.writeChildKeyReference;
+
+/// Borrowed keys and graph analysis from checked root construction. The source
+/// type store must remain immutable for this oracle's complete lifetime.
+pub const ChildKeyOracle = struct {
+    context: *const anyopaque,
+    lookup: *const fn (*const anyopaque, Var) ?canonical.CanonicalTypeKey,
+    analysis: *source_type_graph.Analysis,
+};
 
 const ModuleEnv = can.ModuleEnv;
 
@@ -25,6 +38,7 @@ const LiteralKind = types.StaticDispatchConstraint.LiteralKind;
 pub const TypeKeyInfo = struct {
     key: canonical.CanonicalTypeKey,
     contains_identity_variables: bool,
+    composable: bool,
 };
 
 /// Public `fromVar` function.
@@ -44,12 +58,25 @@ pub fn fromVarInfo(
     env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!TypeKeyInfo {
+    return fromVarInfoWithOracle(allocator, store, env, var_, null);
+}
+
+/// Digest one source root, borrowing keys only for proven composable children.
+pub fn fromVarInfoWithOracle(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+    oracle: ?ChildKeyOracle,
+) Allocator.Error!TypeKeyInfo {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.oracle = oracle;
     try builder.writeVar(var_);
     return .{
         .key = .{ .bytes = builder.hasher.finalResult() },
         .contains_identity_variables = builder.contains_identity_variables,
+        .composable = (try (if (oracle) |o| o.analysis else &builder.graph).analyze(store, var_)).isComposable(),
     };
 }
 
@@ -89,6 +116,7 @@ pub fn identityVarsFromVar(
 ) Allocator.Error![]types.Var {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.emit_key = false;
     try builder.writeVar(var_);
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
@@ -105,6 +133,7 @@ pub fn identityVarsFromScheme(
 ) Allocator.Error![]types.Var {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.emit_key = false;
     try builder.writeVar(root);
     for (relation_roots) |relation_root| try builder.writeVar(relation_root);
     return try allocator.dupe(types.Var, builder.identity_variables.items);
@@ -121,6 +150,7 @@ pub fn appendIdentityVarsFromVar(
 ) Allocator.Error!void {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.emit_key = false;
     try builder.writeVar(var_);
     try out.appendSlice(allocator, builder.identity_variables.items);
 }
@@ -135,6 +165,7 @@ pub fn identityVarsFromVarIgnoringConstraints(
 ) Allocator.Error![]types.Var {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.emit_key = false;
     builder.walk_identity_constraints = false;
     try builder.writeVar(var_);
     return try allocator.dupe(types.Var, builder.identity_variables.items);
@@ -200,14 +231,15 @@ pub fn schemeFromVar(
 ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
-    builder.writeTag("canonical_type_scheme");
+    try builder.writeTag(.canonical_type_scheme);
     try builder.writeVar(var_);
     return .{ .bytes = builder.hasher.finalResult() };
 }
 
 /// Reusable scratch for complete source-scheme digests within one module.
 /// Every request starts a new digest and new identity/cycle numbering; only
-/// allocation capacity survives. No type information is memoized here.
+/// allocation capacity survives. Local type memo entries never cross requests;
+/// borrowed child keys belong to the immutable source owner.
 pub const SchemeWriter = struct {
     builder: Builder,
     /// Count complete digest requests in tests; no storage in compiler builds.
@@ -223,11 +255,19 @@ pub const SchemeWriter = struct {
         self.builder.deinit();
     }
 
+    /// Borrow the root producer's keys during this immutable-store scope.
+    pub fn setOracle(self: *SchemeWriter, oracle: ChildKeyOracle) void {
+        self.builder.oracle = oracle;
+    }
+
     /// Digest a whole source scheme, including after a failed earlier request.
     pub fn fromVar(self: *SchemeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeSchemeKey {
         if (builtin.is_test) self.test_digests += 1;
         const builder = &self.builder;
-        builder.hasher = TypeDigestHasher.init();
+        builder.hasher.reset();
+        builder.graph.resetRetainingCapacity();
+        builder.memo.clearRetainingCapacity();
+        builder.composed_roots.clearRetainingCapacity();
         builder.active.clearRetainingCapacity();
         builder.identity_variables.clearRetainingCapacity();
         builder.frames.clearRetainingCapacity();
@@ -236,7 +276,7 @@ pub const SchemeWriter = struct {
         builder.ext_seen.clearRetainingCapacity();
         builder.contains_identity_variables = false;
         builder.contains_error = false;
-        builder.writeTag("canonical_type_scheme");
+        try builder.writeTag(.canonical_type_scheme);
         try builder.writeVar(var_);
         return .{ .bytes = builder.hasher.finalResult() };
     }
@@ -253,6 +293,7 @@ pub fn containsError(
 ) Allocator.Error!bool {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.emit_key = false;
     builder.detect_errors = true;
     try builder.writeVar(var_);
     return builder.contains_error;
@@ -298,6 +339,7 @@ const AliasFrame = struct {
 const VarsFrame = struct {
     vars: []const Var,
     idx: u32 = 0,
+    nominal: bool = false,
 };
 
 const FuncFrame = struct {
@@ -344,7 +386,11 @@ const Builder = struct {
     store: *const TypeStore,
     env: *const ModuleEnv,
     idents: *const Ident.Store,
-    hasher: TypeDigestHasher,
+    hasher: encoding.Encoder,
+    graph: source_type_graph.Analysis,
+    oracle: ?ChildKeyOracle = null,
+    memo: std.AutoHashMap(Var, canonical.CanonicalTypeKey),
+    composed_roots: std.ArrayList(Var) = .empty,
     active: std.ArrayList(Var),
     identity_variables: std.ArrayList(Var),
     /// Suspended steps of the walk, innermost last. The walk descends on this
@@ -359,6 +405,9 @@ const Builder = struct {
     /// Collection runs to completion without dispatching children, so one
     /// buffer serves every row node.
     ext_seen: std.ArrayList(Var),
+    /// Identity and error queries use the same ordered traversal without bytes
+    /// or composability analysis; neither query produces a digest.
+    emit_key: bool = true,
     require_concrete: bool = false,
     contains_identity_variables: bool = false,
     detect_errors: bool = false,
@@ -383,7 +432,9 @@ const Builder = struct {
             .store = store,
             .env = env,
             .idents = env.getIdentStoreConst(),
-            .hasher = TypeDigestHasher.init(),
+            .hasher = encoding.Encoder.init(allocator),
+            .graph = source_type_graph.Analysis.init(allocator),
+            .memo = std.AutoHashMap(Var, canonical.CanonicalTypeKey).init(allocator),
             .active = .empty,
             .identity_variables = .empty,
             .frames = .empty,
@@ -394,6 +445,10 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.hasher.deinit();
+        self.graph.deinit();
+        self.memo.deinit();
+        self.composed_roots.deinit(self.allocator);
         self.ext_seen.deinit(self.allocator);
         self.pending_tags.deinit(self.allocator);
         self.pending_fields.deinit(self.allocator);
@@ -413,6 +468,12 @@ const Builder = struct {
         // allocation failure mid-walk can leave entries behind, so unwind them
         // here and keep the builder's buffers consistent on both exit paths.
         errdefer {
+            // An interrupted digest has no usable output. Discard its rendering
+            // contexts and local memo entries along with suspended traversal.
+            self.hasher.reset();
+            self.composed_roots.clearRetainingCapacity();
+            self.memo.clearRetainingCapacity();
+            self.graph.resetRetainingCapacity();
             self.frames.items.len = frames_base;
             self.active.items.len = active_base;
             self.pending_fields.items.len = fields_base;
@@ -451,8 +512,8 @@ const Builder = struct {
         const root = resolved.var_;
 
         if (self.err_by_var and resolved.desc.content == .err) {
-            self.writeTag("err_var");
-            self.writeU32(@intFromEnum(root));
+            try self.writeTag(.err_var);
+            try self.writeU32(@intFromEnum(root));
             return true;
         }
 
@@ -462,7 +523,7 @@ const Builder = struct {
         if (resolved.desc.flags.empty_tag_union_is_default) {
             return try self.writeIdentityVariable(
                 root,
-                "defaulted_empty_tag_union",
+                .defaulted_empty_tag_union,
                 null,
                 types.StaticDispatchConstraint.SafeList.Range.empty(),
             );
@@ -473,31 +534,63 @@ const Builder = struct {
             const flex = resolved.desc.content.flex;
             if (self.require_concrete) {
                 if (self.flexLiteralDefaultKind(flex)) |kind| {
-                    self.writeLiteralDefault(kind);
+                    try self.writeLiteralDefault(kind);
                     return true;
                 }
                 invariantViolation("concrete canonical type key requested for unsolved flex type variable");
             }
-            return try self.writeIdentityVariable(root, "flex", flex.name, flex.constraints);
+            return try self.writeIdentityVariable(root, .flex, flex.name, flex.constraints);
         }
         if (content_tag == .rigid) {
             const rigid = resolved.desc.content.rigid;
             if (self.require_concrete) {
                 invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
             }
-            return try self.writeIdentityVariable(root, "rigid", rigid.name, rigid.constraints);
+            return try self.writeIdentityVariable(root, .rigid, rigid.name, rigid.constraints);
+        }
+
+        if (self.emit_key and self.frames.items.len != 0 and !self.detect_errors) {
+            // Error-sensitive walks use their own mode-local digest memo. They
+            // never consume ordinary keys from the checked-source oracle.
+            if (!self.err_by_var) {
+                if (self.oracle) |oracle| {
+                    if (oracle.lookup(oracle.context, root)) |key| {
+                        try writeChildKeyReference(&self.hasher, key);
+                        return true;
+                    }
+                }
+            }
+            if (self.memo.get(root)) |key| {
+                try writeChildKeyReference(&self.hasher, key);
+                return true;
+            }
+            const analysis = if (self.oracle) |oracle| oracle.analysis else &self.graph;
+            if ((try analysis.analyze(self.store, root)).isComposable()) {
+                try self.composed_roots.append(self.allocator, root);
+                try self.hasher.beginNode();
+            }
         }
 
         if (varSlot(self.active.items, root)) |slot| {
-            self.writeTag("cycle");
-            self.writeU32(slot);
+            try self.writeTag(.cycle);
+            try self.writeU32(slot);
             return true;
         }
 
         try self.active.append(self.allocator, root);
         if (try self.writeContent(resolved.desc.content)) return false;
-        _ = self.active.pop();
+        try self.finishActive();
         return true;
+    }
+
+    fn finishActive(self: *Builder) Allocator.Error!void {
+        const root = self.active.pop().?;
+        if (self.composed_roots.items.len != 0 and self.composed_roots.items[self.composed_roots.items.len - 1] == root) {
+            _ = self.composed_roots.pop();
+            const key = self.hasher.endNode();
+            try self.memo.put(root, key);
+            try writeChildKeyReference(&self.hasher, key);
+        }
     }
 
     /// Whether `writeIdentityVariable` finished the identity outright: an
@@ -505,35 +598,35 @@ const Builder = struct {
     fn writeIdentityVariable(
         self: *Builder,
         root: Var,
-        comptime tag: []const u8,
+        comptime tag: encoding.Tag,
         name: ?Ident.Idx,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) Allocator.Error!bool {
         self.contains_identity_variables = true;
         if (self.identity_anchors) |anchors| {
             if (anchors.contains(root)) {
-                self.writeTag("identity_var_anchor");
-                self.writeU32(@intFromEnum(root));
+                try self.writeTag(.identity_var_anchor);
+                try self.writeU32(@intFromEnum(root));
                 return true;
             }
         }
         if (varSlot(self.identity_variables.items, root)) |slot| {
-            self.writeTag("identity_var_ref");
-            self.writeU32(slot);
+            try self.writeTag(.identity_var_ref);
+            try self.writeU32(slot);
             return true;
         }
 
         const slot: u32 = @intCast(self.identity_variables.items.len);
         try self.identity_variables.append(self.allocator, root);
-        self.writeTag(tag);
-        self.writeU32(slot);
+        try self.writeTag(tag);
+        try self.writeU32(slot);
         if (self.write_identity_names) {
             try self.writeOptionalIdent(name);
         }
 
         if (!self.walk_identity_constraints) return true;
         const items = self.store.sliceStaticDispatchConstraints(constraints);
-        self.writeU32(@intCast(items.len));
+        try self.writeU32(@intCast(items.len));
         if (items.len == 0) return true;
         try self.frames.append(self.allocator, .{ .constraints = .{ .constraints = items } });
         return false;
@@ -553,13 +646,13 @@ const Builder = struct {
         switch (content) {
             .err => {
                 if (self.detect_errors) self.contains_error = true;
-                self.writeTag("err");
+                try self.writeTag(.err);
                 return false;
             },
             .flex => |flex| {
                 if (self.require_concrete) {
                     if (self.flexLiteralDefaultKind(flex)) |kind| {
-                        self.writeLiteralDefault(kind);
+                        try self.writeLiteralDefault(kind);
                         return false;
                     }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
@@ -574,19 +667,19 @@ const Builder = struct {
             },
             .field_presence => |field_presence| {
                 switch (field_presence) {
-                    .required => self.writeTag("presence_required"),
-                    .optional => self.writeTag("presence_optional"),
+                    .required => try self.writeTag(.presence_required),
+                    .optional => try self.writeTag(.presence_optional),
                     .defaulted => |id| {
-                        self.writeTag("presence_defaulted");
-                        self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
-                        self.writeU32(id.expr_node);
+                        try self.writeTag(.presence_defaulted);
+                        try self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
+                        try self.writeU32(id.expr_node);
                     },
                 }
                 return false;
             },
             .alias => |alias| {
-                self.writeTag("alias");
-                self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
+                try self.writeTag(.alias);
+                try self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
                 try self.frames.append(self.allocator, .{ .alias = .{
                     .backing = self.store.getAliasBackingVar(alias),
                     .args = self.store.sliceAliasArgs(alias),
@@ -638,56 +731,53 @@ const Builder = struct {
         return kind;
     }
 
-    fn writeLiteralDefault(self: *Builder, kind: LiteralKind) void {
-        self.writeTag("nominal");
-        switch (types.literal_defaulting.defaultTargetForKind(kind)) {
-            .dec => self.writeIdent(builtinDecTypeIdent(self.idents)),
-            .str => self.writeIdent(builtinStrTypeIdent(self.idents)),
-        }
-        self.writeIdent(builtinModuleIdent(self.idents));
-        self.writeOptionalU32(null);
-        self.writeBool(true);
-        self.writeU32(0);
+    fn writeLiteralDefault(self: *Builder, kind: LiteralKind) Allocator.Error!void {
+        try self.writeTag(.literal_default);
+        try self.writeBool(types.literal_defaulting.defaultTargetForKind(kind) == .str);
     }
 
     /// Write `flat`'s leading bytes, returning true when a frame was pushed.
     fn writeFlat(self: *Builder, flat: types.FlatType) Allocator.Error!bool {
         switch (flat) {
             .empty_record => {
-                self.writeTag("empty_record");
+                try self.writeTag(.empty_record);
                 return false;
             },
             .empty_tag_union => {
-                self.writeTag("[]");
+                try self.writeTag(.empty_tag_union);
                 return false;
             },
             .record_unbound => |fields| {
-                self.writeTag("record_unbound");
+                try self.writeTag(.record_unbound);
                 return try self.writeNormalizedRecordFields(fields);
             },
             .record => |record| return try self.writeNormalizedRecordPayload(record.fields, record.ext),
             .tuple => |tuple| {
-                self.writeTag("tuple");
+                try self.writeTag(.tuple);
                 return try self.pushVarRange(tuple.elems);
             },
             .nominal_type => |nominal| {
                 if (self.detect_errors and self.store.nominalDeclIsInvalid(nominal)) {
                     self.contains_error = true;
                 }
-                self.writeTag("nominal");
-                self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
-                self.writeBool(nominal.isOpaque());
+                try self.writeTag(.nominal);
+                try self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
+                try self.writeBool(nominal.isOpaque());
                 const args = self.store.sliceNominalArgs(nominal);
-                self.writeU32(@intCast(args.len));
-                return try self.pushVars(args);
+                try self.writeU32(@intCast(args.len));
+                if (args.len == 0) {
+                    try self.writeU32(0);
+                    try self.writeU32(0);
+                    return false;
+                }
+                try self.frames.append(self.allocator, .{ .vars = .{ .vars = args, .nominal = true } });
+                return true;
             },
             .fn_pure, .fn_unbound => |func| {
-                self.writeTag("fn_pure");
-                return try self.pushFunc(func);
+                return try self.pushFunc(func, false);
             },
             .fn_effectful => |func| {
-                self.writeTag("fn_effectful");
-                return try self.pushFunc(func);
+                return try self.pushFunc(func, true);
             },
             .tag_union => |tag_union| return try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
         }
@@ -695,16 +785,16 @@ const Builder = struct {
 
     /// A function digests its argument count, then its arguments, then its
     /// return type.
-    fn pushFunc(self: *Builder, func: types.Func) Allocator.Error!bool {
+    fn pushFunc(self: *Builder, func: types.Func, effectful: bool) Allocator.Error!bool {
         const args = self.store.sliceVars(func.args);
-        self.writeU32(@intCast(args.len));
+        if (self.emit_key) try self.hasher.writeFunctionHeader(effectful, @intCast(args.len));
         try self.frames.append(self.allocator, .{ .func = .{ .args = args, .ret = func.ret } });
         return true;
     }
 
     fn pushVarRange(self: *Builder, range: Var.SafeList.Range) Allocator.Error!bool {
         const vars = self.store.sliceVars(range);
-        self.writeU32(@intCast(vars.len));
+        try self.writeU32(@intCast(vars.len));
         return try self.pushVars(vars);
     }
 
@@ -723,7 +813,7 @@ const Builder = struct {
                     if (!try self.request(frame.backing)) return false;
                 },
                 .args_count => {
-                    self.writeU32(@intCast(frame.args.len));
+                    try self.writeU32(@intCast(frame.args.len));
                     frame.stage = .args;
                 },
                 .args => {
@@ -733,7 +823,7 @@ const Builder = struct {
                         if (!try self.request(arg)) return false;
                         continue;
                     }
-                    _ = self.active.pop();
+                    try self.finishActive();
                     return true;
                 },
             }
@@ -748,7 +838,12 @@ const Builder = struct {
                 if (!try self.request(child)) return false;
                 continue;
             }
-            _ = self.active.pop();
+            if (frame.nominal) {
+                // Source usages have no declaration padding or field-order rows.
+                try self.writeU32(0);
+                try self.writeU32(0);
+            }
+            try self.finishActive();
             return true;
         }
     }
@@ -770,7 +865,7 @@ const Builder = struct {
                     if (!try self.request(frame.ret)) return false;
                 },
                 .done => {
-                    _ = self.active.pop();
+                    try self.finishActive();
                     return true;
                 },
             }
@@ -841,7 +936,7 @@ const Builder = struct {
 
         const fields = self.pending_fields.items[fields_base..];
         std.mem.sort(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
-        self.writeU32(@intCast(fields.len));
+        try self.writeU32(@intCast(fields.len));
         try self.frames.append(self.allocator, .{ .record = .{
             .fields_base = fields_base,
             .fields_count = @intCast(fields.len),
@@ -862,12 +957,12 @@ const Builder = struct {
         std.mem.sort(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
         if (tail == null and fields.len == 0) {
             self.pending_fields.items.len = fields_base;
-            self.writeTag("empty_record");
+            try self.writeTag(.empty_record);
             return false;
         }
 
-        self.writeTag("record");
-        self.writeU32(@intCast(fields.len));
+        try self.writeTag(.record);
+        try self.writeU32(@intCast(fields.len));
         try self.frames.append(self.allocator, .{ .record = .{
             .fields_base = fields_base,
             .fields_count = @intCast(fields.len),
@@ -886,31 +981,31 @@ const Builder = struct {
                         if (frame.idx > 0 and self.idents.idxTextEql(self.pending_fields.items[index - 1].name, field.name)) {
                             invariantViolation("canonical type key row normalization found duplicate record fields");
                         }
-                        self.writeIdent(field.name);
+                        try self.writeIdent(field.name);
                         const type_var = switch (field.presence.decode()) {
                             .required => |var_| blk: {
-                                self.writeBool(false);
+                                try self.writeBool(false);
                                 break :blk var_;
                             },
                             .unknown => |unknown| blk: {
                                 switch (self.store.resolveVar(unknown.presence).desc.content) {
                                     .field_presence => |presence| switch (presence) {
-                                        .required => self.writeBool(false),
+                                        .required => try self.writeBool(false),
                                         .defaulted => |id| {
-                                            self.writeTag("field_default");
-                                            self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
-                                            self.writeU32(id.expr_node);
+                                            try self.writeTag(.field_default);
+                                            try self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
+                                            try self.writeU32(id.expr_node);
                                         },
-                                        .optional => self.writeTag("presence_optional_field"),
+                                        .optional => try self.writeTag(.presence_optional_field),
                                     },
                                     .flex => {
-                                        self.writeTag("presence_variable");
+                                        try self.writeTag(.presence_variable);
                                         frame.stage = .presence_var;
                                         if (!try self.request(unknown.presence)) return false;
                                     },
                                     .err => {
                                         if (self.detect_errors) self.contains_error = true;
-                                        self.writeTag("err");
+                                        try self.writeTag(.err);
                                     },
                                     .rigid, .alias, .structure => invariantViolation("canonical type key reached a field presence variable holding non-presence content"),
                                 }
@@ -941,11 +1036,11 @@ const Builder = struct {
                     if (frame.tail) |tail_var| {
                         if (!try self.request(tail_var)) return false;
                     } else {
-                        self.writeTag("empty_record");
+                        try self.writeTag(.empty_record);
                     }
                 },
                 .done => {
-                    _ = self.active.pop();
+                    try self.finishActive();
                     return true;
                 },
             }
@@ -1003,12 +1098,12 @@ const Builder = struct {
         std.mem.sort(TagForKey, tags, self, tagForKeyLessThan);
         if (tail == null and tags.len == 0) {
             self.pending_tags.items.len = tags_base;
-            self.writeTag("[]");
+            try self.writeTag(.empty_tag_union);
             return false;
         }
 
-        self.writeTag("tag_union");
-        self.writeU32(@intCast(tags.len));
+        try self.writeTag(.tag_union);
+        try self.writeU32(@intCast(tags.len));
         try self.frames.append(self.allocator, .{ .tag_union = .{
             .tags_base = tags_base,
             .tags_count = @intCast(tags.len),
@@ -1031,9 +1126,9 @@ const Builder = struct {
                     if (frame.tag_idx > 0 and self.idents.idxTextEql(self.pending_tags.items[index - 1].name, tag.name)) {
                         invariantViolation("canonical type key row normalization found duplicate tags");
                     }
-                    self.writeIdent(tag.name);
+                    try self.writeIdent(tag.name);
                     frame.args = self.store.sliceVars(tag.args);
-                    self.writeU32(@intCast(frame.args.len));
+                    try self.writeU32(@intCast(frame.args.len));
                     frame.arg_idx = 0;
                     frame.stage = .tag_args;
                 },
@@ -1052,11 +1147,11 @@ const Builder = struct {
                     if (frame.tail) |tail_var| {
                         if (!try self.request(tail_var)) return false;
                     } else {
-                        self.writeTag("[]");
+                        try self.writeTag(.empty_tag_union);
                     }
                 },
                 .done => {
-                    _ = self.active.pop();
+                    try self.finishActive();
                     return true;
                 },
             }
@@ -1077,18 +1172,24 @@ const Builder = struct {
                 .head => {
                     if (frame.idx >= frame.constraints.len) return true;
                     const constraint = frame.constraints[frame.idx];
-                    self.writeIdent(constraint.fn_name);
+                    try self.writeIdent(constraint.fn_name);
                     frame.stage = .origin;
                     if (!try self.request(constraint.fn_var)) return false;
                 },
                 .origin => {
                     const constraint = frame.constraints[frame.idx];
-                    self.writeTag(@tagName(constraint.origin));
-                    self.writeBool(constraint.origin.binopNegated());
+                    try self.writeTag(switch (constraint.origin) {
+                        .desugared_binop => .desugared_binop,
+                        .desugared_unaryop => .desugared_unaryop,
+                        .method_call => .method_call,
+                        .where_clause => .where_clause,
+                        .from_literal => .from_literal,
+                    });
+                    try self.writeBool(constraint.origin.binopNegated());
                     const maybe_num_literal = constraint.origin.numeralInfo();
-                    self.writeBool(maybe_num_literal != null);
+                    try self.writeBool(maybe_num_literal != null);
                     if (maybe_num_literal) |num_literal| {
-                        self.hasher.update(&num_literal.keyBytes());
+                        if (self.emit_key) try self.hasher.update(&num_literal.keyBytes());
                     }
                     frame.idx += 1;
                     frame.stage = .head;
@@ -1098,16 +1199,16 @@ const Builder = struct {
     }
 
     fn writeOptionalIdent(self: *Builder, maybe_ident: ?Ident.Idx) Allocator.Error!void {
-        self.writeBool(maybe_ident != null);
+        try self.writeBool(maybe_ident != null);
         if (maybe_ident) |ident| {
-            self.writeIdent(ident);
+            try self.writeIdent(ident);
         }
     }
 
-    fn writeOptionalU32(self: *Builder, maybe_value: ?u32) void {
-        self.writeBool(maybe_value != null);
+    fn writeOptionalU32(self: *Builder, maybe_value: ?u32) Allocator.Error!void {
+        try self.writeBool(maybe_value != null);
         if (maybe_value) |value| {
-            self.writeU32(value);
+            try self.writeU32(value);
         }
     }
 
@@ -1116,48 +1217,37 @@ const Builder = struct {
     /// `sameNominalIdentity` in unify.zig exactly. No name text participates
     /// in the module component, so the digest never depends on coordinator
     /// naming or build directories.
-    fn writeNamedSourceIdentity(self: *Builder, origin_module: base.ModuleIdentity.Idx, ident: Ident.Idx, source_decl: ?u32) void {
-        self.writeBytes(self.env.moduleIdentityHash(origin_module));
-        self.writeOptionalU32(source_decl);
+    fn writeNamedSourceIdentity(self: *Builder, origin_module: base.ModuleIdentity.Idx, ident: Ident.Idx, source_decl: ?u32) Allocator.Error!void {
+        try self.writeBytes(self.env.moduleIdentityHash(origin_module));
+        try self.writeOptionalU32(source_decl);
         if (source_decl == null) {
-            self.writeIdent(ident);
+            try self.writeIdent(ident);
         }
     }
 
-    fn writeIdent(self: *Builder, ident: Ident.Idx) void {
-        self.writeBytes(self.idents.getText(ident));
+    fn writeIdent(self: *Builder, ident: Ident.Idx) Allocator.Error!void {
+        try self.writeBytes(self.idents.getText(ident));
     }
 
-    fn writeTag(self: *Builder, tag: []const u8) void {
-        self.writeBytes(tag);
+    fn writeTag(self: *Builder, tag: encoding.Tag) Allocator.Error!void {
+        if (self.emit_key) try self.hasher.writeTag(tag);
     }
 
-    fn writeBytes(self: *Builder, bytes: []const u8) void {
-        self.writeU32(@intCast(bytes.len));
-        self.hasher.update(bytes);
+    fn writeBytes(self: *Builder, bytes: []const u8) Allocator.Error!void {
+        if (self.emit_key) try self.hasher.writeBytes(bytes);
     }
 
-    fn writeBool(self: *Builder, value: bool) void {
-        const byte: u8 = if (value) 1 else 0;
-        self.hasher.update(std.mem.asBytes(&byte));
+    fn writeBool(self: *Builder, value: bool) Allocator.Error!void {
+        if (self.emit_key) try self.hasher.writeBool(value);
     }
 
-    fn writeU32(self: *Builder, value: u32) void {
-        self.hasher.update(&.{
-            @as(u8, @truncate(value)),
-            @as(u8, @truncate(value >> 8)),
-            @as(u8, @truncate(value >> 16)),
-            @as(u8, @truncate(value >> 24)),
-        });
+    fn writeU32(self: *Builder, value: u32) Allocator.Error!void {
+        if (self.emit_key) try self.hasher.writeU32(value);
     }
 };
 
 fn builtinDecTypeIdent(idents: *const Ident.Store) Ident.Idx {
     return idents.builtinDecTypeIdent();
-}
-
-fn builtinStrTypeIdent(idents: *const Ident.Store) Ident.Idx {
-    return idents.builtinStrTypeIdent();
 }
 
 fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
@@ -1538,4 +1628,62 @@ test "issue 11128 scheme writer recovers from every allocation failure" {
         try std.testing.expectEqualDeep(expected, try writer.fromVar(root));
         try std.testing.expectEqualDeep(small_expected, try writer.fromVar(args[0]));
     }
+}
+
+test "composed keys and schemes agree with and without immutable source child keys" {
+    const allocator = std.testing.allocator;
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(allocator, 16, 16);
+    defer store.deinit();
+    const leaf = try store.freshFromContent(.{ .structure = .empty_record });
+    const inner = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{leaf}) } } });
+    const middle = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ inner, inner }) } } });
+    const outer = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{middle}) } } });
+    const identity = try store.fresh();
+    const scheme = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ identity, middle, identity }) } } });
+    var analysis = source_type_graph.Analysis.init(allocator);
+    defer analysis.deinit();
+    var hits: usize = 0;
+    const PublishedChild = struct {
+        root: Var,
+        key: canonical.CanonicalTypeKey,
+        hits: *usize,
+
+        fn lookup(context: *const anyopaque, root: Var) ?canonical.CanonicalTypeKey {
+            const self: *const @This() = @ptrCast(@alignCast(context));
+            if (root != self.root) return null;
+            self.hits.* += 1;
+            return self.key;
+        }
+    };
+    const published = PublishedChild{ .root = middle, .key = try fromVar(allocator, &store, &env, middle), .hits = &hits };
+    const oracle = ChildKeyOracle{ .context = &published, .lookup = PublishedChild.lookup, .analysis = &analysis };
+    const expected = try fromVar(allocator, &store, &env, outer);
+    try std.testing.expectEqualDeep(expected, (try fromVarInfoWithOracle(allocator, &store, &env, outer, oracle)).key);
+    try std.testing.expectEqual(@as(usize, 1), hits);
+    var writer = SchemeWriter.init(allocator, &store, &env);
+    defer writer.deinit();
+    const expected_scheme = try writer.fromVar(scheme);
+    writer.setOracle(oracle);
+    for (0..3) |_| try std.testing.expectEqualDeep(expected_scheme, try writer.fromVar(scheme));
+    try std.testing.expectEqual(@as(usize, 4), hits);
+    try std.testing.expectEqual(@as(usize, 4), writer.test_digests);
+}
+
+test "error-sensitive composed parents keep poisoned variables distinct" {
+    const allocator = std.testing.allocator;
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(allocator, 16, 16);
+    defer store.deinit();
+    const error_a = try store.freshFromContent(.err);
+    const error_b = try store.freshFromContent(.err);
+    const inner_a = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{error_a}) } } });
+    const inner_b = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{error_b}) } } });
+    const outer_a = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{inner_a}) } } });
+    const outer_b = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{inner_b}) } } });
+    try std.testing.expectEqualDeep(try fromVar(allocator, &store, &env, outer_a), try fromVar(allocator, &store, &env, outer_b));
+    try std.testing.expect(!std.meta.eql(try fromVarErrSensitive(allocator, &store, &env, outer_a), try fromVarErrSensitive(allocator, &store, &env, outer_b)));
+    try std.testing.expect(try containsError(allocator, &store, &env, outer_a));
 }

@@ -57,6 +57,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("requirement_solution.zig"));
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
+    std.testing.refAllDecls(@import("source_type_graph.zig"));
+    std.testing.refAllDecls(@import("type_key_encoding.zig"));
     std.testing.refAllDecls(@import("codec_identity.zig"));
     std.testing.refAllDecls(@import("const_store.zig"));
     std.testing.refAllDecls(@import("artifact_serialize.zig"));

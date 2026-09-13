@@ -2314,6 +2314,46 @@ construction is memoized over already-stored child roots; cryptographic hashing
 is performed once for a new checked-type root, never as a linear search
 mechanism.
 
+A checked-type root is composable precisely when no identity variable and no
+cycle is reachable through the checked-type key encoding's child edges. The
+checked root producer and key construction use the same immutable-source graph
+analysis for this predicate. The analysis uses heap traversal frames and
+completes the reachability results for a whole strongly connected component
+before exposing any member's results. This preserves both deep-type stack
+safety and traversal-order independence when an identity is encountered after
+a back edge. Scratch may retain allocation capacity, but graph results never
+survive a mutation of the source type store.
+
+Checked-type keys encode a versioned short domain, byte discriminators, unsigned
+LEB128 counts and lengths, and fixed-width tagged child digests. A closed acyclic
+child always contributes its digest, independently of whether that digest was
+already stored or computed in the current traversal. Open and recursive children
+retain traversal-relative identity slots and cycle depths. Every stored root
+carries its composability result across serialization and cross-module copying.
+
+Named usage keys encode source identity; the checked owner remains explicit
+payload metadata rather than a second type identity. Nominal nodes always encode
+their declared-field and padding-type columns; source usages carry empty columns,
+while checked declaration roots retain their explicit entries. Function nodes
+share one header encoding across source, checked and synthetic producers. Reusing
+a source function root for a generated procedure still requires the producer to
+intern the procedure's scheme.
+
+Error-sensitive walks never consume ordinary stored child keys. They compute
+child digests in their own error-sensitive query scope, preserving equality with
+ordinary keys for error-free inputs and distinct erroneous-variable identities
+otherwise. Identity enumeration and error detection reuse the ordered traversal
+without rendering bytes or analyzing composability. All digest, identity-slot,
+cycle and mode-local memo state resets between complete scheme requests,
+including after allocation failure.
+
+Source scheme keys alpha-number their identities. Checked substitution keys
+add an explicit instance discriminator and the owning store's root ID when
+introducing a variable slot. This preserves the distinction between two
+instantiated variables with equal shapes; their slots alone are not their
+identity. Such nodes are never composable. Closed acyclic nodes have no
+instance discriminators and share exactly the same encoding in both domains.
+
 Type digests, checked type keys, recursive layout keys, and derived callable
 and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
 structural byte encoding, 32 bytes wide. The hash must be cryptographic and
@@ -12229,6 +12269,9 @@ whole.
 A container qualifies for dismantling when all of the following hold:
 
 - its committed layout is a struct containing at least one refcounted field
+- its RC unit uses a concrete-layout helper; a Boxy descriptor-managed value
+  retains its descriptor-defined whole release, including when reached through
+  an ownership-complete field or tag-payload view
 - its binding is owned and bound exactly once, or is a join parameter whose
   definitions are explicit `initialize_join_param` writes
 - every occurrence of it is a field read (directly or through a borrowed

@@ -14869,11 +14869,11 @@ test "boxy planner records imported box payload capability source modules" {
         } },
     };
     const root_roots = [_]checked.CheckedTypeRoot{
-        .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(15) },
-        .{ .id = @enumFromInt(1), .key = typeKey(11) },
-        .{ .id = @enumFromInt(2), .key = typeKey(12) },
-        .{ .id = @enumFromInt(3), .key = typeKey(13) },
-        .{ .id = @enumFromInt(4), .key = typeKey(14) },
+        .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(15), .composable = true },
+        .{ .id = @enumFromInt(1), .key = typeKey(11), .composable = true },
+        .{ .id = @enumFromInt(2), .key = typeKey(12), .composable = true },
+        .{ .id = @enumFromInt(3), .key = typeKey(13), .composable = true },
+        .{ .id = @enumFromInt(4), .key = typeKey(14), .composable = true },
     };
     const root_view = checked.CheckedTypeStoreView{
         .roots = &root_roots,
@@ -14920,12 +14920,12 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .nominal = builtinNominal(.u8, @enumFromInt(5), .{}) },
     };
     const source_roots = [_]checked.CheckedTypeRoot{
-        .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(10) },
-        .{ .id = @enumFromInt(1), .key = typeKey(11) },
-        .{ .id = @enumFromInt(2), .key = typeKey(12) },
-        .{ .id = @enumFromInt(3), .key = typeKey(13) },
-        .{ .id = @enumFromInt(4), .key = typeKey(14) },
-        .{ .id = @enumFromInt(5), .key = typeKey(15) },
+        .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(10), .composable = true },
+        .{ .id = @enumFromInt(1), .key = typeKey(11), .composable = true },
+        .{ .id = @enumFromInt(2), .key = typeKey(12), .composable = true },
+        .{ .id = @enumFromInt(3), .key = typeKey(13), .composable = true },
+        .{ .id = @enumFromInt(4), .key = typeKey(14), .composable = true },
+        .{ .id = @enumFromInt(5), .key = typeKey(15), .composable = true },
     };
     const source_capability_padding = [_]checked.CheckedTypeId{@enumFromInt(5)};
     const source_capabilities = [_]checked.BoxPayloadCapabilityEntry{
