@@ -42,11 +42,21 @@ const Candidate = struct {
     /// The parameter, its linear aliases, and the matched value: every local
     /// through which an arm can release the union.
     union_locals: std.ArrayList(LIR.LocalId),
+    /// Joins declared at the head of the union join's body, outermost first,
+    /// before the match itself. Lowering a match whose result initializes a
+    /// binding declares that binding's continuation here, and every arm
+    /// jumps to it. Fusion keeps these declarations enclosing the fused arms
+    /// and the producers alike, so those jumps stay in scope.
+    wrappers: std.ArrayList(LIR.CFStmtId),
+    /// The first statement of the match: the innermost wrapper's remainder,
+    /// or the union join's body when nothing wraps it.
+    match_start: LIR.CFStmtId,
     complete: bool,
 
     fn deinit(self: *Candidate, allocator: Allocator) void {
         self.builds.deinit(allocator);
         self.union_locals.deinit(allocator);
+        self.wrappers.deinit(allocator);
     }
 };
 
@@ -215,6 +225,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     }
 }
 
+
 fn findCandidate(
     store: *LirStore,
     layouts: *const layout_mod.Store,
@@ -234,8 +245,18 @@ fn findCandidate(
         const param_layout = layouts.getLayout(store.getLocal(param).layout_idx);
         if (param_layout.tag != .tag_union or store.getLocal(param).boxy_desc != null) continue;
 
+        var wrappers = std.ArrayList(LIR.CFStmtId).empty;
+        errdefer wrappers.deinit(store.allocator);
+        var keep_wrappers = false;
+        defer if (!keep_wrappers) wrappers.deinit(store.allocator);
+        var match_start = join.body;
+        while (store.getCFStmt(match_start) == .join) {
+            try wrappers.append(store.allocator, match_start);
+            match_start = store.getCFStmt(match_start).join.remainder;
+        }
+
         var matched_value = param;
-        var match_stmt = join.body;
+        var match_stmt = match_start;
         var alias_sources = std.ArrayList(LIR.LocalId).empty;
         defer alias_sources.deinit(store.allocator);
         while (true) {
@@ -329,6 +350,7 @@ fn findCandidate(
             union_locals.deinit(store.allocator);
             continue;
         };
+        keep_wrappers = true;
         return .{
             .proc = proc,
             .join_stmt = join_stmt,
@@ -337,6 +359,8 @@ fn findCandidate(
             .switch_stmt = switch_stmt,
             .builds = builds,
             .union_locals = union_locals,
+            .wrappers = wrappers,
+            .match_start = match_start,
             .complete = complete,
         };
     }
@@ -713,8 +737,11 @@ fn applyCandidate(
     // this procedure; known edges have already been redirected around it.
     var replacement = if (candidate.complete)
         join.remainder
-    else
-        try store.addCFStmt(.{ .join = join });
+    else blk: {
+        var kept = join;
+        kept.body = candidate.match_start;
+        break :blk try store.addCFStmt(.{ .join = kept });
+    };
     var index = dests.items.len;
     while (index > 0) {
         index -= 1;
@@ -722,7 +749,13 @@ fn applyCandidate(
         store.getCFStmtPtr(dest.join_stmt).join.remainder = replacement;
         replacement = dest.join_stmt;
     }
-    store.getCFStmtPtr(candidate.join_stmt).* = store.getCFStmt(replacement);
+    if (candidate.wrappers.items.len == 0) {
+        store.getCFStmtPtr(candidate.join_stmt).* = store.getCFStmt(replacement);
+    } else {
+        const innermost = candidate.wrappers.items[candidate.wrappers.items.len - 1];
+        store.getCFStmtPtr(innermost).join.remainder = replacement;
+        store.getCFStmtPtr(candidate.join_stmt).* = store.getCFStmt(candidate.wrappers.items[0]);
+    }
 
     const proc = store.getProcSpecPtr(candidate.proc);
     var frame = std.ArrayList(LIR.LocalId).empty;
@@ -1038,4 +1071,306 @@ test "tag case fusion renames complete arms with a shared suffix" {
     try testing.expect(default_targets[0] != default_targets[1]);
     try testing.expect(default_targets[0] != shared_default);
     try testing.expect(default_targets[1] != shared_default);
+}
+
+test "tag case fusion carries releases on a producer edge" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const tag_layout = try layouts.putTagUnion(&.{ .zst, .zst });
+    const param = try store.addLocal(.{ .layout_idx = tag_layout });
+    const disc = try store.addLocal(.{ .layout_idx = .u16 });
+    const selector = try store.addLocal(.{ .layout_idx = .bool });
+    const finished = try store.addLocal(.{ .layout_idx = .str });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store));
+
+    const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
+    const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = ret_zero,
+    } });
+    const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } });
+    const branch_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = ret_one,
+    } });
+    const consume = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = branch_zero }}),
+        .default_branch = branch_one,
+    } });
+    const read_disc = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = param } },
+        .next = consume,
+    } });
+
+    // The first edge releases a value it has finished with before jumping.
+    const jump_zero = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const release = try store.addCFStmt(.{ .decref = .{
+        .value = finished,
+        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
+        .next = jump_zero,
+    } });
+    const build_zero = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = null,
+        .next = release,
+    } });
+    const jump_one = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_one = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = null,
+        .next = jump_one,
+    } });
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = selector,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = build_zero }}),
+        .default_branch = build_one,
+    } });
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = read_disc,
+        .remainder = choose,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .args = try store.addLocalSpan(&.{ selector, finished }),
+        .body = body,
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, finished, zero, one }),
+        .ret_layout = .u64,
+    });
+
+    try run(&store, &layouts);
+
+    var releases: u32 = 0;
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .assign_tag) try testing.expect(stmt.assign_tag.target != param);
+        if (stmt == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
+        if (stmt == .decref and stmt.decref.value == finished) releases += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), releases);
+}
+
+test "tag case fusion releases the payload where an arm released the union" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const tag_layout = try layouts.putTagUnion(&.{ .zst, .str });
+    const param = try store.addLocal(.{ .layout_idx = tag_layout });
+    const disc = try store.addLocal(.{ .layout_idx = .u16 });
+    const selector = try store.addLocal(.{ .layout_idx = .bool });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    const taken = try store.addLocal(.{ .layout_idx = .str });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store));
+
+    // The payload arm reads the payload, then releases the whole union.
+    const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } });
+    const release_union = try store.addCFStmt(.{ .decref = .{
+        .value = param,
+        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = tag_layout }),
+        .next = ret_one,
+    } });
+    const lit_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = release_union,
+    } });
+    const branch_one = try store.addCFStmt(.{ .assign_ref = .{
+        .target = taken,
+        .op = .{ .tag_payload_struct = .{ .source = param, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = lit_one,
+    } });
+    const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
+    const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = ret_zero,
+    } });
+    const consume = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = branch_one }}),
+        .default_branch = branch_zero,
+    } });
+    const read_disc = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = param } },
+        .next = consume,
+    } });
+
+    const jump_zero = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_zero = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = null,
+        .next = jump_zero,
+    } });
+    const jump_one = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_one = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = text,
+        .next = jump_one,
+    } });
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = selector,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = build_zero }}),
+        .default_branch = build_one,
+    } });
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = read_disc,
+        .remainder = choose,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .args = try store.addLocalSpan(&.{ selector, text }),
+        .body = body,
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, text, taken, zero, one }),
+        .ret_layout = .u64,
+    });
+
+    try run(&store, &layouts);
+
+    var payload_releases: u32 = 0;
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .assign_tag) try testing.expect(stmt.assign_tag.target != param);
+        if (stmt == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
+        if (stmt == .decref) {
+            try testing.expect(stmt.decref.value != param);
+            if (store.getLocal(stmt.decref.value).layout_idx == .str) payload_releases += 1;
+        }
+    }
+    try testing.expectEqual(@as(u32, 1), payload_releases);
+}
+
+test "tag case fusion keeps the match's continuation join enclosing the fused arms" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const tag_layout = try layouts.putTagUnion(&.{ .zst, .zst });
+    const param = try store.addLocal(.{ .layout_idx = tag_layout });
+    const disc = try store.addLocal(.{ .layout_idx = .u16 });
+    const selector = try store.addLocal(.{ .layout_idx = .bool });
+    const out = try store.addLocal(.{ .layout_idx = .u64 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store));
+    const cont_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
+
+    // Each arm initializes the match result and jumps to its continuation,
+    // which lowering declared at the head of the union join's body.
+    const jump_cont_zero = try store.addCFStmt(.{ .jump = .{ .target = cont_id } });
+    const set_zero = try store.addCFStmt(.{ .set_local = .{ .target = out, .value = zero, .mode = .initialize_join_param, .next = jump_cont_zero } });
+    const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = set_zero,
+    } });
+    const jump_cont_one = try store.addCFStmt(.{ .jump = .{ .target = cont_id } });
+    const set_one = try store.addCFStmt(.{ .set_local = .{ .target = out, .value = one, .mode = .initialize_join_param, .next = jump_cont_one } });
+    const branch_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = set_one,
+    } });
+    const consume = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = branch_zero }}),
+        .default_branch = branch_one,
+    } });
+    const read_disc = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = param } },
+        .next = consume,
+    } });
+    const ret_out = try store.addCFStmt(.{ .ret = .{ .value = out } });
+    const cont = try store.addCFStmt(.{ .join = .{
+        .id = cont_id,
+        .params = try store.addLocalSpan(&.{out}),
+        .body = ret_out,
+        .remainder = read_disc,
+    } });
+
+    const jump_zero = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_zero = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = null,
+        .next = jump_zero,
+    } });
+    const jump_one = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_one = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = null,
+        .next = jump_one,
+    } });
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = selector,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = build_zero }}),
+        .default_branch = build_one,
+    } });
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = cont,
+        .remainder = choose,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .args = try store.addLocalSpan(&.{selector}),
+        .body = body,
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, out, zero, one }),
+        .ret_layout = .u64,
+    });
+
+    try run(&store, &layouts);
+
+    // The continuation is now the outermost declaration, and every jump to it
+    // sits inside its remainder.
+    const root = store.getCFStmt(store.getProcSpec(proc).body.?);
+    try testing.expect(root == .join);
+    try testing.expectEqual(cont_id, root.join.id);
+    var jumps_to_cont: u32 = 0;
+    var walk = try body_clone.ReachableStmts.init(&store, root.join.remainder);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .assign_tag) try testing.expect(stmt.assign_tag.target != param);
+        if (stmt == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
+        if (stmt == .jump and stmt.jump.target == cont_id) jumps_to_cont += 1;
+    }
+    try testing.expectEqual(@as(u32, 2), jumps_to_cont);
 }
