@@ -9,6 +9,7 @@
 //! producer control-flow edge selects the same consumer arm explicitly.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -220,7 +221,58 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
             }
             var candidate = found;
             defer candidate.deinit(store.allocator);
+            const fused_id = store.getCFStmt(candidate.join_stmt).join.id;
             try applyCandidate(store, layouts, &join_params, &candidate);
+            try debugCheckJumpScopes(store, proc, fused_id);
+        }
+    }
+}
+
+/// Debug-only invariant: after a fusion, every jump in the procedure still
+/// targets a join whose declaration encloses it. A fusion moves arms into
+/// fresh joins and hoists the match's continuation joins around them, and a
+/// jump left outside its declaration's scope would only surface later as an
+/// ARC lift failure with no pointer back here.
+fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR.JoinPointId) ResourceError!void {
+    if (builtin.mode != .Debug) return;
+    const allocator = store.allocator;
+    const Item = struct { stmt: LIR.CFStmtId, depth: usize };
+    var work = std.ArrayList(Item).empty;
+    defer work.deinit(allocator);
+    var scope = std.ArrayList(LIR.JoinPointId).empty;
+    defer scope.deinit(allocator);
+    var successors = std.ArrayList(LIR.CFStmtId).empty;
+    defer successors.deinit(allocator);
+    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    defer visited.deinit();
+    try work.append(allocator, .{ .stmt = store.getProcSpec(proc).body orelse return, .depth = 0 });
+    while (work.pop()) |item| {
+        if ((try visited.getOrPut(item.stmt)).found_existing) continue;
+        scope.shrinkRetainingCapacity(item.depth);
+        switch (store.getCFStmt(item.stmt)) {
+            .join => |join| {
+                try scope.append(allocator, join.id);
+                try work.append(allocator, .{ .stmt = join.body, .depth = scope.items.len });
+                try work.append(allocator, .{ .stmt = join.remainder, .depth = scope.items.len });
+            },
+            .jump => |jump| {
+                var in_scope = false;
+                for (scope.items) |id| {
+                    if (id == jump.target) in_scope = true;
+                }
+                if (!in_scope) {
+                    std.debug.panic("tag case fusion of j{d} in {s} left a jump to j{d} outside its declaration", .{
+                        @intFromEnum(fused_id),
+                        store.procDebugName(proc) orelse "an unnamed procedure",
+                        @intFromEnum(jump.target),
+                    });
+                }
+            },
+            else => {
+                successors.clearRetainingCapacity();
+                try body_clone.appendSuccessors(store, &successors, item.stmt);
+                for (successors.items) |next| try work.append(allocator, .{ .stmt = next, .depth = item.depth });
+            },
         }
     }
 }
@@ -290,6 +342,25 @@ fn findCandidate(
         }
         if (matched_value != param) try union_locals.append(store.allocator, matched_value);
 
+        // The consumer may re-enter the match with a new value, jumping back
+        // to the union join from an arm or from later code. Such an edge is a
+        // producer the union join must still receive, and it lies inside the
+        // region the hoisted continuations would enclose, so fusion cannot
+        // keep every jump in scope; the join stays as lowered.
+        var body_reenters = false;
+        {
+            var body_walk = try body_clone.ReachableStmts.init(store, join.body);
+            defer body_walk.deinit();
+            while (try body_walk.next()) |stmt_id| {
+                const stmt = store.getCFStmt(stmt_id);
+                if (stmt == .jump and stmt.jump.target == join.id) body_reenters = true;
+            }
+        }
+        if (body_reenters) {
+            union_locals.deinit(store.allocator);
+            continue;
+        }
+
         var join_reads = try body_clone.countReachableReads(store, join.body);
         defer join_reads.deinit();
         var release_reads = try countReleaseReads(store, join.body, union_locals.items);
@@ -335,6 +406,29 @@ fn findCandidate(
             union_locals.deinit(store.allocator);
             continue;
         }
+        // A producer edge's statements may also be reached from elsewhere:
+        // lowering shares a jump between a constructor's continuation and the
+        // body of a join it declared for the same result. Redirecting the
+        // constructor's edge leaves that other path arriving at the union
+        // join with whatever it holds, so the join must stay for it.
+        var shared_edge = false;
+        {
+            var predecessors = try countStructuralPredecessors(store, join.remainder);
+            defer predecessors.deinit();
+            for (builds.items) |build| {
+                var current = store.getCFStmt(build.stmt).assign_tag.next;
+                while (true) {
+                    if (predecessors.counts[@intFromEnum(current)] != 1) shared_edge = true;
+                    if (current == build.edge_jump) break;
+                    current = switch (store.getCFStmt(current)) {
+                        .decref => |release| release.next,
+                        .incref => |retain| retain.next,
+                        .decref_if_initialized => |release| release.next,
+                        else => unreachable,
+                    };
+                }
+            }
+        }
         if (!payloadPresenceConsistent(builds.items)) {
             builds.deinit(store.allocator);
             union_locals.deinit(store.allocator);
@@ -345,11 +439,12 @@ fn findCandidate(
             union_locals.deinit(store.allocator);
             continue;
         }
-        const complete = (try classifyJoinTagUses(store, layouts, join.body, matched_value, match_stmt, builds.items, &join_reads, &release_reads)) orelse {
+        const known_edges_cover = (try classifyJoinTagUses(store, layouts, join.body, matched_value, match_stmt, builds.items, &join_reads, &release_reads)) orelse {
             builds.deinit(store.allocator);
             union_locals.deinit(store.allocator);
             continue;
         };
+        const complete = known_edges_cover and !shared_edge;
         keep_wrappers = true;
         return .{
             .proc = proc,
@@ -439,6 +534,25 @@ fn producerEdgeJump(
             => return null,
         }
     }
+}
+
+/// Count, per statement, how many statements in the subtree under `root`
+/// continue into it structurally. Jumps do not count: they name joins, and a
+/// join reached only by jumps has one structural predecessor, its declarer.
+fn countStructuralPredecessors(store: *LirStore, root: LIR.CFStmtId) ResourceError!body_clone.ReadCounts {
+    const counts = try store.allocator.alloc(u32, store.cfStmtCount());
+    errdefer store.allocator.free(counts);
+    @memset(counts, 0);
+    var successors = std.ArrayList(LIR.CFStmtId).empty;
+    defer successors.deinit(store.allocator);
+    var walk = try body_clone.ReachableStmts.init(store, root);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        successors.clearRetainingCapacity();
+        try body_clone.appendSuccessors(store, &successors, stmt_id);
+        for (successors.items) |next| counts[@intFromEnum(next)] += 1;
+    }
+    return .{ .allocator = store.allocator, .counts = counts };
 }
 
 /// Count, per local, the reachable releases of the locals naming the joined
@@ -1373,4 +1487,103 @@ test "tag case fusion keeps the match's continuation join enclosing the fused ar
         if (stmt == .jump and stmt.jump.target == cont_id) jumps_to_cont += 1;
     }
     try testing.expectEqual(@as(u32, 2), jumps_to_cont);
+}
+
+test "tag case fusion keeps the join when a producer edge is shared with another path" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const tag_layout = try layouts.putTagUnion(&.{ .zst, .zst });
+    const param = try store.addLocal(.{ .layout_idx = tag_layout });
+    const disc = try store.addLocal(.{ .layout_idx = .u16 });
+    const selector = try store.addLocal(.{ .layout_idx = .bool });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store));
+    const dead_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
+
+    const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
+    const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = ret_zero,
+    } });
+    const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } });
+    const branch_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = ret_one,
+    } });
+    const consume = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = branch_zero }}),
+        .default_branch = branch_one,
+    } });
+    const read_disc = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = param } },
+        .next = consume,
+    } });
+
+    // One jump statement serves both the second constructor's edge and the
+    // body of a join lowering declared for the same result.
+    const shared_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_one = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = null,
+        .next = shared_jump,
+    } });
+    const dead = try store.addCFStmt(.{ .join = .{
+        .id = dead_id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = shared_jump,
+        .remainder = build_one,
+    } });
+    const jump_zero = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_zero = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = null,
+        .next = jump_zero,
+    } });
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = selector,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = build_zero }}),
+        .default_branch = dead,
+    } });
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = read_disc,
+        .remainder = choose,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .args = try store.addLocalSpan(&.{selector}),
+        .body = body,
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, one }),
+        .ret_layout = .u64,
+    });
+
+    try run(&store, &layouts);
+
+    // The literal edges bypass the join, but the join itself survives for the
+    // shared path, still matching the tag.
+    var union_joins: u32 = 0;
+    var tag_builds: u32 = 0;
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .join and stmt.join.id == join_id) union_joins += 1;
+        if (stmt == .assign_tag and stmt.assign_tag.target == param) tag_builds += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), union_joins);
+    try testing.expectEqual(@as(u32, 0), tag_builds);
 }
