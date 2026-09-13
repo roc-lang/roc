@@ -215,6 +215,7 @@
 //! whose store this walk never grows is unnecessary.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
 
 const SourceLoc = @import("base").SourceLoc;
@@ -11454,8 +11455,8 @@ const Cloner = struct {
         source_captures: []const Ast.TypedLocal,
         values: []const CaptureValue,
     ) names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.spec_constr.callable_capture_abi.v1");
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.spec_constr.callable_capture_abi.v2");
         var word: [4]u8 = undefined;
         std.mem.writeInt(u32, &word, @intCast(source_captures.len), .little);
         hasher.update(&word);

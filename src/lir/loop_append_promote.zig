@@ -33,7 +33,10 @@
 //! limit under-approximates its true uniquely-owned spare capacity. The analysis works on a proc-wide value
 //! flow graph: the carried chain is the forward closure of the loop parameter
 //! through plain aliases, recognized operations, and join-parameter writes. A
-//! chain value with any unrecognized use is tainted (something may retain or
+//! merged carrier receives matching metadata on every definition: tracked
+//! inputs forward it, and outside inputs transfer ownership before measuring
+//! their own allocation. Chain membership alone does not initialize a merge.
+//! A chain value with any unrecognized use is tainted (something may retain or
 //! observe it); a tainted value may end the chain (escape to the loop's
 //! result) but must not feed further chain edges, since a later unchecked
 //! append through it could write into shared memory. Lowering emits one
@@ -156,6 +159,9 @@ const Edge = struct {
     stmt: CFStmtId,
     source: LocalId,
     target: LocalId,
+    /// Classified once for the current candidate, before validating or emitting
+    /// metadata. Entry definitions supply a new list rather than chain facts.
+    flow: enum { outside, carried, entry } = .outside,
 };
 
 const Pass = struct {
@@ -884,8 +890,9 @@ const Pass = struct {
         defer chain_params.deinit();
         try chain_params.put(list_param, loop_stmt);
 
-        for (scan.edges.items) |edge| {
-            if (!carriers.contains(edge.source)) continue;
+        for (scan.edges.items) |*edge| {
+            edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source)) .carried else .entry;
+            if (edge.flow != .carried) continue;
             switch (edge.kind) {
                 .append_call, .range_append => rewrite_site_count += 1,
                 .set_op => {
@@ -939,18 +946,18 @@ const Pass = struct {
             }
         }
 
-        // Every definition of a non-parameter carrier must be a chain edge.
+        // Every definition of a non-parameter carrier must have an edge plan.
         // Locals are not single-assignment: branch results converge by
         // assigning one local in each arm, so a carrier may have several
-        // definitions. Each chain-edge definition gets a matching slack
-        // definition (a materialized phi); a definition the chain does not
-        // model would leave its path's slack never computed.
+        // definitions. Carried definitions forward metadata, and entry
+        // definitions measure the incoming list. Unmodeled definitions cannot
+        // supply metadata on their paths.
+        var chain_defs = collections.DenseMap(LocalId, u32).init(allocator);
+        defer chain_defs.deinit();
         {
-            var chain_defs = collections.DenseMap(LocalId, u32).init(allocator);
-            defer chain_defs.deinit();
             for (scan.edges.items) |edge| {
                 if (edge.kind == .param_write) continue;
-                if (!carriers.contains(edge.target)) continue;
+                if (edge.flow == .outside) continue;
                 try bumpUse(&chain_defs, edge.target);
             }
             var it = chain_defs.iterator();
@@ -973,7 +980,7 @@ const Pass = struct {
         }
 
         // Qualified: thread the slack.
-        try self.apply(scan, &carriers, &chain_params, has_sets, loop_stmt, list_param, max_join_id, new_locals);
+        try self.apply(scan, &chain_defs, &chain_params, has_sets, loop_stmt, list_param, max_join_id, new_locals);
         return true;
     }
 
@@ -1020,10 +1027,27 @@ const Pass = struct {
         return local;
     }
 
+    /// Observe an incoming ownership unit after its consuming definition. Both
+    /// measurements describe this list, including its current slice encoding.
+    fn seedMetadata(self: *Pass, list: LocalId, limit: LocalId, owned: ?LocalId, next: CFStmtId, new_locals: *std.ArrayList(LocalId)) ResourceError!CFStmtId {
+        var continuation = next;
+        if (owned) |flag| {
+            try self.noteOwnedDef(flag, .measured);
+            continuation = try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = flag,
+                .op = .list_owned_unique,
+                .rc_effect = LowLevelOp.list_owned_unique.rcEffect(),
+                .args = try self.store.addLocalSpan(&.{list}),
+                .next = continuation,
+            } });
+        }
+        return self.seedLimit(list, limit, continuation, new_locals);
+    }
+
     fn apply(
         self: *Pass,
         scan: *Scan,
-        carriers: *collections.DenseMap(LocalId, void),
+        chain_defs: *collections.DenseMap(LocalId, u32),
         chain_params: *collections.DenseMap(LocalId, CFStmtId),
         has_sets: bool,
         loop_stmt: CFStmtId,
@@ -1067,8 +1091,8 @@ const Pass = struct {
         }
 
         // Slack local per carrier. Chain parameters have theirs up front;
-        // append and refresh sites mint theirs when their input slack is
-        // known; aliases inherit. The scan visits statements in stack order,
+        // tracked sites derive theirs from their input and entry sites measure
+        // their result. The scan visits statements in stack order,
         // so resolution runs to a fixpoint over the edges instead of assuming
         // definition order. Every carrier is reachable from a chain parameter
         // through these edges, so the fixpoint resolves them all.
@@ -1084,7 +1108,7 @@ const Pass = struct {
             }
         }
 
-        // A carrier defined by several chain edges gets one shared slack
+        // A carrier defined by several edges gets one shared slack
         // local, defined next to each of its definitions: the materialized
         // form of the slack's control-flow merge.
         var shared_slack = collections.DenseMap(LocalId, LocalId).init(allocator);
@@ -1092,16 +1116,9 @@ const Pass = struct {
         var shared_owned = collections.DenseMap(LocalId, LocalId).init(allocator);
         defer shared_owned.deinit();
         {
-            var def_counts = collections.DenseMap(LocalId, u32).init(allocator);
-            defer def_counts.deinit();
-            for (scan.edges.items) |edge| {
-                if (edge.kind == .param_write) continue;
-                if (!carriers.contains(edge.target)) continue;
-                if (chain_params.contains(edge.target)) continue;
-                try bumpUse(&def_counts, edge.target);
-            }
-            var it = def_counts.iterator();
+            var it = chain_defs.iterator();
             while (it.next()) |entry| {
+                if (chain_params.contains(entry.key_ptr.*)) continue;
                 if (entry.value_ptr.* > 1) {
                     const sx = try self.freshLocal(.u64, new_locals);
                     try shared_slack.put(entry.key_ptr.*, sx);
@@ -1122,9 +1139,41 @@ const Pass = struct {
         while (resolving) {
             resolving = false;
             for (scan.edges.items) |edge| {
-                if (!carriers.contains(edge.source)) continue;
+                if (edge.flow == .outside or edge.kind == .param_write) continue;
                 if (slack_of.contains(edge.target) and !shared_slack.contains(edge.target)) continue;
                 if (rewritten.contains(edge.stmt)) continue;
+                if (edge.flow == .entry) {
+                    const limit = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
+                    const owned = try self.ownedOutFor(edge.target, has_sets, &shared_owned, new_locals);
+                    const stmt = self.store.getCFStmt(edge.stmt);
+                    const next = switch (edge.kind) {
+                        .alias => stmt.assign_ref.next,
+                        .append_call => stmt.assign_call.next,
+                        .refresh_op, .range_append, .set_op => stmt.assign_low_level.next,
+                        .param_write => unreachable,
+                    };
+                    const seed = try self.seedMetadata(edge.target, limit, owned, next, new_locals);
+                    switch (edge.kind) {
+                        // A plain alias can still borrow from an outside holder.
+                        // Transfer ownership before observing its refcount, so
+                        // ARC preserves any other live uses before the query.
+                        .alias => self.store.getCFStmtPtr(edge.stmt).* = .{ .assign_low_level = .{
+                            .target = edge.target,
+                            .op = .list_map_prepare_reuse,
+                            .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
+                            .args = try self.store.addLocalSpan(&.{edge.source}),
+                            .next = seed,
+                        } },
+                        .append_call => self.store.getCFStmtPtr(edge.stmt).assign_call.next = seed,
+                        .refresh_op, .range_append, .set_op => self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = seed,
+                        .param_write => unreachable,
+                    }
+                    try slack_of.put(edge.target, limit);
+                    if (owned) |flag| try owned_of.put(edge.target, flag);
+                    try rewritten.put(edge.stmt, {});
+                    resolving = true;
+                    continue;
+                }
                 switch (edge.kind) {
                     .alias => {
                         const source_slack = slack_of.get(edge.source) orelse continue;
@@ -1213,6 +1262,19 @@ const Pass = struct {
             }
         }
 
+        // Metadata availability in the map is not proof that every incoming
+        // definition initialized it. Check the emitted definitions themselves.
+        if (std.debug.runtime_safety) {
+            for (scan.edges.items) |edge| {
+                if (edge.flow == .outside or edge.kind == .param_write) continue;
+                std.debug.assert(slack_of.contains(edge.target));
+                if (shared_slack.contains(edge.target) or edge.kind != .alias) {
+                    std.debug.assert(rewritten.contains(edge.stmt));
+                }
+                if (has_sets) std.debug.assert(owned_of.contains(edge.target));
+            }
+        }
+
         // Wire every write of a chain parameter: carrier values hand over
         // their slack local; the loop entry computes a fresh one from the
         // incoming list.
@@ -1220,8 +1282,8 @@ const Pass = struct {
             if (edge.kind != .param_write) continue;
             if (!chain_params.contains(edge.target)) continue;
             const slack_param = slack_params.get(edge.target).?;
-            const original = self.store.getCFStmt(edge.stmt).set_local;
-            if (carriers.contains(edge.source)) {
+            var original = self.store.getCFStmt(edge.stmt).set_local;
+            if (edge.flow == .carried) {
                 // Resolved by the fixpoint: every carrier's slack derives from
                 // a chain parameter.
                 const slack = slack_of.get(edge.source).?;
@@ -1245,26 +1307,24 @@ const Pass = struct {
                     .next = forward,
                 } };
             } else {
-                // Entry edge: measure the incoming list once.
+                std.debug.assert(edge.flow == .entry);
+                // Entry edge: acquire the incoming ownership unit before
+                // measuring it, just as for an outside alias definition.
+                const incoming = try self.freshLocal(self.store.getLocal(edge.source).layout_idx, new_locals);
+                original.value = incoming;
                 const measured = try self.freshLocal(.u64, new_locals);
                 var forward = try self.store.addCFStmt(.{ .set_local = original });
+                var owned: ?LocalId = null;
                 if (has_sets) {
                     const measured_owned = try self.freshLocal(.u64, new_locals);
+                    owned = measured_owned;
                     const owned_param = owned_params.get(edge.target).?;
-                    try self.noteOwnedDef(measured_owned, .measured);
                     try self.noteOwnedDef(owned_param, .{ .local = measured_owned });
                     if (edge.target == list_param) try self.noteLoopEdge(loop_stmt, original.next, measured_owned);
                     forward = try self.store.addCFStmt(.{ .set_local = .{
                         .target = owned_param,
                         .value = measured_owned,
                         .mode = .initialize_join_param,
-                        .next = forward,
-                    } });
-                    forward = try self.store.addCFStmt(.{ .assign_low_level = .{
-                        .target = measured_owned,
-                        .op = .list_owned_unique,
-                        .rc_effect = LowLevelOp.list_owned_unique.rcEffect(),
-                        .args = try self.store.addLocalSpan(&.{edge.source}),
                         .next = forward,
                     } });
                 }
@@ -1274,8 +1334,14 @@ const Pass = struct {
                     .mode = .initialize_join_param,
                     .next = forward,
                 } });
-                const seed = try self.seedLimit(edge.source, measured, write_slack, new_locals);
-                self.store.getCFStmtPtr(edge.stmt).* = self.store.getCFStmt(seed);
+                const seed = try self.seedMetadata(incoming, measured, owned, write_slack, new_locals);
+                self.store.getCFStmtPtr(edge.stmt).* = .{ .assign_low_level = .{
+                    .target = incoming,
+                    .op = .list_map_prepare_reuse,
+                    .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
+                    .args = try self.store.addLocalSpan(&.{edge.source}),
+                    .next = seed,
+                } };
             }
         }
     }
@@ -2080,10 +2146,13 @@ test "promote threads slack through an append-only loop" {
 
     // The entry edge measures the incoming list and seeds the fill limit:
     // its length plus its uniquely owned spare capacity.
-    const entry_measure = store.getCFStmt(entry_set).assign_low_level;
+    const entry_prepare = store.getCFStmt(entry_set).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_map_prepare_reuse, entry_prepare.op);
+    try testing.expectEqual(init_list, GuardedList.at(store.getLocalSpan(entry_prepare.args), 0));
+    const entry_measure = store.getCFStmt(entry_prepare.next).assign_low_level;
     try testing.expectEqual(LowLevelOp.list_slack_unique, entry_measure.op);
     const entry_args = store.getLocalSpan(entry_measure.args);
-    try testing.expectEqual(init_list, GuardedList.at(entry_args, 0));
+    try testing.expectEqual(entry_prepare.target, GuardedList.at(entry_args, 0));
     const entry_len = store.getCFStmt(entry_measure.next).assign_low_level;
     try testing.expectEqual(LowLevelOp.list_len, entry_len.op);
     const entry_sum = store.getCFStmt(entry_len.next).assign_low_level;
@@ -2093,7 +2162,7 @@ test "promote threads slack through an append-only loop" {
     try testing.expectEqual(entry_sum.target, entry_limit_write.value);
     const entry_list_write = store.getCFStmt(entry_limit_write.next).set_local;
     try testing.expectEqual(out, entry_list_write.target);
-    try testing.expectEqual(init_list, entry_list_write.value);
+    try testing.expectEqual(entry_prepare.target, entry_list_write.value);
     try testing.expectEqual(entry_jump, entry_list_write.next);
 
     // The append call became the limit diamond: a join whose body is the
@@ -2656,4 +2725,106 @@ test "promote keeps a foreign back edge on the head inside the copy" {
     try testing.expectEqual(BodyShape{ .switches = 1, .unchecked_sets = 1, .jumps_to_head = 1, .jumps_to_copy = 1 }, hot);
     const cold = try shapeOf(store, alias_a, head.id, copy.id);
     try testing.expectEqual(BodyShape{ .switches = 2, .checked_sets = 1, .unchecked_sets = 1, .jumps_to_head = 2 }, cold);
+}
+
+test "promote initializes merged metadata on every incoming definition" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    // The merge has a tracked list_set result on one edge and an outside list
+    // on the other. Both definitions must initialize the same metadata locals;
+    // the outside edge must also prevent a direct back edge to the unique copy.
+    const out = try store.addLocal(.{ .layout_idx = f.list });
+    const initial = try store.addLocal(.{ .layout_idx = f.list });
+    const other = try store.addLocal(.{ .layout_idx = f.list });
+    const condition = try store.addLocal(.{ .layout_idx = .bool });
+    const updated = try store.addLocal(.{ .layout_idx = f.list });
+    const merged = try store.addLocal(.{ .layout_idx = f.list });
+    const loop_id = f.freshJoinPointId();
+    const merge_id = f.freshJoinPointId();
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = loop_id } });
+    const back_write = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = merged,
+        .mode = .initialize_join_param,
+        .next = back_jump,
+    } });
+    const tracked_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } });
+    const tracked = try store.addCFStmt(.{ .assign_ref = .{
+        .target = merged,
+        .op = .{ .local = updated },
+        .next = tracked_jump,
+    } });
+    const set_site = try addSetSite(&f, updated, out, tracked);
+    const foreign_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } });
+    const foreign = try store.addCFStmt(.{ .assign_ref = .{
+        .target = merged,
+        .op = .{ .local = other },
+        .next = foreign_jump,
+    } });
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = condition,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = set_site }}),
+        .default_branch = foreign,
+        .continuation = null,
+    } });
+    const merge = try store.addCFStmt(.{ .join = .{
+        .id = merge_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = back_write,
+        .remainder = branch,
+    } });
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = loop_id } });
+    const entry = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = initial,
+        .mode = .initialize_join_param,
+        .next = entry_jump,
+    } });
+    const loop = try store.addCFStmt(.{ .join = .{
+        .id = loop_id,
+        .params = try store.addLocalSpan(&.{out}),
+        .body = merge,
+        .remainder = entry,
+    } });
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{ initial, other, condition }),
+        .body = loop,
+        .ret_layout = f.list,
+    });
+
+    try run(store, &f.layouts);
+
+    const prepare = store.getCFStmt(foreign).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_map_prepare_reuse, prepare.op);
+    try testing.expectEqual(merged, prepare.target);
+    try testing.expectEqual(other, GuardedList.at(store.getLocalSpan(prepare.args), 0));
+    const spare = store.getCFStmt(prepare.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_slack_unique, spare.op);
+    try testing.expectEqual(merged, GuardedList.at(store.getLocalSpan(spare.args), 0));
+    const length = store.getCFStmt(spare.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_len, length.op);
+    const limit = store.getCFStmt(length.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.num_int_add_wrap, limit.op);
+    const owned = store.getCFStmt(limit.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_owned_unique, owned.op);
+    try testing.expectEqual(merged, GuardedList.at(store.getLocalSpan(owned.args), 0));
+    try testing.expectEqual(foreign_jump, owned.next);
+
+    const forwarded_limit = store.getCFStmt(store.getCFStmt(tracked).assign_ref.next).assign_ref;
+    try testing.expectEqual(limit.target, forwarded_limit.target);
+    const forwarded_owned = store.getCFStmt(forwarded_limit.next).assign_ref;
+    try testing.expectEqual(owned.target, forwarded_owned.target);
+    try testing.expectEqual(tracked_jump, forwarded_owned.next);
+    try testing.expectEqual(limit.target, store.getCFStmt(back_write).set_local.value);
+    try testing.expectEqual(owned.target, store.getCFStmt(store.getCFStmt(back_write).set_local.next).set_local.value);
+
+    const head = store.getCFStmt(loop).join;
+    const dispatch = store.getCFStmt(head.body).switch_stmt;
+    const copy = store.getCFStmt(GuardedList.at(store.getCFSwitchBranches(dispatch.branches), 0).body).join;
+    const hot = try shapeOf(store, copy.body, head.id, copy.id);
+    try testing.expectEqual(@as(u32, 1), hot.jumps_to_head);
+    try testing.expectEqual(@as(u32, 0), hot.jumps_to_copy);
 }

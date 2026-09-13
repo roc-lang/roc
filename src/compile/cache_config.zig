@@ -194,7 +194,7 @@ pub const Constants = struct {
     ///     in a pattern-only context.
     /// 90: Scheme-use evidence belongs to explicit value and dispatch edges;
     ///     type applications no longer publish spurious value-use records.
-    pub const CACHE_VERSION = 90;
+    pub const CACHE_VERSION = 91;
 };
 
 /// Configuration for the Roc cache system.

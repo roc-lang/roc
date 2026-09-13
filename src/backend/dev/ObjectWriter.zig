@@ -39,8 +39,10 @@ pub const DebugSections = struct {
     info_relocs: []const object.DebugReloc,
 };
 
-/// Like `generateObjectFile`, with DWARF debug sections (ELF and Mach-O;
-/// COFF dev objects do not carry debug info yet).
+/// Like `generateObjectFile`, with DWARF debug sections. COFF objects carry
+/// them as `.debug_*` sections the way MinGW toolchains do; lld-link keeps
+/// them in the image with `/debug:dwarf`, which gdb, lldb, llvm-symbolizer
+/// and Zig's own stack traces all read (WinDbg needs CodeView instead).
 pub fn generateObjectFileWithDebug(
     allocator: Allocator,
     target: RocTarget,
@@ -75,10 +77,16 @@ pub fn generateObjectFileWithDebug(
         .symbol = table.indices.get(rel.target_symbol_name).?,
         .addend = rel.addend,
     };
-    return generateIndexedObjectFileWithDebug(allocator, target, code, rodata, symbols, indexed.items, indexed_data, debug, output);
+    return generateIndexedObjectFileWithDebug(allocator, target, code, rodata, symbols, indexed.items, indexed_data, &.{}, debug, output);
 }
 
 /// Write producer-resolved relocations. Every target indexes the supplied symbol column.
+///
+/// `unwind_functions` names every callable range code generation recorded,
+/// including reference-count helpers emitted inline after a procedure body
+/// without a symbol of their own. Windows unwind tables must cover those
+/// ranges too: a frame whose return address has no `.pdata` entry is walked
+/// as a leaf, which corrupts every frame above it.
 pub fn generateIndexedObjectFileWithDebug(
     allocator: Allocator,
     target: RocTarget,
@@ -87,6 +95,7 @@ pub fn generateIndexedObjectFileWithDebug(
     symbols: []const Symbol,
     relocations: []const IndexedRelocation,
     rodata_relocations: []const IndexedDataRelocation,
+    unwind_functions: []const object.coff.FunctionInfo,
     debug: ?DebugSections,
     output: *std.ArrayList(u8),
 ) (Allocator.Error || error{UnsupportedTarget})!void {
@@ -201,6 +210,12 @@ pub fn generateIndexedObjectFileWithDebug(
 
             coff_writer.setCode(code);
             coff_writer.setRodata(rodata);
+            if (debug) |d| coff_writer.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+
+            // Ranges the published symbols already describe, so recorded
+            // ranges below are not emitted twice.
+            var covered_starts: std.AutoHashMapUnmanaged(u32, void) = .empty;
+            defer covered_starts.deinit(allocator);
 
             // Add symbols and function info for unwind tables
             for (symbols, 0..) |sym, ordinal| {
@@ -231,7 +246,20 @@ pub fn generateIndexedObjectFileWithDebug(
                         .callee_saved_mask = sym.callee_saved_mask,
                         .epilogue_offset = sym.epilogue_offset,
                     });
+                    try covered_starts.put(allocator, @intCast(sym.offset), {});
                 }
+            }
+
+            // Recorded ranges that no symbol describes (inline reference-count
+            // helpers) still need unwind entries. Procedures record themselves
+            // too, so a range that starts where a published symbol starts is
+            // already covered and is skipped rather than duplicated.
+            for (unwind_functions) |function| {
+                if (function.start_offset == function.end_offset) continue;
+                if (covered_starts.contains(function.start_offset)) continue;
+                var info = function;
+                info.frame_reg_offset = 0;
+                try coff_writer.addFunctionInfo(info);
             }
             for (relocations) |rel| {
                 switch (rel) {
@@ -553,6 +581,50 @@ test "generate aarch64 windows object with unwind sections" {
     try std.testing.expectEqual(@as(u16, 3), num_sections);
 }
 
+test "x86_64 windows object covers recorded helper ranges without symbols" {
+    const allocator = std.testing.allocator;
+
+    // A procedure followed by an inline helper that has no symbol of its own.
+    const code = &[_]u8{
+        0x55, 0x48, 0x89, 0xE5, 0x5D, 0xC3, // push rbp; mov rbp, rsp; pop rbp; ret
+        0x55, 0x48, 0x89, 0xE5, 0x5D, 0xC3, // the helper: same shape
+    };
+    const symbols = &[_]Symbol{
+        .{
+            .name = "proc",
+            .offset = 0,
+            .size = 6,
+            .is_global = false,
+            .is_function = true,
+            .is_external = false,
+            .prologue_size = 4,
+            .epilogue_offset = 4,
+        },
+    };
+    // Code generation records the procedure and the helper alike.
+    const recorded = &[_]object.coff.FunctionInfo{
+        .{ .start_offset = 0, .end_offset = 6, .prologue_size = 4, .frame_reg_offset = 0, .uses_frame_pointer = true, .stack_alloc = 0, .epilogue_offset = 4 },
+        .{ .start_offset = 6, .end_offset = 12, .prologue_size = 4, .frame_reg_offset = 0, .uses_frame_pointer = true, .stack_alloc = 0, .epilogue_offset = 4 },
+    };
+
+    for ([_]struct { recorded: []const object.coff.FunctionInfo, entries: u32 }{
+        .{ .recorded = &.{}, .entries = 1 },
+        .{ .recorded = recorded, .entries = 2 },
+    }) |case| {
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(allocator);
+        try generateIndexedObjectFileWithDebug(allocator, .x64win, code, &.{}, symbols, &.{}, &.{}, case.recorded, null, &output);
+
+        // No .rdata, so .pdata is the second section header; each x64 entry is 12 bytes.
+        const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
+        try std.testing.expectEqual(@as(u16, 3), num_sections);
+        const pdata_header = output.items[20 + 40 ..][0..40];
+        try std.testing.expectEqualStrings(".pdata", std.mem.sliceTo(pdata_header[0..8], 0));
+        const pdata_size = std.mem.readInt(u32, pdata_header[16..20], .little);
+        try std.testing.expectEqual(case.entries * 12, pdata_size);
+    }
+}
+
 test "ELF objects declare the OSABI their target's linker looks for" {
     const cases = [_]struct { target: RocTarget, osabi: u8 }{
         .{ .target = .x64openbsd, .osabi = 12 },
@@ -749,7 +821,17 @@ fn coffSectionData(bytes: []const u8, wanted_name: []const u8) error{ InvalidObj
         if (section_offset + 40 > bytes.len) return error.InvalidObjectFile;
         const raw_name = bytes[section_offset..][0..8];
         const name_len = std.mem.findScalar(u8, raw_name, 0) orelse raw_name.len;
-        const name = raw_name[0..name_len];
+        var name: []const u8 = raw_name[0..name_len];
+        if (name.len > 1 and name[0] == '/') {
+            // A long name: "/offset" into the string table after the symbols.
+            const symoff = std.mem.readInt(u32, bytes[8..12], .little);
+            const count = std.mem.readInt(u32, bytes[12..16], .little);
+            if (symoff + count * 18 > bytes.len) return error.InvalidObjectFile;
+            const strings = bytes[symoff + count * 18 ..];
+            const offset = std.fmt.parseInt(usize, name[1..], 10) catch return error.InvalidObjectFile;
+            if (offset >= strings.len) return error.InvalidObjectFile;
+            name = std.mem.sliceTo(strings[offset..], 0);
+        }
         if (std.mem.eql(u8, name, wanted_name)) {
             const size = std.mem.readInt(u32, bytes[section_offset + 16 ..][0..4], .little);
             const offset = std.mem.readInt(u32, bytes[section_offset + 20 ..][0..4], .little);
@@ -896,7 +978,7 @@ test "indexed object relocations preserve targets through format symbol ordering
         };
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, target, &([_]u8{0} ** 32), &([_]u8{0} ** 32), &symbols, &relocations, &data_relocations, null, &output);
+        try generateIndexedObjectFileWithDebug(allocator, target, &([_]u8{0} ** 32), &([_]u8{0} ** 32), &symbols, &relocations, &data_relocations, &.{}, null, &output);
         const decoded = try TestObjectTables.read(target, output.items);
         const expected = [_][]const u8{ "local_data", "external_function", "local_data", "global_data" };
         try std.testing.expectEqual(@as(usize, 4), decoded.text.len / decoded.relocation_size);
@@ -1099,6 +1181,15 @@ fn exerciseBorrowedObjectSections(allocator: Allocator) (Allocator.Error || erro
         const section = try readonlySection(target, output.items);
         const expected_addend: u64 = if (target.toOsTag() == .linux) 0 else 7;
         try std.testing.expectEqual(expected_addend, std.mem.readInt(u64, section[0..8], .little));
+        if (target.toOsTag() == .windows) {
+            // Addends are stored in the fields; the linker adds the targets.
+            const line = try coffSectionData(output.items, ".debug_line");
+            try std.testing.expectEqual(@as(u64, 3), std.mem.readInt(u64, line[0..8], .little));
+            const info = try coffSectionData(output.items, ".debug_info");
+            try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, info[0..4], .little));
+            try std.testing.expectEqual(@as(u64, 2), std.mem.readInt(u64, info[8..16], .little));
+            try std.testing.expectEqual(@as(usize, 1), (try coffSectionData(output.items, ".debug_abbrev")).len);
+        }
         if (target.toOsTag() == .macos) {
             const info = try machoSection(output.items, "__debug_info");
             try std.testing.expectEqual(@as(u32, code.len + data.len + debug_line.len + 1), std.mem.readInt(u32, info[0..4], .little));

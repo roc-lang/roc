@@ -203,6 +203,176 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        // https://github.com/roc-lang/roc/issues/11317
+        // Each alternative supplies the arm's captured local.
+        .name = "issue 11317: closure captures an or-pattern binding",
+        .source_kind = .module,
+        .source =
+        \\get : [A(U64), B(U64)] -> U64
+        \\get = |v| match v {
+        \\    A(n) | B(n) => (|| n)()
+        \\}
+        \\main = (get(A(1)), get(B(2)))
+        ,
+        .expected = .{ .inspect_str = "(1, 2)" },
+    },
+    .{
+        .name = "issue 11317: or-pattern capture in a mapped string interpolation",
+        .source_kind = .module,
+        .source =
+        \\describe : [A(U64), B(U64)] -> Str
+        \\describe = |v| match v {
+        \\    A(n) | B(n) => ["x", "y"].map(|s| "${n.to_str()}${s}") |> Str.join_with(",")
+        \\}
+        \\main = (describe(A(1)), describe(B(2)))
+        ,
+        .expected = .{ .inspect_str = "(\"1x,1y\", \"2x,2y\")" },
+    },
+    .{
+        .name = "issue 11317: or-pattern capture when the representative alternative is uninhabited",
+        .source_kind = .module,
+        .source =
+        \\get : [A([], U64), B(U64)] -> U64
+        \\get = |v| match v {
+        \\    A(_, n) | B(n) => (|| n)()
+        \\}
+        \\main = get(B(2))
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11317: returned closure preserves reordered or-pattern captures",
+        .source_kind = .module,
+        .source =
+        \\make : [A(U64, U64), B(U64, U64)] -> ({} -> (U64, U64))
+        \\make = |v| match v {
+        \\    A(x, y) | B(y, x) => |{}| (x, y)
+        \\}
+        \\main = (make(A(1, 2))({}), make(B(3, 4))({}))
+        ,
+        .expected = .{ .inspect_str = "((1, 2), (4, 3))" },
+    },
+    .{
+        .name = "issue 11317: stored nested or-pattern closures retain separate generic captures",
+        .source_kind = .module,
+        .source =
+        \\make = |v| match v {
+        \\    A(n) | B(n) => |{}| {
+        \\        inner = |{}| n
+        \\        inner({})
+        \\    }
+        \\}
+        \\first = make(A("first"))
+        \\second = make(B("second"))
+        \\third = make(B(["third"]))
+        \\main = (first({}), second({}), third({}))
+        ,
+        .expected = .{ .inspect_str = "(\"first\", \"second\", [\"third\"])" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11316
+        .name = "issue 11316: compile-time loop preserves checked set with the same list as fallback",
+        .source_kind = .module,
+        .source =
+        \\build : List(U64) -> List(U64)
+        \\build = |steps| {
+        \\    var $acc = []
+        \\    for n in steps {
+        \\        $acc = $acc.append(n)
+        \\        $acc = $acc.set(0, n) ?? $acc
+        \\    }
+        \\    $acc
+        \\}
+        \\
+        \\program : List(U64)
+        \\program = build([1, 2, 3])
+        \\main = program
+        ,
+        .expected = .{ .inspect_str = "[3, 2, 3]" },
+    },
+    .{
+        .name = "issue 11316: compile-time checked set inside a match preserves appended elements",
+        .source_kind = .module,
+        .source =
+        \\Step := [Push(U64), Mark]
+        \\build : List(Step), List(U64) -> List(U64)
+        \\build = |steps, acc0| {
+        \\    var $acc = acc0
+        \\    for s in steps {
+        \\        $acc = match s {
+        \\            Push(n) => $acc.append(n)
+        \\            Mark => {
+        \\                w = $acc.append(0).append(7).append(8)
+        \\                w.set(0, w.len()) ?? w
+        \\            }
+        \\        }
+        \\    }
+        \\    $acc
+        \\}
+        \\program : List(U64)
+        \\program = build([Mark, Push(1), Mark, Push(2)], [])
+        \\main = program
+        ,
+        .expected = .{ .inspect_str = "[7, 7, 8, 1, 0, 7, 8, 2]" },
+    },
+    .{
+        .name = "issue 11316: checked set merges success and fallback across loop iterations",
+        .source_kind = .module,
+        .source =
+        \\build : List(U64) -> List(U64)
+        \\build = |steps| {
+        \\    var $acc = []
+        \\    for n in steps {
+        \\        $acc = $acc.append(n)
+        \\        index = if n == 2 99 else 0
+        \\        $acc = $acc.set(index, n) ?? $acc
+        \\    }
+        \\    $acc
+        \\}
+        \\main = build([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "[3, 2, 3]" },
+    },
+    .{
+        .name = "issue 11316: loop entry preserves a retained list with spare capacity",
+        .source =
+        \\{
+        \\    build = |steps, initial| {
+        \\        var $acc = initial
+        \\        for n in steps {
+        \\            $acc = $acc.append(n)
+        \\        }
+        \\        $acc
+        \\    }
+        \\    initial = List.reserve([41.U64], 64)
+        \\    result = build([1, 2, 3], initial)
+        \\    (initial, result)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([41], [41, 1, 2, 3])" },
+    },
+    .{
+        .name = "issue 11316: mixed carrier definitions preserve a retained list and a slice",
+        .source =
+        \\{
+        \\    build = |steps, other| {
+        \\        var $acc = []
+        \\        for n in steps {
+        \\            $acc = if n == 1 other else $acc.append(n)
+        \\        }
+        \\        $acc
+        \\    }
+        \\    other = List.reserve([41.U64], 64)
+        \\    full = List.reserve([40.U64, 41, 42], 64)
+        \\    slice = full.sublist({ start: 1, len: 1 })
+        \\    from_other = build([1, 2, 3], other)
+        \\    from_slice = build([1, 2, 3], slice)
+        \\    (other, full, slice, from_other, from_slice)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([41], [40, 41, 42], [41], [41, 2, 3], [41, 2, 3])" },
+    },
+    .{
         .name = "issue 11235: shared error tails preserve disjoint payloads and the success path",
         .source_kind = .module,
         .source =

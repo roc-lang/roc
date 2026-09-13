@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const tracy = @import("tracy");
@@ -776,11 +777,11 @@ pub const Store = struct {
         /// Identity per node; null for acyclic and nominal nodes.
         keys: []?RecursiveKey,
 
-        pub const RecursiveKey = [32]u8;
+        pub const RecursiveKey = [16]u8;
 
         const no_component = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);
-        const domain = "roc.layout.recursive-graph.v1";
+        const domain = "roc.layout.recursive-graph.v2";
 
         fn init(allocator: Allocator, graph: *const LayoutGraph) Allocator.Error!RecursiveGraphAnalysis {
             const node_count = graph.nodes.items.len;
@@ -866,7 +867,7 @@ pub const Store = struct {
             return .{ @truncate(value), @truncate(value >> 8), @truncate(value >> 16), @truncate(value >> 24) };
         }
 
-        fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+        fn hashU32(hasher: *TypeDigestHasher, value: u32) void {
             const bytes = littleEndianBytes(value);
             hasher.update(&bytes);
         }
@@ -997,7 +998,7 @@ pub const Store = struct {
             /// inside it as a bare positional marker.
             const LabelSink = struct {
                 engine: *Engine,
-                hasher: *std.crypto.hash.sha2.Sha256,
+                hasher: *TypeDigestHasher,
                 component_id: u32,
 
                 fn writeByte(self_sink: LabelSink, value: u8) Allocator.Error!void {
@@ -1111,7 +1112,7 @@ pub const Store = struct {
                 }
 
                 if (members.len == 1 and self_engine.edges.items.len == 0) {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    var hasher = TypeDigestHasher.init();
                     hasher.update(domain);
                     hasher.update("acyclic");
                     try encodeNode(self_engine.graph, members[0], LabelSink{
@@ -1146,7 +1147,7 @@ pub const Store = struct {
                 var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(allocator);
                 defer distinct_labels.deinit();
                 for (members, 0..) |member, pos| {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    var hasher = TypeDigestHasher.init();
                     try encodeNode(self_engine.graph, member, LabelSink{
                         .engine = self_engine,
                         .hasher = &hasher,
@@ -1159,7 +1160,7 @@ pub const Store = struct {
                 while (true) {
                     distinct_labels.clearRetainingCapacity();
                     for (members, 0..) |_, pos| {
-                        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                        var hasher = TypeDigestHasher.init();
                         hasher.update(&labels[pos]);
                         const edges = self_engine.edges.items[self_engine.edge_start.items[pos]..][0..self_engine.edge_len.items[pos]];
                         for (edges) |child_index| {
@@ -1217,13 +1218,13 @@ pub const Store = struct {
                         .rank_of_member = rank_of_member,
                     });
                 }
-                var group_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                var group_hasher = TypeDigestHasher.init();
                 group_hasher.update(self_engine.render_buf.items);
                 const group_digest = group_hasher.finalResult();
                 const block_digest = try allocator.alloc(RecursiveKey, block_count);
                 defer allocator.free(block_digest);
                 for (0..block_count) |rank| {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    var hasher = TypeDigestHasher.init();
                     hasher.update("recursive-member");
                     hashU32(&hasher, @intCast(rank));
                     hasher.update(&group_digest);
