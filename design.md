@@ -7844,6 +7844,29 @@ never share an entry. Work is therefore proportional to relation sites plus
 unique exact provisional requests, rather than to the number of duplicate call
 paths through the same interface problem.
 
+Completed interface summaries are retained across bodies by that same exact
+address. The coordinator owns interned request and summary types in the
+program store; each executor lane owns a private cumulative table in its
+workspace. Frozen task inputs borrow the coordinator table read-only. Shards
+carry newly retained entries with their immutable type/name epochs, and ordered
+commit relocates both type roots before retaining the entries. Evidence is
+owned checked content. Only completed summaries cross this boundary; active
+recursive entries remain graph-local. Every hit checks exact evidence and type
+equality and instantiates fresh graph cells. Safety builds with detailed timing
+diagnostics independently expand the first sixteen coordinator hits per builder
+and compare their summaries.
+
+Digest discovery encodes each uncached node's scalar bytes once and retains
+ordered child offsets. Acyclic resolution and cyclic-group reduction replay
+those bytes with finalized child digests or group references. All scalar and
+child encodings remain byte-for-byte identical to the versioned digest format.
+
+Retaining a provisional view interns its immutable content, including explicit
+undetermined field kinds, without reading its former live graph cells. It does
+not freeze relations or replace a request's graph. Provisional and specialization
+views reuse active snapshots for resolved subtrees within the current relation
+production epoch; unresolved fringes remain independently materialized.
+
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
 data that are already present in the checked module. If a required relation is
@@ -8595,6 +8618,13 @@ Rows are normalized once, with field and tag names in explicit sorted order,
 and the type digest is stored beside the node when the node is interned. Parent
 digests are computed from child digests, so structurally growing records and
 function types do not repeatedly walk their whole prefix.
+
+Transaction relocation copies each representative's full content digest from
+its speculative node to its durable node. Safety builds recompute it before the
+copy to check content preservation. Specialization digests are computed lazily.
+Optional store-scoped digest diagnostics count requests outside specialization
+lookup too, and report transaction and interface replay work separately. No
+digest encoding or cache identity changes at this boundary.
 
 A child digest is cached only when that child's traversal introduced no cycle
 edge. The traversal tracks a monotonically increasing cycle count rather than a
