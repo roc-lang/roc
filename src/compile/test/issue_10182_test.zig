@@ -94,6 +94,7 @@ test "issue 10182: local import cycle reports an error without scheduling partia
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(coord.hasUserErrors());
     var found_cycle_report = false;

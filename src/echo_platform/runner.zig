@@ -33,6 +33,7 @@ pub const RunEchoError = Allocator.Error ||
         CompilationFailed,
         EvaluationFailed,
         EntrypointNotFound,
+        UnsupportedTarget,
     };
 
 /// Diagnostic-emission interface. The browser wasm host writes terminal text
@@ -131,7 +132,7 @@ pub const RunOptions = struct {
 /// Wraps the user `source` in a synthetic `app [main!]` header that imports
 /// the embedded echo platform, then walks the canonical embedding sequence
 /// (see `src/compile/README.md`): BuildEnv discovery → check → LIR lowering
-/// → `LirImage.fillHeaderInBuffer` → `viewMappedImage` →
+/// → `LirImage.referenceProgramWithStaticDataInBuffer` → `viewMappedImage` →
 /// `LirInterpreter.runEntrypoint`.
 ///
 /// Returns the Roc program's exit code (or 1 if an inline `expect` failed
@@ -256,16 +257,20 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         diag.step("create LirImage.Header", err);
         return err;
     };
-    lir.LirImage.fillHeaderInBuffer(
-        image_header,
+    const image_data = try eval.buildStaticDataForWidth(allocator, .{
+        .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
+        .imports = import_views,
+    }, &lowered, lowered.target_usize, .{});
+    defer eval.deinitStaticData(allocator, image_data);
+    const copied = try lir.LirImage.referenceProgramWithStaticDataInBuffer(
+        allocator,
         opts.runtime_fba.buffer.ptr,
-        opts.runtime_fba.end_index,
+        opts.runtime_fba.buffer.len,
         &lowered.lir_result,
         entrypoints,
-    ) catch |err| {
-        diag.step("LirImage.fillHeaderInBuffer", err);
-        return err;
-    };
+        image_data,
+    );
+    try copied.fillHeader(image_header, opts.runtime_fba.end_index);
 
     var view = lir.LirImage.viewMappedImage(
         image_header,
@@ -303,6 +308,9 @@ fn runEchoView(
     var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
+    var static_data = try eval.InterpreterStaticData.init(allocator, view.static_data, view.static_data_value_count);
+    defer static_data.deinit();
+
     var interpreter = eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
@@ -315,6 +323,7 @@ fn runEchoView(
         return err;
     };
     defer interpreter.deinit();
+    static_data.install(&interpreter);
 
     _ = interpreter.runEntrypoint(view, 0, @ptrCast(&cli_args_list), @ptrCast(&result_buf)) catch |err| switch (err) {
         error.RuntimeError, error.DivisionByZero => {

@@ -67,6 +67,8 @@ pub const Program = struct {
     boxy_sidecar_blob: ?[]const u8 = null,
     boxy_sidecar_desc: ?LirImage.BoxySidecar = null,
     main_proc: LirProcSpecId,
+    static_data: []const backend.StaticDataExport = &.{},
+    static_data_value_count: usize = 0,
 };
 
 /// Explicit dependency for platform-hosted calls during inspected execution.
@@ -346,6 +348,9 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         },
     };
 
+    var static_data = try @import("interpreter_static_data.zig").InterpreterStaticData.init(allocator, program.static_data, program.static_data_value_count);
+    defer static_data.deinit();
+
     var interp = try Interpreter.initWithBoxyTablesAndHostedCallHandler(
         allocator,
         program.store,
@@ -359,6 +364,7 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         },
     );
     defer interp.deinit();
+    static_data.install(&interp);
 
     const arg_layouts = try mainProcArgLayouts(allocator, program);
     defer allocator.free(arg_layouts);
@@ -398,6 +404,17 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         );
         defer static_strings.deinit();
 
+        var static_image = backend.StaticDataImage.init(allocator, program.static_data) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Internal,
+        };
+        defer static_image.deinit();
+        const addresses = static_image.lirValueAddresses(allocator, program.static_data_value_count) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Internal,
+        };
+        defer allocator.free(addresses);
+
         var codegen = try HostLirCodeGen.initWithBoxyMetadata(
             allocator,
             program.store,
@@ -410,9 +427,13 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
+        codegen.setNativeStaticData(addresses);
         var native_fns = boxy_abi.nativeFnTable();
         codegen.boxy_native_fns = &native_fns;
         try codegen.compileAllProcSpecs(program.store.getProcSpecs());
+        const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
+        defer allocator.free(helpers);
+        try codegen.compileStaticDataRcHelpers(helpers);
 
         const proc = program.store.getProcSpec(program.main_proc);
         const arg_layouts = try mainProcArgLayouts(allocator, program);
@@ -429,6 +450,22 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             codegen.getUnwindFunctions(),
         );
         defer exec_mem.deinit();
+        const Resolver = struct {
+            codegen: *const HostLirCodeGen,
+            executable: *const ExecutableMemory,
+            fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+                const self: *@This() = @ptrCast(@alignCast(raw.?));
+                const address = @intFromPtr(self.executable.codePtr());
+                if (relocation.rc_helper) |helper| return address + (self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null);
+                const proc_id = relocation.procedure orelse return null;
+                return address + (self.codegen.compiledProcSymbol(proc_id) orelse return null).code_start;
+            }
+        };
+        var resolver = Resolver{ .codegen = &codegen, .executable = &exec_mem };
+        static_image.resolveFunctionRelocations(.{ .context = &resolver, .resolve = Resolver.resolve }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Internal,
+        };
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
@@ -483,6 +520,13 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         .default,
     );
     defer codegen.deinit();
+    const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
+    defer allocator.free(helpers);
+    codegen.static_data_rc_helpers = helpers;
+    codegen.module.addStaticDataExports(program.static_data) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
 
     const proc = program.store.getProcSpec(program.main_proc);
     const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (program.boxy_tables.needsRuntimeForStore(program.store)) .{
@@ -556,6 +600,21 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     const llvm_compile = @import("llvm_compile");
 
+    var static_image = backend.StaticDataImage.init(allocator, program.static_data) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
+    defer static_image.deinit();
+    const addresses = static_image.lirValueAddresses(allocator, program.static_data_value_count) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
+    defer allocator.free(addresses);
+    const static_procs = try @import("static_data").collectReferencedProcs(allocator, program.static_data);
+    defer allocator.free(static_procs);
+    const static_helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
+    defer allocator.free(static_helpers);
+
     const proc = program.store.getProcSpec(program.main_proc);
     const arg_layouts = try mainProcArgLayouts(allocator, program);
     defer allocator.free(arg_layouts);
@@ -575,6 +634,11 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
             program.boxy_tables.worker_procs,
         );
         codegen.layout_store = program.layouts;
+        codegen.static_data_addresses = addresses;
+        codegen.proc_symbol_mode = .lir_symbol;
+        codegen.static_symbol_prefix = "roc_inspect_";
+        codegen.static_data_procs = static_procs;
+        codegen.static_data_rc_helpers = static_helpers;
         defer codegen.deinit();
 
         break :generate try codegen.generateEntrypointModule("roc_eval_module", llvm_entrypoints[0..]);
@@ -599,6 +663,25 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
+    var functions = std.StringHashMap(usize).init(allocator);
+    defer functions.deinit();
+    for (program.static_data) |data_export| for (data_export.relocations) |relocation| {
+        if (relocation.kind != .function_pointer) continue;
+        const name = try std.fmt.allocPrintSentinel(allocator, "roc_inspect_{s}", .{relocation.target_symbol_name}, 0);
+        defer allocator.free(name);
+        const address = lib.lookup(*const anyopaque, name) orelse return error.LlvmBackendUnavailable;
+        try functions.put(relocation.target_symbol_name, @intFromPtr(address));
+    };
+    const Resolver = struct {
+        fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+            const map: *const std.StringHashMap(usize) = @ptrCast(@alignCast(raw.?));
+            return map.get(relocation.target_symbol_name);
+        }
+    };
+    static_image.resolveFunctionRelocations(.{ .context = &functions, .resolve = Resolver.resolve }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
 
     const EntryFn = *const fn (*builtins.host_abi.RocOps, *InProcessContext, [*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(EntryFn, "roc_eval_main") orelse return error.LlvmBackendUnavailable;

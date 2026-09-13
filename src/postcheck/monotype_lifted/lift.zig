@@ -508,7 +508,8 @@ const Lifter = struct {
             },
             .hosted => .hosted,
         };
-        const source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        var source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        if (source) |*template| template.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
@@ -527,7 +528,8 @@ const Lifter = struct {
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
         try self.rewriteExpr(def.body);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
-        const source = self.nestedSource(def.fn_id, def.fn_def);
+        var source = self.nestedSource(def.fn_id, def.fn_def);
+        source.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
@@ -642,6 +644,8 @@ const Lifter = struct {
             },
             .tag => |tag| try self.rewriteExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.rewriteExpr(candidate.runtime_expr),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.rewriteExpr(candidate.initializer),
             .typed_boundary => |boundary| try self.rewriteExpr(boundary.value),
             .nominal,
             .dbg,
@@ -806,7 +810,8 @@ const Lifter = struct {
 
         try self.rewriteExpr(lambda.body);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
-        const source = self.source.fnSource(lambda.fn_id);
+        var source = self.source.fnSource(lambda.fn_id);
+        source.frozen_fn = lambda.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
             .source = source,
@@ -1326,6 +1331,8 @@ const CaptureSet = struct {
                 for (0..payloads.len) |payload_index| try self.collectExpr(GuardedList.at(payloads, payload_index), bound);
             },
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, bound),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, bound),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, bound),
             .nominal,
             .dbg,
@@ -2170,6 +2177,8 @@ const CaptureGraphBuilder = struct {
             },
             .tag => |tag| try self.collectExprSpan(tag.payloads, node),
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, node),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, node),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, node),
             .nominal,
             .dbg,

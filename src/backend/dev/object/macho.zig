@@ -429,18 +429,19 @@ pub const MachOWriter = struct {
         const rodata_offset: u32 = text_offset + text_size;
         const rodata_size: u32 = @intCast(self.rodata.len);
 
-        const text_reloc_offset: u32 = rodata_offset + rodata_size;
-        const text_reloc_size: u32 = @intCast(self.text_relocs.items.len * @sizeOf(RelocationInfo));
-        const rodata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
-        const rodata_reloc_size: u32 = @intCast(self.rodata_relocs.items.len * @sizeOf(RelocationInfo));
-
-        const debug_line_offset: u32 = rodata_reloc_offset + rodata_reloc_size;
+        const debug_line_offset: u32 = rodata_offset + rodata_size;
         const debug_line_size: u32 = @intCast(self.debug_line.len);
         const debug_abbrev_offset: u32 = debug_line_offset + debug_line_size;
         const debug_abbrev_size: u32 = @intCast(self.debug_abbrev.len);
         const debug_info_offset: u32 = debug_abbrev_offset + debug_abbrev_size;
         const debug_info_size: u32 = @intCast(self.debug_info.len);
-        const debug_line_reloc_offset: u32 = debug_info_offset + debug_info_size;
+        // Segment-backed sections are contiguous. Relocation tables follow
+        // the segment and do not inflate its file extent beyond virtual size.
+        const text_reloc_offset: u32 = debug_info_offset + debug_info_size;
+        const text_reloc_size: u32 = @intCast(self.text_relocs.items.len * @sizeOf(RelocationInfo));
+        const rodata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
+        const rodata_reloc_size: u32 = @intCast(self.rodata_relocs.items.len * @sizeOf(RelocationInfo));
+        const debug_line_reloc_offset: u32 = rodata_reloc_offset + rodata_reloc_size;
         const debug_line_reloc_size: u32 = @intCast(self.debug_line_relocs.len * @sizeOf(RelocationInfo));
         const debug_info_reloc_offset: u32 = debug_line_reloc_offset + debug_line_reloc_size;
         const debug_info_reloc_size: u32 = @intCast(self.debug_info_relocs.len * @sizeOf(RelocationInfo));
@@ -516,7 +517,8 @@ pub const MachOWriter = struct {
             .vmaddr = 0,
             .vmsize = text_size + rodata_size + debug_line_size + debug_abbrev_size + debug_info_size,
             .fileoff = text_offset,
-            .filesize = text_size + rodata_size,
+            // The segment contains all five declared sections, including DWARF.
+            .filesize = text_reloc_offset - text_offset,
             .maxprot = 7, // rwx
             .initprot = 7,
             .nsects = section_count,
@@ -683,6 +685,23 @@ pub const MachOWriter = struct {
             std.mem.writeInt(i64, output.items[@as(usize, rodata_offset) + rel.offset ..][0..8], value, .little);
         }
 
+        // Write debug sections within the same contiguous segment
+        output.appendSliceAssumeCapacity(self.debug_line);
+        output.appendSliceAssumeCapacity(self.debug_abbrev);
+        output.appendSliceAssumeCapacity(self.debug_info);
+        applyDebugRelocations(
+            output.items[debug_line_offset..][0..debug_line_size],
+            self.debug_line_relocs,
+            debug_addr_base,
+            debug_line_size,
+        );
+        applyDebugRelocations(
+            output.items[debug_info_offset..][0..debug_info_size],
+            self.debug_info_relocs,
+            debug_addr_base,
+            debug_line_size,
+        );
+
         // Write relocations
         for (self.text_relocs.items) |rel| {
             const reloc = RelocationInfo.init(
@@ -711,23 +730,6 @@ pub const MachOWriter = struct {
             );
             output.appendSliceAssumeCapacity(std.mem.asBytes(&reloc));
         }
-
-        // Write debug sections and their relocations
-        output.appendSliceAssumeCapacity(self.debug_line);
-        output.appendSliceAssumeCapacity(self.debug_abbrev);
-        output.appendSliceAssumeCapacity(self.debug_info);
-        applyDebugRelocations(
-            output.items[debug_line_offset..][0..debug_line_size],
-            self.debug_line_relocs,
-            debug_addr_base,
-            debug_line_size,
-        );
-        applyDebugRelocations(
-            output.items[debug_info_offset..][0..debug_info_size],
-            self.debug_info_relocs,
-            debug_addr_base,
-            debug_line_size,
-        );
 
         const unsigned_reloc_type: u4 = switch (self.arch) {
             .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
@@ -957,4 +959,30 @@ test "DWARF relocations encode object-space target addresses" {
     try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, section_data[12..20], .little));
     try std.testing.expectEqual(@as(u24, 4), MachOWriter.debugTargetOrdinal(.debug_abbrev));
     try std.testing.expectEqual(@as(u2, 2), MachOWriter.debugRelocLength(.four));
+}
+
+test "macho segment file extent contains every declared section" {
+    const allocator = std.testing.allocator;
+    var writer = try MachOWriter.init(allocator, .aarch64);
+    defer writer.deinit();
+    writer.setCode(&.{ 0xc0, 0x03, 0x5f, 0xd6 });
+    const external = try writer.addExternalSymbol("_external");
+    try writer.addTextRelocation(0, external, true);
+    writer.debug_line = &(@as([256]u8, @splat(0)));
+    writer.debug_abbrev = &(@as([64]u8, @splat(0)));
+    writer.debug_info = &(@as([128]u8, @splat(0)));
+    var output = std.ArrayList(u8).empty;
+    defer output.deinit(allocator);
+    try writer.write(&output);
+    const segment = std.mem.bytesToValue(SegmentCommand64, output.items[@sizeOf(MachHeader64)..][0..@sizeOf(SegmentCommand64)]);
+    try std.testing.expect(segment.filesize <= segment.vmsize);
+    const sections_offset = @sizeOf(MachHeader64) + @sizeOf(SegmentCommand64);
+    for (0..segment.nsects) |index| {
+        const offset = sections_offset + index * @sizeOf(Section64);
+        const section = std.mem.bytesToValue(Section64, output.items[offset..][0..@sizeOf(Section64)]);
+        try std.testing.expect(section.offset >= segment.fileoff);
+        try std.testing.expect(section.offset + section.size <= segment.fileoff + segment.filesize);
+        try std.testing.expect(section.addr + section.size <= segment.vmaddr + segment.vmsize);
+        if (section.nreloc != 0) try std.testing.expect(section.reloff >= segment.fileoff + segment.filesize);
+    }
 }

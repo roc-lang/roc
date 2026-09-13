@@ -33,6 +33,7 @@ const lir_core = @import("lir_core");
 const MonoType = @import("../monotype/type.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+const Common = @import("../common.zig");
 
 const LIR = lir_core.LIR;
 const GuardedList = collections.GuardedList;
@@ -127,11 +128,28 @@ const Frame = collections.DenseMap(Ast.LocalId, Value);
 
 const recursion_depth_cap = 4000;
 
+/// Declared materialized function root supplying one immutable compile-time value.
+pub const ComptimeProducer = struct {
+    root: Common.ComptimeValueRoot,
+    root_index: usize,
+};
+
+/// Consumer policy and exact root declarations supplied by the harness.
+pub const Inputs = struct {
+    inline_expects_enabled: bool,
+    comptime_producers: []const ComptimeProducer,
+};
+
+const RootState = union(enum) { pending, active, completed: RunOutcome };
+
 /// Tree-walking evaluator over one Lambda Mono program.
 pub const Evaluator = struct {
     gpa: std.mem.Allocator,
     program: *const Ast.Program,
     arena: std.heap.ArenaAllocator,
+    inputs: Inputs,
+    root_states: []RootState,
+    executing_comptime: bool,
 
     /// Rendered dbg messages in execution order (arena-owned bytes).
     dbg_events: std.ArrayList([]const u8),
@@ -160,8 +178,16 @@ pub const Evaluator = struct {
     /// Sizes of live allocations handed out through `roc_ops`, for realloc.
     ops_alloc_sizes: std.AutoHashMap(usize, usize),
 
-    pub fn init(gpa: std.mem.Allocator, program: *const Ast.Program) Evaluator {
+    pub fn init(gpa: std.mem.Allocator, program: *const Ast.Program, inputs: Inputs) std.mem.Allocator.Error!Evaluator {
+        const states = try gpa.alloc(RootState, program.rootCount());
+        @memset(states, .pending);
+        for (inputs.comptime_producers) |producer| {
+            if (producer.root_index >= states.len) Common.invariant("oracle producer index exceeds declared roots");
+        }
         return .{
+            .inputs = inputs,
+            .root_states = states,
+            .executing_comptime = false,
             .gpa = gpa,
             .program = program,
             .arena = std.heap.ArenaAllocator.init(gpa),
@@ -182,6 +208,7 @@ pub const Evaluator = struct {
     }
 
     pub fn deinit(self: *Evaluator) void {
+        self.gpa.free(self.root_states);
         self.dbg_events.deinit(self.gpa);
         self.expect_failures.deinit(self.gpa);
         self.ops_alloc_sizes.deinit();
@@ -196,6 +223,54 @@ pub const Evaluator = struct {
     /// arguments. Roots whose fn takes runtime arguments return
     /// `error.Unsupported`.
     pub fn runRoot(self: *Evaluator, root_index: usize) Error!RunOutcome {
+        for (self.inputs.comptime_producers) |producer| {
+            if (producer.root_index == root_index) return self.runProducer(root_index);
+        }
+        return self.runRootBody(root_index);
+    }
+
+    fn runProducer(self: *Evaluator, index: usize) Error!RunOutcome {
+        switch (self.root_states[index]) {
+            .completed => |outcome| return outcome,
+            .active => return .{ .aborted = .{ .kind = .crash, .message = "cyclic compile-time value dependency" } },
+            .pending => {},
+        }
+        self.root_states[index] = .active;
+        errdefer self.root_states[index] = .pending;
+        const saved_comptime = self.executing_comptime;
+        self.executing_comptime = true;
+        defer self.executing_comptime = saved_comptime;
+        const outcome = try self.runRootBody(index);
+        self.root_states[index] = .{ .completed = outcome };
+        return outcome;
+    }
+
+    fn readComptimeValue(self: *Evaluator, root: Common.ComptimeValueRoot) EvalError!Value {
+        for (self.inputs.comptime_producers) |producer| {
+            if (producer.root.root != root.root or !std.meta.eql(producer.root.module, root.module)) continue;
+            const outcome = try self.runProducer(producer.root_index);
+            return switch (outcome) {
+                .value => |value| value,
+                .aborted => |abort| self.raiseAbort(abort.kind, abort.message),
+            };
+        }
+        Common.invariant("oracle compile-time read has no declared producer");
+    }
+
+    fn runRootBody(self: *Evaluator, root_index: usize) Error!RunOutcome {
+        const saved_abort = self.abort_record;
+        const saved_return = self.return_value;
+        const saved_break = self.break_value;
+        const saved_continue = self.continue_values;
+        const saved_jump_values = self.jump_values;
+        defer {
+            self.abort_record = saved_abort;
+            self.return_value = saved_return;
+            self.break_value = saved_break;
+            self.continue_values = saved_continue;
+            self.jump_values = saved_jump_values;
+        }
+
         const roots = self.program.rootsView();
         if (root_index >= roots.len) return self.unsup("root index out of range");
         const root = roots[root_index];
@@ -302,6 +377,8 @@ pub const Evaluator = struct {
                 return frame.get(local_id) orelse self.unsupported_("unbound local");
             },
             .unit => return .unit,
+            .inline_expects_enabled => return .{ .bool_ = self.executing_comptime or self.inputs.inline_expects_enabled },
+            .comptime_value => |value| return self.readComptimeValue(value.root),
             .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
                 const prim = self.primitiveOf(expr.ty) orelse return self.unsupported_("int literal without primitive type");
@@ -3313,4 +3390,52 @@ test "lambda mono eval declarations are referenced" {
 test "SIMD bit extraction rejects values without an integer representation" {
     try std.testing.expectError(error.UnsupportedValue, Evaluator.valueBits(.{ .float32 = 1.0 }));
     try std.testing.expectEqual(@as(u128, 1), try Evaluator.valueBits(.{ .bool_ = true }));
+}
+
+test "oracle demands declared roots once without executing representation witnesses" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, check.CheckedNames.NameStore.init(allocator), .empty, .empty, .empty);
+    defer program.deinit();
+    const bool_ty = try program.types.add(.{ .primitive = .bool });
+    const policy = try program.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
+    const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
+    const producer_index = program.rootCount();
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(producer_index), .const_locator = null };
+    // The fixture's root declarations issue the checked and materialized ordinal together.
+    const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
+    // Oracle execution consumes fn_id; source requests and linker symbols are unread.
+    try program.roots.append(allocator, .{ .fn_id = producer_fn, .request = undefined });
+    const read = try program.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = root, .initializer = witness } } });
+    const consumer_index = program.rootCount();
+    const consumer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = read }, .ret = bool_ty });
+    try program.roots.append(allocator, .{ .fn_id = consumer_fn, .request = undefined });
+    const policy_index = program.rootCount();
+    const policy_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
+    try program.roots.append(allocator, .{ .fn_id = policy_fn, .request = undefined });
+    for ([_]bool{ false, true }) |enabled| {
+        var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = enabled, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+        defer evaluator.deinit();
+        try std.testing.expectEqual(enabled, (try evaluator.runRoot(policy_index)).value.bool_);
+        try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
+        try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
+        try std.testing.expect(evaluator.root_states[producer_index] == .completed);
+        // Replacing the producer body proves subsequent reads consume its stored result.
+        var changed = program.getFn(producer_fn);
+        changed.body = .{ .roc = witness };
+        program.setFn(producer_fn, changed);
+        try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
+        changed.body = .{ .roc = policy };
+        program.setFn(producer_fn, changed);
+    }
+    var cyclic = program.getFn(producer_fn);
+    cyclic.body = .{ .roc = read };
+    program.setFn(producer_fn, cyclic);
+    var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = false, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+    defer evaluator.deinit();
+    const failure = (try evaluator.runRoot(consumer_index)).aborted;
+    try std.testing.expectEqual(AbortKind.crash, failure.kind);
+    try std.testing.expectEqualStrings("cyclic compile-time value dependency", failure.message);
+    cyclic.body = .{ .roc = policy };
+    program.setFn(producer_fn, cyclic);
+    try std.testing.expectEqualStrings(failure.message, (try evaluator.runRoot(consumer_index)).aborted.message);
 }

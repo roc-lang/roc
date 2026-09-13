@@ -137,6 +137,7 @@ pub const Inventory = struct {
         while (true) {
             if (@import("builtin").is_test) self.expr_visits += 1;
             switch (self.program.getExpr(current).data) {
+                .inline_expects_enabled => {},
                 .local => |local| self.useLocal(local, null),
                 .tuple_access => |access| {
                     const receiver = self.program.getExpr(access.tuple);
@@ -168,6 +169,7 @@ pub const Inventory = struct {
                 .tag => |tag| try self.expressions(tag.payloads),
                 .nominal, .dbg, .expect => |child| try self.collect(child),
                 .static_data_candidate => |candidate| try self.collect(candidate.runtime_expr),
+                .comptime_value => |candidate| try self.collect(candidate.initializer),
                 .typed_boundary => |boundary| try self.collect(boundary.value),
                 .fn_ref => |ref| try self.captures(ref.captures),
                 .call_value => |call| {

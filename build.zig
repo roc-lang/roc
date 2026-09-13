@@ -722,13 +722,16 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 3264, .end = 3275 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
-        .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
+        .{ .file = "inspected_run.zig", .start = 109, .end = 109 },
         // compile_time_finalization.zig resolves comptime-failure provenance by
         // matching the failing LIR statement's source-file entry (text stamped by
         // the declaring module's lowering) against the finalizing module's
         // qualified name—cross-module, so there is no shared ident store to
         // compare indices in. Error-reporting path, not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 2197, .end = 2207 },
+        .{ .file = "compile_time_finalization.zig", .start = 3185, .end = 3188 },
+        // Consumer compatibility excludes observation sinks by Zig field name at
+        // compile time. These are compiler API fields, never Roc identifiers.
+        .{ .file = "compile_time_finalization.zig", .start = 164, .end = 175 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
@@ -793,7 +796,8 @@ const CheckTypeCheckerPatternsStep = struct {
                         // - std.mem.Allocator: a type, not a comparison
                         // - std.mem.Alignment: a type, not a comparison
                         // - std.mem.sort: sorting by custom comparator, not string comparison
-                        // - std.mem.asBytes: type punning, not string comparison
+                        // - std.mem.asBytes / bytesAsValue: type punning, not string comparison
+                        // - std.mem.readInt / writeInt: fixed-width binary serialization
                         // - std.mem.reverse: reversing arrays, not string comparison
                         // - std.mem.alignForward: memory alignment arithmetic, not string comparison
                         // - std.mem.order: sort ordering (used by sort comparators), not string comparison
@@ -803,6 +807,9 @@ const CheckTypeCheckerPatternsStep = struct {
                             std.mem.startsWith(u8, after_match, "Alignment") or
                             std.mem.startsWith(u8, after_match, "sort") or
                             std.mem.startsWith(u8, after_match, "asBytes") or
+                            std.mem.startsWith(u8, after_match, "bytesAsValue(") or
+                            std.mem.startsWith(u8, after_match, "readInt(") or
+                            std.mem.startsWith(u8, after_match, "writeInt(") or
                             std.mem.startsWith(u8, after_match, "reverse") or
                             std.mem.startsWith(u8, after_match, "alignForward") or
                             std.mem.startsWith(u8, after_match, "order") or

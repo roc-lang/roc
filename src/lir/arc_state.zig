@@ -82,48 +82,66 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             return result;
         }
 
-        /// Bounded-stack traversal of the borrowed immutable root.
-        pub const Iterator = struct {
-            /// A non-default entry and its exact snapshot index.
-            pub const Entry = struct { index: u32, value: T };
-            const Frame = struct { node: *const anyopaque, base: u32, slot: u8 = 0 };
+        pub fn reverseIterator(self: *const Self) ReverseIterator {
+            var result = ReverseIterator{ .depth = self.depth };
+            if (self.root) |root| result.push(root, 0);
+            return result;
+        }
 
-            frames: [max_branch_depth + 1]Frame = undefined,
-            len: usize = 0,
-            depth: u8,
+        pub const Iterator = DirectedIterator(.forward);
+        pub const ReverseIterator = DirectedIterator(.reverse);
 
-            fn push(self: *Iterator, node: *const anyopaque, base: u32) void {
-                if (@import("builtin").mode == .Debug) iterator_node_visits += 1;
-                self.frames[self.len] = .{ .node = node, .base = base };
-                self.len += 1;
-            }
+        /// Bounded-stack traversal of the borrowed immutable root in the
+        /// requested index order. Both directions skip absent subtrees.
+        fn DirectedIterator(comptime direction: @FieldType(std.bit_set.IteratorOptions, "direction")) type {
+            return struct {
+                /// A non-default entry and its exact snapshot index.
+                pub const Entry = struct { index: u32, value: T };
+                const Frame = struct { node: *const anyopaque, base: u32, slot: u8 = 0 };
 
-            /// Returns the next occupied entry, skipping absent subtrees.
-            pub fn next(self: *Iterator) ?Entry {
-                while (self.len != 0) {
-                    const frame = &self.frames[self.len - 1];
-                    if (frame.slot == radix) {
-                        self.len -= 1;
-                        continue;
-                    }
-                    const slot = frame.slot;
-                    frame.slot += 1;
-                    const remaining_depth = self.depth + 1 - self.len;
-                    if (remaining_depth == 0) {
-                        const leaf: *const Leaf = @ptrCast(@alignCast(frame.node));
-                        const value = leaf.values[slot];
-                        if (!std.meta.eql(value, empty)) return .{ .index = frame.base + slot, .value = value };
-                    } else {
-                        const branch: *const Branch = @ptrCast(@alignCast(frame.node));
-                        if (branch.children[slot]) |child| {
-                            const shift: u5 = @intCast(leaf_bits + (remaining_depth - 1) * radix_bits);
-                            self.push(child, frame.base | (@as(u32, slot) << shift));
+                frames: [max_branch_depth + 1]Frame = undefined,
+                len: usize = 0,
+                depth: u8,
+
+                fn push(self: *@This(), node: *const anyopaque, base: u32) void {
+                    if (@import("builtin").mode == .Debug) iterator_node_visits += 1;
+                    self.frames[self.len] = .{ .node = node, .base = base, .slot = if (direction == .forward) 0 else radix };
+                    self.len += 1;
+                }
+
+                /// Returns the next occupied entry, skipping absent subtrees.
+                pub fn next(self: *@This()) ?Entry {
+                    while (self.len != 0) {
+                        const frame = &self.frames[self.len - 1];
+                        if (frame.slot == (if (direction == .forward) radix else 0)) {
+                            self.len -= 1;
+                            continue;
+                        }
+                        const slot = if (direction == .forward) block: {
+                            const index = frame.slot;
+                            frame.slot += 1;
+                            break :block index;
+                        } else block: {
+                            frame.slot -= 1;
+                            break :block frame.slot;
+                        };
+                        const remaining_depth = self.depth + 1 - self.len;
+                        if (remaining_depth == 0) {
+                            const leaf: *const Leaf = @ptrCast(@alignCast(frame.node));
+                            const value = leaf.values[slot];
+                            if (!std.meta.eql(value, empty)) return .{ .index = frame.base + slot, .value = value };
+                        } else {
+                            const branch: *const Branch = @ptrCast(@alignCast(frame.node));
+                            if (branch.children[slot]) |child| {
+                                const shift: u5 = @intCast(leaf_bits + (remaining_depth - 1) * radix_bits);
+                                self.push(child, frame.base | (@as(u32, slot) << shift));
+                            }
                         }
                     }
+                    return null;
                 }
-                return null;
-            }
-        };
+            };
+        }
 
         /// Whether a half-open index range contains a non-default entry.
         /// Canonical empty subtrees are null, so fully covered subtrees need
@@ -522,4 +540,27 @@ test "sparse iteration preserves forks and skips absent history" {
     try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = 99999, .value = -1 }, changed_iter.next().?);
     try std.testing.expectEqual(null, changed_iter.next());
     if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits - before <= 11);
+}
+
+test "sparse reverse iteration preserves descending order and skips wide empty ranges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(u64, 0);
+    var values = Sparse.init(arena.allocator(), 0);
+    const keys = [_]u32{ 0, 7, 8, 511, 512, 99999, std.math.maxInt(u32) };
+    for (keys) |key| try values.putUnique(key, @as(u64, key) + 1);
+    const before = iterator_node_visits;
+    var iter = values.reverseIterator();
+    var remaining = keys.len;
+    while (remaining > 0) {
+        remaining -= 1;
+        const entry = iter.next().?;
+        try std.testing.expectEqual(keys[remaining], entry.index);
+        try std.testing.expectEqual(@as(u64, keys[remaining]) + 1, entry.value);
+    }
+    try std.testing.expectEqual(null, iter.next());
+    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits - before <= keys.len * 11);
+    var empty_values = Sparse.init(arena.allocator(), 0);
+    var empty_iter = empty_values.reverseIterator();
+    try std.testing.expectEqual(null, empty_iter.next());
 }

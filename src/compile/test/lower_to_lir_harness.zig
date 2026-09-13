@@ -110,6 +110,10 @@ pub const LoweredInspectFn = *const fn (
 
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
+    /// Inspect both target continuations from one shared specialization result.
+    prepared_inspect: ?*const fn (*const lir.CheckedPipeline.PreparedMonotype) LowerToLirHarnessError!void = null,
+    shared_comptime_reads: bool = false,
+
     specialization_strategy: base.SpecializationStrategy = .lss,
     /// Number of coordinator workers available to post-check lowering.
     /// The default retains the harness's existing single-threaded behavior.
@@ -633,7 +637,7 @@ fn lowerAppPathToLir(
         try std.testing.expect(!coord.hasUserErrors());
     }
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     if (!opts.allow_user_errors) {
         try std.testing.expect(!coord.hasUserErrors());
     }
@@ -697,31 +701,36 @@ fn lowerAppPathToLir(
         if (opts.reverse_post_check_completions) reverse_executor.executor() else executor
     else
         null;
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
-            .imports = imports,
-        },
-        .{
-            .requests = lir_roots,
-            .include_internal_static_data = opts.include_internal_static_data,
-        },
-        .{
-            .specialization_strategy = opts.specialization_strategy,
-            .target_usize = opts.target_usize,
-            .inline_mode = opts.inline_mode,
-            .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
-            .consume_dead_boxes = opts.consume_dead_boxes,
-            .list_in_place_map = opts.list_in_place_map,
-            .proc_debug_names = opts.proc_debug_names,
-            .prove_ranges = opts.prove_ranges,
-            .lifted_expr_count_out = opts.lifted_expr_count_out,
-            .post_check_executor = post_check_executor,
-            .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
-            .timing = if (opts.timing_out != null) &timing else null,
-        },
-    );
+    const lower_modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+        .imports = imports,
+    };
+    const lower_roots: lir.CheckedPipeline.RootRequestSet = .{
+        .requests = lir_roots,
+        .include_internal_static_data = opts.include_internal_static_data,
+    };
+    const lower_target: lir.CheckedPipeline.TargetConfig = .{
+        .comptime_value_reads = opts.shared_comptime_reads,
+        .specialization_strategy = opts.specialization_strategy,
+        .target_usize = opts.target_usize,
+        .inline_mode = opts.inline_mode,
+        .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
+        .consume_dead_boxes = opts.consume_dead_boxes,
+        .list_in_place_map = opts.list_in_place_map,
+        .proc_debug_names = opts.proc_debug_names,
+        .prove_ranges = opts.prove_ranges,
+        .lifted_expr_count_out = opts.lifted_expr_count_out,
+        .post_check_executor = post_check_executor,
+        .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
+        .timing = if (opts.timing_out != null) &timing else null,
+    };
+    if (opts.prepared_inspect) |prepared_inspect| {
+        var prepared = try lir.CheckedPipeline.prepareCheckedModulesMonotype(gpa, lower_modules, lower_roots, lower_target);
+        defer prepared.deinit();
+        try prepared_inspect(&prepared);
+        return;
+    }
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(gpa, lower_modules, lower_roots, lower_target);
     defer lowered.deinit();
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
 

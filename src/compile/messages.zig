@@ -266,15 +266,19 @@ pub const TypeCheckedPublication = union(enum) {
 };
 
 /// Result of successfully type-checking a module.
-/// User diagnostics do not alter this outcome: publication is either complete
-/// or explicitly deferred until platform/app relation finalization.
+/// User diagnostics do not alter this outcome: import metadata is prepared
+/// now or retained until platform/app relation construction. Selected roots
+/// are evaluated when the coordinator finishes the checked program.
 pub const OwnedSemanticModuleData = struct {
     /// The coordinator retains this input until it accepts the publication.
     module_env: *ModuleEnv,
     publication: TypeCheckedPublication,
     publication_owned: bool = true,
+    pending_evaluation: ?*PendingEvaluationState = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.pending_evaluation) |state| state.deinit();
+        self.pending_evaluation = null;
         if (!self.publication_owned) return;
         switch (self.publication) {
             .published => |*artifact| artifact.deinitRetainingModuleEnv(artifact.canonical_names.allocator),
@@ -301,6 +305,20 @@ pub const TypeCheckedResult = struct {
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,
+};
+
+/// Diagnostic ownership retained between checking and post-frontend evaluation.
+pub const PendingEvaluationState = struct {
+    allocator: Allocator,
+    checker: check.Check,
+    imported_envs: []const *ModuleEnv,
+    reported_problem_count: usize,
+
+    pub fn deinit(self: *PendingEvaluationState) void {
+        self.checker.deinit();
+        self.allocator.free(self.imported_envs);
+        self.allocator.destroy(self);
+    }
 };
 
 /// Complete checker-owned continuation for a module whose checked artifact is

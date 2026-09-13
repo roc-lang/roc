@@ -70,6 +70,8 @@ pub const CheckedModules = struct {
 /// Explicit roots requested from checked module data.
 pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},
+    /// Exact owner of each request checked-type id. Empty means the root module.
+    source_modules: []const checked.ModuleId = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const StaticDataRequest = &.{},
     test_plan_metadata: []const RootTestPlanMetadata = &.{},
@@ -82,11 +84,34 @@ pub const StaticDataRequest = struct {
     checked_type: checked.CheckedTypeId,
 };
 
+/// Stable checked identity of one selected compile-time value. Representation
+/// identity belongs to the typed expression that carries this reference.
+pub const ComptimeValueRoot = struct {
+    module: checked.ModuleId,
+    root: checked.ComptimeRootId,
+    const_locator: ?checked.ConstLocator,
+};
+
+/// Producer-owned storage requirements; only target lowering applies string ABI size.
+pub const StaticDataStorage = union(enum(u8)) {
+    aggregate,
+    string_backing: u64,
+
+    pub fn needsTargetStorage(self: StaticDataStorage, target_usize: base.target.TargetUsize) bool {
+        return switch (self) {
+            .aggregate => true,
+            .string_backing => |bytes| bytes >= target_usize.size() * 3,
+        };
+    }
+};
+
 /// Stage-local readonly static-data value id.
 pub const StaticDataId = enum(u32) { _ };
 
 /// Optional command-level test-plan metadata for a checked root request.
 pub const RootTestPlanMetadata = struct {
+    /// Exact position in the producer-owned root request sequence.
+    request_index: u32,
     root_order: u32,
     result_index: u32,
     module_index: u32,
@@ -97,9 +122,11 @@ pub const RootTestPlanMetadata = struct {
 pub fn testPlanMetadataForRoot(
     roots: RootRequests,
     root: checked.RootRequest,
+    request_index: usize,
 ) ?lir_core.RootMetadata.RootMetadata.TestPlanMetadata {
     for (roots.test_plan_metadata) |metadata| {
-        if (metadata.root_order != root.order) continue;
+        if (metadata.request_index != request_index) continue;
+        std.debug.assert(metadata.root_order == root.order);
         return .{
             .result_index = metadata.result_index,
             .module_index = metadata.module_index,
@@ -263,4 +290,28 @@ pub const SymbolGen = struct {
 
 test "common declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "string storage metadata applies the target threshold only at layout lowering" {
+    const twelve: StaticDataStorage = .{ .string_backing = 12 };
+    const twenty_three: StaticDataStorage = .{ .string_backing = 23 };
+    const twenty_four: StaticDataStorage = .{ .string_backing = 24 };
+    try std.testing.expect(twelve.needsTargetStorage(.u32));
+    try std.testing.expect(!twelve.needsTargetStorage(.u64));
+    try std.testing.expect(twenty_three.needsTargetStorage(.u32));
+    try std.testing.expect(!twenty_three.needsTargetStorage(.u64));
+    try std.testing.expect(twenty_four.needsTargetStorage(.u32));
+    try std.testing.expect(twenty_four.needsTargetStorage(.u64));
+}
+
+test "test metadata uses explicit union request positions across equal root orders" {
+    var root: checked.RootRequest = undefined;
+    root.order = 0;
+    const roots: RootRequests = .{ .test_plan_metadata = &.{
+        .{ .request_index = 2, .root_order = 0, .result_index = 0, .module_index = 4, .root_index = 0 },
+        .{ .request_index = 3, .root_order = 0, .result_index = 1, .module_index = 7, .root_index = 0 },
+    } };
+    try std.testing.expect(testPlanMetadataForRoot(roots, root, 0) == null);
+    try std.testing.expectEqual(@as(u32, 4), testPlanMetadataForRoot(roots, root, 2).?.module_index);
+    try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
 }

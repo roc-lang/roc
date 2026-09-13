@@ -1284,3 +1284,9 @@ test "RcHelper distinguishes concrete layout helpers from boxy descriptor helper
         .concrete => return error.TestExpectedEqual,
     }
 }
+
+/// Original evaluated failure site, retained when a frozen value propagates a crash.
+pub const ComptimeFailureOrigin = struct {
+    loc: ?base.SourceLoc,
+    region: ?base.Region,
+};

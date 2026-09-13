@@ -74,7 +74,7 @@ pub const Table = struct {
     }
 };
 
-/// Build readonly data exports for all string-store backings in a LIR store.
+/// Build readonly data exports from the exact LIR procedure backing demand.
 pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget) Allocator.Error!Table {
     const word_size: u32 = @intCast(target.ptrBitWidth() / 8);
 
@@ -100,8 +100,10 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         if (entries_live) entries.deinit(allocator);
     }
 
-    var strings = store.strings.iterator();
-    while (strings.next()) |entry| {
+    const demanded = try lir.LiteralBackings.collect(allocator, store);
+    defer allocator.free(demanded);
+    for (demanded) |id| {
+        const entry = .{ .idx = id, .bytes = store.getString(id), .alignment = store.strings.alignment(id) };
         const symbol_name = try std.fmt.allocPrint(allocator, "roc__static_str_{d}", .{@intFromEnum(entry.idx)});
         var symbol_owned = true;
         errdefer if (symbol_owned) allocator.free(symbol_name);
@@ -180,7 +182,7 @@ fn writeSignedWord(word_size: u32, bytes: []u8, offset: u32, value: isize) void 
     }
 }
 
-test "build emits all literal backing with static refcount headers" {
+test "build emits demanded literal backing with static refcount headers" {
     const allocator = std.testing.allocator;
 
     var store = lir.LirStore.init(allocator);
@@ -190,6 +192,14 @@ test "build emits all literal backing with static refcount headers" {
     const large = try store.insertString("this string is longer than twenty three bytes");
     try std.testing.expectEqual(small, try store.insertStringAligned("small", 16));
 
+    const dead = try store.insertString("compile-time-only intermediate must not be emitted");
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    _ = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = dead, .offset = 0, .len = @intCast(store.getString(dead).len) } }, .next = end } });
+    const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = large, .offset = 0, .len = @intCast(store.getString(large).len) } }, .next = end } });
+    const head = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = small, .offset = 0, .len = 5 } }, .next = tail } });
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = .empty(), .body = head, .ret_layout = .str });
+
     var table = try build(allocator, &store, .x64linux);
     defer table.deinit();
 
@@ -197,6 +207,7 @@ test "build emits all literal backing with static refcount headers" {
     try std.testing.expectEqual(@as(usize, 2), table.entries.len);
     try std.testing.expect(table.find(small) != null);
     try std.testing.expect(table.find(large) != null);
+    try std.testing.expect(table.find(dead) == null);
 
     for (table.entries) |entry| {
         const text = store.getString(entry.id);

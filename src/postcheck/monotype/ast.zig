@@ -163,6 +163,11 @@ pub const CodecContractIdentity = struct {
 
 /// Function template plus source and monomorphic type identities.
 pub const FnTemplate = struct {
+    /// Identity in the common frozen Monotype owner, stamped by lifting.
+    /// Consumer-specific symbols and layout specializations never replace it.
+    frozen_fn: ?FnId = null,
+    /// Exact callable worker specialization key, emitted by SpecConstr.
+    frozen_worker: ?[48]u8 = null,
     fn_def: FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -882,9 +887,17 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// An immutable root-slot read. The initializer supplies representation and
+/// lambda-set evidence; it is never evaluated by the read itself.
+pub const ComptimeValue = struct {
+    root: Common.ComptimeValueRoot,
+    initializer: ExprId,
+};
+
 /// A restored compile-time value that may lower to static data once the final
 /// LIR const plan and target layout are known.
 pub const StaticDataCandidate = struct {
+    storage: Common.StaticDataStorage,
     static_data: Common.StaticDataId,
     runtime_expr: ExprId,
 };
@@ -918,6 +931,9 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    /// Explicit consumer input: opaque until target LIR selects run/omit.
+    inline_expects_enabled: void,
+    comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
@@ -1521,6 +1537,60 @@ pub const ProgramBuilder = struct {
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
         };
+    }
+
+    /// Fork the immutable specialization output while preserving every id.
+    /// The fork owns its arrays and diagnostic/literal bytes independently.
+    pub fn cloneFrozen(self: *const ProgramBuilder, allocator: std.mem.Allocator) std.mem.Allocator.Error!ProgramBuilder {
+        if (!self.types.isFrozen()) Common.invariant("Monotype cloning requires a frozen program");
+        var result = ProgramBuilder.init(allocator);
+        errdefer result.deinit();
+        result.names = try self.names.clone(allocator);
+        result.types = try self.types.cloneFrozen(allocator);
+        inline for (.{ "specs", "imported_fns", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+            try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
+        }
+        try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
+        for (self.string_literals.unsafeRawItemsForView()) |literal| {
+            var copied = literal;
+            copied.backing = try allocator.dupe(u8, literal.backing);
+            result.string_literals.append(allocator, copied) catch |err| {
+                allocator.free(copied.backing);
+                return err;
+            };
+        }
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            var copied = file;
+            copied.name = try allocator.dupe(u8, file.name);
+            copied.qualified_name = allocator.dupe(u8, file.qualified_name) catch |err| {
+                allocator.free(copied.name);
+                return err;
+            };
+            result.source_files.append(allocator, copied) catch |err| {
+                allocator.free(copied.name);
+                allocator.free(copied.qualified_name);
+                return err;
+            };
+        }
+        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
+            var copied = site;
+            copied.branch_regions = try allocator.dupe(base.Region, site.branch_regions);
+            result.comptime_sites.append(allocator, copied) catch |err| {
+                allocator.free(copied.branch_regions);
+                return err;
+            };
+        }
+        for (self.local_names.unsafeRawItemsForView()) |name| {
+            const copied = try allocator.dupe(u8, name);
+            result.local_names.append(allocator, copied) catch |err| {
+                allocator.free(copied);
+                return err;
+            };
+        }
+        result.next_symbol = self.next_symbol;
+        result.current_loc = self.current_loc;
+        result.current_region = self.current_region;
+        return result;
     }
 
     pub fn deinit(self: *ProgramBuilder) void {
@@ -2638,4 +2708,41 @@ test "codec function evidence identity excludes per-use replay addresses" {
     right[0].structural.checked.?.generated_codec_identity = derivations[2].identity;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+}
+
+fn cloneFrozenForAllocationTest(allocator: std.mem.Allocator, source: *const Program) std.mem.Allocator.Error!void {
+    var copy = try source.cloneFrozen(allocator);
+    defer copy.deinit();
+}
+
+test "frozen Monotype forks retain identities and own literal and diagnostic storage" {
+    const allocator = std.testing.allocator;
+    var source = Program.init(allocator);
+    var source_owned = true;
+    defer if (source_owned) source.deinit();
+    const ty = try source.types.add(.{ .primitive = .str });
+    const literal = try source.addStringView("prefix-value-suffix", 7, 5);
+    const expr = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
+    const local = try source.addLocal(@enumFromInt(1), ty);
+    try source.setLocalName(local, "value");
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    const site = try source.addComptimeSite(.if_, .zero(), null, &.{.zero()});
+    const name = try source.names.internExportName("entry");
+    try source.proc_debug_names.put(@enumFromInt(1), name);
+    source.freeze();
+    try std.testing.checkAllAllocationFailures(allocator, cloneFrozenForAllocationTest, .{&source});
+    var copy = try source.cloneFrozen(allocator);
+    defer copy.deinit();
+    try std.testing.expect(source.stringLiteral(literal).backing.ptr != copy.stringLiteral(literal).backing.ptr);
+    source.deinit();
+    source_owned = false;
+    try std.testing.expectEqual(ty, copy.getExpr(expr).ty);
+    try std.testing.expectEqual(literal, copy.getExpr(expr).data.str_lit);
+    try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
+    try std.testing.expectEqualStrings("value", copy.localName(local));
+    try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
+    try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
+    try std.testing.expectEqual(name, copy.proc_debug_names.get(@enumFromInt(1)).?);
+    try std.testing.expectEqual(name, try copy.names.internExportName("entry"));
+    try std.testing.expect(copy.types.isFrozen());
 }

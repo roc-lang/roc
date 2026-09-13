@@ -679,6 +679,28 @@ when no lexical import exists.
 
 ### Compile-Time Evaluation And Static Storage
 
+Frontend task completion and checked-value completion are distinct boundaries.
+The frontend prepares immutable checked types, bodies, binding identities, and
+selected root requests before evaluating those roots. Importers may consume
+that prepared interface while their own frontend tasks run. A prepared module
+is not a completed checked cache entry: evaluation and diagnostic replay must
+finish before its constants are committed or its checked module data is serialized.
+
+The compilation coordinator evaluates prepared modules after all frontend tasks
+have completed, while its post-check executor and module environments remain
+alive. Evaluation runs for `roc check` as well as `roc build`.
+Evaluation remains part of checking's diagnostic contract; "post-check
+executor" names the worker lifetime, not permission to postpone diagnostics
+until runtime. Standalone checking clients own the same completion operation
+and may complete it immediately when they have no frontend coordinator.
+Frontend workers must never wait for nested specialization work on their own
+occupied worker pool. Dependency completion and deterministic module/root
+replay order are explicit coordinator responsibilities. Successful compile-time
+`dbg` observations are durable checked output keyed by root id, with owned
+message bytes. Cache hits replay that output alongside newly evaluated roots,
+sorted by module and root id; they do not rerun cached expressions. Cache
+validation checks the recorded root ids and message ranges before replay.
+
 Compile-time evaluation must evaluate every checked top-level expression and
 every selected compile-time root that can be evaluated without effectful calls
 or runtime data. It must run `crash`, `dbg`, and `expect` during that
@@ -694,6 +716,27 @@ kind and its resolved value reference. It must not infer a procedure from source
 names, function type alone, body shape below the root expression, or post-check
 specialization results. Any wrapper, capture, conditional, call, or other
 function-valued computation remains an ordinary compile-time callable root.
+
+A shared post-check program represents a selected root read as an explicit
+`comptime_value` expression. Its identity is the checked module id, compile-time
+root id, and optional const locator (callable roots have no const locator). Its
+initializer is an explicit zero-argument proof call to the one declared root
+function, whose return owns the concrete Monotype representation and lambda
+sets. Lambda solving unifies reads with that return. The proof call is not an
+expression to execute at the read. Lifting and lambda solving preserve that witness. Value
+folding must treat the read as opaque. LIR interns storage slots only after
+exact concrete representation equality and committed layout equality, and
+records the checked root identity beside each slot. Evaluation initializes the
+slots in checked dependency order; runtime static-data materialization consumes
+the completed root payloads. Neither consumer executes the initializer at a
+slot read or reconstructs a callable identity from its layout.
+
+A provided static export requested during shared preparation aliases that same
+declared slot. Its const locator's checked owner identifies the root, and the
+explicit evaluation request manifest determines slot membership. The export's
+closed initializer reads the slot after evaluation; it does not restore a
+pending ConstStore entry or run the value computation again. Requests for an
+explicit stored subnode continue to consume that exact stored node.
 
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
@@ -720,12 +763,116 @@ record, tuple, box, list, string, and callable captures. A wrapper must not drop
 that context and thereby turn a representation-stable descendant back into a
 runtime construction.
 
+Shared specialization uses an explicit inline-expect mode. It lowers and keeps
+every expect condition, but selects the checker's `without_inline_expects`
+divergence tables for the surrounding continuation. An expect condition's
+impossibility proof does not terminate that surrounding continuation in shared
+mode. Ordinary divergence outside an expect still uses the same explicit
+producer tables and remains terminating. Consequently the shared Monotype
+contains both the complete diagnostic computation and the continuation required
+when optimized runtime code omits it. Later lowering selects `.run` for compile-
+time evaluation or `.omit` for optimized execution. Those different expect behaviors
+require separate target-LIR continuations from the shared Solved program; they do not
+repeat specialization or lambda solving. A program lowered originally with a non-shared expect
+mode cannot change that mode at the continuation boundary.
+
+Shared value slots are declared by the compile-time `RootRequest` manifest,
+not by root type eligibility alone. Eligible procedure aliases and roots with
+unbound platform requirements can be intentionally absent from that manifest.
+The initial reservation pass records exactly its module/root identities and
+reserved root functions; lowering uses that declaration table to select slot reads.
+Unrequested callable bindings retain their ordinary checked body computation.
+
+Every shared compile-time value slot names an explicit failure-record slot with
+separate internal `failed: U8` (zero means success, one means failure) and
+`message: Str` fields. Empty crash messages remain
+failures. After CFG transformations, ARC, and immortal-local certification, a
+final LIR pass guards each value read with ordinary record loads, a branch, and
+a crash. The pass records the exact guard entry and successful continuation;
+completed successful root outcomes remove guards through that metadata. No
+subsequent CFG pass may invalidate these identities. Guard locals borrow the
+immutable evaluation image, including its immortal string backing, and introduce
+no ownership transfers. The pass extends each affected procedure's sorted frame
+local inventory and recomputes its stack-probe requirement. Backends consume
+only these explicit ordinary LIR operations.
+
+The guard pass also records each guard's crash statement identity. Failed root
+completion associates those statements with the original evaluated failure's
+source location and region. Recorded origins remain stable. A suspended
+invocation may demand another root, whose completion records additional origins
+before that invocation resumes. Native compile-time failure hooks receive the
+emitted statement ID; the host and interpreter consume the same origin table when a guard
+propagates a failure. They never reconstruct the original source from the
+value's use site or from checked bodies. The table is diagnostic session data,
+not part of the runtime frozen value representation.
+
+A shared expect that reassigns surrounding variables uses an ordinary Monotype
+`if_` whose condition is the explicit `inline_expects_enabled` consumer input.
+Its run arm executes the expect and returns the resulting variable-state tuple;
+its omit arm returns the original state tuple. An ordinary outer tuple binding
+names the merged variables. Both arms remain visible through lifting and lambda
+solving, including callable identities stored in compile-time results. The
+consumer input is opaque to value folding until target LIR lowering supplies the
+configured run/omit Boolean. No specialization is repeated.
+
+A cross-target continuation forks one frozen Solved program after Monotype
+lowering, lifting, SpecConstr, lambda solving, and inline analysis. It copies
+the owned arrays, checked name identities, immutable type graphs, literal and
+diagnostic bytes, and inline plan exactly. Every producer id and specialization
+identity stays unchanged. The fork does not rerun any of those stages. Each
+fork is consumed independently by target LIR lowering; target width and the
+explicitly shared expect consumer mode may change, while specialization options
+remain captured. Callable correspondence therefore compares ids from one
+producer domain, never ids allocated by separate solver runs.
+
+Boxy runtime lowering is a distinct declared specialization strategy. Compile-
+time evaluation remains LSS, so that consumer's runtime roots are excluded from
+the LSS union and lowered by the separate Boxy pipeline after checking completes.
+This split follows the selected strategy, never a failed specialization attempt.
+
+Native compile-time instruction generation consumes an explicit, read-only LIR
+demand closure seeded by compile-time root procedures and materialized callable
+relocations. Runtime-only procedures remain in the shared program without being
+JIT-compiled. Runtime machine emission is a distinct consumer: compile-time
+hooks, deterministic dictionary seed, host CPU, and root-entry wrapper ABI are
+explicit execution policies. That machine emission does not repeat checked,
+Monotype, or host-compatible LIR lowering.
+
+Monotype records string backing length as explicit static-candidate storage
+metadata and does not apply a pointer-width threshold. Target LIR lowering
+compares that length with its three-word string representation; short strings
+retain their literal construction. The same Monotype program therefore serves
+both 32-bit and 64-bit layouts without repeating specialization.
+
+Evaluated root values are frozen directly from their explicit forward plans
+into owned bytes and symbolic data, procedure, and ARC-helper relocations.
+Typed allocation identities preserve sharing and cycles within each graph;
+immutable allocations carry the runtime's immortal header. Shared runtime LIR
+consumes that graph without restoring a checked constant or executing a root
+again. Distinct consumer layouts re-encode it using paired value-slot plans and
+symbolic source edges. Fixed-width scalars retain their width; pointer-bearing
+containers, string representations, tags, and callable captures use the target
+layout. Callable template correspondence carries the frozen Monotype function
+identity plus the producer's callable-worker identity. Erased-callable plans
+carry the exact emitted drop-helper identity. Consumers may not derive these
+identities from names, code shape, or capture layouts.
+
 Object emission, native compile-time execution, and interpreter compile-time
 execution consume the same target-layout static-data materializer. In-process
 evaluators own a relocated immutable data image and index its root addresses
 directly by compact `StaticDataId`; callable relocations carry explicit
 capture-offset metadata so the interpreter does not reconstruct ABI meaning from
-bytes or symbols. A static-data candidate is identified by its stored const node,
+bytes or symbols.
+
+Interpreter sessions and runtime test execution retain the relocated image and
+an explicit capture-address-to-procedure registry produced from callable
+relocations. Static erased callables use a distinct trampoline ABI; direct
+interpreter calls and callback re-entry consume that registry. Heap callables
+retain their explicit interpreter context ABI. Re-freezing either form consumes
+the same procedure/capture view and the LIR erased-entry drop authority; no code
+pointer is decoded to reconstruct a reference-counting operation.
+
+A static-data candidate is identified by its stored const node,
 checked type, and concrete Monotype type; a checked type id alone cannot identify
 its representation across distinct specialization contexts. Raw stage-local
 Monotype ids are not representation identity. Candidates for the same stored node
@@ -5089,6 +5236,14 @@ item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
 
+Readonly literal export demand comes from the retained LIR procedure control-flow
+graphs and their explicit join-point inventories. String literals, packed-list
+literals, and string-match prefixes and delimiters name their exact backing
+identities. The backing pool itself is not an export manifest: it may still
+contain compiler names and compile-time-only intermediates after runtime
+procedure extraction. Static string materialization consumes this LIR demand
+and emits each demanded backing once.
+
 LLVM codegen interns one refcounted backing global per blob for the whole
 module, but the pointer to the blob's data offset is a WipFunction
 instruction: every proc body that restores a view must emit its own GEP from
@@ -8405,10 +8560,14 @@ identities receives a program-global identity derived from the first final
 `LocalId` in that equivalence class. Local aliases within the same
 materialization retain one identity; a separate materialization receives a
 different identity even when it came from the same checked binder. The checked
-binder remains separate metadata for lexical binding and substitution. The original checked capture
-identity is also carried in a separate provenance field for normalizing declared
-pre-lift capture keys and writing a compile-time result back to `ConstStore`;
-it is never used as durable runtime capture identity. Consequently, separate
+binder remains separate metadata for lexical binding and substitution. The declared
+callable-root evaluator reserves its recursive local with the root's declared
+checked pattern binder. Its captures therefore retain that source provenance
+when the evaluated recursive graph is written back to `ConstStore`. The original
+checked capture identity is also carried in a separate provenance field for
+normalizing declared pre-lift capture keys and writing a compile-time result
+back to `ConstStore`; it is never used as durable runtime capture identity.
+Consequently, separate
 materializations cannot collide merely because they came from one checked
 binder. A downstream one-to-one capture rewrite preserves the complete
 post-check capture identity explicitly, while a one-to-many materialization
@@ -13104,13 +13263,15 @@ an invitation for an architecture-specific best-effort spill.
 
 ## Compile-Time Constants
 
-Compile-time constants use the existing checked-finalization pipeline while a
-checked module is being finalized. This path is unaffected by the runtime
+Compile-time constants use checked finalization after the coordinator's
+frontend tasks have completed. Standalone checking clients complete their
+prepared modules directly. This path is unaffected by the runtime
 `--specialize` flag:
 
 ```text
 checked CIR
-  -> CheckedModuleBuilder during checking finalization
+  -> CheckedModuleBuilder prepares checked interfaces and selected roots
+  -> frontend task completion (coordinated compilations)
   -> Monotype IR
   -> Monotype Lifted IR
   -> optional SpecConstr
@@ -13165,10 +13326,12 @@ through the existing Monotype/Lambda/LIR path, interpret the result, and store
 checked values in `ConstStore`. This keeps `roc check` and compile-time
 evaluation independent of runtime backend and specialization choices.
 
-Compile-time ARC insertion runs the same borrow-inference solver as runtime
-ARC insertion in its single-variant form: one proc per solved `RcSig`, no
-mode specialization. Compile-time evaluation pays for solving once per
-evaluated root and never for variant cloning.
+Check-only ARC insertion runs the borrow-inference solver in its single-variant
+form. A shared host/runtime LIR program instead applies its declared runtime
+ARC policy once, and compile-time execution consumes that same explicit output.
+Consumers requiring distinct target layouts or expect behavior share Monotype
+specialization and each commit their own LIR and ARC output; they do not repeat
+checked-to-Monotype lowering.
 
 The evaluator produces a runtime value. Checking then stores that eval
 result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
@@ -13197,6 +13360,14 @@ jobs do not write diagnostics, stderr output, checked problems, or `ConstStore`
 entries directly. They write root-local event lists and branch-hit data; after
 all jobs in the batch finish, checking finalization replays those lists in the
 sorted root order.
+
+The checked-to-LIR API exposes an owned `PreparedMonotype` boundary. Preparation
+lowers its explicit root requests once and retains the specialization program,
+the exact target/options, and owned test-root metadata. Checked storage remains
+borrowed and must outlive the prepared program. Resuming consumes this owner on
+both success and failure; it never invokes Monotype lowering again. Native and
+interpreter root evaluation consume borrowed LIR plus an explicit root-plan
+slice, so the evaluator does not own the compilation's lowered program.
 
 Slow-root progress reporting observes the same root job state without changing
 evaluation. By default, a root that has been running for more than three seconds
@@ -13256,6 +13427,13 @@ roots, the cached or uncached execution decision, and the result slot. Later
 stages consume this plan directly; they never reconstruct test identity from
 source paths, symbol names, module traversal order, filesystem order, package
 cache paths, or backend output.
+
+When test roots borrow one command-owned LIR program, their execution request
+explicitly declares that shared ownership. Dev and LLVM compile the union's
+procedures and root wrappers once and retain the one frozen static image until
+all roots finish. Checked-module partitions remain explicit root slices with
+separate expect-counter ranges; execution does not infer shared ownership from
+matching pointers or combine observation counts across module boundaries.
 
 Optimized test execution performs at most one LLVM shared-library link for the
 whole command for the selected optimization mode and native target. It must not
@@ -13737,7 +13915,50 @@ Compile-time dependency summaries are produced from explicit checked root data
 and `ConstStore` dependencies. They are not discovered by a later stage scanning
 bodies for missing data.
 
+Shared host and runtime consumers branch from one completed Lambda Solved
+program and its inline plan. The runtime continuation is an exact owned clone;
+Lift, SpecConstr, and Solve do not run again. Frozen callable correspondence
+retains the complete member specialization identity in that shared domain:
+capture ABI, lifted source function, solved function type, and producer capture
+span, or the source-owned capture count. Source-owned capture storage positions
+are continuation-local and are not identities. A source function can have
+multiple members with distinct capture contexts even when all their payloads
+are zero-sized; its source template or layout alone cannot identify which member
+was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
+Monotype function and generated worker identity. Transcoding consumes that
+complete identity and requires one exact target member.
+
+Shared compile-time execution completes slots on demand. Each declared
+value and failure slot carries its producer's exact checked module and root ID.
+Before reading a static slot, the compile-time interpreter or native hook asks
+the session to ensure that producer has completed. Ordinary materialized slots
+are already ready. A pending producer runs synchronously with independent host,
+return storage, and execution state; the result is stored before the suspended
+read resumes. Completed producers never run again. Re-entering an active
+producer reports an actual cyclic compile-time value dependency through the
+ordinary compile-time crash path. No execution is probed, abandoned, or retried.
+
+All declared roots are still requested for diagnostics. Session execution is
+serial and nested demands execute on the same thread; lowering and specialization
+retain their independent parallelism. This preserves the executed dependency
+path for conditional and erased calls without approximating it by every latent
+closure body. Runtime consumers have no demand hook and receive only completed
+slot images. Operational failures unwind through the host boundary and retain
+their original error identity instead of becoming language crashes.
+
+
 ## LirImage And Hosted Functions
+
+A mapped interpreter image transports the complete materialized static graph
+alongside LIR. Its explicit export rows carry slot IDs, byte spans, symbol
+offsets, and alignment; relocation rows retain data-symbol IDs, procedure IDs,
+callable capture offsets, and RC helper identities. All spans are image-relative
+offsets. Frozen bytes record their pointer width and mapped consumers reject a
+width mismatch. Cross-width production converts completed values before image
+emission. The loader owns relocated bytes and callable metadata for as long
+as any interpreter or escaping callable can reference them. It never reruns a
+compile-time initializer or reconstructs identity from symbol names.
+
 
 Platform-hosted functions called through `RocOps.hosted_fns` receive ownership
 of every refcounted argument. LIR ARC insertion transfers that ownership at the
@@ -13955,6 +14176,15 @@ features, and strip debug metadata only for non-debug output. Both remove
 producer metadata; only non-debug size builds remove target-feature metadata.
 
 ## Host Symbol ABI
+
+The program's hosted catalog retains every visible hosted declaration and
+classifies its platform binding as mapped or unavailable. Only mapped entries
+carry a dispatch slot. An unavailable declaration lowers to the existing
+checked-generated Roc error body; it never gains a fabricated host symbol or
+slot. This permits error-bearing checked programs, including unselected erased
+callable variants, to complete lowering while preserving the checker's missing
+hosted-section diagnostics. A missing catalog declaration remains an invariant
+violation, distinct from an explicitly unavailable binding.
 
 Hosts and compiled Roc code share symbols resolved at link time; there is no
 host-facing struct of function pointers. `RocOps` survives only as an
