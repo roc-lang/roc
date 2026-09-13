@@ -659,8 +659,8 @@ const Pass = struct {
             }
             data.allocator.free(item.relocations);
         };
-        // Rebuild ownership of names before removing any exports: the original
-        // owner of a shared procedure/helper name may itself be pruned. Value
+        // Copy the exact retained symbol-name allocations before pruning exports:
+        // a retained relocation may borrow its name from a discarded row. Value
         // bytes stay in place and transfer only when the entire plan succeeds.
         for (data.exports, 0..) |item, index| {
             if (!self.reachable_exports[index]) continue;
@@ -734,6 +734,8 @@ const Pass = struct {
             if (kept_count == 0) {
                 for (old_entries) |entry| {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
+                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
+                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
                 }
                 if (old_entries.len > 0) self.allocator.free(old_entries);
                 set.entries = &.{};
@@ -747,8 +749,10 @@ const Pass = struct {
                     new_entries[write] = entry;
                     new_entries[write].entry = new_proc;
                     write += 1;
-                } else if (entry.captures.len > 0) {
-                    self.allocator.free(entry.captures);
+                } else {
+                    if (entry.captures.len > 0) self.allocator.free(entry.captures);
+                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
+                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
                 }
             }
             if (old_entries.len > 0) self.allocator.free(old_entries);
@@ -1358,4 +1362,39 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ procs[0], procs[1] }, result.root_procs.items);
     for (result.store.getProcSpecs()) |proc| try std.testing.expectEqual(ret, proc.body.?);
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(exports[0].relocations[0].procedure.?));
+}
+
+test "erased callable pruning frees evidence for fully and partly discarded sets" {
+    const allocator = std.testing.allocator;
+    var result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
+    defer result.deinit();
+    const local = try result.store.addLocal(.{ .layout_idx = .zst });
+    const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } });
+    const live = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .args = .empty(), .body = body, .ret_layout = .zst });
+    const dead = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .args = .empty(), .body = body, .ret_layout = .zst });
+    try result.root_procs.append(allocator, live);
+    const callable_layout = try result.layouts.insertErasedCallable();
+    for ([_][]const LIR.LirProcSpecId{ &.{dead}, &.{ live, dead } }) |procs| {
+        const entries = try allocator.alloc(LirProgram.ErasedFn, procs.len);
+        for (entries, procs) |*entry, proc| {
+            entry.* = .{
+                .entry = proc,
+                // Reachability consumes the procedure ID, while evidence
+                // and frames remain independently owned template storage.
+                .template = .{
+                    .fn_def = undefined,
+                    .source_fn_ty = undefined,
+                    .source_fn_key = undefined,
+                    .evidence = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}),
+                    .evidence_frames = try allocator.dupe(@import("check").ConstStore.ConstFnEvidenceFrame, &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 1 }}),
+                },
+            };
+        }
+        try result.erased_fns.append(allocator, .{ .layout = callable_layout, .entries = entries });
+    }
+    try run(&result);
+    try std.testing.expectEqual(@as(usize, 0), result.erased_fns.items[0].entries.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence_frames.len);
 }

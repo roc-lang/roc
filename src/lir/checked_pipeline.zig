@@ -107,6 +107,7 @@ pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
 /// Producer-side work counts, independent of elapsed time and output size.
 pub const WorkMetrics = struct {
     monotype_runs: u32 = 0,
+    solved_runs: u32 = 0,
     lir_continuations: u32 = 0,
 };
 
@@ -850,11 +851,11 @@ pub fn prepareCheckedModulesMonotype(
 
 /// Consumes the prepared program on success and failure. No specialization
 /// lowering is repeated, and all continuation options come from preparation.
-pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError!LoweredProgram {
+pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!PreparedSolved {
     const allocator = prepared.allocator;
     const target = prepared.target;
-    if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
-    defer allocator.free(prepared.test_plan_metadata);
+    if (target.work_metrics) |metrics| metrics.solved_runs += 1;
+    errdefer allocator.free(prepared.test_plan_metadata);
     var mono = prepared.program;
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -887,7 +888,8 @@ pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError
     };
     defer procedure_usage.deinit();
 
-    if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
+    const lifted_expr_count = lifted.exprCount();
+    if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;
 
     var lambda_solve_timing_scope = PipelineTimingScope.begin(target.timing, .lambda_solve);
     defer lambda_solve_timing_scope.end();
@@ -895,8 +897,7 @@ pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError
     lifted_owned = false;
     lifted = undefined;
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
-    var solved_owned = true;
-    errdefer if (solved_owned) solved.deinit();
+    errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 
     var inline_plan_timing_scope = PipelineTimingScope.begin(
@@ -904,15 +905,80 @@ pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
-    defer inline_plan.deinit();
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     inline_plan_timing_scope.end();
 
+    return .{
+        .allocator = allocator,
+        .program = solved,
+        .inline_plan = inline_plan,
+        .target = target,
+        .root_count = prepared.root_count,
+        .test_plan_metadata = prepared.test_plan_metadata,
+        .lifted_expr_count = lifted_expr_count,
+    };
+}
+
+/// Owns one solved producer identity domain and its consumer continuation data.
+pub const PreparedSolved = struct {
+    allocator: Allocator,
+    program: postcheck.LambdaSolved.Ast.Program,
+    inline_plan: postcheck.SolvedInline.OwnedPlan,
+    target: TargetConfig,
+    root_count: usize,
+    test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
+    lifted_expr_count: usize,
+
+    /// Copy the solved owner exactly so consumer-local IDs retain producer identity.
+    pub fn forkForConsumer(self: *const PreparedSolved, target_usize: base.target.TargetUsize, inline_expects: InlineExpectMode) Allocator.Error!PreparedSolved {
+        if (!self.target.comptime_value_reads and inline_expects != self.target.inline_expects) {
+            checkedPipelineInvariant("changing expect mode requires shared Monotype lowering");
+        }
+        var program = try postcheck.SolvedLirLower.cloneSolvedProgram(self.allocator, &self.program);
+        errdefer program.deinit();
+        const metadata = try self.allocator.dupe(postcheck.Common.RootTestPlanMetadata, self.test_plan_metadata);
+        errdefer self.allocator.free(metadata);
+        const bodies = try self.allocator.dupe(?postcheck.MonotypeLifted.Ast.ExprId, self.inline_plan.inline_bodies);
+        var target = self.target;
+        target.target_usize = target_usize;
+        target.inline_expects = inline_expects;
+        return .{
+            .allocator = self.allocator,
+            .program = program,
+            .inline_plan = .{ .allocator = self.allocator, .inline_bodies = bodies },
+            .target = target,
+            .root_count = self.root_count,
+            .test_plan_metadata = metadata,
+            .lifted_expr_count = self.lifted_expr_count,
+        };
+    }
+
+    /// Release the retained solved program and its owned continuation metadata.
+    pub fn deinit(self: *PreparedSolved) void {
+        self.program.deinit();
+        self.inline_plan.deinit();
+        self.allocator.free(self.test_plan_metadata);
+        self.* = undefined;
+    }
+};
+
+/// Preserve the immediate lowering API while sharing the solved preparation path.
+pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError!LoweredProgram {
+    return lowerPreparedSolvedToLir(try prepareMonotypeToSolved(prepared));
+}
+
+/// Consume a solved owner into one target-specific LIR continuation.
+pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!LoweredProgram {
+    const allocator = prepared.allocator;
+    const target = prepared.target;
+    if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
+    if (target.lifted_expr_count_out) |slot| slot.* = prepared.lifted_expr_count;
+    defer allocator.free(prepared.test_plan_metadata);
+    var inline_plan = prepared.inline_plan;
+    defer inline_plan.deinit();
     var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
-    const solved_input = solved;
-    solved_owned = false;
-    solved = undefined;
+    const solved_input = prepared.program;
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,

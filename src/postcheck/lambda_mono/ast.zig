@@ -231,7 +231,7 @@ pub const Expr = struct {
 /// An immutable root-slot read. The initializer supplies representation and
 /// lambda-set evidence; it is never evaluated by the read itself.
 pub const ComptimeValue = struct {
-    root: Common.ComptimeValueRef,
+    root: Common.ComptimeValueRoot,
     initializer: ExprId,
 };
 

@@ -3317,7 +3317,7 @@ const Lowerer = struct {
                     try self.callablePayloadLayout(value_layout, type_variants.len, @intCast(index), capture_ty)
                 else
                     .zst,
-                .template = try constFnTemplateFromMono(self, self.fnTemplateForFn(variant.target)),
+                .template = try constFnTemplateForFn(self, variant.target),
                 .captures = captures,
             };
             captures_owned = false;
@@ -3363,7 +3363,7 @@ const Lowerer = struct {
                 .on_drop = self.erasedCallableOnDrop(capture_layout),
                 .entry = entry_proc,
                 .capture_layout = capture_layout,
-                .template = try constFnTemplateFromMono(self, self.fnTemplateForFn(member.target)),
+                .template = try constFnTemplateForFn(self, member.target),
                 .captures = captures,
             };
             captures_owned = false;
@@ -3704,7 +3704,7 @@ const Lowerer = struct {
         } });
     }
 
-    fn createComptimeFailureMessageSlot(self: *Lowerer, root: Common.ComptimeValueRef) Common.LowerError!LIR.StaticDataId {
+    fn createComptimeFailureMessageSlot(self: *Lowerer, root: Common.ComptimeValueRoot) Common.LowerError!LIR.StaticDataId {
         const layout_idx = try self.result.layouts.putStructFields(&.{
             .{ .index = 0, .layout = .u8 },
             .{ .index = 1, .layout = .str },
@@ -11221,31 +11221,47 @@ const TypeEquivalence = struct {
     }
 };
 
-fn cloneSolvedProgram(allocator: std.mem.Allocator, solved: *const Solved.Program) std.mem.Allocator.Error!Solved.Program {
+/// Clone the frozen identity domain exactly; all producer IDs are preserved.
+pub fn cloneSolvedProgram(allocator: std.mem.Allocator, solved: *const Solved.Program) std.mem.Allocator.Error!Solved.Program {
     var lifted = try cloneLiftedProgram(allocator, &solved.lifted);
     errdefer lifted.deinit();
 
     var types = try cloneSolvedTypeStore(allocator, &solved.types);
     errdefer types.deinit();
 
+    var defs = try cloneArrayList(Solved.Def, allocator, &solved.defs);
+    errdefer defs.deinit(allocator);
+    var local_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.local_tys);
+    errdefer local_tys.deinit(allocator);
+    var expr_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.expr_tys);
+    errdefer expr_tys.deinit(allocator);
+    var pat_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.pat_tys);
+    errdefer pat_tys.deinit(allocator);
+    var fn_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.fn_tys);
+    errdefer fn_tys.deinit(allocator);
+    var layout_requests = try cloneArrayList(Solved.LayoutRequest, allocator, &solved.layout_requests);
+    errdefer layout_requests.deinit(allocator);
+    var runtime_schema_requests = try cloneArrayList(Solved.RuntimeSchemaRequest, allocator, &solved.runtime_schema_requests);
+    errdefer runtime_schema_requests.deinit(allocator);
+
     return .{
         .allocator = allocator,
         .lifted = lifted,
         .types = types,
-        .defs = try cloneArrayList(Solved.Def, allocator, &solved.defs),
-        .local_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.local_tys),
-        .expr_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.expr_tys),
-        .pat_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.pat_tys),
-        .fn_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.fn_tys),
-        .layout_requests = try cloneArrayList(Solved.LayoutRequest, allocator, &solved.layout_requests),
-        .runtime_schema_requests = try cloneArrayList(Solved.RuntimeSchemaRequest, allocator, &solved.runtime_schema_requests),
+        .defs = defs,
+        .local_tys = local_tys,
+        .expr_tys = expr_tys,
+        .pat_tys = pat_tys,
+        .fn_tys = fn_tys,
+        .layout_requests = layout_requests,
+        .runtime_schema_requests = runtime_schema_requests,
     };
 }
 
 fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Program) std.mem.Allocator.Error!Lifted.Program {
     const view = program.view();
 
-    var name_store = try cloneNameStore(allocator, &program.names);
+    var name_store = try program.names.clone(allocator);
     errdefer name_store.deinit();
 
     var types = try cloneMonoTypeStore(allocator, &program.types);
@@ -11279,47 +11295,113 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     var const_fn_evidence_frames = try clonedLiftedProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames", allocator, view.const_fn_evidence_frames);
     errdefer const_fn_evidence_frames.deinit(allocator);
 
+    var imported_fns = try clonedLiftedProgramList(Lifted.ImportedFn, "imported_fns", allocator, view.imported_fns);
+    errdefer imported_fns.deinit(allocator);
+    var fns = try clonedLiftedProgramList(Lifted.Fn, "fns", allocator, view.fns);
+    errdefer fns.deinit(allocator);
+    var exprs = try clonedLiftedProgramList(Lifted.Expr, "exprs", allocator, view.exprs);
+    errdefer exprs.deinit(allocator);
+    var pats = try clonedLiftedProgramList(Lifted.Pat, "pats", allocator, view.pats);
+    errdefer pats.deinit(allocator);
+    var stmts = try clonedLiftedProgramList(Lifted.Stmt, "stmts", allocator, view.stmts);
+    errdefer stmts.deinit(allocator);
+    var locals = try clonedLiftedProgramList(Lifted.Local, "locals", allocator, view.locals);
+    errdefer locals.deinit(allocator);
+    var expr_ids = try clonedLiftedProgramList(Lifted.ExprId, "expr_ids", allocator, view.expr_ids);
+    errdefer expr_ids.deinit(allocator);
+    var pat_ids = try clonedLiftedProgramList(Lifted.PatId, "pat_ids", allocator, view.pat_ids);
+    errdefer pat_ids.deinit(allocator);
+    var typed_locals = try clonedLiftedProgramList(Lifted.TypedLocal, "typed_locals", allocator, view.typed_locals);
+    errdefer typed_locals.deinit(allocator);
+    var stmt_ids = try clonedLiftedProgramList(Lifted.StmtId, "stmt_ids", allocator, view.stmt_ids);
+    errdefer stmt_ids.deinit(allocator);
+    var field_exprs = try clonedLiftedProgramList(Lifted.FieldExpr, "field_exprs", allocator, view.field_exprs);
+    errdefer field_exprs.deinit(allocator);
+    var field_access_segments = try clonedLiftedProgramList(Lifted.FieldAccessSegment, "field_access_segments", allocator, view.field_access_segments);
+    errdefer field_access_segments.deinit(allocator);
+    var fn_def_captures = try clonedLiftedProgramList(Lifted.FnDefCapture, "fn_def_captures", allocator, view.fn_def_captures);
+    errdefer fn_def_captures.deinit(allocator);
+    var capture_operands = try clonedLiftedProgramList(Lifted.CaptureOperand, "capture_operands", allocator, view.capture_operands);
+    errdefer capture_operands.deinit(allocator);
+    var record_destructs = try clonedLiftedProgramList(Lifted.RecordDestruct, "record_destructs", allocator, view.record_destructs);
+    errdefer record_destructs.deinit(allocator);
+    var str_pattern_steps = try clonedLiftedProgramList(Lifted.StrPatternStep, "str_pattern_steps", allocator, view.str_pattern_steps);
+    errdefer str_pattern_steps.deinit(allocator);
+    var branches = try clonedLiftedProgramList(Lifted.Branch, "branches", allocator, view.branches);
+    errdefer branches.deinit(allocator);
+    var if_branches = try clonedLiftedProgramList(Lifted.IfBranch, "if_branches", allocator, view.if_branches);
+    errdefer if_branches.deinit(allocator);
+    var roots = try clonedLiftedProgramList(Lifted.Root, "roots", allocator, view.roots);
+    errdefer roots.deinit(allocator);
+    var layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests);
+    errdefer layout_requests.deinit(allocator);
+    var runtime_schema_requests = try clonedLiftedProgramList(Lifted.RuntimeSchemaRequest, "runtime_schema_requests", allocator, view.runtime_schema_requests);
+    errdefer runtime_schema_requests.deinit(allocator);
+    var static_data_values = try clonedLiftedProgramList(Lifted.StaticDataValue, "static_data_values", allocator, view.static_data_values);
+    errdefer static_data_values.deinit(allocator);
+    var expr_locs = try clonedLiftedProgramList(base.SourceLoc, "expr_locs", allocator, view.expr_locs);
+    errdefer expr_locs.deinit(allocator);
+    var expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions);
+    errdefer expr_regions.deinit(allocator);
+    var stmt_locs = try clonedLiftedProgramList(base.SourceLoc, "stmt_locs", allocator, view.stmt_locs);
+    errdefer stmt_locs.deinit(allocator);
+    var stmt_regions = try clonedLiftedProgramList(base.Region, "stmt_regions", allocator, view.stmt_regions);
+    errdefer stmt_regions.deinit(allocator);
+    var inline_scopes = try clonedLiftedProgramList(Lifted.InlineScope, "inline_scopes", allocator, view.inline_scopes);
+    errdefer inline_scopes.deinit(allocator);
+    var expr_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "expr_inline_scopes", allocator, view.expr_inline_scopes);
+    errdefer expr_inline_scopes.deinit(allocator);
+    var stmt_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "stmt_inline_scopes", allocator, view.stmt_inline_scopes);
+    errdefer stmt_inline_scopes.deinit(allocator);
+    var proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names);
+    errdefer proc_debug_names.deinit();
+    var comptime_sites = try cloneComptimeSites(allocator, view.comptime_sites);
+    errdefer {
+        for (comptime_sites.items) |site| allocator.free(site.branch_regions);
+        comptime_sites.deinit(allocator);
+    }
+
     return .{
         .allocator = allocator,
         .names = name_store,
         .next_symbol = program.next_symbol,
         .types = types,
-        .imported_fns = try clonedLiftedProgramList(Lifted.ImportedFn, "imported_fns", allocator, view.imported_fns),
+        .imported_fns = imported_fns,
         .const_fn_evidence = const_fn_evidence,
         .const_fn_evidence_frames = const_fn_evidence_frames,
-        .fns = try clonedLiftedProgramList(Lifted.Fn, "fns", allocator, view.fns),
-        .exprs = try clonedLiftedProgramList(Lifted.Expr, "exprs", allocator, view.exprs),
-        .pats = try clonedLiftedProgramList(Lifted.Pat, "pats", allocator, view.pats),
-        .stmts = try clonedLiftedProgramList(Lifted.Stmt, "stmts", allocator, view.stmts),
-        .locals = try clonedLiftedProgramList(Lifted.Local, "locals", allocator, view.locals),
-        .expr_ids = try clonedLiftedProgramList(Lifted.ExprId, "expr_ids", allocator, view.expr_ids),
-        .pat_ids = try clonedLiftedProgramList(Lifted.PatId, "pat_ids", allocator, view.pat_ids),
-        .typed_locals = try clonedLiftedProgramList(Lifted.TypedLocal, "typed_locals", allocator, view.typed_locals),
-        .stmt_ids = try clonedLiftedProgramList(Lifted.StmtId, "stmt_ids", allocator, view.stmt_ids),
-        .field_exprs = try clonedLiftedProgramList(Lifted.FieldExpr, "field_exprs", allocator, view.field_exprs),
-        .field_access_segments = try clonedLiftedProgramList(Lifted.FieldAccessSegment, "field_access_segments", allocator, view.field_access_segments),
-        .fn_def_captures = try clonedLiftedProgramList(Lifted.FnDefCapture, "fn_def_captures", allocator, view.fn_def_captures),
-        .capture_operands = try clonedLiftedProgramList(Lifted.CaptureOperand, "capture_operands", allocator, view.capture_operands),
-        .record_destructs = try clonedLiftedProgramList(Lifted.RecordDestruct, "record_destructs", allocator, view.record_destructs),
-        .str_pattern_steps = try clonedLiftedProgramList(Lifted.StrPatternStep, "str_pattern_steps", allocator, view.str_pattern_steps),
-        .branches = try clonedLiftedProgramList(Lifted.Branch, "branches", allocator, view.branches),
-        .if_branches = try clonedLiftedProgramList(Lifted.IfBranch, "if_branches", allocator, view.if_branches),
+        .fns = fns,
+        .exprs = exprs,
+        .pats = pats,
+        .stmts = stmts,
+        .locals = locals,
+        .expr_ids = expr_ids,
+        .pat_ids = pat_ids,
+        .typed_locals = typed_locals,
+        .stmt_ids = stmt_ids,
+        .field_exprs = field_exprs,
+        .field_access_segments = field_access_segments,
+        .fn_def_captures = fn_def_captures,
+        .capture_operands = capture_operands,
+        .record_destructs = record_destructs,
+        .str_pattern_steps = str_pattern_steps,
+        .branches = branches,
+        .if_branches = if_branches,
         .string_literals = Lifted.ProgramList(Mono.StringLiteral, "string_literals").fromArrayList(string_literals),
         .next_lift_capture_id = program.next_lift_capture_id,
-        .proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names),
-        .roots = try clonedLiftedProgramList(Lifted.Root, "roots", allocator, view.roots),
-        .layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests),
-        .runtime_schema_requests = try clonedLiftedProgramList(Lifted.RuntimeSchemaRequest, "runtime_schema_requests", allocator, view.runtime_schema_requests),
-        .static_data_values = try clonedLiftedProgramList(Lifted.StaticDataValue, "static_data_values", allocator, view.static_data_values),
-        .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(try cloneComptimeSites(allocator, view.comptime_sites)),
+        .proc_debug_names = proc_debug_names,
+        .roots = roots,
+        .layout_requests = layout_requests,
+        .runtime_schema_requests = runtime_schema_requests,
+        .static_data_values = static_data_values,
+        .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
         .source_files = Lifted.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(source_files),
-        .expr_locs = try clonedLiftedProgramList(base.SourceLoc, "expr_locs", allocator, view.expr_locs),
-        .expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions),
-        .stmt_locs = try clonedLiftedProgramList(base.SourceLoc, "stmt_locs", allocator, view.stmt_locs),
-        .stmt_regions = try clonedLiftedProgramList(base.Region, "stmt_regions", allocator, view.stmt_regions),
-        .inline_scopes = try clonedLiftedProgramList(Lifted.InlineScope, "inline_scopes", allocator, view.inline_scopes),
-        .expr_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "expr_inline_scopes", allocator, view.expr_inline_scopes),
-        .stmt_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "stmt_inline_scopes", allocator, view.stmt_inline_scopes),
+        .expr_locs = expr_locs,
+        .expr_regions = expr_regions,
+        .stmt_locs = stmt_locs,
+        .stmt_regions = stmt_regions,
+        .inline_scopes = inline_scopes,
+        .expr_inline_scopes = expr_inline_scopes,
+        .stmt_inline_scopes = stmt_inline_scopes,
         .local_names = blk: {
             var names: std.ArrayList([]const u8) = .empty;
             errdefer {
@@ -11379,55 +11461,18 @@ fn cloneProcDebugNameMap(allocator: std.mem.Allocator, source: *const Lifted.Pro
     return cloned;
 }
 
-fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedNames.NameStore) std.mem.Allocator.Error!check.CheckedNames.NameStore {
-    var cloned = check.CheckedNames.NameStore.init(allocator);
-    errdefer cloned.deinit();
-
-    // Re-intern every name in serial-id order; the ids must come back identical.
-    try reinternNames("module-name", &source.module_names, &cloned, NameStore.internModuleName);
-    try reinternNames("type-name", &source.type_names, &cloned, NameStore.internTypeName);
-    try reinternNames("method-name", &source.method_names, &cloned, NameStore.internMethodName);
-    try reinternNames("record-field", &source.record_field_labels, &cloned, NameStore.internRecordFieldLabel);
-    try reinternNames("tag", &source.tag_labels, &cloned, NameStore.internTagLabel);
-    try reinternNames("export-name", &source.export_names, &cloned, NameStore.internExportName);
-    try reinternNames("external-symbol", &source.external_symbol_names, &cloned, NameStore.internExternalSymbolName);
-    for (source.proc_bases.items.items, 0..) |key, index| {
-        const id = try cloned.internProcBase(key);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed proc-base ids");
-    }
-
-    return cloned;
-}
-
 const NameStore = check.CheckedNames.NameStore;
-
-/// Re-intern every text of one source interner into `dest` in serial-id order,
-/// asserting each id round-trips to its original position. A name interner
-/// deduplicates, so this reproduces ids `0..count-1` exactly UNLESS the source
-/// held the same text under two ids—dedup would collapse those and shift every
-/// later id, which the per-id check turns into a loud invariant break rather than
-/// a silently divergent clone.
-fn reinternNames(
-    comptime label: []const u8,
-    source: anytype,
-    dest: *NameStore,
-    comptime intern: anytype,
-) std.mem.Allocator.Error!void {
-    var i: u32 = 0;
-    while (i < source.count()) : (i += 1) {
-        const id = try intern(dest, source.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed " ++ label ++ " ids (duplicate text in source?)");
-    }
-}
 
 fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Store) std.mem.Allocator.Error!MonoType.Store {
     const view = source.view();
+    if (source.hasSpeculativeConstruction()) Common.invariant("Solved cloning requires completed Monotype construction");
     var cloned = MonoType.Store.init(allocator);
     errdefer cloned.deinit();
 
     cloned.types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types));
     cloned.type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests));
     cloned.specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView()));
+    cloned.equality_digests = @TypeOf(source.equality_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.equality_digests.unsafeRawItemsForView()));
     cloned.constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView()));
     cloned.iterator_interface_cache = @TypeOf(source.iterator_interface_cache).fromArrayList(try cloneSlice(?bool, allocator, source.iterator_interface_cache.unsafeRawItemsForView()));
     var iterator_interface_visit_epochs: std.ArrayList(u32) = .empty;
@@ -11443,6 +11488,14 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     while (unfoldings.next()) |entry| {
         try cloned.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
     }
+    var buckets = source.full_digest_interned.iterator();
+    while (buckets.next()) |entry| {
+        var copied = try cloneSlice(MonoType.TypeId, allocator, entry.value_ptr.items);
+        cloned.full_digest_interned.put(entry.key_ptr.*, copied) catch |err| {
+            copied.deinit(allocator);
+            return err;
+        };
+    }
     cloned.spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans));
     cloned.fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields));
     cloned.tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags));
@@ -11452,16 +11505,33 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
 }
 
 fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.Store) std.mem.Allocator.Error!SolvedType.Store {
+    var vars = try cloneArrayList(SolvedType.Content, allocator, &source.vars);
+    errdefer vars.deinit(allocator);
+    var owned_named_backings = try cloneArrayList(bool, allocator, &source.owned_named_backings);
+    errdefer owned_named_backings.deinit(allocator);
+    var spans = try cloneArrayList(SolvedType.TypeVarId, allocator, &source.spans);
+    errdefer spans.deinit(allocator);
+    var fields = try cloneArrayList(SolvedType.Field, allocator, &source.fields);
+    errdefer fields.deinit(allocator);
+    var tags = try cloneArrayList(SolvedType.Tag, allocator, &source.tags);
+    errdefer tags.deinit(allocator);
+    var captures = try cloneArrayList(SolvedType.Capture, allocator, &source.captures);
+    errdefer captures.deinit(allocator);
+    var fn_members = try cloneArrayList(SolvedType.FnMember, allocator, &source.fn_members);
+    errdefer fn_members.deinit(allocator);
+    var declared_fields = try cloneArrayList(SolvedType.DeclaredField, allocator, &source.declared_fields);
+    errdefer declared_fields.deinit(allocator);
+
     return .{
         .allocator = allocator,
-        .vars = try cloneArrayList(SolvedType.Content, allocator, &source.vars),
-        .owned_named_backings = try cloneArrayList(bool, allocator, &source.owned_named_backings),
-        .spans = try cloneArrayList(SolvedType.TypeVarId, allocator, &source.spans),
-        .fields = try cloneArrayList(SolvedType.Field, allocator, &source.fields),
-        .tags = try cloneArrayList(SolvedType.Tag, allocator, &source.tags),
-        .captures = try cloneArrayList(SolvedType.Capture, allocator, &source.captures),
-        .fn_members = try cloneArrayList(SolvedType.FnMember, allocator, &source.fn_members),
-        .declared_fields = try cloneArrayList(SolvedType.DeclaredField, allocator, &source.declared_fields),
+        .vars = vars,
+        .owned_named_backings = owned_named_backings,
+        .spans = spans,
+        .fields = fields,
+        .tags = tags,
+        .captures = captures,
+        .fn_members = fn_members,
+        .declared_fields = declared_fields,
     };
 }
 
@@ -11531,7 +11601,9 @@ fn lirInlineScopeId(scope: Lifted.InlineScopeId) LIR.InlineScopeId {
     return @enumFromInt(@intFromEnum(scope));
 }
 
-fn constFnTemplateFromMono(self: *Lowerer, template: Mono.FnTemplate) std.mem.Allocator.Error!LirProgram.FnTemplate {
+fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Error!LirProgram.FnTemplate {
+    const template = self.fnTemplateForFn(fn_id);
+    const spec = self.fn_entries.items[@intFromEnum(fn_id)].spec;
     requireConstFnEvidenceTopology(template);
     const lifted = self.solved.lifted.view();
     const evidence = try self.allocator.dupe(check.ConstStore.ConstFnEvidence, lifted.const_fn_evidence[template.const_evidence.start..][0..template.const_evidence.len]);
@@ -11540,6 +11612,18 @@ fn constFnTemplateFromMono(self: *Lowerer, template: Mono.FnTemplate) std.mem.Al
     return .{
         .frozen_fn = if (template.frozen_fn) |id| @intFromEnum(id) else null,
         .frozen_worker = template.frozen_worker,
+        .frozen_context = .{
+            .abi = switch (spec.abi) {
+                .finite => .finite,
+                .erased => .erased,
+            },
+            .source = @intFromEnum(spec.source),
+            .fn_type = @intFromEnum(spec.solved_fn_ty),
+            .captures = switch (spec.captures.source) {
+                .own => .{ .own = spec.captures.len },
+                .solved => .{ .solved = .{ .start = spec.captures.start, .len = spec.captures.len } },
+            },
+        },
         .fn_def = constFnDefFromMono(template.fn_def),
         .source_fn_ty = template.source_fn_ty,
         .source_fn_key = template.source_fn_key,
@@ -11625,6 +11709,53 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         0, // next_symbol
     );
     return Solved.Program.init(allocator, lifted);
+}
+
+test "frozen solved clone preserves producer IDs and releases partial allocations" {
+    const allocator = std.testing.allocator;
+    var source = emptySolvedProgramForTest(allocator);
+    defer source.deinit();
+    const names = &source.lifted.names;
+    const module = try names.internModuleName("Fixture");
+    const identity = try names.internModuleIdentity(&(@as([32]u8, @splat(17))));
+    _ = try names.internTypeName("Value");
+    _ = try names.internMethodName("method");
+    _ = try names.internRecordFieldLabel("field");
+    _ = try names.internTagLabel("Tag");
+    const exported = try names.internExportName("entry");
+    _ = try names.internExternalSymbolName("roc_entry");
+    _ = try names.internProcBase(.{ .module_name = module, .export_name = exported, .kind = .checked_source, .ordinal = 0 });
+    const mono_ty = try source.lifted.types.add(.{ .primitive = .u8 });
+    var symbols: Common.SymbolGen = .{};
+    const capture_symbol = symbols.fresh();
+    const local = try source.lifted.addLocal(capture_symbol, mono_ty);
+    const ty = try source.types.add(.{ .primitive = .u8 });
+    const captures = try source.types.addCaptures(&.{.{ .local = local, .symbol = capture_symbol, .binder = null, .ty = ty }});
+    const members = try source.types.addMembers(&.{.{ .lambda = symbols.fresh(), .captures = captures }});
+    try source.local_tys.append(allocator, ty);
+    try source.expr_tys.append(allocator, ty);
+    try source.pat_tys.append(allocator, ty);
+    try source.fn_tys.append(allocator, ty);
+    var cloned = try cloneSolvedProgram(allocator, &source);
+    defer cloned.deinit();
+    try std.testing.expectEqual(source.types.memberItem(members, 0).captures, cloned.types.memberItem(members, 0).captures);
+    try std.testing.expectEqual(source.types.captureItem(captures, 0).local, cloned.types.captureItem(captures, 0).local);
+    try std.testing.expectEqualSlices(u8, names.moduleIdentityBytes(identity), cloned.lifted.names.moduleIdentityBytes(identity));
+    inline for (.{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" }) |field| {
+        const original = &@field(names, field);
+        const copy = &@field(cloned.lifted.names, field);
+        try std.testing.expectEqual(original.count(), copy.count());
+        for (0..original.count()) |index| try std.testing.expectEqualSlices(u8, original.getText(@intCast(index)), copy.getText(@intCast(index)));
+    }
+    try std.testing.expectEqual(names.proc_bases.items.items.len, cloned.lifted.names.proc_bases.items.items.len);
+    try std.testing.expect(cloned.local_tys.items.ptr != source.local_tys.items.ptr);
+    const Attempt = struct {
+        fn run(failing: std.mem.Allocator, original: *const Solved.Program) std.mem.Allocator.Error!void {
+            var copy = try cloneSolvedProgram(failing, original);
+            defer copy.deinit();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{&source});
 }
 
 test "layout lowering accepts tag payload alias backed by primitive" {

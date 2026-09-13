@@ -119,12 +119,26 @@ pub const FnResult = union(enum) {
     erased: ErasedFnsId,
 };
 
+/// Exact member context in the common target-independent Lambda Solved graph.
+/// Own captures belong to `source`; solved captures name their producer span.
+pub const FrozenCallableContext = struct {
+    abi: enum { finite, erased },
+    source: u32,
+    fn_type: u32,
+    captures: union(enum) {
+        own: u32,
+        solved: struct { start: u32, len: u32 },
+    },
+};
+
 /// Checked function template and source type used to emit callable code.
 pub const FnTemplate = struct {
     /// Original function slot in the shared frozen Monotype owner.
     frozen_fn: ?u32 = null,
     /// Exact callable worker specialization key, emitted by SpecConstr.
     frozen_worker: ?[96]u8 = null,
+    /// Exact member specialization within the shared frozen Solved owner.
+    frozen_context: ?FrozenCallableContext = null,
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,

@@ -684,11 +684,11 @@ The frontend prepares immutable checked types, bodies, binding identities, and
 selected root requests before evaluating those roots. Importers may consume
 that prepared interface while their own frontend tasks run. A prepared module
 is not a completed checked cache entry: evaluation and diagnostic replay must
-finish before its constants are published or its artifact is serialized.
+finish before its constants are committed or its checked module data is serialized.
 
 The compilation coordinator evaluates prepared modules after all frontend tasks
 have completed, while its post-check executor and module environments remain
-alive. This phase runs for `roc check` as well as executable compilation.
+alive. Evaluation runs for `roc check` as well as `roc build`.
 Evaluation remains part of checking's diagnostic contract; "post-check
 executor" names the worker lifetime, not permission to postpone diagnostics
 until runtime. Standalone checking clients own the same completion operation
@@ -720,7 +720,7 @@ function-valued computation remains an ordinary compile-time callable root.
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
 root id, and optional const locator (callable roots have no const locator). Its
-initializer is an explicit zero-argument proof call to the one canonical root
+initializer is an explicit zero-argument proof call to the one declared root
 function, whose return owns the concrete Monotype representation and lambda
 sets. Lambda solving unifies reads with that return. The proof call is not an
 expression to execute at the read. Lifting and lambda solving preserve that witness. Value
@@ -732,7 +732,7 @@ the completed root payloads. Neither consumer executes the initializer at a
 slot read or reconstructs a callable identity from its layout.
 
 A provided static export requested during shared preparation aliases that same
-canonical slot. Its const locator's checked owner identifies the root, and the
+declared slot. Its const locator's checked owner identifies the root, and the
 explicit evaluation request manifest determines slot membership. The export's
 closed initializer reads the slot after evaluation; it does not restore a
 pending ConstStore entry or run the value computation again. Requests for an
@@ -771,16 +771,16 @@ mode. Ordinary divergence outside an expect still uses the same explicit
 producer tables and remains terminating. Consequently the shared Monotype
 contains both the complete diagnostic computation and the continuation required
 when optimized runtime code omits it. Later lowering selects `.run` for compile-
-time evaluation or `.omit` for optimized execution. Those differing semantics
-require separate target-LIR continuations from the shared Monotype; they do not
-repeat specialization. A program lowered originally with a non-shared expect
+time evaluation or `.omit` for optimized execution. Those different expect behaviors
+require separate target-LIR continuations from the shared Solved program; they do not
+repeat specialization or lambda solving. A program lowered originally with a non-shared expect
 mode cannot change that mode at the continuation boundary.
 
 Shared value slots are declared by the compile-time `RootRequest` manifest,
 not by root type eligibility alone. Eligible procedure aliases and roots with
 unbound platform requirements can be intentionally absent from that manifest.
 The initial reservation pass records exactly its module/root identities and
-canonical functions; lowering uses that declaration table to select slot reads.
+reserved root functions; lowering uses that declaration table to select slot reads.
 Unrequested callable bindings retain their ordinary checked body computation.
 
 Every shared compile-time value slot names an explicit failure-record slot with
@@ -797,10 +797,11 @@ local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
 The guard pass also records each guard's crash statement identity. Failed root
-publication associates those statements with the original evaluated failure's
-source location and region. Published origins remain stable. A suspended invocation may demand another
-root, whose completion publishes additional origins before that invocation resumes. Native compile-time failure hooks receive the emitted statement ID;
-the host and interpreter consume the same published origin table when a guard
+completion associates those statements with the original evaluated failure's
+source location and region. Recorded origins remain stable. A suspended
+invocation may demand another root, whose completion records additional origins
+before that invocation resumes. Native compile-time failure hooks receive the
+emitted statement ID; the host and interpreter consume the same origin table when a guard
 propagates a failure. They never reconstruct the original source from the
 value's use site or from checked bodies. The table is diagnostic session data,
 not part of the runtime frozen value representation.
@@ -814,13 +815,15 @@ solving, including callable identities stored in compile-time results. The
 consumer input is opaque to value folding until target LIR lowering supplies the
 configured run/omit Boolean. No specialization is repeated.
 
-A cross-target continuation forks the frozen Monotype program by copying its
-owned arrays, canonical-name identities, immutable type graph, and owned literal
-and diagnostic bytes. Every id and specialization identity stays unchanged.
-The fork does not invoke checked lowering or a specialization cache. Each fork
-is consumed independently by lifting and the remaining target-layout pipeline;
-target width and the explicitly shared expect consumer mode may change, while
-specialization options remain captured.
+A cross-target continuation forks one frozen Solved program after Monotype
+lowering, lifting, SpecConstr, lambda solving, and inline analysis. It copies
+the owned arrays, checked name identities, immutable type graphs, literal and
+diagnostic bytes, and inline plan exactly. Every producer id and specialization
+identity stays unchanged. The fork does not rerun any of those stages. Each
+fork is consumed independently by target LIR lowering; target width and the
+explicitly shared expect consumer mode may change, while specialization options
+remain captured. Callable correspondence therefore compares ids from one
+producer domain, never ids allocated by separate solver runs.
 
 Boxy runtime lowering is a distinct declared specialization strategy. Compile-
 time evaluation remains LSS, so that consumer's runtime roots are excluded from
@@ -8527,7 +8530,10 @@ identities receives a program-global identity derived from the first final
 `LocalId` in that equivalence class. Local aliases within the same
 materialization retain one identity; a separate materialization receives a
 different identity even when it came from the same checked binder. The checked
-binder remains separate metadata for lexical binding and substitution. The original checked capture
+binder remains separate metadata for lexical binding and substitution. The declared
+callable-root evaluator reserves its recursive local with the root's declared
+checked pattern binder. Its captures therefore retain that source provenance
+when the evaluated recursive graph is written back to `ConstStore`. The original checked capture
 identity is also carried in a separate provenance field solely for writing a
 compile-time result back to `ConstStore`; it is never used for runtime capture
 joining. Consequently, separate
@@ -13857,12 +13863,25 @@ Compile-time dependency summaries are produced from explicit checked root data
 and `ConstStore` dependencies. They are not discovered by a later stage scanning
 bodies for missing data.
 
-Shared compile-time execution uses demand-driven slot publication. Each canonical
+Shared host and runtime consumers branch from one completed Lambda Solved
+program and its inline plan. The runtime continuation is an exact owned clone;
+Lift, SpecConstr, and Solve do not run again. Frozen callable correspondence
+retains the complete member specialization identity in that shared domain:
+capture ABI, lifted source function, solved function type, and producer capture
+span, or the source-owned capture count. Source-owned capture storage positions
+are continuation-local and are not identities. A source function can have
+multiple members with distinct capture contexts even when all their payloads
+are zero-sized; its source template or layout alone cannot identify which member
+was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
+Monotype function and generated worker identity. Transcoding consumes that
+complete identity and requires one exact target member.
+
+Shared compile-time execution completes slots on demand. Each declared
 value and failure slot carries its producer's exact checked module and root ID.
 Before reading a static slot, the compile-time interpreter or native hook asks
 the session to ensure that producer has completed. Ordinary materialized slots
 are already ready. A pending producer runs synchronously with independent host,
-return storage, and execution state; publication completes before the suspended
+return storage, and execution state; the result is stored before the suspended
 read resumes. Completed producers never run again. Re-entering an active
 producer reports an actual cyclic compile-time value dependency through the
 ordinary compile-time crash path. No execution is probed, abandoned, or retried.
@@ -13884,7 +13903,7 @@ offsets, and alignment; relocation rows retain data-symbol IDs, procedure IDs,
 callable capture offsets, and RC helper identities. All spans are image-relative
 offsets. Frozen bytes record their pointer width and mapped consumers reject a
 width mismatch. Cross-width production converts completed values before image
-publication. The loader owns relocated bytes and callable metadata for as long
+emission. The loader owns relocated bytes and callable metadata for as long
 as any interpreter or escaping callable can reference them. It never reruns a
 compile-time initializer or reconstructs identity from symbol names.
 
@@ -14105,6 +14124,15 @@ features, and strip debug metadata only for non-debug output. Both remove
 producer metadata; only non-debug size builds remove target-feature metadata.
 
 ## Host Symbol ABI
+
+The program's hosted catalog retains every visible hosted declaration and
+classifies its platform binding as mapped or unavailable. Only mapped entries
+carry a dispatch slot. An unavailable declaration lowers to the existing
+checked-generated Roc error body; it never gains a fabricated host symbol or
+slot. This permits error-bearing checked programs, including unselected erased
+callable variants, to complete lowering while preserving the checker's missing
+hosted-section diagnostics. A missing catalog declaration remains an invariant
+violation, distinct from an explicitly unavailable binding.
 
 Hosts and compiled Roc code share symbols resolved at link time; there is no
 host-facing struct of function pointers. `RocOps` survives only as an

@@ -690,6 +690,7 @@ pub const PublishInputs = struct {
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
     pub const Error = Allocator.Error || std.Thread.SpawnError || error{
+        RuntimeError,
         EmptyCode,
         MmapFailed,
         MprotectFailed,

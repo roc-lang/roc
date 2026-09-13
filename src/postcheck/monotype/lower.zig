@@ -2126,7 +2126,7 @@ const FunctionShape = struct {
 const HostedCatalogEntry = struct {
     template: names.ProcTemplate,
     external_symbol_name: names.ExternalSymbolNameId,
-    dispatch_index: u32,
+    binding: union(enum) { unavailable, mapped: u32 },
     order: []const u8,
     target_checked_module_digest: [32]u8,
     def_idx: u32,
@@ -2718,7 +2718,7 @@ const SpecJobWorkerInputs = struct {
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     comptime_value_reads: bool,
-    canonical_comptime_roots: *const CanonicalComptimeRoots,
+    declared_comptime_root_functions: *const DeclaredComptimeRootFunctions,
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
     current_region: base.Region,
@@ -3078,7 +3078,7 @@ const SymbolDomains = struct {
     }
 };
 
-const CanonicalComptimeRoots = std.AutoHashMap(EntryRoot, Ast.FnId);
+const DeclaredComptimeRootFunctions = std.AutoHashMap(EntryRoot, Ast.FnId);
 
 const Builder = struct {
     allocator: Allocator,
@@ -3098,8 +3098,8 @@ const Builder = struct {
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     comptime_value_reads: bool,
-    canonical_comptime_roots: CanonicalComptimeRoots,
-    canonical_comptime_root_owner: ?*const CanonicalComptimeRoots = null,
+    declared_comptime_root_functions: DeclaredComptimeRootFunctions,
+    borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*Timing,
     /// Executor workers use the existing allocation error channel as a private
@@ -3254,7 +3254,7 @@ const Builder = struct {
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
-            .canonical_comptime_roots = CanonicalComptimeRoots.init(allocator),
+            .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
@@ -3294,7 +3294,7 @@ const Builder = struct {
             .timing = null,
         });
         errdefer builder.deinit();
-        builder.canonical_comptime_root_owner = inputs.canonical_comptime_roots;
+        builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
         builder.current_region = inputs.current_region;
@@ -3371,7 +3371,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
-        self.canonical_comptime_roots.deinit();
+        self.declared_comptime_root_functions.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         for (self.spec_job_parallel_workers) |*worker| {
             if (worker.*) |*initialized| initialized.deinit();
@@ -3548,11 +3548,9 @@ const Builder = struct {
         if (self.hostedBindingView()) |binding_view| {
             // The platform header's hosted section is the complete list of
             // functions the host supplies, and it is what gives each one its
-            // external symbol and dispatch slot. Build the catalog from that
-            // list rather than from every hosted declaration in scope: a
-            // declaration the section leaves out has no symbol to call and no
-            // slot to occupy, and checking already reports it against the
-            // section it is missing from.
+            // external symbol and dispatch slot. Retain declarations omitted
+            // from that list as explicitly unavailable: they have no host slot
+            // and lower to error bodies, preserving checking's section error.
             var declared_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
             defer declared_by_target.deinit();
             try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
@@ -3563,25 +3561,21 @@ const Builder = struct {
                 }, index);
             }
 
-            var bound = std.ArrayList(HostedCatalogEntry).empty;
-            errdefer bound.deinit(self.allocator);
-            try bound.ensureTotalCapacity(self.allocator, binding_view.table.bindings.len);
             for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
                 const entry_index = declared_by_target.get(.{
                     .checked_module_digest = binding.target_checked_module.bytes,
                     .def_idx = @intFromEnum(binding.target_def),
                 }) orelse Common.invariant("hosted section names a function with no hosted declaration in scope");
-                var entry = entries.items[entry_index];
-                entry.dispatch_index = @intCast(dispatch_index);
+                const entry = &entries.items[entry_index];
+                entry.binding = .{ .mapped = @intCast(dispatch_index) };
                 entry.external_symbol_name = try self.program.names.internExternalSymbolName(
                     binding_view.names.externalSymbolNameText(binding.external_symbol_name),
                 );
-                bound.appendAssumeCapacity(entry);
             }
 
-            // Bindings are walked in declaration order, so the catalog is
-            // already ordered by dispatch index.
-            self.hosted_catalog = try bound.toOwnedSlice(self.allocator);
+            // Retain every declaration: an omitted declaration is explicitly
+            // unavailable, never a missing catalog lookup or invented host slot.
+            self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
             return;
         }
 
@@ -3601,7 +3595,7 @@ const Builder = struct {
         };
         std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
         for (entries.items, 0..) |*entry, index| {
-            entry.dispatch_index = @intCast(index);
+            entry.binding = .{ .mapped = @intCast(index) };
         }
 
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
@@ -3632,7 +3626,7 @@ const Builder = struct {
             try entries.append(self.allocator, .{
                 .template = proc.template,
                 .external_symbol_name = try self.program.names.internExternalSymbolName(view.names.externalSymbolNameText(proc.external_symbol_name)),
-                .dispatch_index = 0,
+                .binding = .unavailable,
                 .order = proc.orderKey(view.hosted_procs),
                 .target_checked_module_digest = view.key.bytes,
                 .def_idx = @intFromEnum(proc.def_idx),
@@ -3640,16 +3634,33 @@ const Builder = struct {
         }
     }
 
-    fn hostedFn(self: *Builder, template: names.ProcTemplate) Ast.HostedFn {
+    fn hostedEntry(self: *Builder, template: names.ProcTemplate) HostedCatalogEntry {
         for (self.hosted_catalog) |entry| {
-            if (!names.procedureTemplateRefEql(entry.template, template)) continue;
-            return .{
-                .template = template,
-                .external_symbol_name = entry.external_symbol_name,
-                .dispatch_index = entry.dispatch_index,
-            };
+            if (names.procedureTemplateRefEql(entry.template, template)) return entry;
         }
         Common.invariant("hosted procedure template was not output in the hosted catalog");
+    }
+
+    fn hostedFn(self: *Builder, template: names.ProcTemplate) Ast.HostedFn {
+        const entry = self.hostedEntry(template);
+        return .{
+            .template = template,
+            .external_symbol_name = entry.external_symbol_name,
+            .dispatch_index = switch (entry.binding) {
+                .mapped => |index| index,
+                .unavailable => Common.invariant("unavailable hosted declaration reached extern emission"),
+            },
+        };
+    }
+
+    fn fnDefForHostedTemplate(self: *Builder, template: names.ProcTemplate, is_local: bool) Ast.FnDef {
+        return switch (self.hostedEntry(template).binding) {
+            .unavailable => .{ .checked_generated = template },
+            .mapped => if (is_local)
+                .{ .local_hosted = self.hostedFn(template) }
+            else
+                .{ .imported_hosted = self.hostedFn(template) },
+        };
     }
 
     /// Whether an extern boundary may be emitted at `emitted_fn_ty`: the host
@@ -3877,13 +3888,13 @@ const Builder = struct {
                 const source_module = self.rootSourceModule(source_modules, i);
                 const source_view = self.moduleForId(source_module);
                 const template = request.procedure_template orelse
-                    Common.invariant("shared compile-time root lacked its canonical entry template");
+                    Common.invariant("shared compile-time root lacked its declared entry template");
                 const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence);
                 const key = EntryRoot{ .module = source_module, .root = root_id };
-                const entry = try self.canonical_comptime_roots.getOrPut(key);
+                const entry = try self.declared_comptime_root_functions.getOrPut(key);
                 const fn_id = self.defFnId(def);
                 if (entry.found_existing and entry.value_ptr.* != fn_id) {
-                    Common.invariant("checked compile-time root reserved different canonical functions");
+                    Common.invariant("checked compile-time root reserved different functions for one declared root");
                 }
                 entry.value_ptr.* = fn_id;
             }
@@ -3942,7 +3953,7 @@ const Builder = struct {
             .inline_expects = self.inline_expects,
             .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
-            .canonical_comptime_roots = self.canonical_comptime_root_owner orelse &self.canonical_comptime_roots,
+            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
@@ -4029,7 +4040,7 @@ const Builder = struct {
         const body = body: {
             // Provided exports request the whole checked constant before its
             // evaluation completes. Their initializer aliases the declared
-            // canonical slot; it must not restore the still-pending ConstStore.
+            // declared slot; it must not restore the still-pending ConstStore.
             if (request.node == null and self.comptime_value_reads) {
                 const view = self.moduleForId(checked.constModuleId(request.const_locator));
                 const root_id = switch (request.const_locator.owner) {
@@ -4038,7 +4049,7 @@ const Builder = struct {
                 };
                 if (root_id) |root| {
                     if (self.comptimeValueReadDeclared(view, root)) {
-                        const owners = self.canonical_comptime_root_owner orelse &self.canonical_comptime_roots;
+                        const owners = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions;
                         const fn_id = owners.get(.{ .module = view.key, .root = root }).?;
                         const initializer = try self.program.addExpr(.{
                             .ty = ret_ty,
@@ -5015,6 +5026,23 @@ const Builder = struct {
                 hosted_fn_template.const_evidence_frame_head = fn_template.const_evidence_frame_head;
                 const fn_data = self.programFunctionShape(lower_fn_ty, "hosted procedure template root type was not a function");
                 const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
+                if (self.hostedEntry(template_ref).binding == .unavailable) {
+                    const body = try self.program.addExpr(.{
+                        .ty = fn_data.ret,
+                        .data = .{ .crash = try self.program.addStringLiteral("hosted declaration is absent from the platform hosted section") },
+                    });
+                    self.program.setDef(reservation.def, .{
+                        .symbol = reservation.symbol,
+                        .fn_def = hosted_fn_template,
+                        .fn_id = reservation.fn_id,
+                        .args = args,
+                        .body = .{ .roc = body },
+                        .ret = fn_data.ret,
+                    });
+                    self.program.setFnSource(reservation.fn_id, hosted_fn_template);
+                    try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
+                    return;
+                }
                 const hosted_try = try self.hostedTryAdapterCapability(view, template.hosted_try_adapter);
                 if (try self.hostedTryAdapterSourceType(hosted_try, declared_mono_fn_ty, lower_fn_ty)) |adapter_source_fn_ty| {
                     const source_def = try self.lowerTemplateWithMono(
@@ -5169,7 +5197,7 @@ const Builder = struct {
             .inline_expects = self.inline_expects,
             .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
-            .canonical_comptime_roots = self.canonical_comptime_root_owner orelse &self.canonical_comptime_roots,
+            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
@@ -6282,10 +6310,7 @@ const Builder = struct {
         }
         const is_local = moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes);
         const fn_def: Ast.FnDef = switch (template.target) {
-            .hosted => if (is_local)
-                .{ .local_hosted = self.hostedFn(template_ref) }
-            else
-                .{ .imported_hosted = self.hostedFn(template_ref) },
+            .hosted => self.fnDefForHostedTemplate(template_ref, is_local),
             .roc, .intrinsic, .entry, .comptime_only => if (is_local)
                 .{ .local_template = template_ref }
             else
@@ -6496,10 +6521,7 @@ const Builder = struct {
         mono_fn_ty: Type.TypeId,
     ) Ast.FnTemplate {
         const fn_def: Ast.FnDef = switch (view.templates.get(template.template).target) {
-            .hosted => if (moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template).bytes))
-                .{ .local_hosted = self.hostedFn(template) }
-            else
-                .{ .imported_hosted = self.hostedFn(template) },
+            .hosted => self.fnDefForHostedTemplate(template, moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template).bytes)),
             .roc,
             .intrinsic,
             .entry,
@@ -7475,7 +7497,7 @@ const Builder = struct {
     /// on unbound platform requirements from that manifest.
     fn comptimeValueReadDeclared(self: *Builder, view: ModuleView, root_id: checked.ComptimeRootId) bool {
         if (!self.comptime_value_reads) return false;
-        const declarations = self.canonical_comptime_root_owner orelse &self.canonical_comptime_roots;
+        const declarations = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions;
         return declarations.contains(.{ .module = view.key, .root = root_id });
     }
 
@@ -10269,8 +10291,8 @@ const Builder = struct {
                 .context_fn_key = nested.context_fn_key,
                 .local_proc_context_digest = nested.local_proc_context_digest,
             } },
-            .local_hosted => |template| .{ .local_hosted = self.hostedFn(template) },
-            .imported_hosted => |template| .{ .imported_hosted = self.hostedFn(template) },
+            .local_hosted => |template| self.fnDefForHostedTemplate(template, true),
+            .imported_hosted => |template| self.fnDefForHostedTemplate(template, false),
             .checked_generated => |template| .{ .checked_generated = template },
             .parser_runtime => |runtime| .{ .parser_runtime = .{
                 .owner = runtime.owner,
@@ -12259,7 +12281,7 @@ const DraftExprData = union(enum(u8)) {
     bytes_lit: DraftPackedListLiteral,
     static_data_candidate: DraftStaticDataCandidate,
     inline_expects_enabled: void,
-    comptime_value: struct { root: Common.ComptimeValueRef, initializer: DraftExprId },
+    comptime_value: struct { root: Common.ComptimeValueRoot, initializer: DraftExprId },
     list: DraftSpan(DraftExprId),
     tuple: DraftSpan(DraftExprId),
     record: DraftSpan(DraftFieldExpr),
@@ -23678,18 +23700,18 @@ const BodyContext = struct {
     }
 
     /// The checker permits root slots only for context-free concrete values.
-    /// This direct reference transports the canonical root's return relation to
+    /// This direct reference transports the declared root's return relation to
     /// Lambda Solved. It is evidence for a slot read, never an evaluator call.
-    fn canonicalComptimeValue(
+    fn declaredComptimeValueRead(
         self: *BodyContext,
         view: ModuleView,
         root_id: checked.ComptimeRootId,
         cell: DraftTypeCell,
         const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
-        const owners = self.builder.canonical_comptime_root_owner orelse &self.builder.canonical_comptime_roots;
+        const owners = self.builder.borrowed_comptime_root_functions orelse &self.builder.declared_comptime_root_functions;
         const fn_id = owners.get(.{ .module = view.key, .root = root_id }) orelse
-            Common.invariant("shared root read lacked a reserved canonical root function");
+            Common.invariant("shared root read lacked a declared root function");
         const initializer = try self.addExprWithTypeCell(cell, .{ .call_proc = .{
             .callee = .{ .func = .{ .local = .{ .final = fn_id } } },
             .args = .empty(),
@@ -23711,7 +23733,7 @@ const BodyContext = struct {
 
         const request_cell = DraftTypeCell.fromGraphNode(request_fn_node);
         if (self.builder.comptimeValueReadDeclared(view, root_id)) {
-            return self.canonicalComptimeValue(view, root_id, request_cell, null);
+            return self.declaredComptimeValueRead(view, root_id, request_cell, null);
         }
         const local = try self.reserveCallableEvalBinding(view, root_id, request_fn_node);
         const lowered = try self.lowerComptimeRootExprAtCell(body_expr, request_cell);
@@ -23747,10 +23769,16 @@ const BodyContext = struct {
         root_id: checked.ComptimeRootId,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftLocalId {
+        const root = view.compile_time_roots.root(root_id);
+        const pattern = root.pattern orelse Common.invariant("callable eval binding omitted its checked pattern");
+        const binder = switch (view.bodies.pattern(pattern).data) {
+            .assign => |binder| binder,
+            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("callable eval binding pattern was not a binder"),
+        };
         const local = try self.addLocalWithBinderCell(
             self.builder.symbols.fresh(),
             DraftTypeCell.fromGraphNode(request_fn_node),
-            null,
+            binder,
         );
         try self.draft.active_callable_eval_bindings.append(self.allocator, .{
             .module = view.key,
@@ -33848,7 +33876,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
         if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
-            return self.canonicalComptimeValue(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
+            return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
         const entry_template = store_view.templates.get(eval.entry_template.template);
 

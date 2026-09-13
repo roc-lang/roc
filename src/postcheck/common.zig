@@ -86,13 +86,13 @@ pub const StaticDataRequest = struct {
 
 /// Stable checked identity of one selected compile-time value. Representation
 /// identity belongs to the typed expression that carries this reference.
-pub const ComptimeValueRef = struct {
+pub const ComptimeValueRoot = struct {
     module: checked.ModuleId,
     root: checked.ComptimeRootId,
     const_locator: ?checked.ConstLocator,
 };
 
-/// Producer-owned storage facts; only target lowering applies string ABI size.
+/// Producer-owned storage requirements; only target lowering applies string ABI size.
 pub const StaticDataStorage = union(enum(u8)) {
     aggregate,
     string_backing: u64,

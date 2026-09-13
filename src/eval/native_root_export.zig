@@ -13,6 +13,7 @@ const static_data = @import("static_data");
 const Value = @import("value.zig").Value;
 const Allocator = std.mem.Allocator;
 const Program = lir.Program;
+const Error = Allocator.Error || error{RuntimeError};
 const SymbolId = static_data.StaticDataSymbolId;
 const word_size = @sizeOf(usize);
 
@@ -25,9 +26,10 @@ pub const CallableResolution = struct {
 };
 
 /// Evaluator callback supplying exact callable procedure and capture identities.
+/// Missing evaluator registry evidence propagates its terminal runtime error.
 pub const CallableResolver = struct {
     context: ?*anyopaque = null,
-    resolve: *const fn (?*anyopaque, [*]u8) CallableResolution = missingCallableResolver,
+    resolve: *const fn (?*anyopaque, [*]u8) error{RuntimeError}!CallableResolution = missingCallableResolver,
 };
 
 /// The first export is the requested slot; all data-symbol relocation indices
@@ -41,7 +43,7 @@ pub fn freezeRoot(
     root: Program.ConstRootPlan,
     value: Value,
     callables: CallableResolver,
-) Allocator.Error![]static_data.StaticDataExport {
+) Error![]static_data.StaticDataExport {
     if (program.layouts.targetUsize().size() != word_size) {
         invariant("native root export requires host-width LIR");
     }
@@ -181,7 +183,7 @@ const Builder = struct {
         if (result.fresh) try self.enqueue(child_plan, child_layout, child_value, result.dest, .value);
     }
 
-    fn visit(self: *Builder, job: Job) Allocator.Error!void {
+    fn visit(self: *Builder, job: Job) Error!void {
         const physical = self.program.layouts.getLayout(job.layout_idx);
         if (job.storage == .recursive_box) {
             if (physical.tag != .box) invariant("recursive capture plan lacked box storage");
@@ -328,10 +330,10 @@ const Builder = struct {
         } else invariant("native callable capture plan had non-struct multiple captures");
     }
 
-    fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId) Allocator.Error!void {
+    fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId) Error!void {
         const address = job.source.read(usize);
         if (address == 0) invariant("native erased callable had a null payload");
-        const resolved = self.callables.resolve(self.callables.context, @ptrFromInt(address));
+        const resolved = try self.callables.resolve(self.callables.context, @ptrFromInt(address));
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         for (set.entries) |entry| {
             if (entry.entry != resolved.proc) continue;
@@ -420,7 +422,7 @@ const Builder = struct {
     }
 };
 
-fn missingCallableResolver(_: ?*anyopaque, _: [*]u8) CallableResolution {
+fn missingCallableResolver(_: ?*anyopaque, _: [*]u8) error{RuntimeError}!CallableResolution {
     invariant("native root exporter requires explicit erased callable identities");
 }
 
@@ -632,7 +634,7 @@ test "native root export preserves erased callable procedure and drop helper ide
     const Resolver = struct {
         proc: lir.LIR.LirProcSpecId,
         payload: [*]u8,
-        fn resolve(context: ?*anyopaque, data_ptr: [*]u8) CallableResolution {
+        fn resolve(context: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!CallableResolution {
             const self: *@This() = @ptrCast(@alignCast(context.?));
             std.debug.assert(data_ptr == self.payload);
             return .{ .proc = self.proc, .capture_ptr = data_ptr + builtins.erased_callable.capture_offset };
@@ -651,6 +653,15 @@ test "native root export preserves erased callable procedure and drop helper ide
     try std.testing.expectEqualSlices(u8, &(@as([2 * word_size]u8, @splat(0))), copied_header);
     const capture_pointer = payload_export.relocations[2];
     try std.testing.expectEqualStrings(text, exports[@intFromEnum(capture_pointer.target.data_symbol)].bytes[@intCast(capture_pointer.addend)..]);
+
+    const MissingRegistry = struct {
+        fn resolve(_: ?*anyopaque, _: [*]u8) error{RuntimeError}!CallableResolution {
+            return error.RuntimeError;
+        }
+    };
+    // Missing producer evidence terminates freezing; no empty callable or
+    // partially materialized graph may be published in its place.
+    try std.testing.expectError(error.RuntimeError, freezeRoot(allocator, &program, try testSlot(&program, fn_layout), testRoot(fn_plan, fn_layout), .{ .ptr = @ptrCast(&pointer) }, .{ .resolve = MissingRegistry.resolve }));
 }
 
 test "native root export follows only selected tag payload and clears inactive bytes" {

@@ -141,7 +141,7 @@ pub const ProgramSession = struct {
     runtime_roots: lir.CheckedPipeline.RootRequestSet,
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     host: ?lir.CheckedPipeline.LoweredProgram,
-    runtime_prepared: ?lir.CheckedPipeline.PreparedMonotype,
+    runtime_prepared: ?lir.CheckedPipeline.PreparedSolved,
     compile_time_root_count: usize,
 
     pub fn deinit(self: *ProgramSession) void {
@@ -208,7 +208,7 @@ pub const ProgramSession = struct {
             inline for (.{ "timing", "work_metrics", "post_check_executor", "debug_materialized_out", "solved_lir_parallel_metrics_out", "lifted_expr_count_out" }) |field| {
                 @field(prepared.target, field) = @field(target, field);
             }
-            break :block try lir.CheckedPipeline.lowerPreparedMonotypeToLir(prepared);
+            break :block try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
         } else block: {
             const host = self.host orelse finalizationInvariant("runtime program was already consumed");
             self.host = null;
@@ -413,13 +413,14 @@ pub fn finalizeProgram(
     host_target.inline_expects = .run;
     host_target.post_check_executor = options.post_check_executor;
     host_target.timing = if (options.timing) |timing| &timing.lowering else null;
-    var prepared = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
+    const monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionNotBound => finalizationInvariant("prepared program contains an unbound hosted declaration"),
     };
+    var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
     var prepared_owned = true;
     errdefer if (prepared_owned) prepared.deinit();
-    var runtime_prepared: ?lir.CheckedPipeline.PreparedMonotype = null;
+    var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = null;
     errdefer if (runtime_prepared) |*owned| owned.deinit();
     if (runtime_target) |target| {
         if (target.specialization_strategy == .lss and
@@ -427,7 +428,7 @@ pub fn finalizeProgram(
             runtime_prepared = try prepared.forkForConsumer(target.target_usize, target.inline_expects);
     }
     prepared_owned = false;
-    var host = lir.CheckedPipeline.lowerPreparedMonotypeToLir(prepared) catch |err| switch (err) {
+    var host = lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionNotBound => unreachable,
     };
@@ -1679,6 +1680,20 @@ const CompletedNativeRoot = struct {
     }
 };
 
+// Export failures occur outside evalCompileTimeRoot's language-diagnostic
+// handling. Emit their exact interpreter message through the configured error
+// writer before its owner unwinds, while retaining the terminal error result.
+fn resolveInterpreterCallable(interpreter: *Interpreter, stderr: ?Options.StderrWriter, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
+    const callable = (interpreter.interpretedCallable(data_ptr) catch |err| {
+        if (stderr) |writer| {
+            writer.writeAll(interpreter.getRuntimeErrorMessage() orelse finalizationInvariant("interpreter callable error omitted its diagnostic"));
+            writer.writeAll("\n");
+        }
+        return err;
+    }) orelse finalizationInvariant("interpreter result omitted its explicit callable ABI");
+    return .{ .proc = callable.proc, .capture_ptr = callable.capture_ptr };
+}
+
 /// Owns one native compilation shared by dependency-ordered root batches.
 /// Stable owner: interpreter-created callable contexts retain its address.
 const InterpreterProgram = struct {
@@ -1692,6 +1707,7 @@ const InterpreterProgram = struct {
     host: CompilerHost,
     interpreter: Interpreter,
     static_callables: std.ArrayList(Interpreter.StaticErasedCallable) = .empty,
+    stderr: ?Options.StderrWriter = null,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!*InterpreterProgram {
         const self = try allocator.create(InterpreterProgram);
@@ -1703,6 +1719,7 @@ const InterpreterProgram = struct {
         self.slot_demand = null;
         self.demand_error = null;
         self.static_callables = .empty;
+        self.stderr = options.stderr;
         errdefer self.static_callables.deinit(allocator);
         const started = if (options.timing) |timing| timing.start() else 0;
         self.slots = try StaticSlotEnvironment.init(allocator, modules, lowered, roc_target.RocTarget.detectNative());
@@ -1736,6 +1753,7 @@ const InterpreterProgram = struct {
             .allocator = allocator,
             .slots = undefined,
             .shared_slots = self.slotEnvironment(),
+            .stderr = self.stderr,
             .slot_demand = self.slot_demand,
             .host = CompilerHost.init(allocator),
             .interpreter = undefined,
@@ -1774,14 +1792,13 @@ const InterpreterProgram = struct {
 
     const resolveFunction = @import("interpreter_static_data.zig").resolveFunction;
 
-    fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) NativeRootExport.CallableResolution {
+    fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
         const self: *InterpreterProgram = @ptrCast(@alignCast(raw.?));
-        const callable = self.interpreter.interpretedCallable(data_ptr) orelse finalizationInvariant("interpreter result omitted its explicit callable ABI");
-        return .{ .proc = callable.proc, .capture_ptr = callable.capture_ptr };
+        return try resolveInterpreterCallable(&self.interpreter, self.stderr, data_ptr);
     }
 
-    fn resolveStoredCallable(raw: ?*anyopaque, data_ptr: [*]u8) ConstStoreWriter.ErasedCallableResolution {
-        const callable = resolveCallable(raw, data_ptr);
+    fn resolveStoredCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!ConstStoreWriter.ErasedCallableResolution {
+        const callable = try resolveCallable(raw, data_ptr);
         return .{ .proc = callable.proc, .capture_ptr = callable.capture_ptr };
     }
 
@@ -2150,7 +2167,7 @@ const DevProgram = struct {
         };
     }
 
-    fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) NativeRootExport.CallableResolution {
+    fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
         const self: *DevProgram = @ptrCast(@alignCast(raw.?));
         const payload = builtins.erased_callable.payloadPtr(data_ptr);
         const address = @intFromPtr(payload.callable_fn_ptr);
@@ -2363,7 +2380,7 @@ fn evalDevProgramRoots(
         store: *const lir.LirStore,
         executable: *const backend.ExecutableMemory,
 
-        fn resolve(raw: ?*anyopaque, data_ptr: [*]u8) ConstStoreWriter.ErasedCallableResolution {
+        fn resolve(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!ConstStoreWriter.ErasedCallableResolution {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
             const payload = builtins.erased_callable.payloadPtr(data_ptr);
             const runtime_addr = @intFromPtr(payload.callable_fn_ptr);
@@ -3812,20 +3829,38 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer host.deinit();
     var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), host.ops(), .normalize);
     defer interpreter.deinit();
+    interpreter.setStaticData(data.addresses, &.{});
+    try std.testing.expectError(error.RuntimeError, interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool }));
+    try std.testing.expectEqualStrings("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry", interpreter.getRuntimeErrorMessage().?);
     data.install(&interpreter);
     const first = try interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool });
     try std.testing.expectEqual(@as(u8, 1), first.value.read(u8));
     const root_value = @import("value.zig").Value{ .ptr = @ptrFromInt(data.addresses[0]) };
     const payload_ptr: [*]u8 = @ptrFromInt(root_value.read(usize));
+    const ErrorMessages = struct {
+        bytes: [256]u8 = undefined,
+        len: usize = 0,
+        fn write(raw: ?*anyopaque, bytes: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            @memcpy(self.bytes[self.len..][0..bytes.len], bytes);
+            self.len += bytes.len;
+        }
+    };
+    var errors = ErrorMessages{};
+    interpreter.setStaticData(data.addresses, &.{});
+    try std.testing.expectError(error.RuntimeError, resolveInterpreterCallable(&interpreter, .{ .context = &errors, .write = ErrorMessages.write }, payload_ptr));
+    try std.testing.expectEqualStrings("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry\n", errors.bytes[0..errors.len]);
+    try std.testing.expectError(error.RuntimeError, resolveInterpreterCallable(&interpreter, null, payload_ptr));
+    data.install(&interpreter);
     const payload = builtins.erased_callable.payloadPtr(payload_ptr);
     var direct_answer: u8 = 0;
     var out_desc: ?*const anyopaque = null;
     payload.callable_fn_ptr(&interpreter.roc_ops, @ptrCast(&direct_answer), null, builtins.erased_callable.capturePtr(payload_ptr), null, &out_desc);
     try std.testing.expectEqual(@as(u8, 1), direct_answer);
     const Resolver = struct {
-        fn resolve(raw: ?*anyopaque, ptr: [*]u8) NativeRootExport.CallableResolution {
+        fn resolve(raw: ?*anyopaque, ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
             const interp: *Interpreter = @ptrCast(@alignCast(raw.?));
-            const value = interp.interpretedCallable(ptr).?;
+            const value = (try interp.interpretedCallable(ptr)).?;
             return .{ .proc = value.proc, .capture_ptr = value.capture_ptr };
         }
     };

@@ -1213,6 +1213,7 @@ pub fn compileInspectedProgramWithLambdaMono(
     imports: []const ModuleSource,
     pre_published_builtin: ?PrePublishedBuiltin,
     materialized_out: *?lir.CheckedPipeline.LambdaMonoProgram,
+    inline_expects_enabled: bool,
 ) Error!CompiledTargetProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
@@ -1228,6 +1229,7 @@ pub fn compileInspectedProgramWithLambdaMono(
 
     const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, .{
         .list_in_place_map = false,
+        .inline_expects = if (inline_expects_enabled) .run else .omit,
         .monotype_cache = lir.CheckedPipeline.MonotypeCacheControl.disabled,
         .debug_materialized_out = materialized_out,
     });
@@ -1882,6 +1884,7 @@ fn lowerParsedProgramToLir(
 }
 
 const LowerToLirOptions = struct {
+    inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     specialization_strategy: base.SpecializationStrategy = .lss,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     tag_reachability: bool = false,
@@ -1975,6 +1978,7 @@ fn lowerCheckedRootWithViews(
             .specialization_strategy = options.specialization_strategy,
             .inline_mode = options.inline_mode,
             .list_in_place_map = options.list_in_place_map,
+            .inline_expects = options.inline_expects,
             .monotype_cache = options.monotype_cache,
             .tag_reachability = options.tag_reachability,
             .prove_ranges = options.prove_ranges,

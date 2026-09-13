@@ -660,6 +660,7 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
         case.imports,
         null,
         &materialized,
+        true,
     ) catch |err| switch (classifyTestHelperError(err)) {
         .out_of_memory => return error.OutOfMemory,
         .crash, .other => return CaseResult{ .status = .compile_skip },
@@ -695,7 +696,15 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
         };
     }
 
-    var evaluator = LambdaMonoEval.Evaluator.init(gpa, program);
+    var producers: std.ArrayList(LambdaMonoEval.ComptimeProducer) = .empty;
+    defer producers.deinit(gpa);
+    for (program.rootsView(), 0..) |root, index| {
+        if (root.request.abi != .compile_time) continue;
+        const root_id = root.request.compile_time_root orelse @panic("oracle compile-time request omitted its root identity");
+        const template = root.request.procedure_template orelse @panic("oracle compile-time request omitted its declaring module");
+        try producers.append(gpa, .{ .root = .{ .module = .{ .bytes = template.artifact.bytes }, .root = root_id, .const_locator = null }, .root_index = index });
+    }
+    var evaluator = try LambdaMonoEval.Evaluator.init(gpa, program, .{ .inline_expects_enabled = true, .comptime_producers = producers.items });
     defer evaluator.deinit();
 
     // Root 0 matches the interpreter's `mainProc()` (`root_procs.items[0]`):

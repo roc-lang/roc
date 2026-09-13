@@ -45,9 +45,11 @@ fn runConsumer(lowered: *const lir.CheckedPipeline.LoweredProgram, expected_cras
 
 fn inspectConsumers(prepared: *const lir.CheckedPipeline.PreparedMonotype, run_crashes: bool, omit_crashes: bool) harness.LowerToLirHarnessError!void {
     const source_expr_count = prepared.program.view().exprs.len;
+    var solved = try lir.CheckedPipeline.prepareMonotypeToSolved(try prepared.forkForConsumer(prepared.target.target_usize, .run));
+    defer solved.deinit();
     for ([_]lir.CheckedPipeline.InlineExpectMode{ .run, .omit }, [_]bool{ run_crashes, omit_crashes }) |mode, expected_crash| {
-        const fork = try prepared.forkForConsumer(prepared.target.target_usize, mode);
-        var lowered = try lir.CheckedPipeline.lowerPreparedMonotypeToLir(fork);
+        const fork = try solved.forkForConsumer(prepared.target.target_usize, mode);
+        var lowered = try lir.CheckedPipeline.lowerPreparedSolvedToLir(fork);
         defer lowered.deinit();
         runConsumer(&lowered, expected_crash, 7) catch |err| {
             std.log.err("shared expect consumer {s}: {s}", .{ @tagName(mode), @errorName(err) });
@@ -97,9 +99,11 @@ test "shared expect lowering retains the continuation of a returning condition" 
 }
 
 fn inspectMutation(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
+    var solved = try lir.CheckedPipeline.prepareMonotypeToSolved(try prepared.forkForConsumer(prepared.target.target_usize, .run));
+    defer solved.deinit();
     for ([_]lir.CheckedPipeline.InlineExpectMode{ .run, .omit }, [_]i8{ 8, 7 }) |mode, expected_exit| {
-        const fork = try prepared.forkForConsumer(prepared.target.target_usize, mode);
-        var lowered = try lir.CheckedPipeline.lowerPreparedMonotypeToLir(fork);
+        const fork = try solved.forkForConsumer(prepared.target.target_usize, mode);
+        var lowered = try lir.CheckedPipeline.lowerPreparedSolvedToLir(fork);
         defer lowered.deinit();
         runConsumer(&lowered, false, expected_exit) catch return error.TestUnexpectedResult;
     }

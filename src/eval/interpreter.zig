@@ -1174,7 +1174,7 @@ pub const Interpreter = struct {
         self.performInterpreterApiRc(.decref, val, layout_idx, 0);
     }
 
-    fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
+    fn runtimeError(self: *LirInterpreter, message: []const u8) error{RuntimeError} {
         self.recordActiveFailureLocIfUnset();
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
@@ -4349,7 +4349,7 @@ pub const Interpreter = struct {
     };
 
     /// Decode only the explicit static-registry or interpreter-context ABI.
-    pub fn interpretedCallable(self: *const LirInterpreter, data_ptr: [*]u8) ?InterpretedCallable {
+    pub fn interpretedCallable(self: *LirInterpreter, data_ptr: [*]u8) error{RuntimeError}!?InterpretedCallable {
         const payload = builtins.erased_callable.payloadPtr(data_ptr);
         const code = @intFromPtr(payload.callable_fn_ptr);
         if (code == staticErasedCallableTrampolineAddress()) {
@@ -4357,7 +4357,7 @@ pub const Interpreter = struct {
             for (self.static_erased_callables) |entry| {
                 if (entry.capture_ptr == capture) return .{ .proc = entry.proc_id, .capture_ptr = capture };
             }
-            std.debug.panic("static interpreted callable omitted its producer registry entry", .{});
+            return self.runtimeError("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry");
         }
         if (code != @intFromPtr(&interpreterErasedCallableTrampoline)) return null;
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
@@ -4703,7 +4703,7 @@ pub const Interpreter = struct {
         };
 
         const payload = builtins.erased_callable.payloadPtr(closure_ptr);
-        if (self.interpretedCallable(closure_ptr)) |callable| {
+        if (try self.interpretedCallable(closure_ptr)) |callable| {
             const proc_id = callable.proc;
             const proc_spec = self.store.getProcSpec(proc_id);
             const proc_params = self.store.getLocalSpan(proc_spec.args);

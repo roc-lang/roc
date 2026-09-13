@@ -378,7 +378,7 @@ fn invariant(comptime message: []const u8) noreturn {
 }
 
 fn sameFrozenFunction(source: Program.FnTemplate, target: Program.FnTemplate) bool {
-    return (source.frozen_fn orelse invariant("source callable lacks frozen owner identity")) == (target.frozen_fn orelse invariant("target callable lacks frozen owner identity")) and std.meta.eql(source.frozen_worker, target.frozen_worker);
+    return (source.frozen_fn orelse invariant("source callable lacks frozen owner identity")) == (target.frozen_fn orelse invariant("target callable lacks frozen owner identity")) and std.meta.eql(source.frozen_worker, target.frozen_worker) and std.meta.eql(source.frozen_context orelse invariant("source callable lacks solved member identity"), target.frozen_context orelse invariant("target callable lacks solved member identity"));
 }
 
 fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {
@@ -493,7 +493,7 @@ fn recursiveCallable(allocator: Allocator, program: *Program.Result) Allocator.E
     const fn_layout = try program.layouts.putTagUnion(&.{box_layout});
     program.layouts.updateLayout(box_layout, layout.Layout.box(fn_layout));
     const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .slot = 0, .ty = undefined, .plan = plan, .storage = .recursive_box }});
-    const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = captures }});
+    const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 17, .fn_type = 1, .captures = .{ .own = 1 } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = captures }});
     // Fill every variant identity from its allocated slice index before publication.
     for (variants, 0..) |*variant, index| variant.id = @enumFromInt(index);
     try program.fn_sets.append(allocator, .{ .layout = fn_layout, .variants = variants });
@@ -542,7 +542,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     for ([_]*Program.Result{ &source, &target }) |program| {
         try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
     }
-    const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
+    const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } }, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
     var other_template = template;
     other_template.frozen_worker = @as([96]u8, @splat(2));
     const capture = Program.CaptureSlot{ .id = @enumFromInt(5), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
@@ -559,7 +559,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     var string = builtins.str.RocStr.fromSliceSmall("capture");
     var pointer = @intFromPtr(&string);
     const Resolver = struct {
-        fn resolve(context: ?*anyopaque, data: [*]u8) @import("native_root_export.zig").CallableResolution {
+        fn resolve(context: ?*anyopaque, data: [*]u8) error{RuntimeError}!@import("native_root_export.zig").CallableResolution {
             const proc: *const lir.LIR.LirProcSpecId = @ptrCast(@alignCast(context.?));
             return .{ .proc = proc.*, .capture_ptr = data };
         }
@@ -630,7 +630,7 @@ fn reorderedCallable(allocator: Allocator, program: *Program.Result, reverse: bo
     const variants = try allocator.alloc(Program.FnVariant, 2);
     for (variants, 0..) |*variant, i| {
         const has_capture = i == selected;
-        variant.* = .{ .id = @enumFromInt(i), .discriminant = @intCast(i), .variant_index = @intCast(i), .payload_layout = if (has_capture) .str else .zst, .template = .{ .frozen_fn = if (has_capture) 17 else 18, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = if (has_capture) captures else &.{} };
+        variant.* = .{ .id = @enumFromInt(i), .discriminant = @intCast(i), .variant_index = @intCast(i), .payload_layout = if (has_capture) .str else .zst, .template = .{ .frozen_fn = if (has_capture) 17 else 18, .frozen_context = .{ .abi = .finite, .source = if (has_capture) 17 else 18, .fn_type = 1, .captures = .{ .own = @intFromBool(has_capture) } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = if (has_capture) captures else &.{} };
     }
     try program.fn_sets.append(allocator, .{ .layout = idx, .variants = variants });
     return .{ .plan = plan, .layout_idx = idx };
@@ -662,4 +662,40 @@ test "frozen root transcode selects target callable discriminant by frozen origi
     try std.testing.expectEqual(@as(u32, 0), data.readDiscriminant(converted[0].bytes.ptr, target.layouts.targetUsize()));
     try std.testing.expectEqualStrings("capture", converted[0].bytes[0..7]);
     try std.testing.expectEqual(@as(u8, 0x87), converted[0].bytes[11]);
+}
+
+test "frozen root transcode distinguishes zero-sized capture contexts of one function" {
+    const allocator = std.testing.allocator;
+    var source = try Program.Result.init(allocator, .u64);
+    defer source.deinit();
+    var target = try Program.Result.init(allocator, .u32);
+    defer target.deinit();
+    var plans: [2]Program.ConstPlanId = undefined;
+    for ([_]*Program.Result{ &source, &target }, 0..) |program, side| {
+        const unit_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+        try program.const_plans.append(allocator, .zst);
+        plans[side] = @enumFromInt(program.const_plans.items.len);
+        try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
+        const variants = try allocator.alloc(Program.FnVariant, 2);
+        for (variants, 0..) |*variant, index| {
+            const context = if (side == 0) index else variants.len - 1 - index;
+            // Checked metadata is unused by graph transcode. The explicit
+            // source contexts distinguish equal-layout unit captures.
+            variant.* = .{
+                .id = @enumFromInt(index),
+                .discriminant = @intCast(index),
+                .variant_index = @intCast(index),
+                .payload_layout = .zst,
+                .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 9, .fn_type = 12, .captures = .{ .solved = .{ .start = @intCast(context), .len = 1 } } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined },
+                .captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(context), .slot = 0, .ty = undefined, .plan = unit_plan, .storage = .value }}),
+            };
+        }
+        try program.fn_sets.append(allocator, .{ .layout = .bool, .variants = variants });
+    }
+    var selected: u8 = 1;
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, .bool), testRoot(plans[0], .bool), .{ .ptr = @ptrCast(&selected) }, .{});
+    defer static_data.deinitStaticData(allocator, native);
+    const converted = try transcodeRoot(allocator, &source, testRoot(plans[0], .bool), native, testRootSymbol(native), &target, testRoot(plans[1], .bool), try testSlot(&target, .bool));
+    defer static_data.deinitStaticData(allocator, converted);
+    try std.testing.expectEqual(@as(u8, 0), converted[0].bytes[0]);
 }

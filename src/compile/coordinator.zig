@@ -5417,6 +5417,7 @@ pub const Coordinator = struct {
             } },
             error.EmptyCode,
             error.Internal,
+            error.RuntimeError,
             error.LockedMemoryLimitExceeded,
             error.MmapFailed,
             error.MprotectFailed,
@@ -8328,10 +8329,12 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try std.testing.expect(!coord.hasUserErrors());
             try std.testing.expect(coord.program_session.?.compile_time_root_count > 0);
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
             var runtime = try coord.program_session.?.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(@as(u32, if (width == base.target.TargetUsize.native) 1 else 2), metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
