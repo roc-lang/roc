@@ -1083,20 +1083,7 @@ fn sortCaptureSlots(program: *const Ast.Program, items: []Ast.TypedLocal) void {
 /// Find the operand value supplied for `slot` among explicit pre-lift capture
 /// operands. Both sides use the lift boundary's single provisional-key rule.
 fn explicitCaptureValueForSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
-    const slot_local = program.getLocal(slot.local);
-    const slot_id = slot_local.checked_capture_id orelse slotCaptureId(program, slot);
-    var value: ?Ast.ExprId = null;
-    for (0..explicit.len) |index| {
-        const capture = GuardedList.at(explicit, index);
-        const local = program.getLocal(capture.local);
-        const capture_id = local.checked_capture_id orelse local.capture_id orelse
-            Common.invariant("pre-lift capture operand local had no capture identity");
-        if (capture_id == slot_id) {
-            if (value != null) Common.invariant("pre-lift function captures declared one provisional key more than once");
-            value = capture.value;
-        }
-    }
-    return value;
+    return operandValueForSlot(program, explicit, slot);
 }
 
 /// Whether an explicit pre-lift capture operand supplies the target slot.
@@ -2100,13 +2087,9 @@ const CaptureGraphBuilder = struct {
         const captures = self.graph.program.fnDefCaptureSpan(span);
         for (0..captures.len) |index| {
             const capture = GuardedList.at(captures, index);
-            const capture_local = self.graph.program.getLocal(capture.local);
-            const runtime_id = capture_local.capture_id orelse
-                Common.invariant("pre-lift explicit capture local had no CaptureId");
-            const declared_id = capture_local.checked_capture_id orelse runtime_id;
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(capture.value, child);
-            try supplies.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
+            try supplies.append(self.graph.allocator, .{ .id = capture.id, .value = capture.value, .node = child });
         }
         try self.finishEdge(parent, target, .pre_lift, &supplies);
     }
@@ -2648,6 +2631,27 @@ test "capture finalization preserves explicitly keyed capture permutation" {
     try std.testing.expectEqual(checked.CaptureId.fromBinder(second_binder), GuardedList.at(finalized, 1).id);
     try std.testing.expectEqual(second_arg_ref, GuardedList.at(finalized, 0).value);
     try std.testing.expectEqual(first_arg_ref, GuardedList.at(finalized, 1).value);
+}
+
+test "pre-lift closure operands name target slots independently of supplied locals" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const first_key = checked.CaptureId.fromBinder(@enumFromInt(1));
+    const second_key = checked.CaptureId.fromBinder(@enumFromInt(2));
+    const first = try program.addLocalWithCaptureIdentity(@enumFromInt(1), ty, @enumFromInt(1), program.nextLiftCaptureId(), first_key);
+    const second = try program.addLocalWithCaptureIdentity(@enumFromInt(2), ty, @enumFromInt(2), program.nextLiftCaptureId(), second_key);
+    const first_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = first } });
+    const second_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = second } });
+    const supplied = try program.addFnDefCaptureSpan(&.{
+        .{ .id = second_key, .value = first_value },
+        .{ .id = first_key, .value = second_value },
+    });
+    const operands = program.fnDefCaptureSpan(supplied);
+    try std.testing.expectEqual(second_value, explicitCaptureValueForSlot(&program, operands, .{ .local = first, .ty = ty }).?);
+    try std.testing.expectEqual(first_value, explicitCaptureValueForSlot(&program, operands, .{ .local = second, .ty = ty }).?);
 }
 
 test "lift boundary normalizes checked capture identity" {

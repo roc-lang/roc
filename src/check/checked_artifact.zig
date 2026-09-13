@@ -4,6 +4,7 @@
 //! narrowed read-only views instead of loose checked modules plus side stores.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const base = @import("base");
@@ -266,7 +267,7 @@ fn hashBytes(bytes: []const u8) [32]u8 {
     return hasher.finalResult();
 }
 
-fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn hashU32(hasher: anytype, value: u32) void {
     hasher.update(&.{
         @as(u8, @truncate(value)),
         @as(u8, @truncate(value >> 8)),
@@ -275,7 +276,7 @@ fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     });
 }
 
-fn hashByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn hashByteSlice(hasher: anytype, bytes: []const u8) void {
     hashU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
@@ -7412,7 +7413,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     store: *const CheckedTypeStore,
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
-    hasher: std.crypto.hash.sha2.Sha256,
+    hasher: TypeDigestHasher,
     active: collections.DenseMap(CheckedTypeId, u32),
     identity_variables: collections.DenseMap(CheckedTypeId, u32),
 
@@ -7440,7 +7441,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             .store = store,
             .formals = formals,
             .actuals = actuals,
-            .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
+            .hasher = TypeDigestHasher.init(),
             .active = collections.DenseMap(CheckedTypeId, u32).init(allocator),
             .identity_variables = collections.DenseMap(CheckedTypeId, u32).init(allocator),
         };
@@ -8191,7 +8192,7 @@ fn syntheticFunctionTypeKey(
     ret: CheckedTypeId,
 ) canonical.CanonicalTypeKey {
     const finalized_kind = finalizedFunctionKind(kind);
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hashByteSlice(&hasher, "checked_synthetic_function");
     hashByteSlice(&hasher, @tagName(finalized_kind));
     hashU32(&hasher, @intCast(args.len));
@@ -8203,7 +8204,7 @@ fn syntheticFunctionTypeKey(
 }
 
 fn syntheticSchemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hashByteSlice(&hasher, "checked_synthetic_type_scheme");
     hasher.update(&key.bytes);
     return .{ .bytes = hasher.finalResult() };
@@ -18739,7 +18740,7 @@ const EvidencePass = struct {
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
                 .slot = if (source == .scheme_requirement) null else self.schemeVarSlot(param.dispatcher_var),
-                .runtime_dictionary = source == .constraint_callable or param.constraint.origin.literalKind() == null,
+                .runtime_dictionary = source == .constraint_callable or static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
                 .path = .{ .start = path_start, .len = @intCast(published_path.len) },
@@ -19636,7 +19637,7 @@ const EvidencePass = struct {
         const resolution = (try self.resolveObligation(var_, dispatcher_ty, method, structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
         return .{
             .dispatcher_ty = dispatcher_ty,
-            .runtime_dictionary = param.constraint.origin.literalKind() == null,
+            .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
             .resolution = switch (resolution) {
                 .direct_pending => |node| .{ .direct = node },
                 .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
@@ -19836,7 +19837,7 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("checked procedure-value dispatcher type was not published", .{});
             entries.appendAssumeCapacity(.{
                 .dispatcher_ty = dispatcher_ty,
-                .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                 .resolution = .from_callable,
             });
         }
@@ -19929,7 +19930,7 @@ const EvidencePass = struct {
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
                     .dispatcher_ty = dispatcher_ty,
-                    .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                    .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                     .resolution = if (param.source == .scheme_requirement) .from_scheme else .from_callable,
                 });
                 continue;
@@ -27991,7 +27992,7 @@ test "platform relation procedure use preserves exported runtime result provenan
     const required_binding_id: PlatformRequiredBindingId = @enumFromInt(8);
     const required_declaration_id: PlatformRequiredDeclarationId = @enumFromInt(9);
     const required_relation_id: PlatformRequirementRelationId = @enumFromInt(10);
-    const requested_source_ty = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xC1} ** 32 };
+    const requested_source_ty = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xC1} ** 16 };
     const exported = ImportedProcedureBindingView{
         .binding = .{
             .artifact = app_key,
@@ -31343,7 +31344,8 @@ pub const CheckedModuleArtifact = struct {
     // for custom literal patterns.
     // Version 95 makes stored callable-derived evidence own its vector slot
     // instead of retaining a parameter index from a forwarding scheme.
-    const serialized_layout_version: u32 = 95;
+    // Version 96 uses 128-bit type and evidence content hashes.
+    const serialized_layout_version: u32 = 96;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37274,7 +37276,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .numeric_default_phase = .mono_specialization,
         .row_default = null,
     } });
-    try store.roots.append(gpa, .{ .id = a, .key = .{ .bytes = [_]u8{1} ** 32 } });
+    try store.roots.append(gpa, .{ .id = a, .key = .{ .bytes = [_]u8{1} ** 16 } });
     try store.payloads.append(gpa, flex_stored);
 
     // 1: a tag_union with one tag carrying args [a].
@@ -37282,7 +37284,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const tags = try gpa.alloc(CheckedTagBuild, 1);
     tags[0] = .{ .name = @enumFromInt(3), .args = tag_args };
     const tu_stored = try store.commitPayload(gpa, .{ .tag_union = .{ .tags = tags, .ext = a } });
-    try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = [_]u8{2} ** 32 } });
+    try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = [_]u8{2} ** 16 } });
     try store.payloads.append(gpa, tu_stored);
 
     const alias_owner: ModuleId = .{ .bytes = [_]u8{0xA1} ** 32 };
@@ -37296,7 +37298,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .backing = b,
         .args = alias_args,
     } });
-    try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 32 } });
+    try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 16 } });
     try store.payloads.append(gpa, alias_stored);
 
     const nominal_owner: ModuleId = .{ .bytes = [_]u8{0xB2} ** 32 };
@@ -37314,7 +37316,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .args = nominal_args,
         .padding_field_types = nominal_padding,
     } });
-    try store.roots.append(gpa, .{ .id = d, .key = .{ .bytes = [_]u8{5} ** 32 } });
+    try store.roots.append(gpa, .{ .id = d, .key = .{ .bytes = [_]u8{5} ** 16 } });
     try store.payloads.append(gpa, nominal_stored);
 
     // 4: a record with one field of each published kind (design.md "Field
@@ -37324,12 +37326,12 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     record_fields[1] = .{ .name = @enumFromInt(22), .ty = a, .kind = .optional };
     record_fields[2] = .{ .name = @enumFromInt(23), .ty = a, .kind = .defaultedFromParts(@enumFromInt(12), 77) };
     const record_stored = try store.commitPayload(gpa, .{ .record = .{ .fields = record_fields, .ext = a } });
-    try store.roots.append(gpa, .{ .id = e, .key = .{ .bytes = [_]u8{6} ** 32 } });
+    try store.roots.append(gpa, .{ .id = e, .key = .{ .bytes = [_]u8{6} ** 16 } });
     try store.payloads.append(gpa, record_stored);
 
     // A scheme with generalized vars [a, b].
     const gv = try store.appendTypeIds(gpa, &.{ a, b });
-    const scheme_key = canonical.CanonicalTypeSchemeKey{ .bytes = [_]u8{3} ** 32 };
+    const scheme_key = canonical.CanonicalTypeSchemeKey{ .bytes = [_]u8{3} ** 16 };
     const scheme_id = try store.internScheme(gpa, scheme_key, a);
     store.schemes.items[@intFromEnum(scheme_id)].gv_start = gv.start;
     store.schemes.items[@intFromEnum(scheme_id)].gv_len = gv.len;
@@ -37387,7 +37389,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqualDeep(scheme, loaded.schemeForKey(scheme.key).?);
         try std.testing.expectEqualDeep(scheme, loaded.view().schemeForKey(scheme.key).?);
     }
-    try std.testing.expect(loaded.schemeForKey(.{ .bytes = [_]u8{255} ** 32 }) == null);
+    try std.testing.expect(loaded.schemeForKey(.{ .bytes = [_]u8{255} ** 16 }) == null);
 
     // Flex name + constraint survive.
     const flex = loaded.payload(a).flex;
@@ -37569,8 +37571,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
 
     var checked_types_src = CheckedTypeStore{};
     defer checked_types_src.deinit(gpa);
-    const ty0_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xAB} ** 32 };
-    const ty1_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xCD} ** 32 };
+    const ty0_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xAB} ** 16 };
+    const ty1_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xCD} ** 16 };
     try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty0_key });
     try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty1_key });
     try checked_types_src.payloads.append(gpa, .empty_record);
@@ -37909,8 +37911,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x17, 0xC0, 0xDF, 0xF1, 0xE9, 0xDA, 0x5A, 0x3F, 0xB8, 0x10, 0x4B, 0x58, 0x33, 0xBF, 0x14, 0xA2,
-        0xA5, 0xA6, 0x52, 0x90, 0x6E, 0x9B, 0xB6, 0x69, 0x6B, 0x9B, 0x96, 0x39, 0x07, 0x3C, 0xA4, 0x49,
+        0xB8, 0x76, 0x8B, 0x0E, 0x2F, 0x44, 0x2B, 0xE4, 0x9D, 0x15, 0x1E, 0xA3, 0xFF, 0xA0, 0xF7, 0xEC,
+        0x6A, 0xF6, 0xCE, 0xF4, 0x55, 0x0C, 0x8B, 0xB3, 0xC7, 0xA0, 0xD4, 0x64, 0x9B, 0x09, 0xE6, 0xE6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

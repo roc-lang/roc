@@ -20573,6 +20573,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return null;
         }
 
+        /// One reference-count helper the code generator compiled: the cache
+        /// key that identifies it and where its code starts.
+        pub const CompiledRcHelper = struct {
+            key: u64,
+            start_offset: usize,
+
+            fn startsBefore(_: void, lhs: CompiledRcHelper, rhs: CompiledRcHelper) bool {
+                return lhs.start_offset < rhs.start_offset;
+            }
+        };
+
+        /// Every compiled reference-count helper in code order, so object
+        /// symbol publication is deterministic. Caller owns the slice.
+        pub fn compiledRcHelpers(self: *const Self, allocator: Allocator) Allocator.Error![]CompiledRcHelper {
+            const result = try allocator.alloc(CompiledRcHelper, self.compiled_rc_helpers.count());
+            var i: usize = 0;
+            var iter = self.compiled_rc_helpers.iterator();
+            while (iter.next()) |entry| : (i += 1) {
+                result[i] = .{ .key = entry.key_ptr.*, .start_offset = entry.value_ptr.* };
+            }
+            std.mem.sort(CompiledRcHelper, result, {}, CompiledRcHelper.startsBefore);
+            return result;
+        }
+
         /// Returns object-file symbol metadata for a compiled LIR procedure.
         ///
         /// This is used by native object emission to let readonly static data
