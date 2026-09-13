@@ -28,8 +28,9 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
-/// Version 19: 128-bit type and evidence content hashes replace SHA-256,
+/// Version 20: 128-bit type and evidence content hashes replace SHA-256,
 /// changing every serialized type digest byte and digest width.
+/// Version 19: pre-lift closure operands store explicit target capture keys.
 /// Version 18: callable-derived evidence belongs to its vector slot and no
 /// longer stores a parameter index from another scheme.
 /// Version 17: generated-codec specialization identities retain the explicit
@@ -52,7 +53,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// content hash of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 19;
+pub const FORMAT_VERSION: u32 = 20;
 
 const SECTION_COUNT = 43;
 
@@ -614,7 +615,6 @@ pub const MappedProgramView = struct {
             if (!self.exprRefInBounds(field.value)) return false;
         }
         for (self.fn_def_captures) |capture| {
-            if (!self.localRefInBounds(capture.local)) return false;
             if (!self.exprRefInBounds(capture.value)) return false;
         }
         for (self.record_destructs) |destruct| {
@@ -2411,6 +2411,11 @@ test "monotype specialization cache maps fresh single-shard program view equival
     });
 
     _ = try program.addFieldExprSpan(&.{.{ .name = field_name, .value = local_expr }});
+    // Capture keys are target identities, independent of this shard's locals.
+    _ = try program.addFnDefCaptureSpan(&.{
+        .{ .id = checked.CaptureId.canonical(100), .value = local_expr },
+        .{ .id = checked.CaptureId.generatedCheck(200), .value = call_expr },
+    });
     _ = try program.addRecordDestructSpan(&.{.{ .name = field_name, .pattern = pat }});
     const delimiter = try program.addStringLiteral("done");
     _ = try program.addStrPatternStepSpan(&.{.{ .capture = pat, .delimiter = delimiter }});
