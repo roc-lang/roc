@@ -7721,7 +7721,6 @@ fn addMainExe(
                 target.result.os.tag == cross_target.result.os.tag and
                 target.result.abi == cross_target.result.abi) continue;
             const cross_shim = addMachineCodeShimLib(b, roc_modules, cross_target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
-            add_tracy(b, roc_modules.build_options, cross_shim, b.graph.host, false, flag_enable_tracy);
             const check_cross = b.addRunArtifact(archive_checker);
             check_cross.addArg(@tagName(cross_target.result.os.tag));
             check_cross.addFileArg(cross_shim.getEmittedBin());
@@ -7796,7 +7795,6 @@ fn addMainExe(
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, interpreter_shim_lib, b.graph.host, false, flag_enable_tracy);
-    add_tracy(b, roc_modules.build_options, machine_code_shim_lib, b.graph.host, false, flag_enable_tracy);
 
     // Cross-compile builtins objects for all supported targets.
     // These are needed by `roc build --opt=dev --target=X` to link the app object with builtins.
