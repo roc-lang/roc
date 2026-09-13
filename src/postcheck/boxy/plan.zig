@@ -1518,6 +1518,8 @@ const Builder = struct {
         args: []const TypeRepId,
 
         const Context = struct {
+            // Bucket selector only; `eql` compares module, declaration and
+            // every argument, so a collision costs a probe.
             pub fn hash(_: @This(), key: HostNominalKey) u64 {
                 var hasher = std.hash.Wyhash.init(0);
                 std.hash.autoHash(&hasher, key.module);

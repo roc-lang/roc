@@ -212,8 +212,8 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v8";
-const checked_module_entry_version: u32 = 8;
+const checked_module_cache_magic = "roc-mod-cache-v9";
+const checked_module_entry_version: u32 = 9;
 const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersionHash();
 
 // Header: magic, composite entry-version hash (32), artifact key (32), env-blob

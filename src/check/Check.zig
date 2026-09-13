@@ -1252,7 +1252,7 @@ const DispatchTargetInstantiation = struct {
     /// descendant's lineage walk (a chain root has no parent yet still
     /// anchors the chain), and record time is the one point that does not
     /// depend on which descendant or fixpoint pass reads the key first.
-    state_type_key: [16]u8,
+    state_type_key: [32]u8,
     /// Whether this edge's dispatch state (receiver and required callable)
     /// strictly embeds a same-binding ancestor's state on its own lineage. A
     /// single embedding step is legal (an argument-supplied state may simply
@@ -27715,22 +27715,22 @@ const GeneralizedSchemeRequirementKey = struct {
     fn_name: Ident.Idx,
     origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
     origin_flag: bool,
-    callable_shape: [16]u8,
+    callable_shape: [32]u8,
 };
 
 const GeneralizedAttachedConstraintKey = struct {
     fn_name: Ident.Idx,
     origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
     origin_flag: bool,
-    callable_shape: [16]u8,
+    callable_shape: [32]u8,
 };
 
 fn generalizedCallableShape(
     self: *Self,
     anchors: *const std.AutoHashMap(Var, void),
-    cache: *std.AutoHashMap(Var, [16]u8),
+    cache: *std.AutoHashMap(Var, [32]u8),
     fn_var: Var,
-) Allocator.Error![16]u8 {
+) Allocator.Error![32]u8 {
     const fn_root = self.types.resolveVar(fn_var).var_;
     if (cache.get(fn_root)) |shape| return shape;
 
@@ -27791,7 +27791,7 @@ fn deduplicateGeneralizedDispatchRequirements(
         anchors.putAssumeCapacity(self.types.resolveVar(identity_var).var_, {});
     }
 
-    var callable_shapes = std.AutoHashMap(Var, [16]u8).init(self.gpa);
+    var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
     defer callable_shapes.deinit();
 
     var pending_receivers: std.ArrayListUnmanaged(Var) = .empty;
@@ -30264,7 +30264,7 @@ fn dispatchStateTypeKey(
     self: *Self,
     dispatcher_var: Var,
     constraint_fn_var: Var,
-) Allocator.Error![16]u8 {
+) Allocator.Error![32]u8 {
     const receiver_key = try canonical_type_keys.fromVarErrSensitive(self.gpa, self.types, self.cir, dispatcher_var);
     const callable_key = try canonical_type_keys.fromVarErrSensitive(self.gpa, self.types, self.cir, constraint_fn_var);
     var hasher = TypeDigestHasher.init();
@@ -30284,7 +30284,7 @@ fn repeatedDispatchStateAncestor(
     constraint: StaticDispatchConstraint,
     parent_constraint_fn_var: ?Var,
     method_lookup: StaticDispatchMethodBinding,
-    state_type_key: [16]u8,
+    state_type_key: [32]u8,
 ) ?u32 {
     var steps: usize = 0;
     var ancestor_fn = parent_constraint_fn_var;
@@ -31039,7 +31039,7 @@ fn instantiateDispatchTargetMethodVar(
     self: *Self,
     dispatcher_var: Var,
     parent_constraint_fn_var: ?Var,
-    state_type_key: [16]u8,
+    state_type_key: [32]u8,
     grew_from_ancestor: bool,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
@@ -31190,7 +31190,7 @@ fn closeConcreteRecursiveDispatch(
     method_lookup: StaticDispatchMethodBinding,
     predeclared_scheme_for_method: ?Var,
     ancestor_idx: u32,
-    state_type_key: [16]u8,
+    state_type_key: [32]u8,
 ) Allocator.Error!?Var {
     if (!try self.varHasConcreteType(dispatcher_var) or
         !try self.varHasConcreteType(constraint.fn_var)) return null;

@@ -7082,6 +7082,12 @@ const CheckedStructuralKeyDomain = enum {
     synthetic_function,
 };
 
+/// Non-cryptographic on purpose: this fingerprint only selects a
+/// `structural_root_heads` chain, and `structuralRootForPayload` accepts an
+/// entry only after `checkedTypePayloadBuildEqlStored` compares the full
+/// payload, so a crafted collision costs a chain walk and never an identity.
+/// It is never serialized. Identity across modules and caches is the SHA-256
+/// `CheckedTypeRoot.key`.
 fn checkedTypePayloadStructuralFingerprint(
     domain: CheckedStructuralKeyDomain,
     payload: CheckedTypePayloadBuild,
@@ -19532,6 +19538,8 @@ const EvidencePass = struct {
         self: *EvidencePass,
         candidate: static_dispatch.EvidenceNode,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
+        // Bucket selector only; `evidenceNodesEql` decides identity, so a
+        // collision costs one extra chain step.
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, candidate.target);
         std.hash.autoHash(&hasher, candidate.dispatcher_ty);
@@ -28027,7 +28035,7 @@ test "platform relation procedure use preserves exported runtime result provenan
     const required_binding_id: PlatformRequiredBindingId = @enumFromInt(8);
     const required_declaration_id: PlatformRequiredDeclarationId = @enumFromInt(9);
     const required_relation_id: PlatformRequirementRelationId = @enumFromInt(10);
-    const requested_source_ty = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xC1} ** 16 };
+    const requested_source_ty = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xC1} ** 32 };
     const exported = ImportedProcedureBindingView{
         .binding = .{
             .artifact = app_key,
@@ -31381,7 +31389,8 @@ pub const CheckedModuleArtifact = struct {
     // instead of retaining a parameter index from a forwarding scheme.
     // Version 96 uses 128-bit type and evidence content hashes.
     // Version 97 stores the builtin-identity-to-declaration index.
-    const serialized_layout_version: u32 = 97;
+    // Version 98 uses 256-bit SHA-256 type and evidence content hashes.
+    const serialized_layout_version: u32 = 98;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37362,7 +37371,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .numeric_default_phase = .mono_specialization,
         .row_default = null,
     } });
-    try store.roots.append(gpa, .{ .id = a, .key = .{ .bytes = [_]u8{1} ** 16 } });
+    try store.roots.append(gpa, .{ .id = a, .key = .{ .bytes = [_]u8{1} ** 32 } });
     try store.payloads.append(gpa, flex_stored);
 
     // 1: a tag_union with one tag carrying args [a].
@@ -37370,7 +37379,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const tags = try gpa.alloc(CheckedTagBuild, 1);
     tags[0] = .{ .name = @enumFromInt(3), .args = tag_args };
     const tu_stored = try store.commitPayload(gpa, .{ .tag_union = .{ .tags = tags, .ext = a } });
-    try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = [_]u8{2} ** 16 } });
+    try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = [_]u8{2} ** 32 } });
     try store.payloads.append(gpa, tu_stored);
 
     const alias_owner: ModuleId = .{ .bytes = [_]u8{0xA1} ** 32 };
@@ -37384,7 +37393,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .backing = b,
         .args = alias_args,
     } });
-    try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 16 } });
+    try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 32 } });
     try store.payloads.append(gpa, alias_stored);
 
     const nominal_owner: ModuleId = .{ .bytes = [_]u8{0xB2} ** 32 };
@@ -37402,7 +37411,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .args = nominal_args,
         .padding_field_types = nominal_padding,
     } });
-    try store.roots.append(gpa, .{ .id = d, .key = .{ .bytes = [_]u8{5} ** 16 } });
+    try store.roots.append(gpa, .{ .id = d, .key = .{ .bytes = [_]u8{5} ** 32 } });
     try store.payloads.append(gpa, nominal_stored);
 
     // 4: a record with one field of each published kind (design.md "Field
@@ -37412,12 +37421,12 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     record_fields[1] = .{ .name = @enumFromInt(22), .ty = a, .kind = .optional };
     record_fields[2] = .{ .name = @enumFromInt(23), .ty = a, .kind = .defaultedFromParts(@enumFromInt(12), 77) };
     const record_stored = try store.commitPayload(gpa, .{ .record = .{ .fields = record_fields, .ext = a } });
-    try store.roots.append(gpa, .{ .id = e, .key = .{ .bytes = [_]u8{6} ** 16 } });
+    try store.roots.append(gpa, .{ .id = e, .key = .{ .bytes = [_]u8{6} ** 32 } });
     try store.payloads.append(gpa, record_stored);
 
     // A scheme with generalized vars [a, b].
     const gv = try store.appendTypeIds(gpa, &.{ a, b });
-    const scheme_key = canonical.CanonicalTypeSchemeKey{ .bytes = [_]u8{3} ** 16 };
+    const scheme_key = canonical.CanonicalTypeSchemeKey{ .bytes = [_]u8{3} ** 32 };
     const scheme_id = try store.internScheme(gpa, scheme_key, a);
     store.schemes.items[@intFromEnum(scheme_id)].gv_start = gv.start;
     store.schemes.items[@intFromEnum(scheme_id)].gv_len = gv.len;
@@ -37475,7 +37484,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqualDeep(scheme, loaded.schemeForKey(scheme.key).?);
         try std.testing.expectEqualDeep(scheme, loaded.view().schemeForKey(scheme.key).?);
     }
-    try std.testing.expect(loaded.schemeForKey(.{ .bytes = [_]u8{255} ** 16 }) == null);
+    try std.testing.expect(loaded.schemeForKey(.{ .bytes = [_]u8{255} ** 32 }) == null);
 
     // Flex name + constraint survive.
     const flex = loaded.payload(a).flex;
@@ -37657,8 +37666,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
 
     var checked_types_src = CheckedTypeStore{};
     defer checked_types_src.deinit(gpa);
-    const ty0_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xAB} ** 16 };
-    const ty1_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xCD} ** 16 };
+    const ty0_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xAB} ** 32 };
+    const ty1_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xCD} ** 32 };
     try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty0_key });
     try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty1_key });
     try checked_types_src.payloads.append(gpa, .empty_record);
@@ -37997,8 +38006,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x2E, 0x44, 0x01, 0xB3, 0xE0, 0x91, 0x0D, 0xC9, 0x9A, 0xC4, 0x9E, 0xA0, 0xE8, 0xBE, 0x8F, 0xEB,
-        0xB1, 0x60, 0xAB, 0x8D, 0x27, 0xA9, 0xBA, 0x48, 0xAD, 0xD5, 0xCA, 0x28, 0x6A, 0xDE, 0x80, 0xAD,
+        0x9F, 0xF4, 0x6E, 0x5A, 0x33, 0xF0, 0xC6, 0x6A, 0x75, 0x42, 0x18, 0x20, 0x78, 0xF9, 0x5B, 0x48,
+        0x48, 0x71, 0xE6, 0x09, 0x6F, 0x40, 0xF8, 0x78, 0x15, 0x06, 0xDB, 0x19, 0x25, 0xC4, 0x7A, 0xE0,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
