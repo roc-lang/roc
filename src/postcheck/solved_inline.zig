@@ -90,6 +90,13 @@ const MaterializationState = enum {
 /// not fit stays a procedure and is called instead.
 const single_use_absorb_budget: u32 = 4096;
 
+/// Lifted expression nodes a wrapper body may hold. A wrapper is inlined at
+/// every call site, so its body is copied per site. Wrappers are two to
+/// seven nodes in practice; this leaves room for guarded and multi-argument
+/// adapters. A larger call-through body is treated as a single-use body
+/// when it is one, and otherwise stays a procedure.
+const wrapper_body_limit: u32 = 32;
+
 const InlineAnalyzer = struct {
     allocator: std.mem.Allocator,
     procedure_usage: SpecConstr.ProcedureUsage,
@@ -211,7 +218,16 @@ const InlineAnalyzer = struct {
             => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
         }
 
-        self.decisions[index] = .{ .inline_body = candidate };
+        var kind = candidate.kind;
+        if (kind == .wrapper and self.own_sizes[index] > wrapper_body_limit) {
+            if (self.singleUseCandidate(fn_id) == null) {
+                self.decisions[index] = .never;
+                return null;
+            }
+            kind = .single_use;
+        }
+
+        self.decisions[index] = .{ .inline_body = .{ .body = candidate.body, .kind = kind } };
         return candidate.body;
     }
 
@@ -249,10 +265,11 @@ const InlineAnalyzer = struct {
     }
 
     /// Keep every owner's absorbed single-use bodies within
-    /// `single_use_absorb_budget`. Owners form a forest: each selected
-    /// single-use body has one owner, and cycles were already refused. Bodies
-    /// are sized bottom-up, each with the bodies it absorbed, and an owner
-    /// admits its callees in function order until the next one no longer fits.
+    /// `single_use_absorb_budget`. A wrapper with exactly one call site is a
+    /// single-use body for this purpose. Owners form a forest: each such body
+    /// has one owner, and cycles were already refused. Bodies are sized
+    /// bottom-up, each with the bodies it absorbed, and an owner admits its
+    /// callees in function order until the next one no longer fits.
     fn applySingleUseAbsorbBudget(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
         const fn_count = self.decisions.len;
         // Singly linked children lists, in ascending function order.
@@ -267,8 +284,14 @@ const InlineAnalyzer = struct {
             index -= 1;
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
             const decision = self.decisions[index];
-            if (decision != .inline_body or decision.inline_body.kind != .single_use) continue;
-            const owner = self.procedure_usage.get(fn_id).external_call_owner orelse
+            if (decision != .inline_body) continue;
+            const use = self.procedure_usage.get(fn_id);
+            const budgeted = switch (decision.inline_body.kind) {
+                .single_use => true,
+                .wrapper => use.external_calls == 1 and use.value_refs == 0,
+            };
+            if (!budgeted) continue;
+            const owner = use.external_call_owner orelse
                 Common.invariant("single-use function had no external call owner");
             const owner_index = @intFromEnum(owner);
             next_sibling[index] = first_child[owner_index];

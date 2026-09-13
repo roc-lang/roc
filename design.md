@@ -4256,7 +4256,11 @@ The explicit `InlineMode` controls the optional specialization work:
   procedure. Exact single-use inlining never grows the program, but without
   the bound one procedure could absorb an entire program, which puts its
   generated code beyond direct branch reach and its frame beyond cheap
-  addressing.
+  addressing. A wrapper is copied to every call site, so its body must be
+  small: a call-through body past a fixed node limit is treated as a
+  single-use body when it has one call site and otherwise stays a
+  procedure, and a wrapper with one call site counts toward its caller's
+  budget like any other single-use body.
 - optimized eval and focused lowering tests may select `.wrappers` directly.
 
 The mode is compiler input supplied to the checked pipeline. SpecConstr and the
