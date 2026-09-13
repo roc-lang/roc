@@ -2310,9 +2310,30 @@ substitution is memoized by its complete source/formal/actual input and interns
 its result through the same checked-type-digest index. Dispatch callable
 instantiation additionally memoizes the complete target-callable/plan-callable
 pair, so equal checked dispatch edges share one result. Checked-type digest
-construction is memoized over already-stored child roots; cryptographic hashing
+construction is memoized over already-stored child roots; 128-bit content hashing
 is performed once for a new checked-type root, never as a linear search
 mechanism.
+
+Type digests, checked type keys, recursive layout keys, and derived callable
+and evidence digests use the shared `base.TypeDigestHasher`. It feeds the same
+structural byte encoding to two `XxHash3` streams with fixed seeds `0` and
+`0x9e3779b97f4a7c15`, then concatenates their 64-bit results in that order, each
+encoded little-endian, into 16 bytes. All producers for a key domain must agree
+on the encoding, including child digests, length prefixes, identity numbering,
+and domain tags. The hash algorithm does not change type equality or the exact
+payload and topology comparisons already required by interners and evidence
+lookup. Consumers that use digest bytes directly as identity assume accidental
+collisions are negligible at 128-bit width; the hash is non-cryptographic.
+
+Module identities, checked module cache keys and filenames, and Monotype cache
+validity and compiler layout hashes remain SHA-256 with 32-byte outputs,
+including when their inputs contain type digests. The type hash algorithm,
+seeds, output byte order, digest widths, and domain versions are part of
+serialized compatibility. Changing them requires
+invalidating affected checked-module and Monotype caches through their explicit
+entry and format versions, as well as updating layout versions and layout-hash
+goldens. Compiler build identity alone does not invalidate caches for an
+uncommitted compiler change.
 
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field outside `ConstStore` whose only purpose is to feed post-check
@@ -4294,6 +4315,15 @@ source-authored and check-generated keys normalize once through the target slot'
 checked identity, while lift-generated keys already name the target's lifted
 slot and remain exact. After that boundary, capture recomputation accepts only
 lifted keys; it never retries a lookup in another identity namespace.
+
+Pre-lift closure operands also carry their target key explicitly, independently
+of the supplying expression. Checked alternative-binder remaps establish each
+or-pattern arm's declared capture provenance while Monotype materializes its
+branches. Alternative locals retain distinct runtime identities and lexical
+binders, but implement the same checked capture slot. This remains true when
+the representative alternative is uninhabited and is not materialized. Nested
+specialization reuse preserves this target contract without cloning functions
+or adding runtime bindings.
 
 Optional tag reachability uses a finite abstract LIR-construction graph. Each
 analyzed LIR local records the LIR constructor sites that can produce it; a
@@ -8387,9 +8417,9 @@ identities receives a program-global identity derived from the first final
 materialization retain one identity; a separate materialization receives a
 different identity even when it came from the same checked binder. The checked
 binder remains separate metadata for lexical binding and substitution. The original checked capture
-identity is also carried in a separate provenance field solely for writing a
-compile-time result back to `ConstStore`; it is never used for runtime capture
-joining. Consequently, separate
+identity is also carried in a separate provenance field for normalizing declared
+pre-lift capture keys and writing a compile-time result back to `ConstStore`;
+it is never used as durable runtime capture identity. Consequently, separate
 materializations cannot collide merely because they came from one checked
 binder. A downstream one-to-one capture rewrite preserves the complete
 post-check capture identity explicitly, while a one-to-many materialization

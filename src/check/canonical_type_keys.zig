@@ -6,6 +6,7 @@
 //! syntax or from environment lookup.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
@@ -174,14 +175,14 @@ pub fn fromConcreteVar(
 
 /// Public `emptyTagUnion` function.
 pub fn emptyTagUnion() canonical.CanonicalTypeKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     writeByteSlice(&hasher, "[]");
     return .{ .bytes = hasher.finalResult() };
 }
 
 /// Public `defaultDec` function.
 pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     writeByteSlice(&hasher, "nominal");
     writeIdentText(&hasher, idents, builtinDecTypeIdent(idents));
     writeIdentText(&hasher, idents, builtinModuleIdent(idents));
@@ -226,7 +227,7 @@ pub const SchemeWriter = struct {
     pub fn fromVar(self: *SchemeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeSchemeKey {
         if (builtin.is_test) self.test_digests += 1;
         const builder = &self.builder;
-        builder.hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        builder.hasher = TypeDigestHasher.init();
         builder.active.clearRetainingCapacity();
         builder.identity_variables.clearRetainingCapacity();
         builder.frames.clearRetainingCapacity();
@@ -343,7 +344,7 @@ const Builder = struct {
     store: *const TypeStore,
     env: *const ModuleEnv,
     idents: *const Ident.Store,
-    hasher: std.crypto.hash.sha2.Sha256,
+    hasher: TypeDigestHasher,
     active: std.ArrayList(Var),
     identity_variables: std.ArrayList(Var),
     /// Suspended steps of the walk, innermost last. The walk descends on this
@@ -382,7 +383,7 @@ const Builder = struct {
             .store = store,
             .env = env,
             .idents = env.getIdentStoreConst(),
-            .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
+            .hasher = TypeDigestHasher.init(),
             .active = .empty,
             .identity_variables = .empty,
             .frames = .empty,
@@ -1163,21 +1164,21 @@ fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
     return idents.builtinModuleIdent();
 }
 
-fn writeIdentText(hasher: *std.crypto.hash.sha2.Sha256, idents: *const Ident.Store, ident: Ident.Idx) void {
+fn writeIdentText(hasher: *TypeDigestHasher, idents: *const Ident.Store, ident: Ident.Idx) void {
     writeByteSlice(hasher, idents.getText(ident));
 }
 
-fn writeByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeByteSlice(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32Value(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeBoolValue(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
+fn writeBoolValue(hasher: *TypeDigestHasher, value: bool) void {
     const byte: u8 = if (value) 1 else 0;
     hasher.update(std.mem.asBytes(&byte));
 }
 
-fn writeU32Value(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32Value(hasher: *TypeDigestHasher, value: u32) void {
     hasher.update(&.{
         @as(u8, @truncate(value)),
         @as(u8, @truncate(value >> 8)),
