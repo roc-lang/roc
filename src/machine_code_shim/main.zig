@@ -18,6 +18,10 @@ const ipc = @import("ipc");
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
 
+/// This archive runs inside user programs; compiler profiling must not add
+/// Tracy client dependencies to its sealed symbol contract.
+pub const roc_disable_tracy = true;
+
 /// Route std.debug.print / std.debug.panic through the minimal shim_io vtable so
 /// the shim archive does not pull in `std.Io.Threaded`.
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;

@@ -11790,9 +11790,14 @@ its ownership context, never statement id alone: the same neutral statement
 may be validly reached under several different states. When an entry summary
 shrinks, the solver revisits and replaces exactly that slot; a monotonically
 increasing slot version prevents an older queued visit from overwriting a
-newer decision. Join and switch dependencies patch their registered terminal
-plans when keep/common states change. Once the fixed point converges, direct
-call demands are mapped to final variants and every reachable plan is complete.
+newer decision. Terminal endpoints retain their exact exit ownership snapshot
+and explicit summary target in solver metadata. Ordinary terminals also retain their exact
+keep snapshot. No terminal release list is computed during iteration. Once the
+fixed point converges, a single finalization pass computes each scheduled
+plan's release list against the final switch common, join entry keep, jump body
+keep plus restitution, or ordinary terminal keep. That pass also commits join
+body reachability and maps direct call demands to final variants. Every
+reachable plan is complete before materialization.
 
 Each plan records every concrete move/retain/release decision and call-variant
 or uniqueness choice. For a low-level operation with an ARC-only borrowed
@@ -11933,7 +11938,12 @@ or certifier `State` entries.
 Fresh one-owner states update their paths in place until the first fork; meets
 share equal subtrees and allocate only changed subtrees. Procedure width is
 therefore paid once by the producer-owned domains and summaries, not once per
-branch, join arrival, plan endpoint, or certifier work item.
+branch, join arrival, plan endpoint, or certifier work item. Ownership iteration
+traverses occupied radix subtrees and carries each loaded entry with its resource
+index. Release differences descend the two snapshots together, skipping shared
+subtrees and absent owned subtrees. Residual releases use the loaded masks and
+the domain's mask at that index, without looking up the local again. Reverse
+resource order in release lists preserves the ascending emitted statement order.
 
 Immediate `incref`/matching-`decref` cancellation is part of retain
 construction: count one cancels the pair and larger counts are reduced by one.
@@ -14147,6 +14157,9 @@ archive test cross-builds all shipped native architectures and object formats.
 Compiler-private cache synchronization and stack probing are local to the
 shim; exported builtins payloads and the interpreter's assembly trampoline
 are not machine-code run-shim inputs.
+Compiler profiling is not a machine-code run-shim dependency either: the shim
+root disables Tracy instrumentation and its build never attaches the Tracy
+client, including when the compiler itself is built with profiling enabled.
 
 Every object-format address embedded in compiler-owned code or data remains a
 relocation through this boundary. In particular, Wasm function pointers are
