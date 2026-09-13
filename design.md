@@ -4284,6 +4284,15 @@ checked identity, while lift-generated keys already name the target's lifted
 slot and remain exact. After that boundary, capture recomputation accepts only
 lifted keys; it never retries a lookup in another identity namespace.
 
+Pre-lift closure operands also carry their target key explicitly, independently
+of the supplying expression. Checked alternative-binder remaps establish each
+or-pattern arm's declared capture provenance while Monotype materializes its
+branches. Alternative locals retain distinct runtime identities and lexical
+binders, but implement the same checked capture slot. This remains true when
+the representative alternative is uninhabited and is not materialized. Nested
+specialization reuse preserves this target contract without cloning functions
+or adding runtime bindings.
+
 Optional tag reachability uses a finite abstract LIR-construction graph. Each
 analyzed LIR local records the LIR constructor sites that can produce it; a
 struct-field read or tag-payload read follows those sites to the locals stored
@@ -8376,9 +8385,9 @@ identities receives a program-global identity derived from the first final
 materialization retain one identity; a separate materialization receives a
 different identity even when it came from the same checked binder. The checked
 binder remains separate metadata for lexical binding and substitution. The original checked capture
-identity is also carried in a separate provenance field solely for writing a
-compile-time result back to `ConstStore`; it is never used for runtime capture
-joining. Consequently, separate
+identity is also carried in a separate provenance field for normalizing declared
+pre-lift capture keys and writing a compile-time result back to `ConstStore`;
+it is never used as durable runtime capture identity. Consequently, separate
 materializations cannot collide merely because they came from one checked
 binder. A downstream one-to-one capture rewrite preserves the complete
 post-check capture identity explicitly, while a one-to-many materialization

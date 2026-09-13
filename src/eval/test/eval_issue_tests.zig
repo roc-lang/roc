@@ -203,6 +203,73 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        // https://github.com/roc-lang/roc/issues/11317
+        // Each alternative supplies the arm's captured local.
+        .name = "issue 11317: closure captures an or-pattern binding",
+        .source_kind = .module,
+        .source =
+        \\get : [A(U64), B(U64)] -> U64
+        \\get = |v| match v {
+        \\    A(n) | B(n) => (|| n)()
+        \\}
+        \\main = (get(A(1)), get(B(2)))
+        ,
+        .expected = .{ .inspect_str = "(1, 2)" },
+    },
+    .{
+        .name = "issue 11317: or-pattern capture in a mapped string interpolation",
+        .source_kind = .module,
+        .source =
+        \\describe : [A(U64), B(U64)] -> Str
+        \\describe = |v| match v {
+        \\    A(n) | B(n) => ["x", "y"].map(|s| "${n.to_str()}${s}") |> Str.join_with(",")
+        \\}
+        \\main = (describe(A(1)), describe(B(2)))
+        ,
+        .expected = .{ .inspect_str = "(\"1x,1y\", \"2x,2y\")" },
+    },
+    .{
+        .name = "issue 11317: or-pattern capture when the representative alternative is uninhabited",
+        .source_kind = .module,
+        .source =
+        \\get : [A([], U64), B(U64)] -> U64
+        \\get = |v| match v {
+        \\    A(_, n) | B(n) => (|| n)()
+        \\}
+        \\main = get(B(2))
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11317: returned closure preserves reordered or-pattern captures",
+        .source_kind = .module,
+        .source =
+        \\make : [A(U64, U64), B(U64, U64)] -> ({} -> (U64, U64))
+        \\make = |v| match v {
+        \\    A(x, y) | B(y, x) => |{}| (x, y)
+        \\}
+        \\main = (make(A(1, 2))({}), make(B(3, 4))({}))
+        ,
+        .expected = .{ .inspect_str = "((1, 2), (4, 3))" },
+    },
+    .{
+        .name = "issue 11317: stored nested or-pattern closures retain separate generic captures",
+        .source_kind = .module,
+        .source =
+        \\make = |v| match v {
+        \\    A(n) | B(n) => |{}| {
+        \\        inner = |{}| n
+        \\        inner({})
+        \\    }
+        \\}
+        \\first = make(A("first"))
+        \\second = make(B("second"))
+        \\third = make(B(["third"]))
+        \\main = (first({}), second({}), third({}))
+        ,
+        .expected = .{ .inspect_str = "(\"first\", \"second\", [\"third\"])" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11316
         .name = "issue 11316: compile-time loop preserves checked set with the same list as fallback",
         .source_kind = .module,
