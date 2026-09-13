@@ -14,7 +14,7 @@
 //!
 //! Lookup is a digest-keyed hash map with exact structural type equality as
 //! the collision authority, so reuse checks stay O(1) expected with zero
-//! SHA-256 recomputation on the lookup path.
+//! 128-bit content hash recomputation on the lookup path.
 //!
 //! Boundary notes: the generated structural-derivation helper defs in
 //! `lower.zig` (`inspect_defs`/`equality_defs`/`hash_defs`) are def memos keyed
@@ -159,16 +159,16 @@ pub const SpecLookupAddress = struct {
     index_a: u32,
     index_b: u32,
     index_c: u32,
-    owner_fn_digest: [32]u8,
+    owner_fn_digest: [16]u8,
     /// Explicitly tagged default-root qualifier: `default_root` distinguishes
     /// a default-root nested site (whose declaring module content identity
     /// fills `default_root_module`) from a template-owned one (zeros).
     default_root: bool,
     default_root_module: [32]u8,
-    source_digest: [32]u8,
-    evidence_digest: [32]u8,
-    codec_contract_digest: [32]u8,
-    type_digest: [32]u8,
+    source_digest: [16]u8,
+    evidence_digest: [16]u8,
+    codec_contract_digest: [16]u8,
+    type_digest: [16]u8,
 
     /// Share the durable identity bucket between reservation and draft commit.
     /// Exact type and evidence equality remain the caller's collision checks.

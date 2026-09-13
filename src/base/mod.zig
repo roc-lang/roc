@@ -31,6 +31,7 @@ pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
+pub const TypeDigestHasher = @import("TypeDigestHasher.zig");
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
@@ -74,6 +75,7 @@ test {
     const ident = @import("Ident.zig");
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
+    std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }

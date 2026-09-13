@@ -4,6 +4,7 @@
 //! defaulting have been finalized. It has no lambda sets and no layout data.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const builtin = @import("builtin");
 const check = @import("check");
 const collections = @import("collections");
@@ -325,7 +326,7 @@ pub const Store = struct {
     /// independent of how deeply a recursive knot is tied—including across
     /// separate digest calls. Keys and values are content-addressed, so
     /// entries stay valid across `restore` truncations and need no rollback.
-    recursive_digest_unfoldings: std.AutoHashMap([32]u8, names.TypeDigest),
+    recursive_digest_unfoldings: std.AutoHashMap([16]u8, names.TypeDigest),
     /// Full-content-identity buckets for store-level acyclic interning: full
     /// digest bytes to every committed candidate that hashed to them,
     /// resolved to exact equality with `typeEql`. Keys and stored ids are
@@ -356,7 +357,7 @@ pub const Store = struct {
             .iterator_interface_visited = .empty,
             .iterator_interface_visit_epochs = .empty,
             .iterator_interface_visit_epoch = 0,
-            .recursive_digest_unfoldings = std.AutoHashMap([32]u8, names.TypeDigest).init(allocator),
+            .recursive_digest_unfoldings = std.AutoHashMap([16]u8, names.TypeDigest).init(allocator),
             .full_digest_interned = std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)).init(allocator),
             .spans = .empty,
             .fields = .empty,
@@ -2122,7 +2123,7 @@ pub const Store = struct {
     }
 
     const DigestBucketKey = struct {
-        bytes: [32]u8,
+        bytes: [16]u8,
 
         fn from(digest: names.TypeDigest) DigestBucketKey {
             return .{ .bytes = digest.bytes };
@@ -2511,9 +2512,9 @@ pub const Store = struct {
     /// format change.
     fn digestDomain(mode: NamedDigestMode) []const u8 {
         return switch (mode) {
-            .full => "roc.monotype.type.identity.v2",
-            .identity_only => "roc.monotype.type.interface.v2",
-            .equality => "roc.monotype.type.equality.v2",
+            .full => "roc.monotype.type.identity.v3",
+            .identity_only => "roc.monotype.type.interface.v3",
+            .equality => "roc.monotype.type.equality.v3",
         };
     }
 
@@ -2981,7 +2982,7 @@ pub const Store = struct {
         /// into this label would bake discovery order into the partition.
         const SccLabelSink = struct {
             engine: *DigestEngine,
-            hasher: *std.crypto.hash.sha2.Sha256,
+            hasher: *TypeDigestHasher,
             member_pos_of_node: []const u32,
 
             fn writeBytes(self: SccLabelSink, bytes: []const u8) std.mem.Allocator.Error!void {
@@ -3159,7 +3160,7 @@ pub const Store = struct {
             const sink = RenderSink{ .engine = self, .out = &self.render_buf, .scc = null };
             const node = self.nodes.items[index];
             try self.store.encodeTypeNode(self.name_store, sink, node.ty, node.mode);
-            var digest: names.TypeDigest = .{ .bytes = sha256Of(self.render_buf.items) };
+            var digest: names.TypeDigest = .{ .bytes = typeHashOf(self.render_buf.items) };
             // An acyclic store node whose one-step rendering matches a known
             // recursive-group unfolding is a rolled-out prefix of the same
             // infinite type: same label, and children digest-equal to the
@@ -3205,14 +3206,14 @@ pub const Store = struct {
             // themselves are identical for bisimilar positions of any two
             // knots regardless of how many store nodes either knot uses or
             // in what order those nodes were allocated.
-            var labels = try self.gpa.alloc([32]u8, member_count);
+            var labels = try self.gpa.alloc([16]u8, member_count);
             defer self.gpa.free(labels);
-            var next_labels = try self.gpa.alloc([32]u8, member_count);
+            var next_labels = try self.gpa.alloc([16]u8, member_count);
             defer self.gpa.free(next_labels);
-            var distinct_labels = std.AutoHashMap([32]u8, u32).init(self.gpa);
+            var distinct_labels = std.AutoHashMap([16]u8, u32).init(self.gpa);
             defer distinct_labels.deinit();
             for (members, 0..) |node_index, pos| {
-                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                var hasher = TypeDigestHasher.init();
                 const sink = SccLabelSink{
                     .engine = self,
                     .hasher = &hasher,
@@ -3228,7 +3229,7 @@ pub const Store = struct {
             while (true) {
                 distinct_labels.clearRetainingCapacity();
                 for (members, 0..) |node_index, pos| {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    var hasher = TypeDigestHasher.init();
                     hasher.update(&labels[pos]);
                     for (self.linksOf(node_index)) |ref| {
                         const target = switch (ref) {
@@ -3244,7 +3245,7 @@ pub const Store = struct {
                 }
                 const next_count: u32 = distinct_labels.count();
                 const stable = next_count == label_count;
-                std.mem.swap([][32]u8, &labels, &next_labels);
+                std.mem.swap([][16]u8, &labels, &next_labels);
                 label_count = next_count;
                 if (stable) break;
             }
@@ -3253,7 +3254,7 @@ pub const Store = struct {
             // intrinsic to the infinite type, so the order is too, and no two
             // reduced positions share a label.
             const block_count = label_count;
-            const sorted_labels = try self.gpa.alloc([32]u8, block_count);
+            const sorted_labels = try self.gpa.alloc([16]u8, block_count);
             defer self.gpa.free(sorted_labels);
             {
                 var it = distinct_labels.keyIterator();
@@ -3263,8 +3264,8 @@ pub const Store = struct {
                 }
                 std.debug.assert(next == block_count);
             }
-            std.mem.sort([32]u8, sorted_labels, {}, struct {
-                fn lessThan(_: void, lhs: [32]u8, rhs: [32]u8) bool {
+            std.mem.sort([16]u8, sorted_labels, {}, struct {
+                fn lessThan(_: void, lhs: [16]u8, rhs: [16]u8) bool {
                     return std.mem.order(u8, &lhs, &rhs) == .lt;
                 }
             }.lessThan);
@@ -3301,11 +3302,11 @@ pub const Store = struct {
                     if (self.stats) |s| s.group_encodings += 1;
                 }
             }
-            const group_digest = sha256Of(self.render_buf.items);
+            const group_digest = typeHashOf(self.render_buf.items);
             const block_digest = try self.gpa.alloc(names.TypeDigest, block_count);
             defer self.gpa.free(block_digest);
             for (0..block_count) |rank| {
-                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                var hasher = TypeDigestHasher.init();
                 hashBytes(&hasher, "recursive-member");
                 hashU32(&hasher, @intCast(rank));
                 hasher.update(&group_digest);
@@ -3326,7 +3327,7 @@ pub const Store = struct {
                 const rep = self.nodes.items[rep_index];
                 try self.store.encodeTypeNode(self.name_store, sink, rep.ty, rep.mode);
                 if (self.stats) |s| s.group_encodings += 1;
-                const unfolding = sha256Of(self.render_buf.items);
+                const unfolding = typeHashOf(self.render_buf.items);
                 const gop = try self.store.recursive_digest_unfoldings.getOrPut(unfolding);
                 if (gop.found_existing) {
                     // Reduced-group digests are intrinsic, so an equivalent
@@ -3495,7 +3496,7 @@ fn fieldDefaultEql(name_store: *const names.NameStore, lhs: ?FieldDefault, rhs: 
 /// Fold one record field's `??` default identity (or its absence) into a
 /// type digest; shared by the Monotype and lambda-mono digest writers so
 /// rows disagreeing about defaults digest differently at every stage.
-pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: *std.crypto.hash.sha2.Sha256, default: ?FieldDefault) void {
+pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: *TypeDigestHasher, default: ?FieldDefault) void {
     if (default) |field_default| {
         writeBytes(hasher, "field-default");
         writeBytes(hasher, name_store.moduleIdentityBytes(field_default.module));
@@ -3902,7 +3903,7 @@ fn digestOutOfMemory() noreturn {
     std.debug.panic("out of memory while digesting a Monotype type", .{});
 }
 
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
@@ -3911,7 +3912,7 @@ fn specializationUsesBacking(backing: ?NamedBacking) bool {
     return if (backing) |present| present.authority == .generated_private else false;
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
@@ -3922,8 +3923,8 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 const hashBytes = writeBytes;
 const hashU32 = writeU32;
 
-fn sha256Of(bytes: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+fn typeHashOf(bytes: []const u8) [16]u8 {
+    var hasher = TypeDigestHasher.init();
     hasher.update(bytes);
     return hasher.finalResult();
 }
@@ -4074,7 +4075,7 @@ test "monotype type epoch deltas own consecutive suffixes" {
     // segments must continue to own both their main nodes and side pools.
     var iteration: u32 = 0;
     while (iteration < 512) : (iteration += 1) {
-        var digest_bytes = [_]u8{0} ** 32;
+        var digest_bytes = [_]u8{0} ** 16;
         digest_bytes[0] = @truncate(iteration);
         digest_bytes[1] = @truncate(iteration >> 8);
         _ = try source.internErased(&name_store, .{ .bytes = digest_bytes });
@@ -4333,7 +4334,7 @@ test "monotype cross-store import preserves every acyclic content form" {
     defer destination.deinit();
 
     const primitive = try source.internPrimitive(&source_names, .u64);
-    const erased_digest = names.TypeDigest{ .bytes = [_]u8{42} ** 32 };
+    const erased_digest = names.TypeDigest{ .bytes = [_]u8{42} ** 16 };
     const erased = try source.internErased(&source_names, erased_digest);
     const unit = try source.internZst(&source_names);
     const list = try source.internList(&source_names, primitive);
@@ -6068,7 +6069,7 @@ test "monotype recursive group digest work is linear in the group's distinct mem
     // Every position digests apart, and the digest is stable on repeat.
     const again = store.typeDigestCached(&name_store, union_ty, &stats);
     try std.testing.expectEqualSlices(u8, digest.bytes[0..], again.bytes[0..]);
-    var seen_digests = std.AutoHashMap([32]u8, void).init(std.testing.allocator);
+    var seen_digests = std.AutoHashMap([16]u8, void).init(std.testing.allocator);
     defer seen_digests.deinit();
     for (tags) |tag| {
         const payload = store.span(tag.payloads);
