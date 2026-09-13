@@ -27439,6 +27439,10 @@ test "symbol producer caches reuse identities and reset with generated code" {
     var store = LirStore.init(allocator);
     defer store.deinit();
     const literal = try store.insertString("a readonly literal with more than twenty three bytes");
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } });
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = .empty(), .body = body, .ret_layout = .str });
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {

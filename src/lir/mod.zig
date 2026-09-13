@@ -37,6 +37,7 @@ pub const RangeProve = @import("range_prove.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
+pub const LiteralBackings = @import("literal_backings.zig");
 pub const ReachableProcs = @import("reachable_procs.zig");
 /// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");

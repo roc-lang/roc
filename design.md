@@ -5203,6 +5203,14 @@ item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
 
+Readonly literal export demand comes from the retained LIR procedure control-flow
+graphs and their explicit join-point inventories. String literals, packed-list
+literals, and string-match prefixes and delimiters name their exact backing
+identities. The backing pool itself is not an export manifest: it may still
+contain compiler names and compile-time-only intermediates after runtime
+procedure extraction. Static string materialization consumes this LIR demand
+and emits each demanded backing once.
+
 LLVM codegen interns one refcounted backing global per blob for the whole
 module, but the pointer to the blob's data offset is a WipFunction
 instruction: every proc body that restores a view must emit its own GEP from

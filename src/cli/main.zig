@@ -16033,8 +16033,8 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]pr
         .{ .name = "Lambda-Set Solving", .ns = timing.lambda_solve_ns },
         .{ .name = "Inline Planning", .ns = timing.inline_plan_ns },
         .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
-        .{ .name = "Shared LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "Shared ARC", .ns = timing.arc_ns },
+        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "ARC", .ns = timing.arc_ns },
     };
 }
 
@@ -16042,8 +16042,8 @@ fn boxyPostCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [4
     return .{
         .{ .name = "Boxy Planning", .ns = timing.boxy_plan_ns },
         .{ .name = "Boxy Lowering", .ns = timing.boxy_lower_ns },
-        .{ .name = "Shared LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "Shared ARC", .ns = timing.arc_ns },
+        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "ARC", .ns = timing.arc_ns },
     };
 }
 
