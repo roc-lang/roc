@@ -2457,9 +2457,30 @@ substitution is memoized by its complete source/formal/actual input and interns
 its result through the same checked-type-digest index. Dispatch callable
 instantiation additionally memoizes the complete target-callable/plan-callable
 pair, so equal checked dispatch edges share one result. Checked-type digest
-construction is memoized over already-stored child roots; cryptographic hashing
+construction is memoized over already-stored child roots; 128-bit content hashing
 is performed once for a new checked-type root, never as a linear search
 mechanism.
+
+Type digests, checked type keys, recursive layout keys, and derived callable
+and evidence digests use the shared `base.TypeDigestHasher`. It feeds the same
+structural byte encoding to two `XxHash3` streams with fixed seeds `0` and
+`0x9e3779b97f4a7c15`, then concatenates their 64-bit results in that order, each
+encoded little-endian, into 16 bytes. All producers for a key domain must agree
+on the encoding, including child digests, length prefixes, identity numbering,
+and domain tags. The hash algorithm does not change type equality or the exact
+payload and topology comparisons already required by interners and evidence
+lookup. Consumers that use digest bytes directly as identity assume accidental
+collisions are negligible at 128-bit width; the hash is non-cryptographic.
+
+Module identities, checked module cache keys and filenames, and Monotype cache
+validity and compiler layout hashes remain SHA-256 with 32-byte outputs,
+including when their inputs contain type digests. The type hash algorithm,
+seeds, output byte order, digest widths, and domain versions are part of
+serialized compatibility. Changing them requires
+invalidating affected checked-module and Monotype caches through their explicit
+entry and format versions, as well as updating layout versions and layout-hash
+goldens. Compiler build identity alone does not invalidate caches for an
+uncommitted compiler change.
 
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field outside `ConstStore` whose only purpose is to feed post-check
@@ -4430,6 +4451,15 @@ source-authored and check-generated keys normalize once through the target slot'
 checked identity, while lift-generated keys already name the target's lifted
 slot and remain exact. After that boundary, capture recomputation accepts only
 lifted keys; it never retries a lookup in another identity namespace.
+
+Pre-lift closure operands also carry their target key explicitly, independently
+of the supplying expression. Checked alternative-binder remaps establish each
+or-pattern arm's declared capture provenance while Monotype materializes its
+branches. Alternative locals retain distinct runtime identities and lexical
+binders, but implement the same checked capture slot. This remains true when
+the representative alternative is uninhabited and is not materialized. Nested
+specialization reuse preserves this target contract without cloning functions
+or adding runtime bindings.
 
 Optional tag reachability uses a finite abstract LIR-construction graph. Each
 analyzed LIR local records the LIR constructor sites that can produce it; a
@@ -8533,10 +8563,11 @@ different identity even when it came from the same checked binder. The checked
 binder remains separate metadata for lexical binding and substitution. The declared
 callable-root evaluator reserves its recursive local with the root's declared
 checked pattern binder. Its captures therefore retain that source provenance
-when the evaluated recursive graph is written back to `ConstStore`. The original checked capture
-identity is also carried in a separate provenance field solely for writing a
-compile-time result back to `ConstStore`; it is never used for runtime capture
-joining. Consequently, separate
+when the evaluated recursive graph is written back to `ConstStore`. The original
+checked capture identity is also carried in a separate provenance field for
+normalizing declared pre-lift capture keys and writing a compile-time result
+back to `ConstStore`; it is never used as durable runtime capture identity.
+Consequently, separate
 materializations cannot collide merely because they came from one checked
 binder. A downstream one-to-one capture rewrite preserves the complete
 post-check capture identity explicitly, while a one-to-many materialization
@@ -10232,6 +10263,27 @@ representation are an invariant failure. The descriptor source still names the
 original call operand root plus the exact instantiated descendant; it never
 changes to a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
+
+Nominal substitution identity does not demand a runtime representation. Boxy
+interns checked type bindings separately from representations; a binding receives
+a representation only when type analysis reaches it through an explicit runtime
+or evidence dependency. Each module-qualified nominal declaration shares one
+ordered vector of formal binding ids, and each checked nominal use records a complete
+vector of exact actual representations in the same order. Formal bindings are
+registered even when their types have not been analyzed. Later analysis fills
+the existing binding, so every use observes it without deferred repair scans or
+duplicated formal metadata. Consumers read actuals by argument index and consult
+the formal binding only for operations on its runtime representation. A formal
+without such a representation has no runtime substitution target; its exact
+actual remains available. Recording formals alone must not allocate layouts,
+descriptor requirements, or dictionaries. Recursive analysis reserves identities
+before descending and never holds growable-table pointers across recursion.
+
+When a record boundary adapts its fields before constructing the target record,
+the aggregate descriptor consumes those adapted field values. Each field's
+descriptor source therefore names the boundary's output representation; a
+proven direct transfer retains the source representation. The pre-conversion
+representation cannot describe a field whose storage the adapter changed.
 
 Nominal construction consumes the same explicit backing parameter substitution.
 The shared backing representation fixes storage; its descriptor binds each

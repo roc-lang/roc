@@ -542,9 +542,9 @@ test "frozen root transcode maps erased worker and drop identities across target
     for ([_]*Program.Result{ &source, &target }) |program| {
         try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
     }
-    const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } }, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
+    const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } }, .frozen_worker = @as([48]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
     var other_template = template;
-    other_template.frozen_worker = @as([96]u8, @splat(2));
+    other_template.frozen_worker = @as([48]u8, @splat(2));
     const capture = Program.CaptureSlot{ .id = @enumFromInt(5), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
     const source_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const target_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});

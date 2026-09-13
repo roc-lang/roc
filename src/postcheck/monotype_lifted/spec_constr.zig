@@ -215,6 +215,7 @@
 //! whose store this walk never grows is unnecessary.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
 
 const SourceLoc = @import("base").SourceLoc;
@@ -11443,11 +11444,7 @@ const Cloner = struct {
         // from a worker produced by an earlier materialization.
         const symbol = self.pass.symbols.fresh();
         var worker_source = source_fn.source orelse Common.invariant("callable worker lacks frozen source authority");
-        var worker_identity: [96]u8 = undefined;
-        @memcpy(worker_identity[0..32], &worker_key.template.bytes);
-        @memcpy(worker_identity[32..64], &worker_key.callable_abi.bytes);
-        @memcpy(worker_identity[64..96], &worker_key.capture_abi.bytes);
-        worker_source.frozen_worker = worker_identity;
+        worker_source.frozen_worker = worker_key.template.bytes ++ worker_key.callable_abi.bytes ++ worker_key.capture_abi.bytes;
         const worker_fn_id = try self.pass.program.addFn(.{
             .symbol = symbol,
             .source = worker_source,
@@ -11510,8 +11507,8 @@ const Cloner = struct {
         source_captures: []const Ast.TypedLocal,
         values: []const CaptureValue,
     ) names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.spec_constr.callable_capture_abi.v1");
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.spec_constr.callable_capture_abi.v2");
         var word: [4]u8 = undefined;
         std.mem.writeInt(u32, &word, @intCast(source_captures.len), .little);
         hasher.update(&word);

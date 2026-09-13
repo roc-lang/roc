@@ -178,6 +178,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11249_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11263_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11286_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11291_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11287_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11292_test.zig"));
     std.testing.refAllDecls(@import("test/shared_expect_lowering_test.zig"));

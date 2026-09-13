@@ -1,6 +1,7 @@
 //! Lambda solving over lifted Monotype IR.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
 const can = @import("can");
 const check = @import("check");
@@ -2837,7 +2838,7 @@ const Solver = struct {
     }
 
     fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = TypeDigestHasher.init();
         var active = self.solved_position_pool.acquire();
         defer self.solved_position_pool.release(&active);
         try self.writeSolvedTypeDigest(&hasher, ty, &active);
@@ -2846,7 +2847,7 @@ const Solver = struct {
 
     fn writeSolvedTypeDigest(
         self: *Solver,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: *TypeDigestHasher,
         ty: Type.TypeVarId,
         active: *collections.DenseMap(Type.TypeVarId, u32),
     ) Allocator.Error!void {
@@ -2968,7 +2969,7 @@ const Solver = struct {
 
     fn writeSolvedTypeSpanDigest(
         self: *Solver,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: *TypeDigestHasher,
         span: Type.Span,
         active: *collections.DenseMap(Type.TypeVarId, u32),
     ) Allocator.Error!void {
@@ -2980,12 +2981,12 @@ const Solver = struct {
     }
 };
 
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
     if (value) |v| {
         hasher.update(&[_]u8{1});
         writeU32(hasher, v);
@@ -2994,7 +2995,7 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
     }
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }

@@ -3,6 +3,7 @@
 //! This is closed, monomorphic, and source-level dispatch-free.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const base = @import("base");
 const check = @import("check");
 const can = @import("can");
@@ -138,7 +139,7 @@ pub const NestedFn = struct {
 /// specialization. Equal callable/type requests with different evidence must
 /// remain distinct specializations.
 pub const EvidenceDigest = extern struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [16]u8 = [_]u8{0} ** 16,
 };
 
 /// The structural codec derivation whose checked call contract identifies a
@@ -166,7 +167,7 @@ pub const FnTemplate = struct {
     /// Consumer-specific symbols and layout specializations never replace it.
     frozen_fn: ?FnId = null,
     /// Exact callable worker specialization key, emitted by SpecConstr.
-    frozen_worker: ?[96]u8 = null,
+    frozen_worker: ?[48]u8 = null,
     fn_def: FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -287,7 +288,7 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
 /// Compute a digest for a Monotype function template. Takes the type store
 /// mutable because type digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
     writeBytes(&hasher, &template.evidence_digest.bytes);
@@ -303,8 +304,8 @@ pub fn fnEvidenceDigest(
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) EvidenceDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v4");
+    var hasher = TypeDigestHasher.init();
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v5");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
@@ -426,7 +427,7 @@ fn methodTargetIdentityEql(
 }
 
 fn writeMethodTarget(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *TypeDigestHasher,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
 ) void {
@@ -452,7 +453,7 @@ fn writeMethodTarget(
     writeBytes(hasher, &callable_key.bytes);
 }
 
-fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: static_dispatch.StructuralDerivation) void {
+fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispatch.StructuralDerivation) void {
     writeU8(hasher, @intFromEnum(derivation));
     switch (derivation) {
         .map, .map_effectful => |plan| {
@@ -463,7 +464,7 @@ fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: s
     }
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
     if (value) |actual| {
         writeU8(hasher, 1);
         writeU32(hasher, actual);
@@ -536,7 +537,7 @@ test "function evidence identity uses checked callable type keys" {
     ));
 }
 
-fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
+fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
     switch (fn_def) {
         .local_template => |template| {
             writeBytes(hasher, "local_template");
@@ -589,29 +590,29 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
     }
 }
 
-fn writeHostedFn(hasher: *std.crypto.hash.sha2.Sha256, hosted: HostedFn) void {
+fn writeHostedFn(hasher: *TypeDigestHasher, hosted: HostedFn) void {
     writeProcTemplate(hasher, hosted.template);
     writeU32(hasher, @intFromEnum(hosted.external_symbol_name));
     writeU32(hasher, hosted.dispatch_index);
 }
 
-fn writeProcTemplate(hasher: *std.crypto.hash.sha2.Sha256, template: names.ProcTemplate) void {
+fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     const module_digest = names.procTemplateModuleDigest(template);
     hasher.update(&module_digest.bytes);
     writeU32(hasher, @intFromEnum(template.proc_base));
     writeU32(hasher, @intFromEnum(template.template));
 }
 
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeU8(hasher: *std.crypto.hash.sha2.Sha256, value: u8) void {
+fn writeU8(hasher: *TypeDigestHasher, value: u8) void {
     hasher.update(&.{value});
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
@@ -627,9 +628,9 @@ pub const Local = struct {
     /// replaces every non-null value with the final local's program-global
     /// post-check identity.
     capture_id: ?checked.CaptureId = null,
-    /// Checked-stage identity used only when a compile-time result stores this
-    /// capture back into `ConstStore`. This provenance is never a runtime
-    /// capture join key.
+    /// Checked capture provenance for pre-lift target-key normalization and
+    /// `ConstStore` publication. Alternative binders use their arm's
+    /// representative key; durable runtime capture identity remains separate.
     checked_capture_id: ?checked.CaptureId = null,
 };
 
@@ -677,7 +678,7 @@ pub const CallValue = struct {
 /// One explicit capture operand supplied at a lifted function reference /
 /// direct call site. `id` is the `CaptureId` of the target function's capture
 /// slot this operand fills; `value` is the expression that supplies it. Operand
-/// spans are stored sorted by `id`, parallel to the target's canonically-sorted
+/// spans after lifting are sorted by `id`, parallel to the target's canonically-sorted
 /// capture slots, so every operand↔slot join is an exact keyed lookup with no
 /// load-bearing order. At the lift boundary, the id's namespace explicitly
 /// distinguishes a provisional checked key from an already-lifted key.
@@ -694,16 +695,10 @@ pub const LiftedFunctionValue = struct {
     captures: Span(CaptureOperand) = Span(CaptureOperand).empty(),
 };
 
-/// Explicit operand for one checked closure capture before lifting. The `local`
-/// identifies the checked capture in the closure creation context; `value` is
-/// the expression that supplies it there. At the lift boundary, both this local
-/// and the target slot use their checked capture identity when present and their
-/// generated capture identity otherwise. Lifting joins only on that explicit
-/// provisional key, then records the operand with the target's lifted key.
-pub const FnDefCapture = struct {
-    local: LocalId,
-    value: ExprId,
-};
+/// Explicit operand for one closure capture before lifting. The producer records
+/// the target slot's provisional key independently of the supplying expression.
+/// Lifting normalizes this key through the target slot's identity exactly once.
+pub const FnDefCapture = CaptureOperand;
 
 /// Reference to a Monotype function value before lifting. `captures` contains
 /// keyed explicit values recorded at the checked closure creation site.
@@ -2659,7 +2654,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     // Allocate distinct replay addresses with the same checked root key.
     var replay_types: [4]checked.CheckedTypeId = undefined;
     for (&replay_types) |*ty| {
-        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 32 }, true);
+        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = [_]u8{2} ** 16 }, true);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
     // Fill the proof table and its indices before building stored evidence.

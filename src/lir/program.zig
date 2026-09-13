@@ -136,7 +136,7 @@ pub const FnTemplate = struct {
     /// Original function slot in the shared frozen Monotype owner.
     frozen_fn: ?u32 = null,
     /// Exact callable worker specialization key, emitted by SpecConstr.
-    frozen_worker: ?[96]u8 = null,
+    frozen_worker: ?[48]u8 = null,
     /// Exact member specialization within the shared frozen Solved owner.
     frozen_context: ?FrozenCallableContext = null,
     fn_def: const_store.FnDef,
