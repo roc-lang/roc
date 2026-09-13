@@ -1,6 +1,7 @@
 //! Checked modules to Monotype IR.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
@@ -2973,7 +2974,7 @@ fn nestedSpecIdentity(
     request_fn_ty: Type.TypeId,
     request_fn_ty_digest: names.TypeDigest,
 ) Ast.SpecIdentity {
-    var context_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var context_hasher = TypeDigestHasher.init();
     context_hasher.update("roc.monotype.nested_capture_abi");
     context_hasher.update(&nested.context_fn_key.bytes);
     context_hasher.update(&capture_abi_digest.bytes);
@@ -2998,8 +2999,8 @@ fn nestedSpecIdentity(
 
 fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeDigest {
     const actual = contract orelse return .{};
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("roc.monotype.codec_contract.v3");
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.codec_contract.v4");
     hasher.update(&actual.module.bytes);
     var integer: [4]u8 = undefined;
     std.mem.writeInt(u32, &integer, @intFromEnum(actual.derivation), .little);
@@ -3483,7 +3484,7 @@ const Builder = struct {
         sealer: *GraphTypeFinals,
         capture_nodes: []const NodeId,
     ) Allocator.Error!names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.capture_abi");
         hashU32(&hasher, @intCast(capture_nodes.len));
         for (capture_nodes) |node| {
@@ -10896,7 +10897,7 @@ const Builder = struct {
 
         defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
-            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+            capture_values[index] = .{ .id = fn_ctx.captureKey(capture.local), .value = capture.value };
         }
 
         const expr = try fn_ctx.addExprWithTypeCell(
@@ -11997,7 +11998,7 @@ const DraftCallProc = struct {
 };
 
 const DraftFnDefCapture = struct {
-    local: DraftLocalId,
+    id: checked.CaptureId,
     value: DraftExprId,
 };
 
@@ -12543,7 +12544,7 @@ const DraftTemplateFamilyAddress = struct {
     proc_base: u32,
     template: u32,
     method_scope: [32]u8,
-    source_fn_key: [32]u8,
+    source_fn_key: [16]u8,
 
     fn init(template_ref: names.ProcTemplate, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
         return .{
@@ -12586,7 +12587,7 @@ const DraftNestedFamilyAddress = struct {
     module: [32]u8,
     owner_proc_base: u32,
     owner_template: u32,
-    owner_fn_key: [32]u8,
+    owner_fn_key: [16]u8,
     site: u32,
     /// Explicitly tagged default-root qualifier: the site id is relative to
     /// the declaring module's site table, so a default-root site's family
@@ -12594,7 +12595,7 @@ const DraftNestedFamilyAddress = struct {
     default_root: bool,
     default_root_module: [32]u8,
     method_scope: [32]u8,
-    source_fn_key: [32]u8,
+    source_fn_key: [16]u8,
 
     fn init(nested: Ast.NestedFn, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
         return .{
@@ -12626,7 +12627,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         const Self = @This();
         const Prefix = struct {
             family: Family,
-            evidence_digest: [32]u8,
+            evidence_digest: [16]u8,
         };
         const PrefixId = enum(u32) { _ };
         const OpenPair = struct { node: NodeId, spec: u32 };
@@ -12653,7 +12654,7 @@ fn DraftSpecLookup(comptime Family: type) type {
         const DigestAddress = struct {
             prefix: PrefixId,
             kind: enum { closed, open_shape },
-            digest: [32]u8,
+            digest: [16]u8,
         };
         const Address = union(enum) {
             open: OpenAddress,
@@ -12767,7 +12768,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             if (pairs) |list| list.appendAssumeCapacity(.{ .node = address.open.node, .spec = raw_spec });
         }
 
-        fn internPrefix(self: *Self, family: Family, evidence_digest: [32]u8) Allocator.Error!PrefixId {
+        fn internPrefix(self: *Self, family: Family, evidence_digest: [16]u8) Allocator.Error!PrefixId {
             const entry = try self.prefixes.getOrPut(self.allocator, .{
                 .family = family,
                 .evidence_digest = evidence_digest,
@@ -15103,21 +15104,6 @@ const BodyDraftStore = struct {
             });
         }
 
-        try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
-        for (self.fn_def_captures.items, 0..) |capture, index| {
-            if (!ids.retained(.fn_def_captures, index)) continue;
-            if (!ids.retained(.locals, @intFromEnum(capture.local))) {
-                std.debug.panic(
-                    "postcheck invariant violated: retained function capture owned by {any} referenced local owned by {any}",
-                    .{ self.ownerForCore(.fn_def_captures, index), self.ownerForCore(.locals, @intFromEnum(capture.local)) },
-                );
-            }
-            program.fn_def_captures.appendAssumeCapacity(.{
-                .local = ids.local(capture.local),
-                .value = ids.expr(capture.value),
-            });
-        }
-
         try program.record_destructs.ensureUnusedCapacity(program.allocator, self.record_destructs.items.len);
         for (self.record_destructs.items, 0..) |field, index| {
             if (!ids.retained(.record_destructs, index)) continue;
@@ -15186,6 +15172,20 @@ const BodyDraftStore = struct {
             });
             const local_name = self.sourceText(self.local_names.items[index]);
             program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
+        }
+
+        try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
+        for (self.fn_def_captures.items, 0..) |capture, index| {
+            if (!ids.retained(.fn_def_captures, index)) continue;
+            const id = if (capture.id.isLiftGenerated())
+                durable_capture_ids.get(capture.id) orelse
+                    Common.invariant("retained function capture names a missing target identity")
+            else
+                capture.id;
+            program.fn_def_captures.appendAssumeCapacity(.{
+                .id = id,
+                .value = ids.expr(capture.value),
+            });
         }
 
         try program.typed_locals.ensureUnusedCapacity(program.allocator, self.typed_locals.items.len);
@@ -16244,8 +16244,8 @@ const InterfaceReplayStatus = enum { expanding, ready };
 
 const InterfaceReplayAddress = struct {
     family: DraftTemplateFamilyAddress,
-    evidence_digest: [32]u8,
-    provisional_digest: [32]u8,
+    evidence_digest: [16]u8,
+    provisional_digest: [16]u8,
 };
 
 const InterfaceReplayEntry = struct {
@@ -16952,7 +16952,7 @@ const BodyContext = struct {
     }
 
     fn parserPlanKey(self: *BodyContext, shape_ty: Type.TypeId) names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = TypeDigestHasher.init();
         hasher.update("roc.parser_precomputed_record");
         const fields = self.recordFieldsForShape(shape_ty);
         var count = std.mem.nativeToLittle(u32, @intCast(GuardedList.borrowLen(fields)));
@@ -18183,6 +18183,14 @@ const BodyContext = struct {
         return try self.draft.addFieldExprSpan(fields);
     }
 
+    /// Record a declared capture slot's key while its binding context is known.
+    /// Supplying expressions never determine the target key during lifting.
+    fn captureKey(self: *const BodyContext, local: DraftLocalId) checked.CaptureId {
+        const target = self.draft.locals.items[@intFromEnum(local)];
+        return target.checked_capture_id orelse target.capture_id orelse
+            Common.invariant("declared capture slot has no capture identity");
+    }
+
     fn addFnDefCaptureSpan(self: *BodyContext, captures: []const DraftFnDefCapture) Allocator.Error!DraftSpan(DraftFnDefCapture) {
         return try self.draft.addFnDefCaptureSpan(captures);
     }
@@ -19029,7 +19037,7 @@ const BodyContext = struct {
         defer self.allocator.free(lexical.local_procs);
 
         const binder_key = lexicalContextKeyFromEntries(self.current_fn_key, lexical.binders);
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.codec_lexical_context");
         hasher.update(&lexical.view);
         hasher.update(&binder_key.bytes);
@@ -19146,8 +19154,8 @@ const BodyContext = struct {
             }
         }.lessThan);
 
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.monotype.local_proc_contexts.v3");
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.local_proc_contexts.v4");
         for (addresses) |address| {
             const context_id = self.local_proc_contexts.get(address) orelse
                 Common.invariant("local procedure context disappeared while its digest was produced");
@@ -19259,7 +19267,7 @@ const BodyContext = struct {
                 .kind = 0,
                 .binder = @intFromEnum(entry.binder),
                 .local = @intFromEnum(entry.local),
-                .type_digest = .{ .bytes = [_]u8{0} ** 32 },
+                .type_digest = .{ .bytes = [_]u8{0} ** 16 },
             };
             index += 1;
         }
@@ -19280,8 +19288,8 @@ const BodyContext = struct {
 
     fn lexicalContextKeyFromEntries(base_key: names.TypeDigest, entries: []const LexicalBinderEntry) names.TypeDigest {
         if (entries.len == 0) return base_key;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.monotype.lexical_context.v2");
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.lexical_context.v3");
         hasher.update(&base_key.bytes);
         // `local` installs the checked binder in the active body draft. Its
         // allocation id changes across restoration and is not checked identity.
@@ -25388,7 +25396,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         arg_count: usize,
     ) names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = TypeDigestHasher.init();
         hasher.update("roc.generated_iterator.callable.lambda");
         hasher.update(self.view.key.bytes[0..]);
         hashU32(&hasher, @intFromEnum(expr_id));
@@ -25402,7 +25410,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         closure: anytype,
     ) Allocator.Error!names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = TypeDigestHasher.init();
         hasher.update("roc.generated_iterator.callable.closure");
         hasher.update(self.view.key.bytes[0..]);
         hashU32(&hasher, @intFromEnum(expr_id));
@@ -32427,7 +32435,7 @@ const BodyContext = struct {
                 binding.ty,
                 .{ .local = binding.local },
             );
-            captures.appendAssumeCapacity(.{ .local = binding.local, .value = value });
+            captures.appendAssumeCapacity(.{ .id = self.captureKey(binding.local), .value = value });
         }
 
         return try self.addFnDefCaptureSpan(captures.items);
@@ -34790,7 +34798,7 @@ const BodyContext = struct {
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
         defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
-            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+            capture_values[index] = .{ .id = fn_ctx.captureKey(capture.local), .value = capture.value };
         }
 
         return try fn_ctx.addExprWithTypeCell(
@@ -34974,7 +34982,7 @@ const BodyContext = struct {
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
         defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
-            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+            capture_values[index] = .{ .id = fn_ctx.captureKey(capture.local), .value = capture.value };
         }
 
         return try fn_ctx.addExprWithTypeCell(
@@ -38571,7 +38579,7 @@ const BodyContext = struct {
                 cell,
                 .{ .local = local },
             );
-            try capture_values.append(self.allocator, .{ .local = local, .value = value });
+            try capture_values.append(self.allocator, .{ .id = capture.capture_id, .value = value });
         }
 
         return try self.addFnDefCaptureSpan(capture_values.items);
@@ -51289,6 +51297,10 @@ const BodyContext = struct {
         for (remaps) |remap| {
             const local = self.binders.get(remap.candidate_binder) orelse
                 Common.invariant("match alternative binder remap referenced an unbound candidate binder");
+            // All alternatives implement the arm's one checked capture slot.
+            // Preserve each local's separate runtime identity and lexical binder.
+            self.draft.locals.items[@intFromEnum(local)].checked_capture_id =
+                checked.CaptureId.fromBinder(remap.representative_binder);
             try self.binders.put(remap.representative_binder, local);
         }
     }
@@ -55712,7 +55724,7 @@ test "draft specialization lookup preserves family evidence and request identity
         var lookup = Lookup.init(allocator);
         defer lookup.deinit();
         const family = std.mem.zeroes(Family);
-        const evidence = [_]u8{0} ** 32;
+        const evidence = [_]u8{0} ** 16;
         const prefix = try lookup.internPrefix(family, evidence);
         try std.testing.expectEqual(prefix, try lookup.internPrefix(family, evidence));
 
@@ -55732,10 +55744,10 @@ test "draft specialization lookup preserves family evidence and request identity
         // Every family qualifier and evidence byte contributes to identity.
         // Growing the prefix table must also preserve previously issued IDs.
         inline for (std.meta.fields(Family)) |field| {
-            const changes = if (field.type == [32]u8) 32 else 1;
+            const changes = if (@typeInfo(field.type) == .array) @typeInfo(field.type).array.len else 1;
             for (0..changes) |byte| {
                 var different_family = family;
-                if (field.type == [32]u8) {
+                if (@typeInfo(field.type) == .array) {
                     @field(different_family, field.name)[byte] = 1;
                 } else if (field.type == u32) {
                     @field(different_family, field.name) = 1;
@@ -57235,7 +57247,7 @@ fn generatedInterpolationStepKey(
     source_expr_id: checked.CheckedExprId,
     index: usize,
 ) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hasher.update("roc.generated_interpolation_step");
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
@@ -57249,7 +57261,7 @@ fn generatedParserRuntimeKey(
     current_fn_key: names.TypeDigest,
     source_expr_id: checked.CheckedExprId,
 ) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hasher.update("roc.generated_structural_parser_runtime");
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
@@ -57261,7 +57273,7 @@ fn generatedEncoderForRuntimeKey(
     current_fn_key: names.TypeDigest,
     source_expr_id: checked.CheckedExprId,
 ) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hasher.update("roc.generated_structural_encoder_for_runtime");
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
@@ -57274,7 +57286,7 @@ fn generatedEncoderCallbackKey(
     source_expr_id: checked.CheckedExprId,
     index: u64,
 ) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hasher.update("roc.generated_structural_encoder_callback");
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
@@ -57289,7 +57301,7 @@ fn restoredConstFnContextKey(
     fn_id: checked.ConstFnId,
     source_fn_key: names.TypeDigest,
 ) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hasher.update("roc.restored_const_fn_context");
     hasher.update(&module_key.bytes);
     hasher.update(&source_fn_key.bytes);
@@ -57303,7 +57315,7 @@ fn restoredLocalProcUseContextKey(
     source_contexts: names.TypeDigest,
     binder: checked.PatternBinderId,
 ) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.restored_local_proc_context");
     hasher.update(&restored_fn_key.bytes);
     hasher.update(&source_contexts.bytes);
@@ -57329,7 +57341,7 @@ fn generatedFieldNamesIterStepKey(
     index: usize,
     mode: FieldNamesIterMode,
 ) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = TypeDigestHasher.init();
     hasher.update("roc.generated_fields_iter_step");
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
@@ -57532,7 +57544,7 @@ fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
     return .{ .bytes = key.bytes };
 }
 
-fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn hashU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
@@ -59169,7 +59181,7 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
         // capture, then destroy the workspace before coordinator absorption.
         var index: u32 = 0;
         while (index < 256) : (index += 1) {
-            var digest = [_]u8{0} ** 32;
+            var digest = [_]u8{0} ** 16;
             std.mem.writeInt(u32, digest[0..4], index, .little);
             _ = try workspace.types.internErased(
                 &workspace.name_store,
@@ -59775,8 +59787,8 @@ test "specialization shard diagnostics remain private until coordinator commit" 
 }
 
 test "function context identity excludes draft local allocation ids" {
-    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 32 };
-    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 32 };
+    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 16 };
+    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 16 };
     const original = [_]LexicalBinderEntry{.{
         .kind = 1,
         .binder = 17,

@@ -167,7 +167,7 @@ test "codec identity preserves cross-root sharing, conditional calls, and recurs
     defer types.deinit(gpa);
     var variables: [3]TypeId = undefined;
     for (&variables) |*variable| {
-        variable.* = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = [_]u8{7} ** 32 }, true);
+        variable.* = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = [_]u8{7} ** 16 }, true);
         try types.fillSyntheticTypeRoot(gpa, variable.*, .{ .flex = .{} });
     }
     var names = @import("canonical_names.zig").CanonicalNameStore.init(gpa);

@@ -4334,6 +4334,43 @@ test "LIR locals carry source-level names" {
     try std.testing.expect(found_second);
 }
 
+test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\get : [A(U64), B(U64)] -> U64
+        \\get = |v| match v {
+        \\    A(n) | B(n) => (|| n)()
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| get(A(n)) + get(B(n + 1))
+    ;
+    {
+        var lowered = try lowerMonotypeModule(allocator, source);
+        defer lowered.deinit(allocator);
+        // Alternative values share the closure body, without extra materializations.
+        try std.testing.expectEqual(@as(usize, 1), lowered.mono.view().nested_defs.len);
+    }
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 11), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "shared callees are lifted once and never gain spurious captures" {
     // A small diamond call graph: every function calls the one below it twice.
     // Capture collection reuses each callee's solved free set instead of
@@ -10299,4 +10336,38 @@ test "tail-call transfers preserve owning cycles and duplicated sources" {
             try runtime_env.checkForLeaks();
         }
     }
+}
+
+test "issue 11291 boxy imported nominal forwarding executes with exact backing descriptors" {
+    const allocator = std.testing.allocator;
+    const container_module =
+        \\Container(a) := { items: List(a) }.{
+        \\    to_list : Container(a) -> List(a)
+        \\    to_list = |value| to_list_help(value)
+        \\}
+        \\to_list_help : Container(a) -> List(a)
+        \\to_list_help = |{ items }| items
+    ;
+    const source =
+        \\import Container exposing [Container]
+        \\value : Container(U8)
+        \\value = { items: Str.to_utf8("xyz") }
+        \\main = Container.to_list(value)
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Container", .source = container_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("[120, 121, 122]", output);
 }

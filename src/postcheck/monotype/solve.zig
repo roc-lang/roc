@@ -9,6 +9,7 @@
 //! specialization's final type.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const base = @import("base");
 const collections = @import("collections");
@@ -1609,7 +1610,7 @@ pub const InstGraph = struct {
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
             };
             const provenance = named.generated_iterator orelse continue;
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            var hasher = TypeDigestHasher.init();
             if (named.def.iterator_representation == .forced_dynamic) {
                 if (named.args.len != 1) {
                     Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
@@ -6283,7 +6284,7 @@ fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
 
 const OpenFunctionInterfaceShapeWriter = struct {
     graph: *InstGraph,
-    hasher: std.crypto.hash.sha2.Sha256,
+    hasher: TypeDigestHasher,
     unresolved_ids: collections.DenseMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
     next_unresolved: u32 = 0,
@@ -6293,7 +6294,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
     fn init(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
         return .{
             .graph = graph,
-            .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
+            .hasher = TypeDigestHasher.init(),
             .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
             .visiting = .empty,
         };
@@ -6311,7 +6312,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
     }
 
     fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
-        self.writeBytes("roc.monotype.open_function_interface_shape.v2");
+        self.writeBytes("roc.monotype.open_function_interface_shape.v3");
         try self.writeFunctionNodes(try self.graph.functionNodes(node));
         if (self.graph.requestSourceInterface(node)) |source| {
             self.writeBytes("source-interface");
@@ -7129,8 +7130,7 @@ test "open function interface shape snapshot alpha-normalizes variables and surv
     const equivalent_shape = try graph.openFunctionInterfaceShape(equivalent);
     try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &equivalent_shape.digest.bytes);
     try std.testing.expectEqualSlices(u8, left_shape.bytes, equivalent_shape.bytes);
-    var exact_bytes_digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(left_shape.bytes, &exact_bytes_digest, .{});
+    const exact_bytes_digest = TypeDigestHasher.hash(left_shape.bytes);
     try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &exact_bytes_digest);
 
     const distinct_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
@@ -8901,7 +8901,7 @@ test "opaque iterator relation resolves unresolved public variable to imported g
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x72} ** 32 },
+            .generated = .{ .bytes = [_]u8{0x72} ** 16 },
             .iterator_representation = .minted,
             .iterator_kind = .list,
             .iterator_depth = 1,
@@ -8949,7 +8949,7 @@ test "opaque interface relation delegates nested private iterator requests to un
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x74} ** 32 },
+            .generated = .{ .bytes = [_]u8{0x74} ** 16 },
             .iterator_representation = .minted,
             .iterator_kind = .concat,
             .iterator_depth = 2,
@@ -8968,7 +8968,7 @@ test "opaque interface relation delegates nested private iterator requests to un
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
+            .generated = .{ .bytes = [_]u8{0x75} ** 16 },
             .iterator_representation = .minted,
             .iterator_kind = .concat,
             .iterator_depth = 2,
@@ -9194,7 +9194,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
     };
 
     var finished_def = public_def;
-    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 32 };
+    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 16 };
     finished_def.iterator_representation = .minted;
     finished_def.iterator_kind = .list;
     finished_def.iterator_depth = 1;
