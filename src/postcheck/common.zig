@@ -93,7 +93,7 @@ pub const ComptimeValueRef = struct {
 };
 
 /// Producer-owned storage facts; only target lowering applies string ABI size.
-pub const StaticDataStorage = union(enum) {
+pub const StaticDataStorage = union(enum(u8)) {
     aggregate,
     string_backing: u64,
 
