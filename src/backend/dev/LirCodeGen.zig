@@ -1503,6 +1503,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.message_pool_index.clearRetainingCapacity();
             self.message_pool.clearRetainingCapacity();
             self.message_pool_placed_len = 0;
+            self.image_finished = false;
             // Clear nested ArrayLists
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
@@ -1651,6 +1652,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             root_proc_id: lir.LIR.LirProcSpecId,
             result_layout: layout.Idx,
         ) Allocator.Error!CodeResult {
+            self.assertImageOpen();
             // Clear any leftover state from compileAllProcSpecs
             self.clearLocalLocationsRetainingCapacity();
             self.codegen.callee_saved_used = 0;
@@ -15529,8 +15531,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
-                // The error already propagating wins over a failed cleanup patch.
-                self.codegen.patchJump(skip_jump, self.codegen.currentOffset()) catch {};
             }
 
             const ptr_slot = self.codegen.allocStackSlot(8);
@@ -15717,8 +15717,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
-                // The error already propagating wins over a failed cleanup patch.
-                self.codegen.patchJump(skip_jump, self.codegen.currentOffset()) catch {};
             }
 
             const ptr_slot = self.codegen.allocStackSlot(8);
@@ -20532,6 +20530,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
         pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
+            self.assertImageOpen();
             for (proc_specs, 0..) |proc, i| {
                 const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
                 try self.proc_registry.put(@intFromEnum(proc_id), .{
@@ -20596,6 +20595,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self: *Self,
             helpers: []const RcHelperKey,
         ) Allocator.Error!void {
+            self.assertImageOpen();
             for (helpers) |helper_key| {
                 if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
                     if (builtin.mode == .Debug) {
@@ -24048,6 +24048,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Load the address of `msg` into `dst_reg`, patched once the pool is placed.
         fn emitPendingMessageAddress(self: *Self, msg: []const u8, dst_reg: GeneralReg) Allocator.Error!void {
+            self.assertImageOpen();
             const message_offset = try self.internMessage(msg);
             if (comptime target.toCpuArch() == .aarch64) {
                 // Reserve the 4-instruction PC-relative address sequence. The
@@ -24063,7 +24064,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.leaRegRipRel(dst_reg, 0);
                 try self.pending_message_addrs.append(self.allocator, .{ .instr_offset = current, .message_offset = message_offset });
             }
-            self.image_finished = false;
         }
 
         /// After a deferred-prologue body shifts forward, message address
@@ -24247,6 +24247,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
+            self.assertImageOpen();
             const func_start = self.codegen.currentOffset();
             var prologue_size: u32 = 0;
             var stack_alloc: u32 = 0;
@@ -25442,6 +25443,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn assertImageFinished(self: *const Self) void {
             if (builtin.mode == .Debug and !self.image_finished) {
                 std.debug.panic("generated code was read before finishImage", .{});
+            }
+        }
+
+        /// Emission after `finishImage` would leave the new code without its
+        /// message pool and far-call stubs; `reset` reopens the image.
+        fn assertImageOpen(self: *const Self) void {
+            if (builtin.mode == .Debug and self.image_finished) {
+                std.debug.panic("code was emitted after finishImage", .{});
             }
         }
     };
