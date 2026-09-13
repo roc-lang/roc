@@ -2310,30 +2310,45 @@ substitution is memoized by its complete source/formal/actual input and interns
 its result through the same checked-type-digest index. Dispatch callable
 instantiation additionally memoizes the complete target-callable/plan-callable
 pair, so equal checked dispatch edges share one result. Checked-type digest
-construction is memoized over already-stored child roots; 128-bit content hashing
+construction is memoized over already-stored child roots; cryptographic hashing
 is performed once for a new checked-type root, never as a linear search
 mechanism.
 
 Type digests, checked type keys, recursive layout keys, and derived callable
-and evidence digests use the shared `base.TypeDigestHasher`. It feeds the same
-structural byte encoding to two `XxHash3` streams with fixed seeds `0` and
-`0x9e3779b97f4a7c15`, then concatenates their 64-bit results in that order, each
-encoded little-endian, into 16 bytes. All producers for a key domain must agree
-on the encoding, including child digests, length prefixes, identity numbering,
-and domain tags. The hash algorithm does not change type equality or the exact
-payload and topology comparisons already required by interners and evidence
-lookup. Consumers that use digest bytes directly as identity assume accidental
-collisions are negligible at 128-bit width; the hash is non-cryptographic.
+and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
+structural byte encoding, 32 bytes wide. The hash must be cryptographic and
+this wide. A package author controls every byte these digests see, several
+consumers treat equal digests as one type with no structural comparison
+(`CheckedTypeStore.root_index` when imported types are projected, the layout
+store's recursive-graph index, erased callable and generated nominal
+identities inside `typeEql`, format-codec call addresses), and the checker
+accepts a package's code by structural unification before the checked type
+store interns its types by digest. A package containing two structurally different types
+with one digest would therefore type-check and then be lowered with a single
+payload for both: a miscompile with memory-unsafe consequences from a pure
+dependency. A non-cryptographic hash makes such a pair cheap to construct, and
+because the attacker supplies both halves the relevant bound is a birthday
+collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
+digests are also persisted in caches and compared across machines, which rules
+out keying them with a secret. Every 64-bit compiler target is built with the
+CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
+software rounds; only 32-bit targets such as wasm32 compute the digest in
+software.
 
-Module identities, checked module cache keys and filenames, and Monotype cache
-validity and compiler layout hashes remain SHA-256 with 32-byte outputs,
-including when their inputs contain type digests. The type hash algorithm,
-seeds, output byte order, digest widths, and domain versions are part of
-serialized compatibility. Changing them requires
-invalidating affected checked-module and Monotype caches through their explicit
-entry and format versions, as well as updating layout versions and layout-hash
-goldens. Compiler build identity alone does not invalidate caches for an
-uncommitted compiler change.
+All producers for a key domain must agree on the encoding, including child
+digests, length prefixes, identity numbering, and domain tags. The hash
+algorithm does not change type equality or the exact payload and topology
+comparisons already required by interners and evidence lookup. Non-cryptographic
+hashes (`std.hash.Wyhash`) remain in use only as bucket selectors in front of an
+exact comparison of the full key, where a collision costs a probe and never an
+identity. Module identities, checked module cache keys and filenames, and
+Monotype cache validity and compiler layout hashes hash with
+`std.crypto.hash.sha2.Sha256` directly, including when their inputs contain
+type digests. The digest widths and domain versions are part of serialized
+compatibility. Changing them requires invalidating affected checked-module and
+Monotype caches through their explicit entry and format versions, as well as
+updating layout versions and layout-hash goldens. Compiler build identity alone
+does not invalidate caches for an uncommitted compiler change.
 
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field outside `ConstStore` whose only purpose is to feed post-check
@@ -2369,6 +2384,17 @@ Monotype and runtime lowering consume the owner checked module id directly as a
 checked module address. If a checked type mentions an owner checked module id
 that is not present in lowering visibility, the checked module producer is
 incomplete.
+
+Builtin identity and declaration backing are independent. `Dict` and `Set`
+retain their builtin dispatch identities, while their storage comes from the
+ordinary checked declarations in `Builtin.roc`. Each checked type store owns a
+fixed builtin-identity-to-declaration-id index, populated when declarations are
+recorded or imported and serialized with the store. Both post-check strategies
+consume that index directly; they do not scan source statements to find builtin
+backings or duplicate the containers' storage definitions. Declaration formals
+and backing templates remain shared checked data. Each strategy substitutes the
+actual arguments only when lowering a reachable use, with Boxy preserving the
+explicit nested descriptors and ordinary LIR ownership contract.
 
 ### Platform/App Relation
 
@@ -8075,17 +8101,20 @@ During active Monotype specialization, unresolved checked variables and row
 extensions remain instantiation graph nodes. They are not represented by
 durable Monotype `TypeId`s.
 
-Open draft specialization indexes retain permanent interface node ids. A lookup
-visits each current union-find class once and probes all its permanent members;
-repeated argument or return positions do not repeat those probes. Candidate
-inspection does not merge existing classes during this scan. Its visited set
-is local to the scan and uses pooled scratch, so a later lookup observes any
-intervening unions. Evidence, capture, and exact interface checks still decide
-whether a candidate may be reused. Probe work is proportional to interface
-positions plus the members of distinct classes, even when many positions share
-one class. The index interns the exact family and evidence-digest prefix once
-per request, using an append-only index-local ID in each interface key. Growing
-the index during recursive lowering does not invalidate those IDs. Request
+Open draft specialization indexes retain permanent interface node ids. Template
+lookup collects the request's distinct interface classes once, then tests only
+the permanent-node/candidate pairs registered under its exact family/evidence
+prefix against those classes. A prefix with no open registrations skips this
+probe entirely. Later unions require no rekeying: class equality is tested at
+lookup time. Resolved template lookup also indexes candidates by the explicit
+procedure template reference, preserving reuse through different checked roots
+without scanning unrelated templates. Nested lookup visits each current
+interface class once and probes its permanent members. Candidate inspection
+does not merge classes, and evidence, capture, recursive-edge, and exact
+interface checks remain authoritative. The index interns the exact family and
+evidence-digest prefix once per request, using an append-only index-local ID in
+each interface key. Growing the index during recursive lowering does not
+invalidate those IDs. Request
 kinds remain disjoint, and interning a prefix does not replace exact candidate
 validation. Permanent-node requests use the prefix ID and node ID directly in
 a separate index; only structural type and open-shape requests carry digests.
@@ -9897,6 +9926,9 @@ construction: they are established in the worker prologue or inside a
 descriptor-binding snapshot window whose initializer is prepended above
 everything lowered while the bind is visible.
 
+Worker prologues initialize captured descriptor inputs and reconstructed
+argument roots before body descriptor templates that capture those roots.
+
 An applied-tag worker argument pattern is irrefutable only when its planned
 checked representation contains exactly one tag variant with that checked tag
 identity. Lowering validates that data, reserves the payload binders, and uses
@@ -10135,6 +10167,12 @@ original call operand root plus the exact instantiated descendant; it never
 changes to a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
+Nested backing traversal composes the call-side declaration substitutions as
+well as the worker-side substitutions. For `Set(Str)`, the call-side backing's
+`Dict(item, {})` argument is the instantiated `Str`, even when `item` and the
+worker's corresponding formal live in different checked modules. These scoped
+substitutions reuse the shared templates and never mutate checked types.
+
 Nominal substitution identity does not demand a runtime representation. Boxy
 interns checked type bindings separately from representations; a binding receives
 a representation only when type analysis reaches it through an explicit runtime
@@ -10155,6 +10193,10 @@ the aggregate descriptor consumes those adapted field values. Each field's
 descriptor source therefore names the boundary's output representation; a
 proven direct transfer retains the source representation. The pre-conversion
 representation cannot describe a field whose storage the adapter changed.
+A bare type parameter has no storage shape of its own. Constructing a tag or
+record payload at that destination preserves the supplying expression's exact
+payload descriptor; an adapted destination with a declared storage shape uses
+the destination descriptor.
 
 Nominal construction consumes the same explicit backing parameter substitution.
 The shared backing representation fixes storage; its descriptor binds each
@@ -10234,6 +10276,10 @@ separately materialized target descriptor describing the bytes it will produce
 or consume. Argument binding, match-condition binding, result binding, and
 container item extraction copy descriptor identities into fresh locals; they
 never repurpose the source value's descriptor local as operation scratch space.
+List storage adapters materialize the target item descriptor before entering
+the loop, using the same descriptor construction as call boundaries. That
+descriptor also describes an empty target list; changing an item layout
+never reuses a source descriptor whose nested fields describe different storage.
 ARC treats a same-value alias as borrow-capable only when its source and target
 name the exact same explicit Boxy RC descriptor reference. A distinct
 descriptor reference is an ownership boundary: the alias receives a moved or

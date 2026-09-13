@@ -352,6 +352,8 @@ const NominalBackingKey = struct {
     args: []const NodeId,
 };
 
+/// Bucket selector only: `NominalBackingKeyContext.eql` compares the
+/// declaration bytes and every argument, so a collision costs a probe.
 fn hashNominalBackingKey(declaration: NominalBackingDeclaration, args: []const NodeId) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(&declaration.module_bytes);
@@ -8993,7 +8995,7 @@ test "opaque iterator relation resolves unresolved public variable to imported g
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x72} ** 16 },
+            .generated = .{ .bytes = [_]u8{0x72} ** 32 },
             .iterator_representation = .minted,
             .iterator_kind = .list,
             .iterator_depth = 1,
@@ -9041,7 +9043,7 @@ test "opaque interface relation delegates nested private iterator requests to un
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x74} ** 16 },
+            .generated = .{ .bytes = [_]u8{0x74} ** 32 },
             .iterator_representation = .minted,
             .iterator_kind = .concat,
             .iterator_depth = 2,
@@ -9060,7 +9062,7 @@ test "opaque interface relation delegates nested private iterator requests to un
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x75} ** 16 },
+            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
             .iterator_representation = .minted,
             .iterator_kind = .concat,
             .iterator_depth = 2,
@@ -9286,7 +9288,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
     };
 
     var finished_def = public_def;
-    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 16 };
+    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 32 };
     finished_def.iterator_representation = .minted;
     finished_def.iterator_kind = .list;
     finished_def.iterator_depth = 1;
