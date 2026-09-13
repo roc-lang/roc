@@ -245,7 +245,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     }
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -412,7 +412,7 @@ test "imported checked bodies restore their module's hoisted constants" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -504,7 +504,7 @@ test "hoisted list constants lower to internal static data in request order" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -530,8 +530,8 @@ test "hoisted list constants lower to internal static data in request order" {
 
     if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
     try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer);
-    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer);
+    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.?);
+    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
     const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
     // Reachable roots form a barrier before queued initializers, whose request
@@ -649,7 +649,7 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -783,7 +783,7 @@ test "callable binding with alias annotation is const-evaluated" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
@@ -875,6 +875,7 @@ test "hoisted constant crash reports original source region" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -976,6 +977,7 @@ test "inlined hoisted constant crash reports hoisted source region" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -1073,6 +1075,7 @@ test "hoisted pattern extraction and validation failures report original destruc
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found_validation = false;
@@ -1178,6 +1181,7 @@ test "hoisted pattern extraction base match failure reports match" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found_match = false;
@@ -1279,6 +1283,7 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
 }
 
@@ -1338,6 +1343,7 @@ test "hoisted roots admit non-concrete transient locals without losing validatio
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(!coord.hasUserErrors());
     const artifact = coord.appRootCheckedArtifact();
@@ -1411,6 +1417,7 @@ test "issue 10721: compile-time known destructure of a match-returned closure re
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     var found_non_exhaustive = false;
     var report_iter = coord.iterReports();
@@ -1478,6 +1485,7 @@ test "issue 10721: compile-time known destructure inside an effectful body resol
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     var found_non_exhaustive = false;
     var report_iter = coord.iterReports();
@@ -1546,6 +1554,7 @@ test "issue 10721: compile-time validation reports a known failing destructure" 
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found_non_exhaustive = false;
@@ -1613,6 +1622,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(!coord.hasUserErrors());
 
@@ -1680,6 +1690,7 @@ test "hoisted match guard does not report unused branch warning" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
 
     var found_unused_branch = false;
@@ -1756,6 +1767,7 @@ test "hoisted successful call does not clear runtime reachable helper exhaustive
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -1827,6 +1839,7 @@ test "hoisted failing call into runtime reachable helper reports static diagnost
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -2327,7 +2340,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpec(value.initializer).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpec(value.initializer.?).is_static_initializer);
     }
 }
 
@@ -2464,7 +2477,7 @@ test "issue 9733: nested expect statements remain inline" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();

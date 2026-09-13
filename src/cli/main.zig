@@ -170,6 +170,7 @@ const CliBuildEnvOptions = struct {
     synthetic_default_app: bool = false,
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
+    runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
     /// Root path tested against the compiler-owned builtin sources; matches
     /// are compiled with the `.builtin` module role (check sites).
     builtin_role_path: ?[]const u8 = null,
@@ -202,6 +203,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
+    if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
     if (opts.synthetic_default_app) {
         // Staged default-app roots and their synthesized platform live in a
         // per-invocation temp dir; identity must be the stable synthetic one
@@ -6736,6 +6738,13 @@ fn lowerLirWithBuildEnv(
     reporter: ?*progress.Reporter,
 ) CliMainError!LoweredCoordinatorResult {
     var build_env = try initCliBuildEnv(ctx, .{
+        .runtime_lowering = checkedRuntimeLoweringConfig(
+            .{ .platform_entrypoints = artifact },
+            opt,
+            specialization_strategy,
+            base.target.TargetUsize.native,
+            false,
+        ),
         .max_threads = max_threads,
         .no_cache = !enable_checked_cache,
         .resolution_config = resolution_config,
@@ -6850,6 +6859,7 @@ fn lowerLirWithBuildEnv(
         false,
         build_env.postCheckExecutor(),
         &spec_timing,
+        build_env.runtimeProgramSession(),
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -9846,6 +9856,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     };
 
     build_env.setTarget(target);
+    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
+        .linked_output,
+        args.opt,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        args.synthetic_default_platform,
+    ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
@@ -9890,6 +9907,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         args.synthetic_default_platform,
         build_env.postCheckExecutor(),
         &spec_timing,
+        build_env.runtimeProgramSession(),
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -10214,6 +10232,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
 
     build_env.setTarget(target);
+    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
+        .linked_output,
+        args.opt,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        args.synthetic_default_platform,
+    ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
@@ -10258,6 +10283,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         args.synthetic_default_platform,
         build_env.postCheckExecutor(),
         &spec_timing,
+        build_env.runtimeProgramSession(),
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -10577,6 +10603,13 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     };
 
     build_env.setTarget(target);
+    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
+        .{ .platform_entrypoints = .lir_image },
+        args.opt,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        base.target.TargetUsize.native,
+        false,
+    ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
@@ -10626,6 +10659,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         false,
         build_env.postCheckExecutor(),
         &spec_timing,
+        build_env.runtimeProgramSession(),
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -11843,6 +11877,42 @@ const CheckedLirRoots = union(enum) {
 /// Owns platform-root selection and the optimization-derived lowering option
 /// list so a new lowering option lands in every backend at once instead of in
 /// whichever hand-copied option lists remembered it.
+fn checkedRuntimeLoweringConfig(
+    roots: CheckedLirRoots,
+    opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
+    target_usize: base.target.TargetUsize,
+    proc_debug_names: bool,
+) compile.build.RuntimeLoweringConfig {
+    return .{
+        .include_provided_data_exports = roots == .linked_output,
+        .include_internal_static_data = switch (roots) {
+            .linked_output => true,
+            .platform_entrypoints => |artifact| artifact == .dev_run_image,
+            .test_plan => false,
+        },
+        .target = .{
+            .target_usize = target_usize,
+            .specialization_strategy = specialization_strategy,
+            .inline_mode = postCheckInlineModeForOpt(opt),
+            .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
+            .consume_dead_boxes = switch (roots) {
+                .linked_output => true,
+                .platform_entrypoints => |artifact| artifact == .dev_run_image,
+                .test_plan => false,
+            },
+            .inline_expects = switch (roots) {
+                .test_plan => .run,
+                .platform_entrypoints, .linked_output => inlineExpectModeForOpt(opt),
+            },
+            .list_in_place_map = listInPlaceMapForOpt(opt),
+            .tag_reachability = tagReachabilityForOpt(opt),
+            .prove_ranges = proveRangesForOpt(opt),
+            .proc_debug_names = proc_debug_names,
+        },
+    };
+}
+
 fn lowerCheckedSourceToLir(
     lir_allocator: Allocator,
     gpa: Allocator,
@@ -11856,6 +11926,7 @@ fn lowerCheckedSourceToLir(
     proc_debug_names: bool,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
+    session: ?*eval.CompileTimeFinalization.ProgramSession,
 ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -11867,57 +11938,27 @@ fn lowerCheckedSourceToLir(
         .test_plan => {},
     };
 
+    var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target_usize, proc_debug_names);
+    config.target.post_check_executor = post_check_executor;
+    config.target.timing = timing;
+    const requests: lir.CheckedPipeline.RootRequestSet = .{
+        .requests = selected_roots,
+        .include_provided_data_exports = config.include_provided_data_exports,
+        .include_internal_static_data = config.include_internal_static_data,
+        .test_plan_metadata = switch (roots) {
+            .test_plan => |plan| plan.metadata,
+            .platform_entrypoints, .linked_output => &.{},
+        },
+    };
+    if (session) |program| return program.takeRuntime(lir_allocator, requests, config.target);
     return lir.CheckedPipeline.lowerCheckedModulesToLir(
         lir_allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
-        .{
-            .requests = selected_roots,
-            // Host-visible data exports exist only in linked outputs.
-            .include_provided_data_exports = switch (roots) {
-                .linked_output => true,
-                .platform_entrypoints, .test_plan => false,
-            },
-            // Internal readonly values are embedded by linked outputs and dev
-            // RunImages. LirImage deliberately remains pointer-width independent.
-            .include_internal_static_data = switch (roots) {
-                .linked_output => true,
-                .platform_entrypoints => |artifact| switch (artifact) {
-                    .dev_run_image => true,
-                    .lir_image => false,
-                },
-                .test_plan => false,
-            },
-            .test_plan_metadata = switch (roots) {
-                .test_plan => |plan| plan.metadata,
-                .platform_entrypoints, .linked_output => &.{},
-            },
-        },
-        .{
-            .target_usize = target_usize,
-            .specialization_strategy = specialization_strategy,
-            .inline_mode = postCheckInlineModeForOpt(opt),
-            .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
-            .consume_dead_boxes = switch (roots) {
-                .linked_output => true,
-                .platform_entrypoints => |artifact| artifact == .dev_run_image,
-                .test_plan => false,
-            },
-            // Test lowering executes inline expects at every opt level; other
-            // backends omit them from optimized output.
-            .inline_expects = switch (roots) {
-                .test_plan => .run,
-                .platform_entrypoints, .linked_output => inlineExpectModeForOpt(opt),
-            },
-            .list_in_place_map = listInPlaceMapForOpt(opt),
-            .tag_reachability = tagReachabilityForOpt(opt),
-            .prove_ranges = proveRangesForOpt(opt),
-            .proc_debug_names = proc_debug_names,
-            .post_check_executor = post_check_executor,
-            .timing = timing,
-        },
+        requests,
+        config.target,
     );
 }
 
@@ -11935,12 +11976,11 @@ const CliTestRootRun = struct {
 
 const CliLoweredTestModule = struct {
     planned_index: usize,
-    lowered: lir.CheckedPipeline.LoweredProgram,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
     root_runs: []CliTestRootRun,
 
     fn deinit(self: *CliLoweredTestModule, allocator: Allocator) void {
         deinitCliTestRootRuns(allocator, self.root_runs);
-        self.lowered.deinit();
     }
 };
 
@@ -11982,6 +12022,8 @@ fn collectCliTestRootRuns(
             }
             unreachable;
         };
+        if (test_plan.result_index < planned.first_entry_index or
+            test_plan.result_index >= planned.first_entry_index + planned.entry_count) continue;
         if (test_plan.root_index >= planned.test_roots.len or test_plan.result_index >= plan_entries.len) {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
@@ -12274,6 +12316,12 @@ fn runInterpreterTestRoots(
     var roc_ops = echo_platform.makeDefaultRocOps(&host_env.echo_env, &hosted_fn_array);
     host_env.installCallbacks(&roc_ops);
     echo_platform.g_roc_ops = &roc_ops;
+    var static_values = try eval.InterpreterStaticData.init(
+        ctx.gpa,
+        if (lowered.frozen_static_data) |frozen| frozen.exports else &.{},
+        lowered.lir_result.static_data_values.items.len,
+    );
+    defer static_values.deinit();
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         ctx.gpa,
         &lowered.lir_result.store,
@@ -12283,6 +12331,8 @@ fn runInterpreterTestRoots(
         .preserve,
     );
     defer interpreter.deinit();
+
+    static_values.install(&interpreter);
 
     const expect_counts = try ctx.gpa.alloc(eval.Inspected.ExpectCounts, lowered.lir_result.expect_sites.items.len);
     defer ctx.gpa.free(expect_counts);
@@ -12568,15 +12618,21 @@ fn runCompiledTestRoots(
     }
 
     var eval_batch = switch (mode) {
-        .dev => eval.Inspected.devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
+        .dev => eval.Inspected.devEvalBoolRootModule(
             ctx.gpa,
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
-            bool_roots,
+            .{
+                .store = &lowered.lir_result.store,
+                .layouts = &lowered.lir_result.layouts,
+                .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+                .roots = bool_roots,
+                .expect_site_count = lowered.lir_result.expect_sites.items.len,
+                .static_data = .{
+                    .exports = if (lowered.frozen_static_data) |frozen| frozen.exports else &.{},
+                    .value_count = lowered.lir_result.static_data_values.items.len,
+                },
+            },
             dev_timing,
             max_workers,
-            lowered.lir_result.expect_sites.items.len,
         ),
         .llvm_size => eval.Inspected.llvmEvalBoolRootsWithExpectSites(
             ctx.gpa,
@@ -12713,84 +12769,34 @@ fn runCompiledTestRoots(
 
 fn lowerPlannedTestModule(
     ctx: *CliCtx,
-    build_env: *BuildEnv,
+    shared: *lir.CheckedPipeline.LoweredProgram,
     planned_index: usize,
     planned: *const CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
-    opt: cli_args.OptLevel,
-    specialization_strategy: base.SpecializationStrategy,
-    timing: ?*lir.CheckedPipeline.Timing,
 ) lir.CheckedPipeline.LowerResourceError!CliLoweredTestModule {
-    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, planned.artifact);
-    defer ctx.gpa.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, planned.artifact);
-    defer ctx.gpa.free(relation_artifacts);
-
-    const root_plan_metadata = try ctx.gpa.alloc(postcheck.Common.RootTestPlanMetadata, planned.test_roots.len);
-    defer ctx.gpa.free(root_plan_metadata);
-    for (planned.test_roots, 0..) |root, root_index| {
-        const entry_index: usize = @intCast(planned.first_entry_index + @as(u32, @intCast(root_index)));
-        const plan_entry = plan_entries[entry_index];
-        if (builtin.mode == .Debug and (plan_entry.root_index != root_index or plan_entry.root_order != root.order)) {
-            std.debug.panic(
-                "CLI test invariant violated: plan entry root index/order ({d}/{d}) differs from lowered root ({d}/{d})",
-                .{ plan_entry.root_index, plan_entry.root_order, root_index, root.order },
-            );
-        }
-        root_plan_metadata[root_index] = .{
-            .root_order = root.order,
-            .result_index = plan_entry.result_index,
-            .module_index = plan_entry.module_index,
-            .root_index = plan_entry.root_index,
-        };
-    }
-
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        planned.artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .{ .test_plan = .{
-            .requests = planned.test_roots,
-            .metadata = root_plan_metadata,
-        } },
-        opt,
-        specialization_strategy,
-        base.target.TargetUsize.native,
-        false,
-        build_env.postCheckExecutor(),
-        timing,
-    );
-    errdefer lowered.deinit();
-
-    const root_runs = try collectCliTestRootRuns(ctx, planned, plan_entries, &lowered);
-    errdefer deinitCliTestRootRuns(ctx.gpa, root_runs);
-
     return .{
         .planned_index = planned_index,
-        .lowered = lowered,
-        .root_runs = root_runs,
+        .lowered = shared,
+        .root_runs = try collectCliTestRootRuns(ctx, planned, plan_entries, shared),
     };
 }
 
 fn runCheckedArtifactTests(
     ctx: *CliCtx,
-    build_env: *BuildEnv,
+    shared: *lir.CheckedPipeline.LoweredProgram,
     planned: *const CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
-    timing: ?*lir.CheckedPipeline.Timing,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     max_workers: ?usize,
     source_modules: *const CliTestSourceModuleMap,
 ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
-    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, specialization_strategy, timing);
+    var lowered_module = try lowerPlannedTestModule(ctx, shared, 0, planned, plan_entries);
     defer lowered_module.deinit(ctx.gpa);
 
     var results = std.ArrayList(CliTestResultItem).empty;
@@ -12802,8 +12808,8 @@ fn runCheckedArtifactTests(
     var summary = CliTestRunSummary{};
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
-        .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, source_modules),
-        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers, source_modules),
+        .interpreter => try runInterpreterTestRoots(ctx, lowered_module.lowered, lowered_module.root_runs, &results, &summary, source_modules),
+        .dev => try runCompiledTestRoots(ctx, mode, lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers, source_modules),
         .llvm_size, .llvm_speed => unreachable,
     }
     summary.modules_with_tests = 1;
@@ -12830,9 +12836,10 @@ fn deinitFreshResultSlots(allocator: Allocator, slots: []?[]CliTestResultItem) v
     allocator.free(slots);
 }
 
-fn runLlvmLoweredTestModulesOnce(
+fn runCompiledLoweredTestModulesOnce(
     ctx: *CliCtx,
     mode: CliTestExecutionMode,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     lowered_modules: []const CliLoweredTestModule,
     fresh_results: []?[]CliTestResultItem,
     summaries: []CliTestRunSummary,
@@ -12874,6 +12881,10 @@ fn runLlvmLoweredTestModulesOnce(
             .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered_module.lowered.lir_result),
             .roots = bool_roots,
             .expect_site_count = lowered_module.lowered.lir_result.expect_sites.items.len,
+            .static_data = .{
+                .exports = if (lowered_module.lowered.frozen_static_data) |frozen| frozen.exports else &.{},
+                .value_count = lowered_module.lowered.lir_result.static_data_values.items.len,
+            },
         });
     }
 
@@ -12892,18 +12903,18 @@ fn runLlvmLoweredTestModulesOnce(
     }
     defer if (live_output) |live| live.clearRuns();
 
-    var eval_batch = eval.Inspected.llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
-        ctx.gpa,
-        bool_modules.items,
-        switch (mode) {
-            .llvm_size => .size,
-            .llvm_speed => .speed,
-            .interpreter, .dev => unreachable,
-        },
-        max_workers,
-        completion_callback,
-        event_callback,
-    ) catch |err| switch (err) {
+    var eval_batch = (switch (mode) {
+        .dev => eval.Inspected.devEvalSharedBoolRootModules(ctx.gpa, bool_modules.items, dev_timing, max_workers),
+        .llvm_size, .llvm_speed => eval.Inspected.llvmEvalSharedBoolRootModules(
+            ctx.gpa,
+            bool_modules.items,
+            if (mode == .llvm_size) .size else .speed,
+            max_workers,
+            completion_callback,
+            event_callback,
+        ),
+        .interpreter => unreachable,
+    }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.AccessDenied,
         error.AntivirusInterference,
@@ -13146,24 +13157,24 @@ fn coalesceInlineExpectResults(
     }
 }
 
-fn runOptimizedTestPlan(
+fn runCompiledTestPlan(
     ctx: *CliCtx,
-    build_env: *BuildEnv,
+    shared: *lir.CheckedPipeline.LoweredProgram,
     test_plan: *CliTestPlan,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     max_workers: ?usize,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
-    timing: ?*lir.CheckedPipeline.Timing,
     source_modules: *const CliTestSourceModuleMap,
 ) (ReportRenderError || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
-        .llvm_size, .llvm_speed => {},
-        .interpreter, .dev => unreachable,
+        .llvm_size, .llvm_speed, .dev => {},
+        .interpreter => unreachable,
     }
 
     const summaries = try ctx.gpa.alloc(CliTestRunSummary, test_plan.modules.len);
@@ -13208,11 +13219,11 @@ fn runOptimizedTestPlan(
 
         try lowered_modules.append(
             ctx.gpa,
-            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt, specialization_strategy, timing),
+            try lowerPlannedTestModule(ctx, shared, planned_index, planned, test_plan.entries),
         );
     }
 
-    try runLlvmLoweredTestModulesOnce(ctx, mode, lowered_modules.items, fresh_results, summaries, max_workers, live_output, source_modules);
+    try runCompiledLoweredTestModulesOnce(ctx, mode, dev_timing, lowered_modules.items, fresh_results, summaries, max_workers, live_output, source_modules);
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
@@ -14406,6 +14417,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .post_check_publication_mode = .none,
     });
     defer build_env.deinit();
+    build_env.defer_post_check = true;
 
     // `roc test` runs the file's top-level `expect`s and nothing else, so the
     // file needs no entrypoint: a headerless file that is neither a type module
@@ -14441,7 +14453,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         };
     }
 
-    const diag = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
     if (args.watch_inputs_file) |file_path| {
         try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
     }
@@ -14458,10 +14469,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         entry.value_ptr.* = module;
     }
 
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    reporter.begin("Test Planning");
-
     const report_config = testReportingConfig(ctx);
 
     var module_results = std.ArrayList(CliModuleTestResult).empty;
@@ -14476,6 +14483,48 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    var runtime_requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer runtime_requests.deinit(ctx.gpa);
+    var runtime_sources = std.ArrayList(check.CheckedArtifact.ModuleId).empty;
+    defer runtime_sources.deinit(ctx.gpa);
+    var runtime_metadata = std.ArrayList(postcheck.Common.RootTestPlanMetadata).empty;
+    defer runtime_metadata.deinit(ctx.gpa);
+    for (test_plan.modules) |planned| {
+        try runtime_requests.appendSlice(ctx.gpa, planned.test_roots);
+        try runtime_sources.appendNTimes(ctx.gpa, planned.artifact.key, planned.test_roots.len);
+        for (planned.test_roots, 0..) |root, root_index| {
+            const entry = test_plan.entries[planned.first_entry_index + root_index];
+            try runtime_metadata.append(ctx.gpa, .{
+                .request_index = @intCast(runtime_metadata.items.len),
+                .root_order = root.order,
+                .result_index = entry.result_index,
+                .module_index = entry.module_index,
+                .root_index = entry.root_index,
+            });
+        }
+    }
+    const runtime_roots: lir.CheckedPipeline.RootRequestSet = .{
+        .requests = runtime_requests.items,
+        .source_modules = runtime_sources.items,
+        .test_plan_metadata = runtime_metadata.items,
+    };
+    var runtime_config = checkedRuntimeLoweringConfig(
+        .{ .test_plan = .{ .requests = runtime_requests.items, .metadata = runtime_metadata.items } },
+        args.opt,
+        specialization_strategy,
+        base.target.TargetUsize.native,
+        false,
+    );
+    runtime_config.explicit_roots = runtime_roots;
+    runtime_config.root_module = if (test_plan.modules.len > 0) test_plan.modules[0].artifact else null;
+    build_env.setRuntimeLowering(runtime_config);
+    build_env.finishCheckedProgram() catch |err| {
+        _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+        return err;
+    };
+    const diag = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
+    reporter.begin("Test Planning");
     for (test_plan.modules) |*planned| {
         if (try loadCachedCliTestResults(
             ctx,
@@ -14498,6 +14547,21 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var dev_timing = eval.test_helpers.DevBoolRootTiming.init(ctx.io.std_io);
 
     var total = CliTestRunSummary{};
+    runtime_config.target.post_check_executor = build_env.postCheckExecutor();
+    runtime_config.target.timing = &spec_timing;
+    var shared_test_program = try build_env.runtimeProgramSession().?.takeRuntime(ctx.gpa, runtime_roots, runtime_config.target);
+    defer shared_test_program.deinit();
+    const session_modules = build_env.runtimeProgramSession().?.modules;
+    const test_static_data = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{ .root = session_modules.root, .imports = session_modules.imports },
+        &shared_test_program,
+        roc_target.RocTarget.detectNative(),
+        .{ .include_provided_exports = false },
+    );
+    if (shared_test_program.frozen_static_data) |*previous| previous.deinit();
+    shared_test_program.frozen_static_data = .{ .allocator = ctx.gpa, .exports = test_static_data };
+
     const test_mode = cliTestExecutionMode(args.opt);
     const use_live_optimized_output = switch (test_mode) {
         .llvm_size, .llvm_speed => true,
@@ -14564,21 +14628,21 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // expensive subsets without pretending their durations are extra work.
     reporter.begin("Compile + Run Tests (wall)");
     switch (test_mode) {
-        .llvm_size, .llvm_speed => try runOptimizedTestPlan(
+        .llvm_size, .llvm_speed, .dev => try runCompiledTestPlan(
             ctx,
-            &build_env,
+            &shared_test_program,
             &test_plan,
             args.opt,
             specialization_strategy,
+            &dev_timing,
             args.max_threads,
             build_env.cache_manager,
             &module_results,
             &total,
             if (live_output) |*output| output else null,
-            &spec_timing,
             &source_modules,
         ),
-        .interpreter, .dev => {
+        .interpreter => {
             for (test_plan.modules) |*planned| {
                 const summary = if (planned.cached_results != null) cached: {
                     const results = planned.releaseCachedResults();
@@ -14586,14 +14650,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     break :cached planned.cached_summary;
                 } else try runCheckedArtifactTests(
                     ctx,
-                    &build_env,
+                    &shared_test_program,
                     planned,
                     test_plan.entries,
                     args.opt,
                     specialization_strategy,
                     build_env.cache_manager,
                     &module_results,
-                    &spec_timing,
                     &dev_timing,
                     args.max_threads,
                     &source_modules,
@@ -15908,10 +15971,10 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
 
 fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     return .{
-        .{ .name = "Monotype Lowering", .ns = timing.monotype_ns },
-        .{ .name = "LIR Generation", .ns = timing.postcheck_to_lir_ns },
-        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "ARC", .ns = timing.arc_ns },
+        .{ .name = "Shared Monotype Lowering", .ns = timing.monotype_ns },
+        .{ .name = "Shared LIR Generation", .ns = timing.postcheck_to_lir_ns },
+        .{ .name = "Shared LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "Shared ARC", .ns = timing.arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
         .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
@@ -15952,8 +16015,8 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]pr
         .{ .name = "Lambda-Set Solving", .ns = timing.lambda_solve_ns },
         .{ .name = "Inline Planning", .ns = timing.inline_plan_ns },
         .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
-        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "ARC", .ns = timing.arc_ns },
+        .{ .name = "Shared LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "Shared ARC", .ns = timing.arc_ns },
     };
 }
 
@@ -15961,8 +16024,8 @@ fn boxyPostCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [4
     return .{
         .{ .name = "Boxy Planning", .ns = timing.boxy_plan_ns },
         .{ .name = "Boxy Lowering", .ns = timing.boxy_lower_ns },
-        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "ARC", .ns = timing.arc_ns },
+        .{ .name = "Shared LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "Shared ARC", .ns = timing.arc_ns },
     };
 }
 
@@ -16298,7 +16361,7 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     const compile_time = timing.compile_time_evaluation;
     if (compile_time.total_ns == 0) return;
     reporter.recordCompletedWithBreakdown(
-        "Compile-Time Evaluation",
+        "Shared Lowering and Compile-Time Evaluation",
         compile_time.total_ns,
         .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
         &compileTimeEvaluationBreakdown(compile_time),

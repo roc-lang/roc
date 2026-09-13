@@ -2,7 +2,7 @@
 //!
 //! Drives a minimal compile + execute through every method an embedder is
 //! expected to call (`Coordinator.discoverAppFromPath` → `coordinatorLoop`
-//! → `iterReports` → `finalizeExecutableArtifacts` → `lowerCheckedModulesToLir`
+//! → `iterReports` → `finishCheckedProgram` → `lowerCheckedModulesToLir`
 //! → `LoweredProgram.platformEntrypoints` → `LirImage.fillHeaderInBuffer`
 //! → `LirImage.viewMappedImage` → `LirInterpreter.runEntrypoint`).
 //!
@@ -111,7 +111,7 @@ fn runEmbeddingSequence(
 
     // 4. Finalization always publishes executable artifacts; diagnostics do
     // not form a separate failure outcome.
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     // 5. Lower to LIR in a contiguous FixedBufferAllocator (the runtime

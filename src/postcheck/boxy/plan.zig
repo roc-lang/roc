@@ -1309,6 +1309,7 @@ pub const ProgramInput = struct {
     root_module: ?checked.LoweringModuleView = null,
     imports: []const checked.ImportedModuleView = &.{},
     roots: []const checked.RootRequest = &.{},
+    source_modules: []const checked.ModuleId = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const Common.StaticDataRequest = &.{},
 };
@@ -1322,8 +1323,11 @@ pub fn analyzeProgram(
     var builder = Builder.init(allocator, input);
     defer builder.deinit();
 
-    for (input.roots) |root| {
-        try builder.analyzeRoot(root);
+    if (input.source_modules.len != 0 and input.source_modules.len != input.roots.len)
+        boxyPlanInvariant("root source module count differs from request count");
+    for (input.roots, 0..) |root, index| {
+        const view = if (input.source_modules.len == 0) builder.root_view else builder.moduleForId(input.source_modules[index]);
+        try builder.analyzeRoot(root, view);
     }
     for (input.layout_requests) |layout_request| {
         try builder.plan.root_reps.append(allocator, try builder.analyzeType(builder.root_view, layout_request));
@@ -1643,10 +1647,10 @@ const Builder = struct {
         boxyPlanInvariant("stored default-root function's declaring module was absent from boxy planning");
     }
 
-    fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
-        const host_type = typeRef(self.root_view, root.checked_type);
-        const host_rep = try self.analyzeType(self.root_view, root.checked_type);
-        const source = workerSourceForRoot(root, self.root_view.key) orelse
+    fn analyzeRoot(self: *Builder, root: checked.RootRequest, view: ModuleView) Allocator.Error!void {
+        const host_type = typeRef(view, root.checked_type);
+        const host_rep = try self.analyzeType(view, root.checked_type);
+        const source = workerSourceForRoot(root, view.key) orelse
             boxyPlanInvariant("boxy root request had no checked procedure worker source");
         const worker_id = try self.ensureWorker(source, host_type, root);
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];

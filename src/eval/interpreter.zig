@@ -340,6 +340,7 @@ pub const Interpreter = struct {
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
     float_nan_mode: builtins.float_bits.NanMode,
+    dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
     /// Arena for runtime-created descriptors whose identities can escape in a
     /// retained callable or host result and must survive later evaluations.
     descriptor_arena: base.SingleThreadArena,
@@ -938,7 +939,7 @@ pub const Interpreter = struct {
     /// Function address stored in static erased-callable payloads interpreted
     /// in-process. Proc identity is resolved by `static_erased_callables`.
     pub fn staticErasedCallableTrampolineAddress() usize {
-        return @intFromPtr(&interpreterErasedCallableTrampoline);
+        return @intFromPtr(&staticErasedCallableTrampoline);
     }
 
     /// Function address stored in static erased-callable `on_drop` slots while
@@ -1198,6 +1199,7 @@ pub const Interpreter = struct {
     /// interpreter is pinned, so a single binding at each evaluation entry keeps
     /// the runtime valid for every boxy operation reached from it.
     fn bindBoxyRuntime(self: *LirInterpreter) void {
+        self.roc_env.active_interpreter = self;
         self.boxy_runtime.runtime_boxy_type_descs = &self.runtime_boxy_type_descs;
         self.boxy_runtime.runtime_boxy_desc_ids = &self.runtime_boxy_desc_ids;
         self.boxy_runtime.adapter_desc_specializations = &self.adapter_desc_specializations;
@@ -4313,6 +4315,46 @@ pub const Interpreter = struct {
         return result;
     }
 
+    pub const InterpretedCallable = struct {
+        proc: LIR.LirProcSpecId,
+        capture_ptr: [*]u8,
+        result_desc: ?*const LirProgram.BoxyTypeDesc = null,
+    };
+
+    /// Decode only the explicit static-registry or interpreter-context ABI.
+    pub fn interpretedCallable(self: *const LirInterpreter, data_ptr: [*]u8) ?InterpretedCallable {
+        const payload = builtins.erased_callable.payloadPtr(data_ptr);
+        const code = @intFromPtr(payload.callable_fn_ptr);
+        if (code == staticErasedCallableTrampolineAddress()) {
+            const capture = builtins.erased_callable.capturePtr(data_ptr);
+            for (self.static_erased_callables) |entry| {
+                if (entry.capture_ptr == capture) return .{ .proc = entry.proc_id, .capture_ptr = capture };
+            }
+            std.debug.panic("static interpreted callable omitted its producer registry entry", .{});
+        }
+        if (code != @intFromPtr(&interpreterErasedCallableTrampoline)) return null;
+        const context = erasedCallableInterpreterContextFromPayload(data_ptr);
+        return .{ .proc = @enumFromInt(context.proc_id), .capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr), .result_desc = context.result_desc };
+    }
+
+    fn staticErasedCallableTrampoline(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) callconv(.c) void {
+        const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        const self: *LirInterpreter = @ptrCast(@alignCast(env.active_interpreter orelse {
+            ops.crash("static interpreted callable has no active interpreter");
+            return;
+        }));
+        const capture_ptr = capture orelse {
+            ops.crash("static interpreted callable omitted its capture address");
+            return;
+        };
+        for (self.static_erased_callables) |entry| {
+            if (entry.capture_ptr != capture_ptr) continue;
+            self.callInterpreterErasedCallable(.{ .proc = entry.proc_id, .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc) catch |err| reportInterpreterErasedCallableError(ops, err);
+            return;
+        }
+        ops.crash("static interpreted callable omitted its producer registry entry");
+    }
+
     pub fn erasedCallableInterpreterContextFromCapture(capture_ptr: ?[*]u8) *ErasedCallableInterpreterContext {
         return @ptrCast(@alignCast(capture_ptr orelse unreachable));
     }
@@ -4345,7 +4387,7 @@ pub const Interpreter = struct {
             retained.retain();
             retained.enter();
         }
-        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, reuse, out_desc) catch |err| {
+        context.interpreter.callInterpreterErasedCallable(.{ .proc = @enumFromInt(context.proc_id), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| {
             leaveAndReleaseErasedCallableOwner(owner);
             reportInterpreterErasedCallableError(ops, err);
             return;
@@ -4451,7 +4493,7 @@ pub const Interpreter = struct {
 
     fn callInterpreterErasedCallable(
         self: *LirInterpreter,
-        context: *ErasedCallableInterpreterContext,
+        callable: InterpretedCallable,
         ops: *RocOps,
         ret: ?[*]u8,
         args: ?[*]const u8,
@@ -4472,7 +4514,7 @@ pub const Interpreter = struct {
             }
         }
 
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
+        const proc_id = callable.proc;
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
         if (proc_arg_locals.len < 2) {
@@ -4517,7 +4559,7 @@ pub const Interpreter = struct {
             }
         }
 
-        const capture_value_ptr: [*]u8 = @ptrCast(@as([*]u8, @ptrCast(context)) + context.capture_value_offset);
+        const capture_value_ptr = callable.capture_ptr;
         proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
         const reuse_index = explicit_arg_count + 1;
@@ -4531,7 +4573,7 @@ pub const Interpreter = struct {
         // context's result descriptor before the call so the post-call fixup,
         // which uses it when the proc returns no descriptor of its own, never
         // dereferences freed memory.
-        const context_result_desc = context.result_desc;
+        const context_result_desc = callable.result_desc;
         const result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
         out_desc.* = @ptrCast(result.desc orelse context_result_desc);
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
@@ -4634,9 +4676,8 @@ pub const Interpreter = struct {
         };
 
         const payload = builtins.erased_callable.payloadPtr(closure_ptr);
-        if (@intFromPtr(payload.callable_fn_ptr) == @intFromPtr(&interpreterErasedCallableTrampoline)) {
-            const proc_id = erasedCallableInterpreterProcId(closure_ptr);
-            const context = erasedCallableInterpreterContextFromPayload(closure_ptr);
+        if (self.interpretedCallable(closure_ptr)) |callable| {
+            const proc_id = callable.proc;
             const proc_spec = self.store.getProcSpec(proc_id);
             const proc_params = self.store.getLocalSpan(proc_spec.args);
             if (proc_params.len == 0) {
@@ -4774,7 +4815,7 @@ pub const Interpreter = struct {
                     .{},
                 );
             }
-            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(erasedCallableInterpreterCaptureValuePtr(closure_ptr)));
+            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(callable.capture_ptr));
             proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
             const reuse_index = explicit_arg_count + 1;
@@ -4795,7 +4836,7 @@ pub const Interpreter = struct {
             return .{
                 .value = proc_result.value,
                 .layout = proc_spec.ret_layout,
-                .desc = proc_result.desc orelse context.result_desc,
+                .desc = proc_result.desc orelse callable.result_desc,
             };
         }
 
@@ -7358,7 +7399,10 @@ pub const Interpreter = struct {
             },
 
             // ── Hasher ──
-            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, builtins.utils.dictPseudoSeed()),
+            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, switch (self.dict_seed_mode) {
+                .runtime => builtins.utils.dictPseudoSeed(),
+                .comptime_zero => 0,
+            }),
             .hasher_finish => self.writeHasherValue(ll.ret_layout, builtins.hash.hasher_finish(args[0].read(u64))),
             .hasher_write_bool => blk: {
                 const seed = args[0].read(u64);

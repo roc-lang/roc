@@ -16,6 +16,84 @@ const checked = check.CheckedModule;
 const const_store = check.ConstStore;
 const dispatch = check.StaticDispatchRegistry;
 
+/// Dense index in the export slice returned by one static-data materialization.
+pub const StaticDataSymbolId = enum(u32) { _ };
+
+/// Immutable data symbol materialized in the target's readonly representation.
+pub const StaticDataExport = struct {
+    /// Linker-visible symbol name, for example `roc__answer`.
+    symbol_name: []const u8,
+    /// LIR static root represented by this export, when it is an internal value.
+    value_id: ?LIR.StaticDataId = null,
+    /// Fully materialized Roc ABI bytes for the constant.
+    bytes: []const u8,
+    /// Offset inside `bytes` where `symbol_name` points.
+    symbol_offset: u32 = 0,
+    /// Required target alignment of the symbol.
+    alignment: u32,
+    /// Whether an object-file symbol has global linker binding.
+    is_global: bool = true,
+    /// Whether this symbol is part of the host-visible ABI.
+    is_exported: bool = true,
+    /// Pointer relocations from this symbol's bytes to other symbols.
+    relocations: []const StaticDataRelocation = &.{},
+};
+
+/// One explicit pointer relocation inside a readonly static-data symbol.
+pub const StaticDataRelocation = struct {
+    /// Runtime meaning of a relocation target.
+    pub const Kind = enum {
+        address,
+        function_pointer,
+    };
+
+    /// Byte offset inside `StaticDataExport.bytes` where the pointer is stored.
+    offset: u64,
+    /// Symbol whose address should be written at `offset`.
+    target_symbol_name: []const u8,
+    /// Address identity: an explicit linker declaration or a row in the owning export slice.
+    target: union(enum) { named, data_symbol: StaticDataSymbolId } = .named,
+    /// Addend applied to the target symbol address.
+    addend: i64 = 0,
+    /// Runtime meaning of the stored pointer.
+    kind: Kind = .address,
+    /// For an erased-callable function pointer, the byte distance from this
+    /// pointer field to the callable's capture bytes.
+    callable_capture_offset: ?u32 = null,
+    /// Exact LIR procedure named by an erased-callable function relocation.
+    ///
+    /// In-process consumers use this identity directly; object backends use
+    /// `target_symbol_name` as its linker representation.
+    procedure: ?LIR.LirProcSpecId = null,
+    /// Exact generated RC helper required by this function-pointer relocation.
+    ///
+    /// Static erased-callable `on_drop` slots are always atomic: their
+    /// construction site makes no thread-confinement claim. Backends consume
+    /// this identity directly instead of recovering it from a symbol or layout.
+    rc_helper: ?layout.RcHelperKey = null,
+    /// Whether `target_symbol_name` is owned by this relocation.
+    owns_target_symbol_name: bool = false,
+};
+
+/// Owned frozen bytes retained with a lowered compilation.
+pub const FrozenStaticData = struct {
+    allocator: Allocator,
+    exports: []StaticDataExport,
+
+    pub fn deinit(self: *FrozenStaticData) void {
+        for (self.exports) |item| {
+            self.allocator.free(item.symbol_name);
+            self.allocator.free(item.bytes);
+            for (item.relocations) |relocation| {
+                if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
+            }
+            self.allocator.free(item.relocations);
+        }
+        self.allocator.free(self.exports);
+        self.* = undefined;
+    }
+};
+
 /// Layout requested for a checked value type digest.
 pub const RequestedLayout = struct {
     ty: names.TypeDigest,
@@ -43,6 +121,10 @@ pub const FnResult = union(enum) {
 
 /// Checked function template and source type used to emit callable code.
 pub const FnTemplate = struct {
+    /// Original function slot in the shared frozen Monotype owner.
+    frozen_fn: ?u32 = null,
+    /// Exact callable worker specialization key, emitted by SpecConstr.
+    frozen_worker: ?[96]u8 = null,
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -86,6 +168,7 @@ pub const FnSet = struct {
 
 /// One erased callable entry and its capture layout plan.
 pub const ErasedFn = struct {
+    on_drop: LIR.ErasedCallableOnDrop = .none,
     entry: LIR.LirProcSpecId,
     capture_layout: layout.Idx = .zst,
     template: FnTemplate,
@@ -307,7 +390,32 @@ pub const ConstRootPlan = struct {
 
 /// One exact LIR value construction that is frozen as readonly target data.
 pub const StaticDataValue = struct {
-    initializer: LIR.LirProcSpecId,
+    /// Null when completed frozen data supplies this slot directly.
+    initializer: ?LIR.LirProcSpecId,
+    layout_idx: layout.Idx,
+    /// An evaluated root owns this slot. Its initializer is representation
+    /// evidence; materialization must consume the completed root value.
+    compile_time_root: ?struct {
+        module: checked.ModuleId,
+        root: checked.ComptimeRootId,
+        const_locator: ?checked.ConstLocator,
+        role: union(enum) {
+            value: struct { failure_slot: LIR.StaticDataId, plan: ConstPlanId },
+            failure_message: struct {
+                failed_field: u32,
+                message_field: u32,
+                failed_offset: u32,
+                message_offset: u32,
+            },
+        },
+    } = null,
+};
+
+/// Exact post-ARC guard identity consumed by successful-root completion.
+pub const ComptimeValueGuard = struct {
+    entry: LIR.CFStmtId,
+    success: LIR.CFStmtId,
+    value_slot: LIR.StaticDataId,
 };
 
 /// Deterministic symbol name for an internal static-data value.
@@ -350,6 +458,7 @@ pub const Result = struct {
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
     static_data_values: std.ArrayList(StaticDataValue),
+    comptime_value_guards: std.ArrayList(ComptimeValueGuard),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
     expect_sites: std.ArrayList(LIR.ExpectSite),
     expect_site_ids: std.AutoHashMapUnmanaged(ExpectSiteKey, LIR.ExpectSiteId),
@@ -386,6 +495,7 @@ pub const Result = struct {
             .const_plans = .empty,
             .const_roots = .empty,
             .static_data_values = .empty,
+            .comptime_value_guards = .empty,
             .comptime_sites = .empty,
             .expect_sites = .empty,
             .expect_site_ids = .empty,
@@ -401,6 +511,7 @@ pub const Result = struct {
         self.expect_site_ids.deinit(allocator);
         self.expect_sites.deinit(allocator);
         self.static_data_values.deinit(allocator);
+        self.comptime_value_guards.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
         self.const_plans.deinit(allocator);

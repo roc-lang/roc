@@ -90,6 +90,7 @@ test "issue 10723: rejected for-loop dispatch reports type errors" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(coord.hasUserErrors());
     var found_type_error = false;

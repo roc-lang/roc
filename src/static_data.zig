@@ -17,64 +17,9 @@ const Checked = check.CheckedArtifact;
 const CheckedModule = check.CheckedModule;
 const GuardedList = @import("collections").GuardedList;
 
-/// Dense index in the export slice returned by one static-data materialization.
-pub const StaticDataSymbolId = enum(u32) { _ };
-
-/// Immutable data symbol materialized in the target's readonly representation.
-pub const StaticDataExport = struct {
-    /// Linker-visible symbol name, for example `roc__answer`.
-    symbol_name: []const u8,
-    /// LIR static root represented by this export, when it is an internal value.
-    value_id: ?lir.LIR.StaticDataId = null,
-    /// Fully materialized Roc ABI bytes for the constant.
-    bytes: []const u8,
-    /// Offset inside `bytes` where `symbol_name` points.
-    symbol_offset: u32 = 0,
-    /// Required target alignment of the symbol.
-    alignment: u32,
-    /// Whether an object-file symbol has global linker binding.
-    is_global: bool = true,
-    /// Whether this symbol is part of the host-visible ABI.
-    is_exported: bool = true,
-    /// Pointer relocations from this symbol's bytes to other symbols.
-    relocations: []const StaticDataRelocation = &.{},
-};
-
-/// One explicit pointer relocation inside a readonly static-data symbol.
-pub const StaticDataRelocation = struct {
-    /// Runtime meaning of a relocation target.
-    pub const Kind = enum {
-        address,
-        function_pointer,
-    };
-
-    /// Byte offset inside `StaticDataExport.bytes` where the pointer is stored.
-    offset: u64,
-    /// Symbol whose address should be written at `offset`.
-    target_symbol_name: []const u8,
-    /// Address identity: an explicit linker declaration or a row in the owning export slice.
-    target: union(enum) { named, data_symbol: StaticDataSymbolId } = .named,
-    /// Addend applied to the target symbol address.
-    addend: i64 = 0,
-    /// Runtime meaning of the stored pointer.
-    kind: Kind = .address,
-    /// For an erased-callable function pointer, the byte distance from this
-    /// pointer field to the callable's capture bytes.
-    callable_capture_offset: ?u32 = null,
-    /// Exact LIR procedure named by an erased-callable function relocation.
-    ///
-    /// In-process consumers use this identity directly; object backends use
-    /// `target_symbol_name` as its linker representation.
-    procedure: ?lir.LIR.LirProcSpecId = null,
-    /// Exact generated RC helper required by this function-pointer relocation.
-    ///
-    /// Static erased-callable `on_drop` slots are always atomic: their
-    /// construction site makes no thread-confinement claim. Backends consume
-    /// this identity directly instead of recovering it from a symbol or layout.
-    rc_helper: ?layout.RcHelperKey = null,
-    /// Whether `target_symbol_name` is owned by this relocation.
-    owns_target_symbol_name: bool = false,
-};
+pub const StaticDataSymbolId = lir.Program.StaticDataSymbolId;
+pub const StaticDataExport = lir.Program.StaticDataExport;
+pub const StaticDataRelocation = lir.Program.StaticDataRelocation;
 
 /// Deterministic cross-object symbol for an atomic generated RC helper.
 pub fn atomicRcHelperSymbolName(allocator: Allocator, helper: layout.RcHelperKey) Allocator.Error![]u8 {
@@ -160,6 +105,7 @@ const SymbolicAllocationId = enum(u32) { _ };
 const SymbolicRelocation = struct {
     const Target = union(enum) {
         allocation: SymbolicAllocationId,
+        frozen_symbol: StaticDataSymbolId,
         procedure: lir.LIR.LirProcSpecId,
         rc_helper: layout.RcHelperKey,
     };
@@ -196,6 +142,7 @@ const StaticInitializerMachine = struct {
     allocations: std.ArrayList(*SymbolicAllocation),
     static_roots: []?*SymbolicValue,
     static_active: []bool,
+    frozen_roots: []?StaticDataSymbolId,
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
 
     fn init(
@@ -211,6 +158,17 @@ const StaticInitializerMachine = struct {
         @memset(static_roots, null);
         const static_active = try arena_allocator.alloc(bool, static_count);
         @memset(static_active, false);
+        const frozen_roots = try arena_allocator.alloc(?StaticDataSymbolId, static_count);
+        @memset(frozen_roots, null);
+        if (lowered.frozen_static_data) |frozen| {
+            for (frozen.exports, 0..) |item, index| {
+                if (item.value_id) |id| {
+                    const raw = @intFromEnum(id);
+                    if (raw >= static_count or frozen_roots[raw] != null) staticDataInvariant("frozen static slot identity is missing or duplicated");
+                    frozen_roots[raw] = @enumFromInt(index);
+                }
+            }
+        }
         return .{
             .arena = arena,
             .lowered = lowered,
@@ -219,6 +177,7 @@ const StaticInitializerMachine = struct {
             .allocations = .empty,
             .static_roots = static_roots,
             .static_active = static_active,
+            .frozen_roots = frozen_roots,
             .string_backings = .empty,
         };
     }
@@ -302,12 +261,50 @@ const StaticInitializerMachine = struct {
         const raw = @intFromEnum(id);
         if (raw >= self.static_roots.len) staticDataInvariant("static initializer referenced an unknown static data value");
         if (self.static_roots[raw]) |root| return root;
+        if (self.frozen_roots[raw]) |symbol| {
+            const root = try self.readFrozenValue(symbol, self.lowered.lir_result.static_data_values.items[raw].layout_idx);
+            self.static_roots[raw] = root;
+            return root;
+        }
         if (self.static_active[raw]) staticDataInvariant("static initializer data dependency graph contained a cycle");
+        if (self.lowered.lir_result.static_data_values.items[raw].compile_time_root != null) {
+            staticDataInvariant("compile-time value slot requires its completed evaluation payload");
+        }
         self.static_active[raw] = true;
         defer self.static_active[raw] = false;
-        const root = try self.evaluateProc(self.lowered.lir_result.static_data_values.items[raw].initializer);
+        const root = try self.evaluateProc(self.lowered.lir_result.static_data_values.items[raw].initializer orelse staticDataInvariant("static value has neither frozen data nor an initializer"));
         self.static_roots[raw] = root;
         return root;
+    }
+
+    fn readFrozenValue(self: *StaticInitializerMachine, symbol: StaticDataSymbolId, value_layout: layout.Idx) MaterializationError!*SymbolicValue {
+        const frozen = self.lowered.frozen_static_data.?;
+        const source = frozen.exports[@intFromEnum(symbol)];
+        const value = try self.newValue(value_layout);
+        const start: usize = source.symbol_offset;
+        const end = start + value.bytes.len;
+        if (end > source.bytes.len) staticDataInvariant("frozen symbol does not contain its explicit value layout");
+        @memcpy(value.bytes, source.bytes[start..end]);
+        for (source.relocations) |relocation| {
+            if (relocation.offset < start or relocation.offset >= end) continue;
+            const target: SymbolicRelocation.Target = switch (relocation.target) {
+                .data_symbol => |id| .{ .frozen_symbol = id },
+                .named => if (relocation.procedure) |proc|
+                    .{ .procedure = proc }
+                else if (relocation.rc_helper) |helper|
+                    .{ .rc_helper = helper }
+                else
+                    staticDataInvariant("frozen value has an untyped named relocation"),
+            };
+            try value.relocations.append(self.allocator(), .{
+                .offset = @intCast(relocation.offset - start),
+                .target = target,
+                .addend = relocation.addend,
+                .kind = relocation.kind,
+                .callable_capture_offset = relocation.callable_capture_offset,
+            });
+        }
+        return value;
     }
 
     fn evaluateProc(
@@ -931,6 +928,9 @@ const StaticInitializerMachine = struct {
 
 /// Selects which closed LIR initializers are frozen into static-data exports.
 pub const BuildOptions = struct {
+    /// Allocate stable addresses for roots that this native session will fill.
+    /// These placeholders may only be consumed by the owning evaluator.
+    prepare_compile_time_slots: bool = false,
     /// Include host-visible provided constants as well as internal LIR values.
     include_provided_exports: bool = false,
     /// Include every explicitly requested constant initializer under a stable,
@@ -978,6 +978,45 @@ pub fn deinitStaticData(allocator: Allocator, exports: []StaticDataExport) void 
     allocator.free(exports);
 }
 
+/// Copy an already-frozen compilation image without running its initializers.
+pub fn cloneStaticData(allocator: Allocator, exports: []const StaticDataExport) Allocator.Error![]StaticDataExport {
+    const result = try allocator.alloc(StaticDataExport, exports.len);
+    var completed: usize = 0;
+    errdefer {
+        for (result[0..completed]) |item| {
+            allocator.free(item.symbol_name);
+            allocator.free(item.bytes);
+            deinitRelocationSlice(allocator, item.relocations);
+            allocator.free(item.relocations);
+        }
+        allocator.free(result);
+    }
+    for (exports, result) |source, *dest| {
+        const name = try allocator.dupe(u8, source.symbol_name);
+        errdefer allocator.free(name);
+        const bytes = try allocator.dupe(u8, source.bytes);
+        errdefer allocator.free(bytes);
+        const relocations = try allocator.alloc(StaticDataRelocation, source.relocations.len);
+        var copied: usize = 0;
+        errdefer {
+            deinitRelocationSlice(allocator, relocations[0..copied]);
+            allocator.free(relocations);
+        }
+        for (source.relocations, relocations) |relocation, *copy| {
+            copy.* = relocation;
+            copy.target_symbol_name = try allocator.dupe(u8, relocation.target_symbol_name);
+            copy.owns_target_symbol_name = true;
+            copied += 1;
+        }
+        dest.* = source;
+        dest.symbol_name = name;
+        dest.bytes = bytes;
+        dest.relocations = relocations;
+        completed += 1;
+    }
+    return result;
+}
+
 fn deinitRelocationSlice(allocator: Allocator, relocations: []const StaticDataRelocation) void {
     for (relocations) |relocation| {
         if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
@@ -997,6 +1036,7 @@ const StaticDataBuilder = struct {
     procedure_names: collections.DenseMap(lir.LIR.LirProcSpecId, []u8),
     helper_names: std.AutoHashMap(layout.RcHelperKey, []u8),
     include_provided_exports: bool,
+    prepare_compile_time_slots: bool,
     include_requested_exports: bool,
 
     fn init(
@@ -1020,6 +1060,7 @@ const StaticDataBuilder = struct {
             .procedure_names = .init(allocator),
             .helper_names = .init(allocator),
             .include_provided_exports = options.include_provided_exports,
+            .prepare_compile_time_slots = options.prepare_compile_time_slots,
             .include_requested_exports = options.include_requested_exports,
         };
     }
@@ -1035,6 +1076,12 @@ const StaticDataBuilder = struct {
     fn build(self: *StaticDataBuilder) MaterializationError![]StaticDataExport {
         errdefer self.deinitNodes();
 
+        if (self.lowered.frozen_static_data) |frozen| {
+            const cloned = try cloneStaticData(self.allocator, frozen.exports);
+            errdefer deinitStaticData(self.allocator, cloned);
+            try self.nodes.appendSlice(self.allocator, cloned);
+            self.allocator.free(cloned);
+        }
         if (self.include_provided_exports) try self.buildProvidedExports();
         if (self.include_requested_exports) try self.buildRequestedExports();
         try self.buildInternalStaticValues();
@@ -1101,9 +1148,28 @@ const StaticDataBuilder = struct {
 
     fn buildInternalStaticValues(self: *StaticDataBuilder) MaterializationError!void {
         for (0..self.lowered.lir_result.static_data_values.items.len) |index| {
+            if (self.initializer_machine.frozen_roots[index] != null) continue;
             const static_data_id: lir.LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
             const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, static_data_id);
             errdefer self.allocator.free(symbol_name);
+
+            const entry = self.lowered.lir_result.static_data_values.items[index];
+            if (entry.compile_time_root != null and self.prepare_compile_time_slots) {
+                const value_layout = entry.layout_idx;
+                const size_align = self.lowered.lir_result.layouts.layoutSizeAlign(self.layoutValue(value_layout));
+                const bytes = try self.allocator.alloc(u8, size_align.size);
+                errdefer self.allocator.free(bytes);
+                @memset(bytes, 0);
+                try self.nodes.append(self.allocator, .{
+                    .symbol_name = symbol_name,
+                    .value_id = static_data_id,
+                    .bytes = bytes,
+                    .alignment = @intCast(size_align.alignment.toByteUnits()),
+                    .is_global = true,
+                    .is_exported = false,
+                });
+                continue;
+            }
 
             const initialized = try self.initializer_machine.evaluateStatic(static_data_id);
             const materialized = try self.freezeValue(initialized);
@@ -1160,6 +1226,17 @@ const StaticDataBuilder = struct {
         }
         for (symbolic, result) |source, *dest| {
             switch (source.target) {
+                .frozen_symbol => |symbol| {
+                    const target = self.nodes.items[@intFromEnum(symbol)];
+                    dest.* = .{
+                        .offset = source.offset,
+                        .target_symbol_name = target.symbol_name,
+                        .target = .{ .data_symbol = symbol },
+                        .addend = source.addend,
+                        .kind = source.kind,
+                        .callable_capture_offset = source.callable_capture_offset,
+                    };
+                },
                 .allocation => |allocation| {
                     const target = try self.freezeAllocation(allocation);
                     dest.* = .{
@@ -1221,7 +1298,7 @@ const StaticDataBuilder = struct {
         // Reserve the symbol before following its relocations. This makes the
         // target-memory graph capable of representing recursive allocation
         // cycles without reconstructing or breaking them.
-        const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__static_const_{d}", .{self.local_symbol_ordinal});
+        const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__static_{s}const_{d}", .{ if (self.lowered.frozen_static_data != null) @as([]const u8, "overlay_") else "", self.local_symbol_ordinal });
         var node_appended = false;
         errdefer if (!node_appended) self.allocator.free(symbol_name);
         self.local_symbol_ordinal += 1;

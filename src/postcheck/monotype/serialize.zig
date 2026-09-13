@@ -50,7 +50,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 18;
+pub const FORMAT_VERSION: u32 = 19;
 
 const SECTION_COUNT = 43;
 
@@ -128,6 +128,8 @@ pub const SectionPayload = struct {
 
 /// Inputs that affect Monotype specialization cache validity.
 pub const ValidityConfig = struct {
+    comptime_value_reads: bool = false,
+    inline_expects: enum { run, omit, shared } = .run,
     proc_debug_names: bool = false,
     builtin_data_id: ?[32]u8 = null,
 };
@@ -704,6 +706,8 @@ pub const MappedProgramView = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => true,
+            .inline_expects_enabled => true,
+            .comptime_value => |value| self.exprRefInBounds(value.initializer),
             .static_data_candidate => |candidate| self.staticDataRefInBounds(candidate.static_data) and
                 self.exprRefInBounds(candidate.runtime_expr),
             .typed_boundary => |boundary| self.exprRefInBounds(boundary.value),
@@ -1165,7 +1169,13 @@ pub fn computeValidityId(inputs: ValidityInputs) [32]u8 {
 
     writeHashBytes(&hasher, "config");
     writeHashBool(&hasher, inputs.config.proc_debug_names);
+    writeHashBool(&hasher, inputs.config.comptime_value_reads);
+    writeHashBytes(&hasher, @tagName(inputs.config.inline_expects));
     writeHashOptionalBytes32(&hasher, inputs.config.builtin_data_id);
+
+    writeHashBytes(&hasher, "root-source-modules");
+    writeHashU32(&hasher, @intCast(inputs.roots.source_modules.len));
+    for (inputs.roots.source_modules) |module| writeModuleId(&hasher, module);
 
     writeHashBytes(&hasher, "root-module");
     writeModuleId(&hasher, inputs.root_module);
@@ -2834,6 +2844,18 @@ test "monotype specialization cache validity includes module ids roots and confi
         .roots = requested_roots,
     });
     try std.testing.expect(!std.mem.eql(u8, empty[0..], requested[0..]));
+
+    const shared_reads = computeValidityId(.{
+        .root_module = root_module,
+        .roots = requested_roots,
+        .config = .{ .comptime_value_reads = true },
+    });
+    try std.testing.expect(!std.mem.eql(u8, requested[0..], shared_reads[0..]));
+    const imported_root = computeValidityId(.{
+        .root_module = root_module,
+        .roots = .{ .requests = &.{request}, .source_modules = &.{testModuleId(2)} },
+    });
+    try std.testing.expect(!std.mem.eql(u8, requested[0..], imported_root[0..]));
 
     const debug_names = computeValidityId(.{
         .root_module = root_module,

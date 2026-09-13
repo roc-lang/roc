@@ -4503,7 +4503,7 @@ const ProcedureBuilder = struct {
         self.hosted_external_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.resolved_workers.items.len);
         @memset(self.hosted_external_procs, null);
 
-        for (self.plan.roots.items, self.layout_plan.roots.items) |root, root_layout| {
+        for (self.plan.roots.items, self.layout_plan.roots.items, 0..) |root, root_layout, request_index| {
             if (root.id != root_layout.root) boxyLowerInvariant("boxy root layout table disagreed with root plan order");
             if (root.worker != root_layout.worker) boxyLowerInvariant("boxy root layout table disagreed with root worker plan");
             const worker_layout = self.layout_plan.workerLayoutFor(root.worker);
@@ -4527,7 +4527,7 @@ const ProcedureBuilder = struct {
             }
             try self.result.root_procs.append(self.allocator, root_proc);
             var metadata = RootMetadata.fromCheckedRoot(root.request);
-            metadata.test_plan = Common.testPlanMetadataForRoot(roots, root.request);
+            metadata.test_plan = Common.testPlanMetadataForRoot(roots, root.request, request_index);
             try self.result.root_metadata.append(self.allocator, metadata);
         }
     }
@@ -46790,6 +46790,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
         gpa,
         .{ .root = .{ .module = &checked_module, .roots = undefined } },
         .{ .test_plan_metadata = &.{.{
+            .request_index = 0,
             .root_order = root.order,
             .result_index = 5,
             .module_index = 2,

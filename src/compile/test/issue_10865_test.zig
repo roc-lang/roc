@@ -86,6 +86,7 @@ fn expectTypeHeaderResult(source: []const u8, expected_title: ?[]const u8) Issue
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     var found_expected = expected_title == null;
     var reports = coord.iterReports();

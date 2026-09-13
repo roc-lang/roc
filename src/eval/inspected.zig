@@ -399,12 +399,18 @@ pub const BoolRoot = struct {
 };
 
 /// A group of bool-returning test roots that share one lowered LIR module.
+pub const RuntimeStaticData = struct {
+    exports: []const backend.StaticDataExport = &.{},
+    value_count: usize = 0,
+};
+
 pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
     expect_site_count: usize = 0,
+    static_data: RuntimeStaticData = .{},
 };
 
 /// Timings for JIT-compiling and running boolean test roots with the dev backend.
@@ -2794,6 +2800,34 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
     max_workers: ?usize,
     expect_site_count: usize,
 ) Error!BoolRootEvalBatch {
+    return devEvalBoolRootModule(allocator, .{ .store = store, .layouts = layouts, .tables = tables, .roots = roots, .expect_site_count = expect_site_count }, timing, max_workers);
+}
+
+/// Execute an explicit root module and its completed immutable value graph.
+pub fn devEvalBoolRootModule(allocator: Allocator, module: BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
+    return devEvalSharedBoolRootModules(allocator, &.{module}, timing, max_workers);
+}
+
+/// Compile one explicitly shared program once, retaining module observation partitions.
+pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
+    try validateSharedBoolRootModules(modules);
+    const module = modules[0];
+    const store = module.store;
+    const layouts = module.layouts;
+    const tables = module.tables;
+    var root_count: usize = 0;
+    var expect_site_count: usize = 0;
+    for (modules) |partition| {
+        root_count = std.math.add(usize, root_count, partition.roots.len) catch return error.OutOfMemory;
+        expect_site_count = std.math.add(usize, expect_site_count, partition.expect_site_count) catch return error.OutOfMemory;
+    }
+    const roots = try allocator.alloc(BoolRoot, root_count);
+    defer allocator.free(roots);
+    var root_cursor: usize = 0;
+    for (modules) |partition| {
+        @memcpy(roots[root_cursor..][0..partition.roots.len], partition.roots);
+        root_cursor += partition.roots.len;
+    }
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
@@ -2811,6 +2845,17 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
         defer static_strings.deinit();
         if (timing) |timings| timings.finish(static_strings_started_ns, .static_strings);
 
+        var static_image = backend.StaticDataImage.init(allocator, module.static_data.exports) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => zeroArgRootInvariant("invalid frozen data graph for dev test roots"),
+        };
+        defer static_image.deinit();
+        const static_addresses = static_image.lirValueAddresses(allocator, module.static_data.value_count) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => zeroArgRootInvariant("dev test graph omitted an explicit static value slot"),
+        };
+        defer allocator.free(static_addresses);
+
         const codegen_setup_started_ns = if (timing) |timings| timings.start() else 0;
         var codegen = try HostLirCodeGen.initWithBoxyMetadata(
             allocator,
@@ -2824,6 +2869,7 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
+        codegen.setNativeStaticData(static_addresses);
         // Worker threads read this table through the codegen'd code while the
         // parallel run below is still in flight, so it must stay alive until
         // this function returns.
@@ -2834,6 +2880,9 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
         try codegen.compileAllProcSpecs(store.getProcSpecs());
+        const static_rc_helpers = try backend.collectRequiredRcHelpers(allocator, module.static_data.exports);
+        defer allocator.free(static_rc_helpers);
+        try codegen.compileStaticDataRcHelpers(static_rc_helpers);
         if (timing) |timings| timings.finish(procedure_codegen_started_ns, .procedure_codegen);
 
         const entry_offsets = try allocator.alloc(usize, roots.len);
@@ -2864,17 +2913,42 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkersAndExpectSites(
             if (timing) |timings| timings.finish(executable_deinit_started_ns, .executable_memory);
         }
 
+        const Resolver = struct {
+            codegen: *const HostLirCodeGen,
+            executable: *const ExecutableMemory,
+            fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+                const self: *@This() = @ptrCast(@alignCast(raw.?));
+                const base_address = @intFromPtr(self.executable.codePtr());
+                if (relocation.rc_helper) |helper| return base_address + (self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null);
+                const proc = relocation.procedure orelse return null;
+                return base_address + (self.codegen.compiledProcSymbol(proc) orelse return null).code_start;
+            }
+        };
+        var resolver = Resolver{ .codegen = &codegen, .executable = &executable };
+        static_image.resolveFunctionRelocations(.{ .context = &resolver, .resolve = Resolver.resolve }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => zeroArgRootInvariant("dev test graph omitted a callable procedure"),
+        };
+
         const calls = try allocator.alloc(BoolRootCall, roots.len);
         defer allocator.free(calls);
-        for (roots, 0..) |root, i| {
-            calls[i] = .{
-                .store = store,
-                .layouts = layouts,
-                .tables = tables,
-                .target = .{ .dev = .{ .executable = &executable, .entry_offset = entry_offsets[i] } },
-                .root = root,
-                .expect_site_count = expect_site_count,
-            };
+        var call_cursor: usize = 0;
+        var expect_site_base: usize = 0;
+        for (modules) |partition| {
+            for (partition.roots) |root| {
+                const i = call_cursor;
+                call_cursor += 1;
+                calls[i] = .{
+                    .store = store,
+                    .layouts = layouts,
+                    .tables = tables,
+                    .target = .{ .dev = .{ .executable = &executable, .entry_offset = entry_offsets[i] } },
+                    .root = root,
+                    .expect_site_count = partition.expect_site_count,
+                    .expect_site_base = expect_site_base,
+                };
+            }
+            expect_site_base += partition.expect_site_count;
         }
 
         const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
@@ -3360,12 +3434,75 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
     completion_callback: ?BoolRootCompletionCallback,
     event_callback: ?BoolRootEventCallback,
 ) Error!BoolRootEvalBatch {
+    return executeLlvmBoolRootModules(allocator, modules, opt, max_workers, completion_callback, event_callback, .independent);
+}
+
+/// All root partitions belong to one declared LIR program. Compile its union
+/// once while retaining independent per-module inline-expect counters.
+pub fn llvmEvalSharedBoolRootModules(
+    allocator: Allocator,
+    modules: []const BoolRootModule,
+    opt: LlvmTestOpt,
+    max_workers: ?usize,
+    completion_callback: ?BoolRootCompletionCallback,
+    event_callback: ?BoolRootEventCallback,
+) Error!BoolRootEvalBatch {
+    return executeLlvmBoolRootModules(allocator, modules, opt, max_workers, completion_callback, event_callback, .shared);
+}
+
+fn validateSharedBoolRootModules(modules: []const BoolRootModule) Error!void {
+    if (modules.len == 0) return error.Internal;
+    const program = modules[0];
+    for (modules[1..]) |module| {
+        if (module.store != program.store or module.layouts != program.layouts or
+            !std.meta.eql(module.tables, program.tables) or !std.meta.eql(module.static_data, program.static_data))
+            return error.Internal;
+    }
+}
+
+fn executeLlvmBoolRootModules(
+    allocator: Allocator,
+    modules: []const BoolRootModule,
+    opt: LlvmTestOpt,
+    max_workers: ?usize,
+    completion_callback: ?BoolRootCompletionCallback,
+    event_callback: ?BoolRootEventCallback,
+    ownership: enum { independent, shared },
+) Error!BoolRootEvalBatch {
     if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
     if (modules.len == 0) return error.LlvmBackendUnavailable;
+    if (ownership == .shared) try validateSharedBoolRootModules(modules);
+    const program_count = if (ownership == .shared) 1 else modules.len;
+    const programs = modules[0..program_count];
 
     const llvm_compile = @import("llvm_compile");
 
-    var bitcodes = try allocator.alloc(llvm_compile.MonoLlvmCodeGen.GenerateResult, modules.len);
+    const static_data = @import("static_data");
+    const images = try allocator.alloc(backend.StaticDataImage, program_count);
+    defer allocator.free(images);
+    const addresses = try allocator.alloc([]usize, program_count);
+    defer allocator.free(addresses);
+    var image_count: usize = 0;
+    defer for (images[0..image_count], addresses[0..image_count]) |*image, values| {
+        allocator.free(values);
+        image.deinit();
+    };
+    for (programs, 0..) |module, index| {
+        images[index] = backend.StaticDataImage.init(allocator, module.static_data.exports) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Internal,
+        };
+        addresses[index] = images[index].lirValueAddresses(allocator, module.static_data.value_count) catch |err| {
+            images[index].deinit();
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                else => error.Internal,
+            };
+        };
+        image_count += 1;
+    }
+
+    var bitcodes = try allocator.alloc(llvm_compile.MonoLlvmCodeGen.GenerateResult, program_count);
     var bitcode_len: usize = 0;
     defer {
         for (bitcodes[0..bitcode_len]) |*bitcode| {
@@ -3374,7 +3511,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
         allocator.free(bitcodes);
     }
 
-    var bitcode_slices = try allocator.alloc([]const u32, modules.len);
+    var bitcode_slices = try allocator.alloc([]const u32, program_count);
     defer allocator.free(bitcode_slices);
 
     var total_roots: usize = 0;
@@ -3382,7 +3519,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
         total_roots += module.roots.len;
     }
 
-    for (modules, 0..) |module, module_index| {
+    for (programs, 0..) |module, module_index| {
         var codegen = llvm_compile.MonoLlvmCodeGen.init(
             allocator,
             module.store,
@@ -3391,18 +3528,33 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
             module.tables.worker_procs,
         );
         codegen.layout_store = module.layouts;
+        codegen.static_data_addresses = addresses[module_index];
+        codegen.proc_symbol_mode = .lir_symbol;
+        const symbol_prefix = try std.fmt.allocPrint(allocator, "roc_test_module_{d}_", .{module_index});
+        defer allocator.free(symbol_prefix);
+        codegen.static_symbol_prefix = symbol_prefix;
+        const static_procs = try static_data.collectReferencedProcs(allocator, module.static_data.exports);
+        defer allocator.free(static_procs);
+        const static_helpers = try static_data.collectRequiredRcHelpers(allocator, module.static_data.exports);
+        defer allocator.free(static_helpers);
+        codegen.static_data_procs = static_procs;
+        codegen.static_data_rc_helpers = static_helpers;
         defer codegen.deinit();
 
-        const entrypoints = try allocator.alloc(llvm_compile.MonoLlvmCodeGen.Entrypoint, module.roots.len);
+        const partitions = if (ownership == .shared) modules else programs[module_index..][0..1];
+        const entrypoint_count = if (ownership == .shared) total_roots else module.roots.len;
+        const entrypoints = try allocator.alloc(llvm_compile.MonoLlvmCodeGen.Entrypoint, entrypoint_count);
         defer allocator.free(entrypoints);
-        for (module.roots, 0..) |root, i| {
-            entrypoints[i] = .{
+        var entrypoint_index: usize = 0;
+        for (partitions) |partition| for (partition.roots) |root| {
+            entrypoints[entrypoint_index] = .{
                 .symbol_name = root.symbol_name,
                 .proc = root.proc,
                 .arg_layouts = root.arg_layouts,
                 .ret_layout = root.ret_layout,
             };
-        }
+            entrypoint_index += 1;
+        };
 
         const module_name = try std.fmt.allocPrint(allocator, "roc_test_module_{d}", .{module_index});
         defer allocator.free(module_name);
@@ -3426,6 +3578,30 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
 
     var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
+
+    // The library supplies the exact callable and drop-helper symbols named
+    // by each module's frozen graph. Relocate before any root can execute.
+    for (programs, images, 0..) |module, *image, module_index| {
+        var functions = std.StringHashMap(usize).init(allocator);
+        defer functions.deinit();
+        for (module.static_data.exports) |data_export| for (data_export.relocations) |relocation| {
+            if (relocation.kind != .function_pointer) continue;
+            const name = try std.fmt.allocPrintSentinel(allocator, "roc_test_module_{d}_{s}", .{ module_index, relocation.target_symbol_name }, 0);
+            defer allocator.free(name);
+            const address = lib.lookup(*const anyopaque, name) orelse return error.LlvmBackendUnavailable;
+            try functions.put(relocation.target_symbol_name, @intFromPtr(address));
+        };
+        const Resolver = struct {
+            fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+                const map: *const std.StringHashMap(usize) = @ptrCast(@alignCast(raw.?));
+                return map.get(relocation.target_symbol_name);
+            }
+        };
+        image.resolveFunctionRelocations(.{ .context = &functions, .resolve = Resolver.resolve }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Internal,
+        };
+    }
 
     var longjmp_on_crash = true;
     if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {

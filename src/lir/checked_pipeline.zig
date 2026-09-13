@@ -89,6 +89,8 @@ pub const CheckedModuleSet = struct {
 /// Root requests that determine which checked definitions become LIR roots.
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
+    /// Checked module owning each request type; empty for root-module requests.
+    source_modules: []const checked.ModuleId = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
     /// Explicit checked constants to restore as readonly target data.
     static_data_requests: []const postcheck.Common.StaticDataRequest = &.{},
@@ -103,12 +105,21 @@ pub const RootRequestSet = struct {
 pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
+/// Producer-side work counts, independent of elapsed time and output size.
+pub const WorkMetrics = struct {
+    monotype_runs: u32 = 0,
+    lir_continuations: u32 = 0,
+};
+
 pub const TargetConfig = struct {
+    work_metrics: ?*WorkMetrics = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     specialization_strategy: SpecializationStrategy = .lss,
     /// Reuse checking workers for generic post-check tasks when available.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
+    /// The compilation session supplies evaluated root slots for these reads.
+    comptime_value_reads: bool = false,
     inline_mode: InlineMode = .none,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
@@ -598,14 +609,51 @@ pub const RuntimeValueSchemaStore = struct {
     }
 };
 
+/// Select the runtime roots by the producer-recorded positions in the shared
+/// request list. Completion has already rewritten successful failure guards;
+/// remaining guard CFG belongs to failed roots and remains ordinary runtime LIR.
+pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) Allocator.Error!void {
+    const allocator = lowered.lir_result.store.allocator;
+    const result = &lowered.lir_result;
+    var procs = try std.ArrayList(core.LIR.LirProcSpecId).initCapacity(allocator, root_indices.len);
+    errdefer procs.deinit(allocator);
+    var metadata = try std.ArrayList(@import("lir_core").RootMetadata.RootMetadata).initCapacity(allocator, root_indices.len);
+    errdefer metadata.deinit(allocator);
+    for (root_indices) |index| {
+        if (index >= result.root_procs.items.len or index >= result.root_metadata.items.len) checkedPipelineInvariant("runtime root position exceeds shared root plan");
+        procs.appendAssumeCapacity(result.root_procs.items[index]);
+        metadata.appendAssumeCapacity(result.root_metadata.items[index]);
+    }
+    result.root_procs.deinit(allocator);
+    result.root_metadata.deinit(allocator);
+    result.root_procs = procs;
+    result.root_metadata = metadata;
+    procs = .empty;
+    metadata = .empty;
+    result.const_roots.clearRetainingCapacity();
+    result.comptime_value_guards.clearRetainingCapacity();
+    if (lowered.frozen_static_data) |*frozen| {
+        for (frozen.exports) |item| {
+            if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
+        }
+        for (result.static_data_values.items) |*value| value.compile_time_root = null;
+        try ReachableProcs.runWithFrozen(result, frozen);
+    } else {
+        try ReachableProcs.run(result);
+    }
+    lowered.main_proc = if (result.root_procs.items.len == 0) null else result.root_procs.items[0];
+}
+
 /// Fully lowered LIR program plus root and runtime schema metadata.
 pub const LoweredProgram = struct {
     lir_result: LirProgram.Result,
     main_proc: ?LIR.LirProcSpecId,
     target_usize: base.target.TargetUsize,
     runtime_value_schemas: RuntimeValueSchemaStore,
+    frozen_static_data: ?LirProgram.FrozenStaticData = null,
 
     pub fn deinit(self: *LoweredProgram) void {
+        if (self.frozen_static_data) |*data| data.deinit();
         self.runtime_value_schemas.deinit();
         self.lir_result.deinit();
     }
@@ -657,6 +705,51 @@ pub const LoweredProgram = struct {
     }
 };
 
+/// Owns the specialization result and its continuation configuration. Checked
+/// module storage and pointer-valued TargetConfig outputs must outlive this value.
+/// Target options are captured here: resuming cannot silently change the meaning
+/// of specializations already lowered under those options.
+pub const PreparedMonotype = struct {
+    allocator: Allocator,
+    program: postcheck.Monotype.Ast.Program,
+    target: TargetConfig,
+    root_count: usize,
+    test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
+
+    /// Fork only the target-dependent continuation. Specialization output is
+    /// copied exactly; checked lowering and its executor are not run again.
+    pub fn forkForTarget(self: *const PreparedMonotype, target_usize: base.target.TargetUsize) Allocator.Error!PreparedMonotype {
+        return self.forkForConsumer(target_usize, self.target.inline_expects);
+    }
+
+    /// A shared program preserves both expect semantics explicitly. A program
+    /// specialized for one mode cannot acquire the missing continuation later.
+    pub fn forkForConsumer(self: *const PreparedMonotype, target_usize: base.target.TargetUsize, inline_expects: InlineExpectMode) Allocator.Error!PreparedMonotype {
+        if (!self.target.comptime_value_reads and inline_expects != self.target.inline_expects) {
+            checkedPipelineInvariant("changing expect mode requires shared Monotype lowering");
+        }
+        var program = try self.program.cloneFrozen(self.allocator);
+        errdefer program.deinit();
+        const metadata = try self.allocator.dupe(postcheck.Common.RootTestPlanMetadata, self.test_plan_metadata);
+        var target = self.target;
+        target.target_usize = target_usize;
+        target.inline_expects = inline_expects;
+        return .{
+            .allocator = self.allocator,
+            .program = program,
+            .target = target,
+            .root_count = self.root_count,
+            .test_plan_metadata = metadata,
+        };
+    }
+
+    pub fn deinit(self: *PreparedMonotype) void {
+        self.program.deinit();
+        self.allocator.free(self.test_plan_metadata);
+        self.* = undefined;
+    }
+};
+
 /// Lower checked modules and explicit roots directly into an ARC-ready LIR program.
 pub fn lowerCheckedModulesToLir(
     allocator: Allocator,
@@ -664,34 +757,49 @@ pub fn lowerCheckedModulesToLir(
     roots: RootRequestSet,
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
+    if (target.specialization_strategy == .lss) {
+        return lowerPreparedMonotypeToLir(try prepareCheckedModulesMonotype(allocator, modules, roots, target));
+    }
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
-    const static_data_requests = switch (target.checked_module_state) {
-        .complete => try collectStaticDataRequests(
-            allocator,
-            modules.root.module,
-            roots.static_data_requests,
-            roots.include_provided_data_exports,
-        ),
-        .checking_finalization => try allocator.dupe(postcheck.Common.StaticDataRequest, roots.static_data_requests),
-    };
+    const static_data_requests = try collectStaticDataRequests(
+        allocator,
+        modules.root.module,
+        roots.static_data_requests,
+        roots.include_provided_data_exports,
+    );
     defer allocator.free(static_data_requests);
 
-    switch (target.specialization_strategy) {
-        .lss => {},
-        .boxy => return lowerBoxyCheckedModulesToLir(
-            allocator,
-            modules,
-            roots,
-            target,
-            layout_requests,
-            static_data_requests,
-        ),
-    }
+    return lowerBoxyCheckedModulesToLir(allocator, modules, roots, target, layout_requests, static_data_requests);
+}
 
+/// Lower the complete explicit root set once, retaining ownership at the
+/// Monotype boundary. Boxy has no Monotype stage and uses the direct entrance.
+pub fn prepareCheckedModulesMonotype(
+    allocator: Allocator,
+    modules: CheckedModuleSet,
+    roots: RootRequestSet,
+    target: TargetConfig,
+) LowerResourceError!PreparedMonotype {
+    if (target.specialization_strategy != .lss) checkedPipelineInvariant("Monotype preparation requires LSS");
+    try verifyCheckedBoundary(modules, target);
+    try requireHostedProceduresBound(modules, target);
+
+    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
+    defer allocator.free(layout_requests);
+    const static_data_requests = try collectStaticDataRequests(
+        allocator,
+        modules.root.module,
+        roots.static_data_requests,
+        roots.include_provided_data_exports,
+    );
+    defer allocator.free(static_data_requests);
+
+    const test_plan_metadata = try allocator.dupe(postcheck.Common.RootTestPlanMetadata, roots.test_plan_metadata);
+    errdefer allocator.free(test_plan_metadata);
     const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
     var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
         postcheck.Monotype.Lower.Timing.init(timing.std_io)
@@ -704,12 +812,13 @@ pub fn lowerCheckedModulesToLir(
     if (monotype_timing) |*detail| {
         detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
     }
-    var mono = monotype: {
+    const mono = monotype: {
         defer if (target.timing) |timing| {
             timing.finish(monotype_started_ns, .monotype);
             if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
             if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
         };
+        if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
             checkedModules(modules),
@@ -719,8 +828,9 @@ pub fn lowerCheckedModulesToLir(
                 .specialization_cache = target.monotype_cache,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
+                .comptime_value_reads = target.comptime_value_reads,
                 .target_usize = target.target_usize,
-                .inline_expects = switch (target.inline_expects) {
+                .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
                     .run => .run,
                     .omit => .omit,
                 },
@@ -729,6 +839,23 @@ pub fn lowerCheckedModulesToLir(
             },
         );
     };
+    return .{
+        .allocator = allocator,
+        .program = mono,
+        .target = target,
+        .root_count = roots.requests.len,
+        .test_plan_metadata = test_plan_metadata,
+    };
+}
+
+/// Consumes the prepared program on success and failure. No specialization
+/// lowering is repeated, and all continuation options come from preparation.
+pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError!LoweredProgram {
+    const allocator = prepared.allocator;
+    const target = prepared.target;
+    if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
+    defer allocator.free(prepared.test_plan_metadata);
+    var mono = prepared.program;
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
@@ -791,25 +918,25 @@ pub fn lowerCheckedModulesToLir(
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
-        .dict_seed_mode = switch (target.checked_module_state) {
+        .dict_seed_mode = if (target.comptime_value_reads) .runtime else switch (target.checked_module_state) {
             .complete => .runtime,
             .checking_finalization => .comptime_zero,
         },
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
         .layout_request_const_plans = target.layout_request_const_plans,
-        .test_plan_metadata = roots.test_plan_metadata,
+        .test_plan_metadata = prepared.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = target.solved_lir_parallel_metrics_out,
     });
     lir_gen_timing_scope.end();
     errdefer lowered.deinit();
 
-    return finishLoweredOutput(allocator, roots, target, &lowered);
+    return finishLoweredOutput(allocator, prepared.root_count, target, &lowered);
 }
 
 fn finishLoweredOutput(
     allocator: Allocator,
-    roots: RootRequestSet,
+    root_count: usize,
     target: TargetConfig,
     lowered: anytype,
 ) LowerResourceError!LoweredProgram {
@@ -856,9 +983,11 @@ fn finishLoweredOutput(
     // is the placement ARC produced.
     _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
+    try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result);
+
     try LirDump.run(&lowered.lir_result);
 
-    if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
+    if (root_count != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
     }
 
@@ -899,6 +1028,7 @@ fn lowerBoxyCheckedModulesToLir(
         .root_module = modules.root,
         .imports = modules.imports,
         .roots = roots.requests,
+        .source_modules = roots.source_modules,
         .layout_requests = boxy_layout_requests.items,
         .static_data_requests = static_data_requests,
     }, .{});
@@ -922,7 +1052,7 @@ fn lowerBoxyCheckedModulesToLir(
     errdefer lowered.deinit();
     boxy_lower_timing_scope.end();
 
-    return finishLoweredOutput(allocator, roots, target, &lowered);
+    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered);
 }
 
 fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
@@ -1033,6 +1163,7 @@ fn rootRequests(
 ) postcheck.Common.RootRequests {
     return .{
         .requests = roots.requests,
+        .source_modules = roots.source_modules,
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
@@ -1156,3 +1287,38 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
         }
     }
 };
+
+test "runtime extraction consumes producer root positions and preserves their order" {
+    const allocator = std.testing.allocator;
+    var lowered = LoweredProgram{
+        .lir_result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native),
+        .main_proc = null,
+        .target_usize = base.target.TargetUsize.native,
+        .runtime_value_schemas = RuntimeValueSchemaStore.init(allocator),
+    };
+    defer lowered.deinit();
+    const local = try lowered.lir_result.store.addLocal(.{ .layout_idx = .zst });
+    const ret = try lowered.lir_result.store.addCFStmt(.{ .ret = .{ .value = local } });
+    for (0..3) |index| {
+        const proc = try lowered.lir_result.store.addProcSpec(.{
+            .name = lowered.lir_result.store.freshSyntheticSymbol(),
+            .args = .empty(),
+            .body = ret,
+            .ret_layout = .zst,
+        });
+        try lowered.lir_result.root_procs.append(allocator, proc);
+        try lowered.lir_result.root_metadata.append(allocator, .{
+            .order = @intCast(index),
+            .kind = if (index == 0) .compile_time_constant else .runtime_entrypoint,
+            .abi = .roc,
+            .exposure = .private,
+        });
+    }
+    try retainRuntimeRoots(&lowered, &.{ 2, 1 });
+    try std.testing.expectEqual(@as(usize, 2), lowered.lir_result.store.procSpecCount());
+    try std.testing.expectEqual(@as(u32, 2), lowered.lir_result.root_metadata.items[0].order);
+    try std.testing.expectEqual(@as(u32, 1), lowered.lir_result.root_metadata.items[1].order);
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(lowered.lir_result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(lowered.lir_result.root_procs.items[1]));
+    try std.testing.expectEqual(lowered.lir_result.root_procs.items[0], lowered.main_proc.?);
+}

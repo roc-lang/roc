@@ -326,6 +326,11 @@ pub const MonoLlvmCodeGen = struct {
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
     static_refcounted_backings: std.AutoHashMap(u32, LlvmBuilder.Value),
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
+    /// In-process consumers supply a relocated image that outlives execution.
+    /// Object emission leaves this null and uses linker-visible data symbols.
+    static_data_addresses: ?[]const usize = null,
+    /// Distinguishes callable exports from independent modules in one JIT library.
+    static_symbol_prefix: []const u8 = "",
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     /// Atomic helpers required by relocations in the separately emitted
@@ -1758,7 +1763,7 @@ pub const MonoLlvmCodeGen = struct {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.strtabStringFmt("roc_proc_{d}", .{@intFromEnum(proc_id)}) catch return error.OutOfMemory,
             .lir_symbol => blk: {
-                const name = std.fmt.allocPrint(self.allocator, "roc__proc_{x}", .{proc.name.raw()}) catch return error.OutOfMemory;
+                const name = std.fmt.allocPrint(self.allocator, "{s}roc__proc_{x}", .{ self.static_symbol_prefix, proc.name.raw() }) catch return error.OutOfMemory;
                 defer self.allocator.free(name);
                 break :blk try self.exportedFunctionName(builder, name);
             },
@@ -8339,6 +8344,12 @@ pub const MonoLlvmCodeGen = struct {
 
     fn staticDataGlobal(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId, size: u32) Error!LlvmBuilder.Value {
         const raw_id: u32 = @intFromEnum(id);
+        if (self.static_data_addresses) |addresses| {
+            if (raw_id >= addresses.len) return error.CompilationFailed;
+            const builder = self.builder orelse return error.CompilationFailed;
+            const address = builder.intConst(self.ptrSizedIntType(), addresses[raw_id]) catch return error.OutOfMemory;
+            return builder.castValue(.inttoptr, address, try self.ptrType()) catch return error.OutOfMemory;
+        }
         if (self.static_data_globals.get(raw_id)) |value| return value;
 
         const builder = self.builder orelse return error.CompilationFailed;
@@ -11154,7 +11165,7 @@ pub const MonoLlvmCodeGen = struct {
         const is_static_data_helper = self.proc_symbol_mode == .lir_symbol and
             self.staticDataRequiresRcHelper(helper_key, atomicity);
         const fn_name = if (is_static_data_helper)
-            builder.strtabStringFmt("roc__rc_helper_{x}", .{cache_key}) catch return error.OutOfMemory
+            builder.strtabStringFmt("{s}roc__rc_helper_{x}", .{ self.static_symbol_prefix, cache_key }) catch return error.OutOfMemory
         else
             builder.strtabStringFmt("roc_llvm_rc_{s}_{d}{s}", .{
                 @tagName(helper_key.op),

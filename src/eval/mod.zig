@@ -41,6 +41,9 @@ pub const CompileTimeHost = @import("compile_time_host.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
 pub const NativeRootExport = @import("native_root_export.zig");
+pub const FrozenRootTranscode = @import("frozen_root_transcode.zig");
+/// Owned relocated immutable graph and callable registry for runtime interpretation.
+pub const InterpreterStaticData = @import("interpreter_static_data.zig").InterpreterStaticData;
 /// Builtin types for type checking
 pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 /// Crash context for host crash handling
@@ -135,6 +138,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("compile_time_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("native_root_export.zig"));
+    std.testing.refAllDecls(@import("frozen_root_transcode.zig"));
     std.testing.refAllDecls(@import("inspected_run.zig"));
     std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("stack.zig"));

@@ -840,6 +840,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compile-time execution normalizes every produced NaN before it can
         /// enter static data. Ordinary runtime code preserves target NaN bits.
         float_nan_mode: builtins.float_bits.NanMode,
+        /// Explicit execution-environment policy for shared compile-time LIR.
+        dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
         /// Borrowed producer declarations and cached IDs for internal static roots.
         static_data_symbols: collections.DenseMap(lir.LIR.StaticDataId, StaticDataSymbol),
         literal_symbols: collections.DenseMap(u32, SymbolTable.Id),
@@ -7902,6 +7904,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (narrowEnum(HasherOp, ll.op)) {
                 .dict_pseudo_seed => {
                     if (args.len != 0) unreachable;
+                    if (self.dict_seed_mode == .comptime_zero) return .{ .immediate_i64 = 0 };
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.dict_pseudo_seed));
                     return try self.scalarRetReg();
@@ -20524,6 +20527,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.generateBoxyDictProcThunks();
         }
 
+        /// Compile the complete demand list produced by LIR reachability.
+        /// Original store ids are retained, so a shared union program remains
+        /// available for a later consumer with its own machine-code policy.
+        pub fn compileSelectedProcSpecs(self: *Self, demand: []const lir.LIR.LirProcSpecId) Allocator.Error!void {
+            for (demand) |proc_id| {
+                const proc = self.store.getProcSpec(proc_id);
+                std.debug.assert(!proc.is_static_initializer);
+                std.debug.assert(self.proc_registry.get(@intFromEnum(proc_id)) == null);
+                try self.proc_registry.put(@intFromEnum(proc_id), .{
+                    .id = proc_id,
+                    .code_start = unresolved_proc_code_start,
+                    .code_end = 0,
+                    .name = proc.name,
+                    .args = proc.args,
+                });
+            }
+            for (demand) |proc_id| try self.compileProcSpec(proc_id, self.store.getProcSpec(proc_id));
+            try self.patchPendingCalls();
+            try self.patchPendingProcAddrs();
+            try self.generateBoxyDictProcThunks();
+        }
+
         /// Generate the exact dictionary/inspect worker thunks named by LIR.
         fn generateBoxyDictProcThunks(self: *Self) Allocator.Error!void {
             for (self.boxy_worker_procs) |proc_id| {
@@ -27400,4 +27425,21 @@ test "symbol producer caches reuse identities and reset with generated code" {
         const literal_symbol = try codegen.staticStringSymbol(literal);
         try std.testing.expectEqualStrings(strings.find(literal).?.symbol_name, codegen.getSymbolNames()[@intFromEnum(literal_symbol)]);
     }
+}
+
+test "dev explicit procedure demand leaves runtime-only body uncompiled" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    const runtime = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 99, .layout_idx = .i64 } }, .i64);
+    const compile_time = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, roc_target_mod.host_cpu.level());
+    defer codegen.deinit();
+    try codegen.compileSelectedProcSpecs(&.{compile_time});
+    try std.testing.expect(codegen.compiledProcSymbol(runtime) == null);
+    try std.testing.expect(codegen.compiledProcSymbol(compile_time) != null);
+    try std.testing.expectEqual(@as(usize, 2), store.procSpecCount());
 }

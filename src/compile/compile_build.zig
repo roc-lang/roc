@@ -17,8 +17,19 @@ const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
+const lir = @import("lir");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const CoreCtx = @import("ctx").CoreCtx;
+
+/// Runtime demand fixed before post-check finalization. Explicit plans may be
+/// declared from prepared checked modules after the frontend completes.
+pub const RuntimeLoweringConfig = struct {
+    explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
+    root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
+    target: lir.CheckedPipeline.TargetConfig,
+    include_provided_data_exports: bool = false,
+    include_internal_static_data: bool = false,
+};
 
 /// The underlying system I/O type, derived from CoreCtx to avoid
 /// referencing the raw Zig I/O type directly (which is banned in core modules).
@@ -162,7 +173,7 @@ const PathUtils = struct {
 
 /// Controls which post-check publication work runs after ordinary checking has completed.
 pub const PostCheckPublicationMode = enum {
-    /// No post-check work (diagnostics only).
+    /// Evaluate checked roots without preparing executable platform relations.
     none,
     /// Publish the relation-bearing platform root once at finalization,
     /// including when checked source contains explicit runtime-error nodes.
@@ -200,6 +211,9 @@ pub const BuildEnv = struct {
 
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
+    runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// Let a caller declare a test plan from prepared artifacts before CTFE.
+    defer_post_check: bool = false,
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
@@ -220,8 +234,8 @@ pub const BuildEnv = struct {
     /// so `roc check` and `roc build` both finalize the relation-bearing platform
     /// root once (`.executable_artifacts`): finalization builds the platform/app
     /// relation and publishes the platform root, which also resolves the platform
-    /// target config constants both flows depend on. `.none` runs no post-check
-    /// work, for diagnostic-only embeddings that never link an executable.
+    /// target config constants both flows depend on. `.none` still evaluates compile-time roots
+    /// for diagnostic-only embeddings, but does not prepare executable relations.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     /// Whether executable artifacts were published for this build. User
@@ -746,7 +760,24 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.setExecutableFinalizationEnabled(self.post_check_publication_mode != .none);
+        coord.runtime_lowering = self.runtime_lowering;
         self.coordinator = coord;
+    }
+
+    pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
+        if (self.coordinator) |coordinator| {
+            std.debug.assert(coordinator.program_session == null);
+            coordinator.runtime_lowering = config;
+        }
+        self.runtime_lowering = config;
+    }
+
+    /// A configured runtime consumer must consume the checked program's exact
+    /// retained lowering session rather than begin another specialization pass.
+    pub fn runtimeProgramSession(self: *BuildEnv) ?*eval.CompileTimeFinalization.ProgramSession {
+        if (self.runtime_lowering == null) return null;
+        const coordinator = self.coordinator orelse unreachable;
+        return if (coordinator.program_session) |*session| session else unreachable;
     }
 
     /// Reuse compilation workers for post-check lowering after checking finishes.
@@ -1014,19 +1045,17 @@ pub const BuildEnv = struct {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        var finalized_executable = false;
-        switch (self.post_check_publication_mode) {
-            .none => {},
-            .executable_artifacts => {
-                coord.finalizeExecutableArtifacts() catch |err| {
-                    self.emitAccumulatedReportsForError();
-                    return err;
-                };
-                finalized_executable = true;
-            },
-        }
+        if (self.defer_post_check) return;
+        try self.finishCheckedProgram();
+    }
 
-        self.executable_artifacts_finalized = finalized_executable;
+    pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
+        const coord = self.coordinator orelse unreachable;
+        coord.finishCheckedProgram(self.post_check_publication_mode) catch |err| {
+            self.emitAccumulatedReportsForError();
+            return err;
+        };
+        self.executable_artifacts_finalized = self.post_check_publication_mode == .executable_artifacts;
 
         try self.resolvePlatformTargetConfigConstants();
 

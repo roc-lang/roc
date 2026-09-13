@@ -198,6 +198,7 @@ fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     var titles = std.ArrayList([]const u8).empty;
     errdefer {

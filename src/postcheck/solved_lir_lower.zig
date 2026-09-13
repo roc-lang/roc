@@ -405,6 +405,13 @@ const StaticInitializerRequest = struct {
     layout_idx: layout.Idx,
 };
 
+const ComptimeValueRequest = struct {
+    module: check.CheckedModule.ModuleId,
+    root: check.CheckedModule.ComptimeRootId,
+    ty: Type.TypeId,
+    layout_idx: layout.Idx,
+};
+
 const StaticInitializerEntry = struct {
     expr: Lifted.ExprId,
     ty: Type.TypeId,
@@ -536,6 +543,7 @@ const Lowerer = struct {
     mono_const_type_map: collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
+    comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
@@ -767,6 +775,7 @@ const Lowerer = struct {
             .mono_const_type_map = collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
+            .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .static_initializer_queue = .empty,
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
@@ -819,6 +828,7 @@ const Lowerer = struct {
         self.callable_source_fn_map.deinit();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
+        self.comptime_value_map.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
@@ -873,6 +883,7 @@ const Lowerer = struct {
         self.callable_source_fn_map.deinit();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
+        self.comptime_value_map.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
@@ -909,6 +920,7 @@ const Lowerer = struct {
         self.local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(self.allocator);
         self.static_initializer_queue = .empty;
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
+        self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
@@ -1524,6 +1536,8 @@ const Lowerer = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .lambda,
             .def_ref,
             .fn_def,
@@ -1643,6 +1657,8 @@ const Lowerer = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .lambda,
             .def_ref,
             .fn_def,
@@ -2786,12 +2802,12 @@ const Lowerer = struct {
     }
 
     fn bindRoots(self: *Lowerer) Common.LowerError!void {
-        for (self.roots.items) |root| {
+        for (self.roots.items, 0..) |root, request_index| {
             const entry = self.fn_entries.items[@intFromEnum(root.fn_id)];
             const proc = try self.markReachableFn(root.fn_id);
             try self.result.root_procs.append(self.allocator, proc);
             var metadata = RootMetadata.fromCheckedRoot(root.request);
-            metadata.test_plan = Common.testPlanMetadataForRoot(self.root_requests, root.request);
+            metadata.test_plan = Common.testPlanMetadataForRoot(self.root_requests, root.request, request_index);
             try self.result.root_metadata.append(self.allocator, metadata);
             if (root.request.abi == .compile_time) {
                 try self.result.const_roots.append(self.allocator, .{
@@ -2885,6 +2901,7 @@ const Lowerer = struct {
         const result_id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = proc,
+            .layout_idx = layout_idx,
         });
         try self.static_initializer_queue.append(self.allocator, .{
             .expr = candidate.runtime_expr,
@@ -3341,9 +3358,11 @@ const Lowerer = struct {
             errdefer if (captures_owned) self.allocator.free(captures);
 
             const entry_proc = try self.markReachableFn(member.target);
+            const capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst;
             entries[index] = .{
+                .on_drop = self.erasedCallableOnDrop(capture_layout),
                 .entry = entry_proc,
-                .capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst,
+                .capture_layout = capture_layout,
                 .template = try constFnTemplateFromMono(self, self.fnTemplateForFn(member.target)),
                 .captures = captures,
             };
@@ -3676,6 +3695,79 @@ const Lowerer = struct {
         return try self.lowerExprIntoAtType(ret_local, expr_id, ret_ty, ret_stmt);
     }
 
+    /// Internal failure protocol is an explicit U8 flag plus an immortal Str.
+    fn lowerInlineExpectsEnabledInto(self: *Lowerer, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .i64_literal = .{ .value = if (self.inline_expects == .run) 1 else 0, .layout_idx = self.result.store.getLocal(target).layout_idx } },
+            .next = next,
+        } });
+    }
+
+    fn createComptimeFailureMessageSlot(self: *Lowerer, root: Common.ComptimeValueRef) Common.LowerError!LIR.StaticDataId {
+        const layout_idx = try self.result.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = .u8 },
+            .{ .index = 1, .layout = .str },
+        });
+        const record_layout = self.result.layouts.getLayout(layout_idx);
+        const struct_idx = record_layout.getStruct().idx;
+        const id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
+        try self.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = layout_idx,
+            .compile_time_root = .{
+                .module = root.module,
+                .root = root.root,
+                .const_locator = null,
+                .role = .{ .failure_message = .{
+                    .failed_field = 0,
+                    .message_field = 1,
+                    .failed_offset = self.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+                    .message_offset = self.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+                } },
+            },
+        });
+        return id;
+    }
+
+    fn lowerComptimeValueInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        value: Mono.ComptimeValue,
+        ty: Type.TypeId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const layout_idx = self.result.store.getLocal(target).layout_idx;
+        const request = ComptimeValueRequest{
+            .module = value.root.module,
+            .root = value.root.root,
+            .ty = ty,
+            .layout_idx = layout_idx,
+        };
+        const id = self.comptime_value_map.get(request) orelse slot: {
+            if (self.worker_callback) return self.requireSerialWorkerRetry();
+            const failure_slot = try self.createComptimeFailureMessageSlot(value.root);
+            const id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
+            try self.result.static_data_values.append(self.allocator, .{
+                .initializer = null,
+                .layout_idx = layout_idx,
+                .compile_time_root = .{
+                    .module = value.root.module,
+                    .root = value.root.root,
+                    .const_locator = value.root.const_locator,
+                    .role = .{ .value = .{ .failure_slot = failure_slot, .plan = try self.constPlanOfType(ty) } },
+                },
+            });
+            try self.comptime_value_map.put(request, id);
+            break :slot id;
+        };
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .static_data = id },
+            .next = next,
+        } });
+    }
+
     fn lowerStaticDataCandidateInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -3684,7 +3776,7 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
-        if (self.layoutNeedsStaticData(layout_idx)) {
+        if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .value = .{ .static_data = try self.lirStaticDataFor(candidate, ty, layout_idx) },
@@ -3785,6 +3877,8 @@ const Lowerer = struct {
             .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
             .uninitialized, .uninitialized_payload => next,
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, expr_ty, next),
+            .inline_expects_enabled => try self.lowerInlineExpectsEnabledInto(target, next),
+            .comptime_value => |value| try self.lowerComptimeValueInto(target, value, expr_ty, next),
             .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(target, expr_ty, boundary, next),
             .list => |items| try self.lowerListIntoAtType(target, expr_ty, items, next),
             .tuple => |items| try self.lowerTupleIntoAtType(target, expr_ty, items, next),
@@ -3911,6 +4005,8 @@ const Lowerer = struct {
             .nominal => |backing| try self.lowerNominalInto(target, ty, backing, next),
             .let_ => |let_| try self.lowerLetIntoAtType(target, ty, let_, next),
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, ty, next),
+            .inline_expects_enabled => try self.lowerInlineExpectsEnabledInto(target, next),
+            .comptime_value => |value| try self.lowerComptimeValueInto(target, value, ty, next),
             .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(target, ty, boundary, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.segments, next),
             .call_value => |call| try self.lowerValueCallInto(target, ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
@@ -11442,6 +11538,8 @@ fn constFnTemplateFromMono(self: *Lowerer, template: Mono.FnTemplate) std.mem.Al
     errdefer self.allocator.free(evidence);
     const evidence_frames = try self.allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, lifted.const_fn_evidence_frames[template.const_evidence_frames.start..][0..template.const_evidence_frames.len]);
     return .{
+        .frozen_fn = if (template.frozen_fn) |id| @intFromEnum(id) else null,
+        .frozen_worker = template.frozen_worker,
         .fn_def = constFnDefFromMono(template.fn_def),
         .source_fn_ty = template.source_fn_ty,
         .source_fn_key = template.source_fn_key,

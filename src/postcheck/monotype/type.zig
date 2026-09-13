@@ -366,6 +366,33 @@ pub const Store = struct {
         };
     }
 
+    /// Copy an immutable type graph without changing any type or child-span id.
+    /// Cached identities are preserved; unfinished construction and traversal
+    /// scratch never cross this immutable boundary.
+    pub fn cloneFrozen(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+        if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
+        var result = Store.init(allocator);
+        errdefer result.deinit();
+        inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "constructing", "iterator_interface_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+            try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
+        }
+        var unfoldings = self.recursive_digest_unfoldings.iterator();
+        while (unfoldings.next()) |entry| {
+            try result.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        var buckets = self.full_digest_interned.iterator();
+        while (buckets.next()) |entry| {
+            var copied = std.ArrayList(TypeId).empty;
+            try copied.appendSlice(allocator, entry.value_ptr.items);
+            result.full_digest_interned.put(entry.key_ptr.*, copied) catch |err| {
+                copied.deinit(allocator);
+                return err;
+            };
+        }
+        result.freeze();
+        return result;
+    }
+
     pub fn deinit(self: *Store) void {
         self.declared_fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);

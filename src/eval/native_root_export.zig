@@ -22,12 +22,11 @@ const word_size = @sizeOf(usize);
 pub const CallableResolution = struct {
     proc: lir.LIR.LirProcSpecId,
     capture_ptr: [*]u8,
-    on_drop: ?layout.RcHelperKey,
 };
 
 pub const CallableResolver = struct {
     context: ?*anyopaque = null,
-    resolve: *const fn (?*anyopaque, [*]u8, usize) CallableResolution = missingCallableResolver,
+    resolve: *const fn (?*anyopaque, [*]u8) CallableResolution = missingCallableResolver,
 };
 
 /// The first export is the requested slot; all data-symbol relocation indices
@@ -254,8 +253,8 @@ const Builder = struct {
         }, slice.len, 1, false, null);
         if (result.fresh) @memcpy(self.bytes(result.dest, slice.len), slice);
         try self.relocate(job.dest, result.dest);
-        self.writeWord(job.dest.offsetBy(word_size), slice.len);
-        self.writeWord(job.dest.offsetBy(2 * word_size), builtins.str.RocStr.encodeCapacity(slice.len));
+        self.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(slice.len));
+        self.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
     }
 
     fn list(self: *Builder, job: Job, element: Program.ConstPlanId) Allocator.Error!void {
@@ -331,7 +330,7 @@ const Builder = struct {
     fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId) Allocator.Error!void {
         const address = job.source.read(usize);
         if (address == 0) invariant("native erased callable had a null payload");
-        const resolved = self.callables.resolve(self.callables.context, @ptrFromInt(address), (Value{ .ptr = @ptrFromInt(address + word_size) }).read(usize));
+        const resolved = self.callables.resolve(self.callables.context, @ptrFromInt(address));
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         for (set.entries) |entry| {
             if (entry.entry != resolved.proc) continue;
@@ -352,7 +351,12 @@ const Builder = struct {
                 .callable_capture_offset = builtins.erased_callable.capture_offset,
                 .procedure = resolved.proc,
             });
-            if (resolved.on_drop) |helper| {
+            const on_drop: ?layout.RcHelperKey = switch (entry.on_drop) {
+                .none => null,
+                .rc_helper => |helper| helper,
+                .boxy_capture, .interpreter_context_drop => invariant("frozen callable lacks durable producer drop authority"),
+            };
+            if (on_drop) |helper| {
                 try self.node(result.dest).relocations.append(self.allocator, .{
                     .offset = result.dest.offset + word_size,
                     .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, helper),
@@ -415,7 +419,7 @@ const Builder = struct {
     }
 };
 
-fn missingCallableResolver(_: ?*anyopaque, _: [*]u8, _: usize) CallableResolution {
+fn missingCallableResolver(_: ?*anyopaque, _: [*]u8) CallableResolution {
     invariant("native root exporter requires explicit erased callable identities");
 }
 
@@ -479,6 +483,10 @@ test "native root export owns list strings and preserves shared typed pointers" 
     const count_header = elements.bytes[@intCast(elements_relocation.addend - 2 * word_size)..][0..word_size];
     try std.testing.expectEqual(@as(usize, 2), std.mem.readInt(usize, count_header[0..word_size], .little));
     try std.testing.expectEqual(elements.relocations[0].target.data_symbol, elements.relocations[1].target.data_symbol);
+    const first_string_offset: usize = @intCast(elements_relocation.addend);
+    const frozen_string = std.mem.bytesAsValue(builtins.str.RocStr, elements.bytes[first_string_offset..][0..@sizeOf(builtins.str.RocStr)]).*;
+    try std.testing.expectEqual(text.len, frozen_string.length);
+    try std.testing.expectEqual(builtins.str.RocStr.encodeCapacity(text.len), frozen_string.capacity_or_alloc_ptr);
     const string_relocation = elements.relocations[0];
     const string_bytes = exports[@intFromEnum(string_relocation.target.data_symbol)];
     try std.testing.expectEqualStrings(text, string_bytes.bytes[@intCast(string_relocation.addend)..]);
@@ -504,7 +512,9 @@ test "native root export removes seamless-slice native pointers" {
     const root = exports[0];
     try std.testing.expectEqual(@as(usize, 1), root.relocations.len);
     try std.testing.expectEqual(@as(usize, 0), std.mem.readInt(usize, root.bytes[0..word_size], .little));
-    try std.testing.expectEqual(builtins.str.RocStr.encodeCapacity(expected.len), std.mem.readInt(usize, root.bytes[2 * word_size ..][0..word_size], .little));
+    const frozen_string = std.mem.bytesAsValue(builtins.str.RocStr, root.bytes[0..@sizeOf(builtins.str.RocStr)]).*;
+    try std.testing.expectEqual(expected.len, frozen_string.length);
+    try std.testing.expectEqual(builtins.str.RocStr.encodeCapacity(expected.len), frozen_string.capacity_or_alloc_ptr);
     const relocation = root.relocations[0];
     const bytes_ = exports[@intFromEnum(relocation.target.data_symbol)].bytes;
     try std.testing.expectEqualStrings(expected, bytes_[@intCast(relocation.addend)..]);
@@ -596,7 +606,7 @@ test "native root export preserves erased callable procedure and drop helper ide
     try program.const_plans.append(allocator, .str);
     try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(0) });
     const captures = try allocator.dupe(Program.CaptureSlot, &.{testCapture(str_plan, .value)});
-    const entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = proc, .capture_layout = .str, .template = testTemplate(), .captures = captures }});
+    const entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = proc, .capture_layout = .str, .template = testTemplate(), .captures = captures, .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = .str } } }});
     try program.erased_fns.append(allocator, .{ .layout = fn_layout, .entries = entries });
     const text = "an erased callable retains this exact native capture";
     var str = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
@@ -608,11 +618,10 @@ test "native root export preserves erased callable procedure and drop helper ide
     const Resolver = struct {
         proc: lir.LIR.LirProcSpecId,
         payload: [*]u8,
-        fn resolve(context: ?*anyopaque, data_ptr: [*]u8, on_drop: usize) CallableResolution {
+        fn resolve(context: ?*anyopaque, data_ptr: [*]u8) CallableResolution {
             const self: *@This() = @ptrCast(@alignCast(context.?));
             std.debug.assert(data_ptr == self.payload);
-            std.debug.assert(on_drop == 0x2222);
-            return .{ .proc = self.proc, .capture_ptr = data_ptr + builtins.erased_callable.capture_offset, .on_drop = .{ .op = .decref, .layout_idx = .str } };
+            return .{ .proc = self.proc, .capture_ptr = data_ptr + builtins.erased_callable.capture_offset };
         }
     };
     var resolver = Resolver{ .proc = proc, .payload = &payload };
