@@ -1253,17 +1253,17 @@ fn testInst(cg: *LinuxCodeGen, loc: usize) u32 {
     return std.mem.readInt(u32, cg.getCode()[loc..][0..4], .little);
 }
 
-fn testPad(cg: *LinuxCodeGen, bytes: usize) !void {
+fn testPad(cg: *LinuxCodeGen, bytes: usize) Allocator.Error!void {
     try cg.emit.buf.appendNTimes(cg.allocator, 0, bytes);
 }
 
-fn expectDirectBranch(comptime opcode: u6, inst: u32, from: usize, to: usize) !void {
+fn expectDirectBranch(comptime opcode: u6, inst: u32, from: usize, to: usize) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(@as(u6, opcode), @as(u6, @truncate(inst >> 26)));
     const words: i64 = @divExact(@as(i64, @intCast(to)) - @as(i64, @intCast(from)), 4);
     try std.testing.expectEqual(@as(u26, @bitCast(@as(i26, @intCast(words)))), @as(u26, @truncate(inst)));
 }
 
-fn expectVeneer(cg: *LinuxCodeGen, veneer: usize, target: usize) !void {
+fn expectVeneer(cg: *LinuxCodeGen, veneer: usize, target: usize) error{TestExpectedEqual}!void {
     const parts = LinuxCodeGen.pcRelParts(veneer, target);
     try std.testing.expectEqual(TestEmit.encodeAdrZero(.IP0), testInst(cg, veneer));
     try std.testing.expectEqual(TestEmit.encodeMovz64(.IP1, parts.lo16, 0), testInst(cg, veneer + 4));
@@ -1274,7 +1274,7 @@ fn expectVeneer(cg: *LinuxCodeGen, veneer: usize, target: usize) !void {
 
 /// Prepend `prologue_bytes` zero bytes in front of the body at the end of the
 /// buffer, the way deferred prologue emission moves a finished body.
-fn testPrependPrologue(cg: *LinuxCodeGen, body_start: usize, prologue_bytes: usize) !void {
+fn testPrependPrologue(cg: *LinuxCodeGen, body_start: usize, prologue_bytes: usize) Allocator.Error!void {
     const body = try std.testing.allocator.dupe(u8, cg.getCode()[body_start..]);
     defer std.testing.allocator.free(body);
     const body_end = cg.currentOffset();
@@ -1466,7 +1466,7 @@ const TestDataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const adrp_ip0_zero_inst: u32 = 0x90000010;
 const add_ip0_ip0_zero_inst: u32 = 0x91000210;
 
-fn expectExternStub(cg: *LinuxCodeGen, call: usize, stub: usize, reloc_index: usize) !void {
+fn expectExternStub(cg: *LinuxCodeGen, call: usize, stub: usize, reloc_index: usize) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     try expectDirectBranch(0b100101, testInst(cg, call), call, stub);
     try std.testing.expectEqual(adrp_ip0_zero_inst, testInst(cg, stub));
     try std.testing.expectEqual(add_ip0_ip0_zero_inst, testInst(cg, stub + 4));

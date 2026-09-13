@@ -3203,7 +3203,7 @@ test "multi-use block helper with statements is not inlined" {
     , "helper", false);
 }
 
-fn appendWideHelper(source: *std.ArrayList(u8), name: []const u8, elements: usize) !void {
+fn appendWideHelper(source: *std.ArrayList(u8), name: []const u8, elements: usize) (Allocator.Error || error{NoSpaceLeft})!void {
     const allocator = std.testing.allocator;
     // The binding keeps the body out of the wrapper rule, which admits a
     // call-through body of any size; only single-use bodies are budgeted.
@@ -3218,7 +3218,7 @@ fn appendWideHelper(source: *std.ArrayList(u8), name: []const u8, elements: usiz
     try source.appendSlice(allocator, "])\n}\n\n");
 }
 
-fn appendWideWrapper(source: *std.ArrayList(u8), name: []const u8, elements: usize) !void {
+fn appendWideWrapper(source: *std.ArrayList(u8), name: []const u8, elements: usize) (Allocator.Error || error{NoSpaceLeft})!void {
     const allocator = std.testing.allocator;
     const header = try std.fmt.allocPrint(allocator, "{s} : U64 -> U64\n{s} = |x| target(x, [", .{ name, name });
     defer allocator.free(header);

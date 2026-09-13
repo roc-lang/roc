@@ -678,14 +678,30 @@ pub const InvalidLocalReason = enum(u8) {
 /// Render the message for a failed invariant check into `buffer`. The
 /// values arrive as integers from generated code; one outside its enum
 /// is reported as such rather than trusted.
-pub fn formatInvalidLocal(buffer: []u8, kind: u8, reason: u8, local: u32, proc: u64, stmt: u32) []const u8 {
+pub fn formatInvalidLocal(buffer: *[192]u8, kind: u8, reason: u8, local: u32, proc: u64, stmt: u32) []const u8 {
     const kind_name: []const u8 = if (std.enums.fromInt(InvalidLocalKind, kind)) |k| @tagName(k) else "unknown";
     const received: []const u8 = if (std.enums.fromInt(InvalidLocalReason, reason)) |r| r.describe() else "an invalid value (unknown reason)";
-    return std.fmt.bufPrint(
-        buffer,
-        "LIR/codegen invariant violated: {s} local {d} received {s} at proc {d} stmt {d}",
-        .{ kind_name, local, received, proc, stmt },
-    ) catch buffer;
+    var local_buffer: [10]u8 = undefined;
+    var proc_buffer: [20]u8 = undefined;
+    var stmt_buffer: [10]u8 = undefined;
+    const parts = [_][]const u8{
+        "LIR/codegen invariant violated: ",
+        kind_name,
+        " local ",
+        unsignedIntToStr(u32, &local_buffer, local),
+        " received ",
+        received,
+        " at proc ",
+        unsignedIntToStr(u64, &proc_buffer, proc),
+        " stmt ",
+        unsignedIntToStr(u32, &stmt_buffer, stmt),
+    };
+    var len: usize = 0;
+    for (parts) |part| {
+        @memcpy(buffer[len..][0..part.len], part);
+        len += part.len;
+    }
+    return buffer[0..len];
 }
 
 /// Report a failed dev-backend Debug invariant check on a local. Generated
@@ -709,6 +725,18 @@ test "formatInvalidLocal renders the check identity and reason" {
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: unknown local 1 received an invalid value (unknown reason) at proc 2 stmt 3",
         formatInvalidLocal(&buffer, 200, 200, 1, 2, 3),
+    );
+}
+
+test "formatInvalidLocal fits maximum identifiers and the longest reason" {
+    var buffer: [192]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "LIR/codegen invariant violated: unknown local 4294967295 received an invalid RocStr (misaligned allocation pointer) at proc 18446744073709551615 stmt 4294967295",
+        formatInvalidLocal(&buffer, 200, @intFromEnum(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u32)),
+    );
+    try std.testing.expectEqualStrings(
+        "LIR/codegen invariant violated: str local 0 received an invalid RocStr (null bytes pointer) at proc 0 stmt 0",
+        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 0, 0, 0),
     );
 }
 
