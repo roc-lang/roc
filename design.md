@@ -8052,17 +8052,20 @@ During active Monotype specialization, unresolved checked variables and row
 extensions remain instantiation graph nodes. They are not represented by
 durable Monotype `TypeId`s.
 
-Open draft specialization indexes retain permanent interface node ids. A lookup
-visits each current union-find class once and probes all its permanent members;
-repeated argument or return positions do not repeat those probes. Candidate
-inspection does not merge existing classes during this scan. Its visited set
-is local to the scan and uses pooled scratch, so a later lookup observes any
-intervening unions. Evidence, capture, and exact interface checks still decide
-whether a candidate may be reused. Probe work is proportional to interface
-positions plus the members of distinct classes, even when many positions share
-one class. The index interns the exact family and evidence-digest prefix once
-per request, using an append-only index-local ID in each interface key. Growing
-the index during recursive lowering does not invalidate those IDs. Request
+Open draft specialization indexes retain permanent interface node ids. Template
+lookup collects the request's distinct interface classes once, then tests only
+the permanent-node/candidate pairs registered under its exact family/evidence
+prefix against those classes. A prefix with no open registrations skips this
+probe entirely. Later unions require no rekeying: class equality is tested at
+lookup time. Resolved template lookup also indexes candidates by the explicit
+procedure template reference, preserving reuse through different checked roots
+without scanning unrelated templates. Nested lookup visits each current
+interface class once and probes its permanent members. Candidate inspection
+does not merge classes, and evidence, capture, recursive-edge, and exact
+interface checks remain authoritative. The index interns the exact family and
+evidence-digest prefix once per request, using an append-only index-local ID in
+each interface key. Growing the index during recursive lowering does not
+invalidate those IDs. Request
 kinds remain disjoint, and interning a prefix does not replace exact candidate
 validation. Permanent-node requests use the prefix ID and node ID directly in
 a separate index; only structural type and open-shape requests carry digests.
