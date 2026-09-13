@@ -3487,25 +3487,33 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     };
     defer lowered.deinit();
     const result = &lowered.lir_result;
+    var checked_roots = std.ArrayList(checked.CompileTimeRoot).empty;
+    defer checked_roots.deinit(allocator);
+    const root_id: checked.ComptimeRootId = @enumFromInt(checked_roots.items.len);
+    // This execution fixture consumes only root identity, never checked syntax.
+    try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .pending });
     const failure_layout = try result.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = result.layouts.getLayout(failure_layout).getStruct().idx;
     const failed_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+    const failure_slot: lir.LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = failure_layout,
-        .compile_time_root = .{ .module = .{}, .root = @enumFromInt(0), .const_locator = null, .role = .{ .failure_message = .{
+        .compile_time_root = .{ .module = .{}, .root = root_id, .const_locator = null, .role = .{ .failure_message = .{
             .failed_field = 0,
             .message_field = 1,
             .failed_offset = failed_offset,
             .message_offset = message_offset,
         } } },
     });
+    const value_plan: LirProgram.ConstPlanId = @enumFromInt(result.const_plans.items.len);
     try result.const_plans.append(allocator, .str);
+    const value_slot: lir.LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = .str,
-        .compile_time_root = .{ .module = .{}, .root = @enumFromInt(0), .const_locator = null, .role = .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = @enumFromInt(0) } } },
+        .compile_time_root = .{ .module = .{}, .root = root_id, .const_locator = null, .role = .{ .value = .{ .failure_slot = failure_slot, .plan = value_plan } } },
     });
     const text = "a dependent root borrows this frozen string after its producer is dropped";
     const source_local = try result.store.addLocal(.{ .layout_idx = .str });
@@ -3532,7 +3540,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const int_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_int, .op = .num_is_eq, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ live_int, expected_int }), .next = int_branch } });
     const expected_float_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_float, .value = .{ .f64_literal = 13.25 }, .next = int_compare } });
     const expected_int_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_int, .value = .{ .i64_literal = .{ .value = 12345, .layout_idx = .u64 } }, .next = expected_float_stmt } });
-    const consumer_load = try result.store.addCFStmt(.{ .assign_literal = .{ .target = consumer_local, .value = .{ .static_data = @enumFromInt(1) }, .next = expected_int_stmt } });
+    const consumer_load = try result.store.addCFStmt(.{ .assign_literal = .{ .target = consumer_local, .value = .{ .static_data = value_slot }, .next = expected_int_stmt } });
     const input_int = try result.store.addLocal(.{ .layout_idx = .u64 });
     const addend_int = try result.store.addLocal(.{ .layout_idx = .u64 });
     const input_float = try result.store.addLocal(.{ .layout_idx = .f64 });
@@ -3550,13 +3558,13 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const zeros = try allocator.alloc(u8, failure_size);
     defer allocator.free(zeros);
     @memset(zeros, 0);
-    const failure_name = try LirProgram.staticDataSymbolName(allocator, @enumFromInt(0));
+    const failure_name = try LirProgram.staticDataSymbolName(allocator, failure_slot);
     defer allocator.free(failure_name);
-    const value_name = try LirProgram.staticDataSymbolName(allocator, @enumFromInt(1));
+    const value_name = try LirProgram.staticDataSymbolName(allocator, value_slot);
     defer allocator.free(value_name);
     const materialized = try static_data_exports.cloneStaticData(allocator, &.{
-        .{ .symbol_name = failure_name, .value_id = @enumFromInt(0), .bytes = zeros, .alignment = @alignOf(usize) },
-        .{ .symbol_name = value_name, .value_id = @enumFromInt(1), .bytes = zeros[0..@sizeOf(builtins.str.RocStr)], .alignment = @alignOf(usize) },
+        .{ .symbol_name = failure_name, .value_id = failure_slot, .bytes = zeros, .alignment = @alignOf(usize) },
+        .{ .symbol_name = value_name, .value_id = value_slot, .bytes = zeros[0..@sizeOf(builtins.str.RocStr)], .alignment = @alignOf(usize) },
     });
     var image = try backend.StaticDataImage.init(allocator, materialized);
     const addresses = try image.lirValueAddresses(allocator, 2);
@@ -3579,6 +3587,8 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
             owner: *InterpreterProgram,
             lowered: *lir.CheckedPipeline.LoweredProgram,
             proc: lir.LIR.LirProcSpecId,
+            root_id: checked.ComptimeRootId,
+            value_plan: LirProgram.ConstPlanId,
             failure: ?[]const u8,
             cycle: bool,
             evaluations: usize = 0,
@@ -3591,29 +3601,29 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                 const child = try self.owner.fork(self.lowered);
                 defer child.deinit();
                 if (self.failure) |message| {
-                    child.slotEnvironment().publishFailureOrigin(self.lowered, .{}, @enumFromInt(0), .{
+                    child.slotEnvironment().publishFailureOrigin(self.lowered, .{}, self.root_id, .{
                         .loc = .{ .file = 0, .line = 7, .column = 3 },
                         .region = base.Region.from_raw_offsets(40, 51),
                     });
-                    try child.slotEnvironment().publishFailure(self.lowered, .{}, @enumFromInt(0), message, .{ .resolve = InterpreterProgram.resolveFunction });
+                    try child.slotEnvironment().publishFailure(self.lowered, .{}, self.root_id, message, .{ .resolve = InterpreterProgram.resolveFunction });
                 } else {
                     const value = child.interpreter.eval(.{ .proc_id = self.proc, .ret_layout = .str }) catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         else => unreachable,
                     };
                     defer child.interpreter.dropValue(value.value, .str);
-                    try child.publishRoot(self.lowered, .{}, @enumFromInt(0), .{
+                    try child.publishRoot(self.lowered, .{}, self.root_id, .{
                         .root_order = 0,
                         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                         .proc = self.proc,
                         .ret_layout = .str,
                         .ret_type = undefined,
-                        .plan = @enumFromInt(0),
+                        .plan = self.value_plan,
                     }, value.value);
                 }
             }
         };
-        var demand = Demand{ .owner = owner, .lowered = &lowered, .proc = source_proc, .failure = failure_message, .cycle = cycle };
+        var demand = Demand{ .owner = owner, .lowered = &lowered, .proc = source_proc, .root_id = root_id, .value_plan = value_plan, .failure = failure_message, .cycle = cycle };
         owner.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };
         const consumer = try owner.fork(&lowered);
         defer consumer.deinit();
@@ -3634,11 +3644,11 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         }
         try std.testing.expectEqual(@as(usize, 1), demand.evaluations);
         if (failure_message == null and comptime backend.host_lir_codegen_available)
-            try testNativeSlotDemand(&lowered, &owner.slots, source_proc, consumer_proc, text);
+            try testNativeSlotDemand(&lowered, &owner.slots, source_proc, consumer_proc, text, root_id, value_plan);
         return;
     }
     if (failure_message) |message| {
-        try owner.slots.publishFailure(&lowered, .{}, @enumFromInt(0), message, .{ .resolve = InterpreterProgram.resolveFunction });
+        try owner.slots.publishFailure(&lowered, .{}, root_id, message, .{ .resolve = InterpreterProgram.resolveFunction });
         const bytes: [*]const u8 = @ptrFromInt(addresses[0]);
         try std.testing.expectEqual(@as(u8, 1), bytes[failed_offset]);
         const stored: *const builtins.str.RocStr = @ptrCast(@alignCast(bytes + message_offset));
@@ -3647,13 +3657,13 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         try std.testing.expectEqualStrings(message, owner.interpreter.getCrashMessage().?);
     } else {
         const value = try owner.interpreter.eval(.{ .proc_id = source_proc, .ret_layout = .str });
-        try owner.publishRoot(&lowered, .{}, @enumFromInt(0), .{
+        try owner.publishRoot(&lowered, .{}, root_id, .{
             .root_order = 0,
             .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
             .proc = source_proc,
             .ret_layout = .str,
             .ret_type = undefined,
-            .plan = @enumFromInt(0),
+            .plan = value_plan,
         }, value.value);
         owner.interpreter.dropValue(value.value, .str);
         const dependent = try owner.interpreter.eval(.{ .proc_id = consumer_proc, .ret_layout = .str });
@@ -3665,7 +3675,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     }
 }
 
-fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8, root_id: checked.ComptimeRootId, value_plan: LirProgram.ConstPlanId) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const allocator = std.testing.allocator;
     var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
@@ -3692,6 +3702,8 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
         slots: *StaticSlotEnvironment,
         source_offset: usize,
         producer: lir.LIR.LirProcSpecId,
+        root_id: checked.ComptimeRootId,
+        value_plan: LirProgram.ConstPlanId,
         evaluations: usize = 0,
 
         fn ensure(raw: *anyopaque, _: lir.LIR.StaticDataId) SlotDemand.Error!void {
@@ -3705,17 +3717,17 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
             if (boundary.set() == 0) self.executable.callRocABIAt(self.source_offset, @ptrCast(child.ops()), @ptrCast(&bytes), null);
             boundary.deinit();
             if (child.termination != .returned) return error.Unexpected;
-            try self.slots.publishRoot(self.lowered, .{}, @enumFromInt(0), .{
+            try self.slots.publishRoot(self.lowered, .{}, self.root_id, .{
                 .root_order = 0,
                 .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                 .proc = self.producer,
                 .ret_layout = .str,
                 .ret_type = undefined,
-                .plan = @enumFromInt(0),
+                .plan = self.value_plan,
             }, .{ .ptr = &bytes }, .{}, .{ .resolve = InterpreterProgram.resolveFunction });
         }
     };
-    var demand = Demand{ .executable = &executable, .lowered = lowered, .slots = slots, .source_offset = source_entry.offset, .producer = producer };
+    var demand = Demand{ .executable = &executable, .lowered = lowered, .slots = slots, .source_offset = source_entry.offset, .producer = producer, .root_id = root_id, .value_plan = value_plan };
     var host = CompileTimeHost.init(allocator);
     defer host.deinit();
     host.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };
@@ -3732,11 +3744,14 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
     try std.testing.expectEqual(@as(usize, 1), demand.evaluations);
 }
 
+// Runtime-only fixture: checked syntax/type/template fields are never consumed;
+// their undefined values distinguish them from the explicit runtime IDs below.
 test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const allocator = std.testing.allocator;
     var program = try LirProgram.Result.init(allocator, .native);
     defer program.deinit();
     const erased_layout = try program.layouts.insertErasedCallable();
+    const closure_slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = erased_layout });
     const capture_arg = try program.store.addLocal(.{ .layout_idx = .opaque_ptr });
     const reuse_arg = try program.store.addLocal(.{ .layout_idx = erased_layout });
@@ -3759,11 +3774,14 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const call_result = try program.store.addLocal(.{ .layout_idx = .bool });
     const caller_ret = try program.store.addCFStmt(.{ .ret = .{ .value = call_result } });
     const call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = call_result, .closure = closure, .args = .empty(), .arg_plan = arg_plan, .next = caller_ret } });
-    const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = @enumFromInt(0) }, .next = call } });
+    const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = closure_slot }, .next = call } });
     const caller = try program.store.addProcSpec(.{ .name = .fromRaw(56), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ closure, call_result }), .body = caller_body, .ret_layout = .bool });
-    try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(0) });
+    const closure_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const erased_set: LirProgram.ErasedFnsId = @enumFromInt(program.erased_fns.items.len);
+    try program.const_plans.append(allocator, .{ .erased_fn = erased_set });
+    const capture_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .str);
-    const captures = try allocator.dupe(LirProgram.CaptureSlot, &.{.{ .id = undefined, .slot = 0, .ty = undefined, .plan = @enumFromInt(1), .storage = .value }});
+    const captures = try allocator.dupe(LirProgram.CaptureSlot, &.{.{ .id = undefined, .slot = 0, .ty = undefined, .plan = capture_plan, .storage = .value }});
     const entries = try allocator.dupe(LirProgram.ErasedFn, &.{.{
         .entry = worker,
         .capture_layout = .str,
@@ -3772,7 +3790,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = .str } },
     }});
     try program.erased_fns.append(allocator, .{ .layout = erased_layout, .entries = entries });
-    const slot_name = try LirProgram.staticDataSymbolName(allocator, @enumFromInt(0));
+    const slot_name = try LirProgram.staticDataSymbolName(allocator, closure_slot);
     defer allocator.free(slot_name);
     const proc_name = try static_data_exports.procSymbolName(allocator, program.store.getProcSpec(worker).name);
     defer allocator.free(proc_name);
@@ -3783,7 +3801,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, .{ .op = .decref, .layout_idx = .str });
     defer allocator.free(drop_name);
     const exports = try static_data_exports.cloneStaticData(allocator, &.{
-        .{ .symbol_name = slot_name, .value_id = @enumFromInt(0), .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 * word }} },
+        .{ .symbol_name = slot_name, .value_id = closure_slot, .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 * word }} },
         .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = worker, .callable_capture_offset = builtins.erased_callable.capture_offset }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } } } },
     });
     defer static_data_exports.deinitStaticData(allocator, exports);
@@ -3811,13 +3829,13 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
             return .{ .proc = value.proc, .capture_ptr = value.capture_ptr };
         }
     };
-    const copied = try NativeRootExport.freezeRoot(allocator, &program, @enumFromInt(0), .{
+    const copied = try NativeRootExport.freezeRoot(allocator, &program, closure_slot, .{
         .root_order = 0,
         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
         .proc = caller,
         .ret_layout = erased_layout,
         .ret_type = undefined,
-        .plan = @enumFromInt(0),
+        .plan = closure_plan,
     }, root_value, .{ .context = &interpreter, .resolve = Resolver.resolve });
     defer static_data_exports.deinitStaticData(allocator, copied);
     var copied_data = try StaticInterpreterData.init(allocator, copied, 1);
@@ -3859,22 +3877,23 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     }
     // Exercise the inspected-run ownership path with procedure and drop-helper
     // relocations, then return a separate frozen string through its Str ABI.
+    const result_slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
     const inspected_closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const inspected_bool = try program.store.addLocal(.{ .layout_idx = .bool });
     const inspected_str = try program.store.addLocal(.{ .layout_idx = .str });
     const inspected_ret = try program.store.addCFStmt(.{ .ret = .{ .value = inspected_str } });
-    const inspected_load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_str, .value = .{ .static_data = @enumFromInt(1) }, .next = inspected_ret } });
+    const inspected_load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_str, .value = .{ .static_data = result_slot }, .next = inspected_ret } });
     const inspected_call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = inspected_bool, .closure = inspected_closure, .args = .empty(), .arg_plan = arg_plan, .next = inspected_load } });
-    const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = @enumFromInt(0) }, .next = inspected_call } });
+    const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = closure_slot }, .next = inspected_call } });
     const inspected_root = try program.store.addProcSpec(.{ .name = .fromRaw(57), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ inspected_closure, inspected_bool, inspected_str }), .body = inspected_body, .ret_layout = .str });
-    const result_name = try LirProgram.staticDataSymbolName(allocator, @enumFromInt(1));
+    const result_name = try LirProgram.staticDataSymbolName(allocator, result_slot);
     defer allocator.free(result_name);
     const result_str = builtins.str.RocStr.fromSliceSmall("relocated");
     const inspected_exports = try allocator.alloc(LirProgram.StaticDataExport, copied.len + 1);
     defer allocator.free(inspected_exports);
     @memcpy(inspected_exports[0..copied.len], copied);
-    inspected_exports[copied.len] = .{ .symbol_name = result_name, .value_id = @enumFromInt(1), .bytes = std.mem.asBytes(&result_str), .alignment = @alignOf(usize), .relocations = &.{} };
+    inspected_exports[copied.len] = .{ .symbol_name = result_name, .value_id = result_slot, .bytes = std.mem.asBytes(&result_str), .alignment = @alignOf(usize), .relocations = &.{} };
     const InspectedRun = @import("inspected_run.zig");
     inline for (.{ InspectedRun.Backend.interpreter, .dev, .llvm }) |kind| {
         if (comptime kind == .dev and !backend.host_lir_codegen_available) continue;
@@ -3897,19 +3916,20 @@ test "inspected runners consume frozen string slots on every backend" {
         const width: base.target.TargetUsize = if (kind == .wasm) .u32 else .native;
         var program = try LirProgram.Result.init(allocator, width);
         defer program.deinit();
+        const slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
         try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
         const value = try program.store.addLocal(.{ .layout_idx = .str });
         const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } });
-        const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @enumFromInt(0) }, .next = ret } });
+        const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = slot }, .next = ret } });
         const root = try program.store.addProcSpec(.{ .name = .fromRaw(101), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{value}), .body = body, .ret_layout = .str });
-        const name = try LirProgram.staticDataSymbolName(allocator, @enumFromInt(0));
+        const name = try LirProgram.staticDataSymbolName(allocator, slot);
         defer allocator.free(name);
         const bytes = try allocator.alloc(u8, 3 * width.size());
         defer allocator.free(bytes);
         @memset(bytes, 0);
         @memcpy(bytes[0..6], "frozen");
         bytes[bytes.len - 1] = 0x80 | 6;
-        const exports = [_]LirProgram.StaticDataExport{.{ .symbol_name = name, .value_id = @enumFromInt(0), .bytes = bytes, .alignment = width.size(), .relocations = &.{} }};
+        const exports = [_]LirProgram.StaticDataExport{.{ .symbol_name = name, .value_id = slot, .bytes = bytes, .alignment = width.size(), .relocations = &.{} }};
         const result = try InspectedRun.run(allocator, kind, .{ .store = &program.store, .layouts = &program.layouts, .main_proc = root, .static_data = &exports, .static_data_value_count = 1 }, if (kind == .interpreter) .reject else {});
         defer result.deinit(allocator);
         try std.testing.expect(result.outcome == .returned);

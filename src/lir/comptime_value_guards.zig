@@ -129,12 +129,13 @@ test "shared compile-time failure guards preserve exact success and shared frame
     defer program.deinit();
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
+    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     try program.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = record_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = @enumFromInt(0),
+            .root = undefined, // Guard insertion reads slot roles, never checked-root identities.
             .const_locator = null,
             .role = .{ .failure_message = .{
                 .failed_field = 0,
@@ -144,12 +145,18 @@ test "shared compile-time failure guards preserve exact success and shared frame
             } },
         },
     });
-    const slot: LIR.StaticDataId = @enumFromInt(1);
+    const slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .scalar);
     try program.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = .u8,
-        .compile_time_root = .{ .module = .{}, .root = @enumFromInt(0), .const_locator = null, .role = .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = @enumFromInt(0) } } },
+        .compile_time_root = .{
+            .module = .{},
+            .root = undefined, // Guard insertion reads slot roles, never checked-root identities.
+            .const_locator = null,
+            .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
+        },
     });
     const target = try program.store.addLocal(.{ .layout_idx = .u8 });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } });

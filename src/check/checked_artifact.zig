@@ -38207,21 +38207,23 @@ test "issue 11128 source scheme publication hashes each source root once" {
 
 test "compile-time debug store validates root identities and message ranges" {
     const allocator = std.testing.allocator;
-    var observations = try CompileTimeDebugStore.init(allocator, &.{
-        .{ .root = @enumFromInt(0), .message = "first" },
-        .{ .root = @enumFromInt(1), .message = "second" },
-    });
+    const messages = [_][]const u8{ "first", "second" };
+    var inputs: [messages.len]CompileTimeDebugStore.Input = undefined;
+    for (messages, &inputs, 0..) |message, *input, index| {
+        input.* = .{ .root = @enumFromInt(index), .message = message };
+    }
+    var observations = try CompileTimeDebugStore.init(allocator, &inputs);
     defer observations.deinit(allocator);
     try observations.validate(2);
     try std.testing.expectEqualStrings("second", observations.message(observations.entries[1]));
     try std.testing.expectError(error.CorruptArtifact, observations.validate(1));
     const malformed: CompileTimeDebugStore = .{
-        .entries = &.{.{ .root = @enumFromInt(0), .message_start = 2, .message_len = std.math.maxInt(u32) }},
+        .entries = &.{.{ .root = observations.entries[0].root, .message_start = 2, .message_len = std.math.maxInt(u32) }},
         .bytes = "abc",
     };
     try std.testing.expectError(error.CorruptArtifact, malformed.validate(1));
     const outside: CompileTimeDebugStore = .{
-        .entries = &.{.{ .root = @enumFromInt(0), .message_start = 4, .message_len = 0 }},
+        .entries = &.{.{ .root = observations.entries[0].root, .message_start = 4, .message_len = 0 }},
         .bytes = "abc",
     };
     try std.testing.expectError(error.CorruptArtifact, outside.validate(1));

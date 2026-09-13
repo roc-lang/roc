@@ -429,6 +429,13 @@ fn invariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
+fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {
+    const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = idx });
+    return id;
+}
+
+// Exporting consumes only the root plan/layout; request and solved-type metadata are not read.
 fn testRoot(plan: Program.ConstPlanId, ret_layout: layout.Idx) Program.ConstRootPlan {
     return .{
         .root_order = 0,
@@ -452,9 +459,9 @@ test "native root export owns list strings and preserves shared typed pointers" 
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const str_plan: Program.ConstPlanId = @enumFromInt(0);
-    const list_plan: Program.ConstPlanId = @enumFromInt(1);
+    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .str);
+    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .{ .list = str_plan });
     const list_layout = try program.layouts.insertList(.str);
     const text = "a native compile-time string exceeding inline capacity";
@@ -471,7 +478,7 @@ test "native root export owns list strings and preserves shared typed pointers" 
         .length = items.len,
         .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(items.len),
     };
-    const slot: lir.LIR.StaticDataId = @enumFromInt(7);
+    const slot = try testSlot(&program, list_layout);
     const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     @memset(backing, 'x');
@@ -499,7 +506,7 @@ test "native root export removes seamless-slice native pointers" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const plan: Program.ConstPlanId = @enumFromInt(0);
+    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .str);
     var backing = "prefix:the native slice is longer than the inline string representation:suffix".*;
     const expected = backing[7 .. backing.len - 7];
@@ -508,7 +515,7 @@ test "native root export removes seamless-slice native pointers" {
         .length = expected.len,
         .capacity_or_alloc_ptr = builtins.str.RocStr.encodeSliceAllocationPtr(&backing),
     };
-    const exports = try freezeRoot(allocator, &program, @enumFromInt(0), testRoot(plan, .str), .{ .ptr = @ptrCast(&str) }, .{});
+    const exports = try freezeRoot(allocator, &program, try testSlot(&program, .str), testRoot(plan, .str), .{ .ptr = @ptrCast(&str) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     const root = exports[0];
     try std.testing.expectEqual(@as(usize, 1), root.relocations.len);
@@ -521,10 +528,12 @@ test "native root export removes seamless-slice native pointers" {
     try std.testing.expectEqualStrings(expected, bytes_[@intCast(relocation.addend)..]);
 }
 
+// Native graph export does not inspect the source template/type metadata.
 fn testTemplate() Program.FnTemplate {
     return .{ .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
 }
 
+// Only slot, plan and storage are read by these synthetic capture export tests.
 fn testCapture(plan: Program.ConstPlanId, storage: Program.CaptureSlotStorage) Program.CaptureSlot {
     return .{ .id = undefined, .slot = 0, .ty = undefined, .plan = plan, .storage = storage };
 }
@@ -533,8 +542,8 @@ test "native root export closes recursive finite callable capture graphs" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const plan: Program.ConstPlanId = @enumFromInt(0);
-    const set: Program.FnSetId = @enumFromInt(0);
+    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const set: Program.FnSetId = @enumFromInt(program.fn_sets.items.len);
     try program.const_plans.append(allocator, .{ .fn_value = set });
     // A recursive function captures itself through the producer's recursive_box
     // capture slot. The tag payload is that box, with no explicit discriminant.
@@ -543,17 +552,19 @@ test "native root export closes recursive finite callable capture graphs" {
     program.layouts.updateLayout(box_layout, layout.Layout.box(fn_layout));
     const captures = try allocator.dupe(Program.CaptureSlot, &.{testCapture(plan, .recursive_box)});
     const variants = try allocator.dupe(Program.FnVariant, &.{.{
-        .id = @enumFromInt(0),
+        .id = undefined,
         .discriminant = 0,
         .variant_index = 0,
         .payload_layout = box_layout,
         .template = testTemplate(),
         .captures = captures,
     }});
+    // Fill every variant identity from its allocated slice index before publication.
+    for (variants, 0..) |*variant, index| variant.id = @enumFromInt(index);
     try program.fn_sets.append(allocator, .{ .layout = fn_layout, .variants = variants });
     var recursive_capture: usize = undefined;
     recursive_capture = @intFromPtr(&recursive_capture);
-    const exports = try freezeRoot(allocator, &program, @enumFromInt(0), testRoot(plan, fn_layout), .{ .ptr = @ptrCast(&recursive_capture) }, .{});
+    const exports = try freezeRoot(allocator, &program, try testSlot(&program, fn_layout), testRoot(plan, fn_layout), .{ .ptr = @ptrCast(&recursive_capture) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     try std.testing.expectEqual(@as(usize, 2), exports.len);
     const root_pointer = exports[0].relocations[0];
@@ -569,16 +580,18 @@ test "native root export selects explicit finite callable tag and captured strin
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const str_plan: Program.ConstPlanId = @enumFromInt(0);
-    const fn_plan: Program.ConstPlanId = @enumFromInt(1);
+    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     const fn_layout = try program.layouts.putTagUnion(&.{ .zst, .str });
     try program.const_plans.append(allocator, .str);
-    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(0) });
+    const fn_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
     const captures = try allocator.dupe(Program.CaptureSlot, &.{testCapture(str_plan, .value)});
     const variants = try allocator.dupe(Program.FnVariant, &.{
-        .{ .id = @enumFromInt(0), .discriminant = 0, .variant_index = 0, .payload_layout = .zst, .template = testTemplate() },
-        .{ .id = @enumFromInt(1), .discriminant = 1, .variant_index = 1, .payload_layout = .str, .template = testTemplate(), .captures = captures },
+        .{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = .zst, .template = testTemplate() },
+        .{ .id = undefined, .discriminant = 1, .variant_index = 1, .payload_layout = .str, .template = testTemplate(), .captures = captures },
     });
+    // Fill every variant identity from its allocated slice index before publication.
+    for (variants, 0..) |*variant, index| variant.id = @enumFromInt(index);
     try program.fn_sets.append(allocator, .{ .layout = fn_layout, .variants = variants });
     const text = "the selected callable captures a large native string";
     var str = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
@@ -588,7 +601,7 @@ test "native root export selects explicit finite callable tag and captured strin
     @memset(native, 0xaa);
     @memcpy(native[0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&str));
     data.writeDiscriminant(native.ptr, 1, program.layouts.targetUsize());
-    const exports = try freezeRoot(allocator, &program, @enumFromInt(0), testRoot(fn_plan, fn_layout), .{ .ptr = native.ptr }, .{});
+    const exports = try freezeRoot(allocator, &program, try testSlot(&program, fn_layout), testRoot(fn_plan, fn_layout), .{ .ptr = native.ptr }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     try std.testing.expectEqual(@as(u32, 1), data.readDiscriminant(exports[0].bytes.ptr, program.layouts.targetUsize()));
     try std.testing.expectEqual(@as(usize, 1), exports[0].relocations.len);
@@ -601,11 +614,11 @@ test "native root export preserves erased callable procedure and drop helper ide
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
     const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .args = .empty(), .ret_layout = .zst });
-    const str_plan: Program.ConstPlanId = @enumFromInt(0);
-    const fn_plan: Program.ConstPlanId = @enumFromInt(1);
+    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     const fn_layout = try program.layouts.insertErasedCallable();
     try program.const_plans.append(allocator, .str);
-    try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(0) });
+    const fn_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
     const captures = try allocator.dupe(Program.CaptureSlot, &.{testCapture(str_plan, .value)});
     const entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = proc, .capture_layout = .str, .template = testTemplate(), .captures = captures, .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = .str } } }});
     try program.erased_fns.append(allocator, .{ .layout = fn_layout, .entries = entries });
@@ -626,7 +639,7 @@ test "native root export preserves erased callable procedure and drop helper ide
         }
     };
     var resolver = Resolver{ .proc = proc, .payload = &payload };
-    const exports = try freezeRoot(allocator, &program, @enumFromInt(0), testRoot(fn_plan, fn_layout), .{ .ptr = @ptrCast(&pointer) }, .{ .context = &resolver, .resolve = Resolver.resolve });
+    const exports = try freezeRoot(allocator, &program, try testSlot(&program, fn_layout), testRoot(fn_plan, fn_layout), .{ .ptr = @ptrCast(&pointer) }, .{ .context = &resolver, .resolve = Resolver.resolve });
     defer static_data.deinitStaticData(allocator, exports);
     const payload_pointer = exports[0].relocations[0];
     const payload_export = exports[@intFromEnum(payload_pointer.target.data_symbol)];
@@ -644,13 +657,13 @@ test "native root export follows only selected tag payload and clears inactive b
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const str_plan: Program.ConstPlanId = @enumFromInt(0);
-    const tag_plan: Program.ConstPlanId = @enumFromInt(1);
+    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     const tag_layout = try program.layouts.putTagUnion(&.{ .zst, .str });
     try program.const_plans.append(allocator, .str);
     const variants = try allocator.alloc(Program.ConstTagVariant, 2);
     variants[0] = .{ .name = try allocator.dupe(u8, "Absent"), .checked_name = undefined, .discriminant = 0, .payloads = try allocator.alloc(Program.ConstPlanId, 0) };
     variants[1] = .{ .name = try allocator.dupe(u8, "Present"), .checked_name = undefined, .discriminant = 1, .payloads = try allocator.dupe(Program.ConstPlanId, &.{str_plan}) };
+    const tag_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .{ .tag_union = variants });
     const data = program.layouts.getTagUnionData(program.layouts.getLayout(tag_layout).getTagUnion().idx);
     const native = try allocator.alloc(u8, program.layouts.layoutSize(program.layouts.getLayout(tag_layout)));
@@ -661,7 +674,7 @@ test "native root export follows only selected tag payload and clears inactive b
         var str = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
         if (discriminant == 1) @memcpy(native[0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&str));
         data.writeDiscriminant(native.ptr, discriminant, program.layouts.targetUsize());
-        const exports = try freezeRoot(allocator, &program, @enumFromInt(0), testRoot(tag_plan, tag_layout), .{ .ptr = native.ptr }, .{});
+        const exports = try freezeRoot(allocator, &program, try testSlot(&program, tag_layout), testRoot(tag_plan, tag_layout), .{ .ptr = native.ptr }, .{});
         defer static_data.deinitStaticData(allocator, exports);
         try std.testing.expectEqual(discriminant, data.readDiscriminant(exports[0].bytes.ptr, program.layouts.targetUsize()));
         if (discriminant == 0) {

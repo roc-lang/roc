@@ -381,6 +381,18 @@ fn sameFrozenFunction(source: Program.FnTemplate, target: Program.FnTemplate) bo
     return (source.frozen_fn orelse invariant("source callable lacks frozen owner identity")) == (target.frozen_fn orelse invariant("target callable lacks frozen owner identity")) and std.meta.eql(source.frozen_worker, target.frozen_worker);
 }
 
+fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {
+    const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = idx });
+    return id;
+}
+
+fn testRootSymbol(exports: []const static_data.StaticDataExport) SymbolId {
+    for (exports, 0..) |item, index| if (item.value_id != null) return @enumFromInt(index);
+    unreachable;
+}
+
+// These graph-only tests do not read request provenance or solved return types.
 fn testRoot(plan: Program.ConstPlanId, idx: layout.Idx) Program.ConstRootPlan {
     return .{ .root_order = 0, .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private }, .proc = undefined, .ret_layout = idx, .ret_type = undefined, .plan = plan };
 }
@@ -392,9 +404,9 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const str_plan: Program.ConstPlanId = @enumFromInt(0);
-    const list_plan: Program.ConstPlanId = @enumFromInt(1);
+    const str_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     try source.const_plans.append(allocator, .str);
+    const list_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     try source.const_plans.append(allocator, .{ .list = str_plan });
     try target.const_plans.append(allocator, .str);
     try target.const_plans.append(allocator, .{ .list = str_plan });
@@ -404,13 +416,13 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     const string = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
     var items = [_]builtins.str.RocStr{ string, string };
     var list_value = builtins.list.RocList{ .bytes = @ptrCast(&items), .length = 2, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(2) };
-    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, @enumFromInt(0), testRoot(list_plan, source_list), .{ .ptr = @ptrCast(&list_value) }, .{});
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_list), testRoot(list_plan, source_list), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, native);
     // The linker symbol may point inside its owned byte image. Relocation
     // addends are relative to that symbol, not the image's first byte.
     native[2].symbol_offset = 4;
     for (@constCast(native[1].relocations)) |*rel| rel.addend -= 4;
-    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, @enumFromInt(0), &target, testRoot(list_plan, target_list), @enumFromInt(4));
+    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(usize, 3), converted.len);
     try std.testing.expectEqual(@as(usize, 12), converted[0].bytes.len);
@@ -432,14 +444,14 @@ test "frozen root transcode promotes inline strings when target width shrinks" {
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const plan: Program.ConstPlanId = @enumFromInt(0);
+    const plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     try source.const_plans.append(allocator, .str);
     try target.const_plans.append(allocator, .str);
     const text = "sixteen-byte-str";
     var value = builtins.str.RocStr.fromSliceSmall(text);
-    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, @enumFromInt(0), testRoot(plan, .str), .{ .ptr = @ptrCast(&value) }, .{});
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, .str), testRoot(plan, .str), .{ .ptr = @ptrCast(&value) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .str), native, @enumFromInt(0), &target, testRoot(plan, .str), @enumFromInt(0));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .str), native, testRootSymbol(native), &target, testRoot(plan, .str), try testSlot(&target, .str));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(usize, 2), converted.len);
     try std.testing.expectEqual(@as(u32, text.len), std.mem.readInt(u32, converted[0].bytes[8..12], .little));
@@ -463,25 +475,27 @@ test "frozen root transcode preserves fixed U64 values on 32-bit targets" {
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const plan: Program.ConstPlanId = @enumFromInt(0);
+    const plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     try source.const_plans.append(allocator, .scalar);
     try target.const_plans.append(allocator, .scalar);
     var value: u64 = 0x123456789abcdef0;
-    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, @enumFromInt(0), testRoot(plan, .u64), .{ .ptr = @ptrCast(&value) }, .{});
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, .u64), testRoot(plan, .u64), .{ .ptr = @ptrCast(&value) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .u64), native, @enumFromInt(0), &target, testRoot(plan, .u64), @enumFromInt(0));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .u64), native, testRootSymbol(native), &target, testRoot(plan, .u64), try testSlot(&target, .u64));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(value, std.mem.readInt(u64, converted[0].bytes[0..8], .little));
 }
 
 fn recursiveCallable(allocator: Allocator, program: *Program.Result) Allocator.Error!layout.Idx {
-    const plan: Program.ConstPlanId = @enumFromInt(0);
-    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(0) });
+    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
     const box_layout = try program.layouts.reserveLayout(layout.Layout.box(.zst));
     const fn_layout = try program.layouts.putTagUnion(&.{box_layout});
     program.layouts.updateLayout(box_layout, layout.Layout.box(fn_layout));
     const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .slot = 0, .ty = undefined, .plan = plan, .storage = .recursive_box }});
-    const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = @enumFromInt(0), .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = captures }});
+    const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = captures }});
+    // Fill every variant identity from its allocated slice index before publication.
+    for (variants, 0..) |*variant, index| variant.id = @enumFromInt(index);
     try program.fn_sets.append(allocator, .{ .layout = fn_layout, .variants = variants });
     return fn_layout;
 }
@@ -492,14 +506,14 @@ test "frozen root transcode closes recursive callable graphs at target pointer w
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
+    const plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     const source_layout = try recursiveCallable(allocator, &source);
     const target_layout = try recursiveCallable(allocator, &target);
-    const plan: Program.ConstPlanId = @enumFromInt(0);
     var recursive_capture: usize = undefined;
     recursive_capture = @intFromPtr(&recursive_capture);
-    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, @enumFromInt(0), testRoot(plan, source_layout), .{ .ptr = @ptrCast(&recursive_capture) }, .{});
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_layout), testRoot(plan, source_layout), .{ .ptr = @ptrCast(&recursive_capture) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, @enumFromInt(0), &target, testRoot(plan, target_layout), @enumFromInt(0));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, testRootSymbol(native), &target, testRoot(plan, target_layout), try testSlot(&target, target_layout));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(usize, 2), converted.len);
     try std.testing.expectEqual(@as(usize, 4), converted[0].bytes.len);
@@ -519,13 +533,14 @@ test "frozen root transcode maps erased worker and drop identities across target
     const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .args = .empty(), .ret_layout = .zst });
     const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .args = .empty(), .ret_layout = .zst });
     const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .args = .empty(), .ret_layout = .zst });
-    const str_plan: Program.ConstPlanId = @enumFromInt(0);
-    const fn_plan: Program.ConstPlanId = @enumFromInt(1);
+    const str_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     const source_layout = try source.layouts.insertErasedCallable();
     const target_layout = try target.layouts.insertErasedCallable();
+    try source.const_plans.append(allocator, .str);
+    try target.const_plans.append(allocator, .str);
+    const fn_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     for ([_]*Program.Result{ &source, &target }) |program| {
-        try program.const_plans.append(allocator, .str);
-        try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(0) });
+        try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
     }
     const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
     var other_template = template;
@@ -544,13 +559,15 @@ test "frozen root transcode maps erased worker and drop identities across target
     var string = builtins.str.RocStr.fromSliceSmall("capture");
     var pointer = @intFromPtr(&string);
     const Resolver = struct {
-        fn resolve(_: ?*anyopaque, data: [*]u8) @import("native_root_export.zig").CallableResolution {
-            return .{ .proc = @enumFromInt(0), .capture_ptr = data };
+        fn resolve(context: ?*anyopaque, data: [*]u8) @import("native_root_export.zig").CallableResolution {
+            const proc: *const lir.LIR.LirProcSpecId = @ptrCast(@alignCast(context.?));
+            return .{ .proc = proc.*, .capture_ptr = data };
         }
     };
-    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, @enumFromInt(0), testRoot(fn_plan, source_layout), .{ .ptr = @ptrCast(&pointer) }, .{ .resolve = Resolver.resolve });
+    var resolver_proc = source_proc;
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_layout), testRoot(fn_plan, source_layout), .{ .ptr = @ptrCast(&pointer) }, .{ .context = &resolver_proc, .resolve = Resolver.resolve });
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(fn_plan, source_layout), native, @enumFromInt(0), &target, testRoot(fn_plan, target_layout), @enumFromInt(0));
+    const converted = try transcodeRoot(allocator, &source, testRoot(fn_plan, source_layout), native, testRootSymbol(native), &target, testRoot(fn_plan, target_layout), try testSlot(&target, target_layout));
     defer static_data.deinitStaticData(allocator, converted);
     const root_pointer = converted[0].relocations[0];
     const payload = converted[@intFromEnum(root_pointer.target.data_symbol)];
@@ -562,11 +579,11 @@ test "frozen root transcode maps erased worker and drop identities across target
     try std.testing.expectEqual(@as(u8, 0x87), payload.bytes[capture_offset + 11]);
 }
 
-fn failureSlot(allocator: Allocator, program: *Program.Result) Allocator.Error!lir.LIR.StaticDataId {
+fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").CheckedArtifact.ComptimeRootId) Allocator.Error!lir.LIR.StaticDataId {
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
     const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = @enumFromInt(0), .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
+    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = root, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
     return id;
 }
 
@@ -576,9 +593,15 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    _ = try failureSlot(allocator, &source);
-    const target_id = try failureSlot(allocator, &target);
-    const slot = source.static_data_values.items[0];
+    const checked = @import("check").CheckedArtifact;
+    var roots = std.ArrayList(checked.CompileTimeRoot).empty;
+    defer roots.deinit(allocator);
+    const root_id: checked.ComptimeRootId = @enumFromInt(roots.items.len);
+    // Transcoding reads only the published root identity, not its source body/type.
+    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
+    const source_id = try failureSlot(allocator, &source, roots.items[@intFromEnum(root_id)].id);
+    const target_id = try failureSlot(allocator, &target, roots.items[@intFromEnum(root_id)].id);
+    const slot = source.static_data_values.items[@intFromEnum(source_id)];
     const fields = slot.compile_time_root.?.role.failure_message;
     const bytes = try allocator.alloc(u8, source.layouts.layoutSize(source.layouts.getLayout(slot.layout_idx)));
     defer allocator.free(bytes);
@@ -586,8 +609,8 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     bytes[fields.failed_offset] = 1;
     var message = builtins.str.RocStr.fromSliceSmall("failed value");
     @memcpy(bytes[fields.message_offset..][0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&message));
-    const source_exports = [_]static_data.StaticDataExport{.{ .symbol_name = "failure", .bytes = bytes, .alignment = 8, .is_global = false, .is_exported = false }};
-    const converted = try transcodeFailure(allocator, &source, slot, &source_exports, @enumFromInt(0), &target, target_id);
+    const source_exports = [_]static_data.StaticDataExport{.{ .symbol_name = "failure", .value_id = source_id, .bytes = bytes, .alignment = 8, .is_global = false, .is_exported = false }};
+    const converted = try transcodeFailure(allocator, &source, slot, &source_exports, testRootSymbol(&source_exports), &target, target_id);
     defer static_data.deinitStaticData(allocator, converted);
     const target_fields = target.static_data_values.items[0].compile_time_root.?.role.failure_message;
     try std.testing.expectEqual(@as(u8, 1), converted[0].bytes[target_fields.failed_offset]);
@@ -596,10 +619,11 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     try std.testing.expectEqualStrings("failed value", converted[@intFromEnum(rel.target.data_symbol)].bytes[@intCast(rel.addend)..]);
 }
 
-fn reorderedCallable(allocator: Allocator, program: *Program.Result, reverse: bool) Allocator.Error!layout.Idx {
-    const str_plan: Program.ConstPlanId = @enumFromInt(0);
+fn reorderedCallable(allocator: Allocator, program: *Program.Result, reverse: bool) Allocator.Error!PlanView {
+    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .str);
-    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(0) });
+    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
     const idx = try program.layouts.putTagUnion(if (reverse) &.{ .str, .zst } else &.{ .zst, .str });
     const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value }});
     const selected: u16 = if (reverse) 0 else 1;
@@ -609,7 +633,7 @@ fn reorderedCallable(allocator: Allocator, program: *Program.Result, reverse: bo
         variant.* = .{ .id = @enumFromInt(i), .discriminant = @intCast(i), .variant_index = @intCast(i), .payload_layout = if (has_capture) .str else .zst, .template = .{ .frozen_fn = if (has_capture) 17 else 18, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = if (has_capture) captures else &.{} };
     }
     try program.fn_sets.append(allocator, .{ .layout = idx, .variants = variants });
-    return idx;
+    return .{ .plan = plan, .layout_idx = idx };
 }
 
 test "frozen root transcode selects target callable discriminant by frozen origin" {
@@ -618,18 +642,21 @@ test "frozen root transcode selects target callable discriminant by frozen origi
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const source_layout = try reorderedCallable(allocator, &source, false);
-    const target_layout = try reorderedCallable(allocator, &target, true);
-    const plan: Program.ConstPlanId = @enumFromInt(1);
+    const source_view = try reorderedCallable(allocator, &source, false);
+    const target_view = try reorderedCallable(allocator, &target, true);
+    const source_layout = source_view.layout_idx;
+    const target_layout = target_view.layout_idx;
+    const plan = source_view.plan;
+    try std.testing.expectEqual(plan, target_view.plan);
     const bytes = try allocator.alloc(u8, source.layouts.layoutSize(source.layouts.getLayout(source_layout)));
     defer allocator.free(bytes);
     @memset(bytes, 0);
     var string = builtins.str.RocStr.fromSliceSmall("capture");
     @memcpy(bytes[0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&string));
     source.layouts.getTagUnionData(source.layouts.getLayout(source_layout).getTagUnion().idx).writeDiscriminant(bytes.ptr, 1, source.layouts.targetUsize());
-    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, @enumFromInt(0), testRoot(plan, source_layout), .{ .ptr = bytes.ptr }, .{});
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_layout), testRoot(plan, source_layout), .{ .ptr = bytes.ptr }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, @enumFromInt(0), &target, testRoot(plan, target_layout), @enumFromInt(0));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, testRootSymbol(native), &target, testRoot(plan, target_layout), try testSlot(&target, target_layout));
     defer static_data.deinitStaticData(allocator, converted);
     const data = target.layouts.getTagUnionData(target.layouts.getLayout(target_layout).getTagUnion().idx);
     try std.testing.expectEqual(@as(u32, 0), data.readDiscriminant(converted[0].bytes.ptr, target.layouts.targetUsize()));

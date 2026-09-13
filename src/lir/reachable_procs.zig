@@ -1256,11 +1256,13 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
         .body = ret,
         .ret_layout = .zst,
     });
+    const discarded_slot: LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
     try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .zst });
+    const retained_slot: LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
     try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .zst });
     const body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = local,
-        .value = .{ .static_data = @enumFromInt(1) },
+        .value = .{ .static_data = retained_slot },
         .next = ret,
     } });
     const runtime = try result.store.addProcSpec(.{
@@ -1281,8 +1283,8 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     }
     var frozen = LirProgram.FrozenStaticData{ .allocator = allocator, .exports = exports };
     defer frozen.deinit();
-    exports[0].value_id = @enumFromInt(0);
-    exports[1].value_id = @enumFromInt(1);
+    exports[0].value_id = discarded_slot;
+    exports[1].value_id = retained_slot;
     const root_relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 1);
     root_relocations[0] = .{
         .offset = 0,
@@ -1329,13 +1331,14 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     defer result.deinit();
     const local = try result.store.addLocal(.{ .layout_idx = .zst });
     const ret = try result.store.addCFStmt(.{ .ret = .{ .value = local } });
-    for (0..3) |_| _ = try result.store.addProcSpec(.{
+    var procs: [3]LIR.LirProcSpecId = undefined;
+    for (&procs) |*proc| proc.* = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .args = .empty(),
         .body = ret,
         .ret_layout = .zst,
     });
-    try result.root_procs.appendSlice(allocator, &.{ @enumFromInt(0), @enumFromInt(1) });
+    try result.root_procs.appendSlice(allocator, &.{ procs[0], procs[1] });
     var exports = [_]LirProgram.StaticDataExport{.{
         .symbol_name = "callable",
         .bytes = &.{},
@@ -1344,15 +1347,15 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
         .relocations = &.{.{
             .offset = 0,
             .target_symbol_name = "callable_proc",
-            .procedure = @enumFromInt(2),
+            .procedure = procs[2],
             .kind = .function_pointer,
         }},
     }};
-    const demand = try collectProcDemand(allocator, &result, &.{@enumFromInt(0)}, &exports);
+    const demand = try collectProcDemand(allocator, &result, &.{procs[0]}, &exports);
     defer allocator.free(demand);
-    try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ @enumFromInt(0), @enumFromInt(2) }, demand);
+    try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ procs[0], procs[2] }, demand);
     try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
-    try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ @enumFromInt(0), @enumFromInt(1) }, result.root_procs.items);
+    try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ procs[0], procs[1] }, result.root_procs.items);
     for (result.store.getProcSpecs()) |proc| try std.testing.expectEqual(ret, proc.body.?);
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(exports[0].relocations[0].procedure.?));
 }
