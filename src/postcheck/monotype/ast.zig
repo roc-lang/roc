@@ -215,6 +215,11 @@ pub const FnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
     evidence_digest: EvidenceDigest = .{},
+    /// `specIdentityKey` of the specialization this template was reserved
+    /// for: the key an object-cache lookup can compute at reservation time,
+    /// before the body exists. Null for functions that are not template
+    /// specializations.
+    spec_key: ?names.TypeDigest = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
@@ -286,6 +291,52 @@ pub const SpecIdentity = struct {
     request_fn_ty_digest: names.TypeDigest,
     request_fn_ty: Type.TypeId,
 };
+
+/// Content key of a specialization identity: the callable rendered by tag
+/// and content plus every digest field except the requesting method scope.
+/// The scope only decides how dispatch evidence was derived, and the evidence
+/// digest already names the result, so two modules requesting the same
+/// specialization get one key. Identical for the same request in every
+/// program, and computable the moment the request is reserved.
+pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.spec-key.v1");
+    switch (identity.callable) {
+        .proc_template => |template| {
+            hasher.update("proc_template");
+            hasher.update(&template.module.bytes);
+            writeU32(&hasher, template.proc_base);
+            writeU32(&hasher, template.template);
+        },
+        .nested_site => |site| {
+            hasher.update("nested_site");
+            hasher.update(&site.module.bytes);
+            writeU32(&hasher, site.owner_proc_base);
+            writeU32(&hasher, site.owner_template);
+            hasher.update(&site.owner_fn_digest.bytes);
+            writeU32(&hasher, site.site);
+            if (site.default_root_module) |module| {
+                hasher.update("default_root");
+                hasher.update(&module.bytes);
+            } else {
+                hasher.update("no_default_root");
+            }
+        },
+        .hosted => |hosted| {
+            hasher.update("hosted");
+            writeU32(&hasher, @intFromEnum(hosted));
+        },
+        .generated => |generated| {
+            hasher.update("generated");
+            writeU32(&hasher, @intFromEnum(generated));
+        },
+    }
+    hasher.update(&identity.source_fn_ty_digest.bytes);
+    hasher.update(&identity.evidence_digest.bytes);
+    hasher.update(&identity.codec_contract_digest.bytes);
+    hasher.update(&identity.request_fn_ty_digest.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
 
 /// Lifecycle state for a specialization record.
 pub const SpecStatus = enum(u8) {

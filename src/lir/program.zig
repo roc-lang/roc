@@ -440,10 +440,21 @@ pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocato
 }
 
 /// Complete LIR program and side data consumed by ARC, backends, and eval.
+/// A template specialization's content key and the procedure lowered for it.
+pub const SpecProc = struct {
+    key: [32]u8,
+    proc: LIR.LirProcSpecId,
+};
+
 pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
+    /// The procedure lowered for each template specialization, by the
+    /// specialization's content key (`Monotype.Ast.specIdentityKey`). Only
+    /// the specialization's own procedure is listed, never SpecConstr clones
+    /// or capture-bearing variants of it.
+    spec_procs: std.ArrayList(SpecProc),
     root_metadata: std.ArrayList(root.RootMetadata),
     requested_layouts: std.ArrayList(RequestedLayout),
     const_types: const_store.ConstTypeStore,
@@ -484,6 +495,7 @@ pub const Result = struct {
             .store = LirStore.init(allocator),
             .layouts = try layout.Store.init(allocator, target_usize),
             .root_procs = .empty,
+            .spec_procs = .empty,
             .root_metadata = .empty,
             .requested_layouts = .empty,
             .const_types = const_store.ConstTypeStore.init(allocator),
@@ -558,6 +570,7 @@ pub const Result = struct {
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
+        self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }

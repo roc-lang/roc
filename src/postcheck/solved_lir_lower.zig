@@ -2286,6 +2286,13 @@ const Lowerer = struct {
             }
         }
         try self.procs_by_identity.putNoClobber(identity, proc);
+        if (source_fn.source) |template| {
+            if (template.spec_key) |key| {
+                if (spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled()) {
+                    try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
+                }
+            }
+        }
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
         return proc;

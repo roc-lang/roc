@@ -157,6 +157,13 @@ pub fn manifestBytes(
         defer allocator.free(line);
         try bytes.appendSlice(allocator, line);
     }
+    for (lowered.lir_result.spec_procs.items) |spec_proc| {
+        const symbol = try procs[@intFromEnum(spec_proc.proc)].identity.symbolName(allocator);
+        defer allocator.free(symbol);
+        const line = try std.fmt.allocPrint(allocator, "spec {s} {s}\n", .{ &std.fmt.bytesToHex(spec_proc.key, .lower), symbol });
+        defer allocator.free(line);
+        try bytes.appendSlice(allocator, line);
+    }
     for (procs, 0..) |proc, index| {
         if (proc.is_static_initializer) continue;
         const symbol = try proc.identity.symbolName(allocator);

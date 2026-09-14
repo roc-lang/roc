@@ -4852,18 +4852,16 @@ const Builder = struct {
         const evidence_digest = Ast.fnEvidenceDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head);
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
-        if (try self.spec_store.findLocal(
-            templateSpecIdentity(
-                template_ref,
-                method_scope.key,
-                source_fn_key,
-                evidence_digest,
-                self.codecContractIdentity(codec_contract),
-                fn_ty,
-                request_digest,
-            ),
-            specializationEvidenceView(identity_evidence),
-        )) |hit| {
+        const spec_identity = templateSpecIdentity(
+            template_ref,
+            method_scope.key,
+            source_fn_key,
+            evidence_digest,
+            self.codecContractIdentity(codec_contract),
+            fn_ty,
+            request_digest,
+        );
+        if (try self.spec_store.findLocal(spec_identity, specializationEvidenceView(identity_evidence))) |hit| {
             if (request_accounting == .count) self.count("template_hits");
             const existing = self.lowered_templates.get(hit.fn_id) orelse
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
@@ -4924,6 +4922,10 @@ const Builder = struct {
 
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
+        // Only a closed request names a specialization the object cache can
+        // hold: a function type anywhere in it makes the body depend on the
+        // program's lambda sets.
+        if (!try self.monoFnTypeMentionsFunction(lower_fn_ty)) fn_template.spec_key = Ast.specIdentityKey(spec_identity);
         if (stored_source_topology) |stored_evidence| {
             fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
@@ -5035,6 +5037,40 @@ const Builder = struct {
     /// identity, ids, and seed are already reserved. Runs immediately for
     /// direct callers and from the scheduler's wave drain for queued symbolic
     /// requests.
+    /// Whether a function type's arguments or result mention a function or
+    /// erased callable anywhere, nominal backings included.
+    fn monoFnTypeMentionsFunction(self: *Builder, fn_ty: Type.TypeId) Allocator.Error!bool {
+        const types = self.program.types.view();
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        switch (types.get(fn_ty)) {
+            .func => |func| {
+                try stack.appendSlice(self.allocator, types.span(func.args));
+                try stack.append(self.allocator, func.ret);
+            },
+            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => try stack.append(self.allocator, fn_ty),
+        }
+        while (stack.pop()) |ty| {
+            const gop = try visited.getOrPut(ty);
+            if (gop.found_existing) continue;
+            switch (types.get(ty)) {
+                .primitive, .zst => {},
+                .erased, .func => return true,
+                .named => |named| {
+                    try stack.appendSlice(self.allocator, types.span(named.args));
+                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                },
+                .record => |span| for (types.fieldSpan(span)) |field| try stack.append(self.allocator, field.ty),
+                .tuple => |span| try stack.appendSlice(self.allocator, types.span(span)),
+                .tag_union => |span| for (types.tagSpan(span)) |tag| try stack.appendSlice(self.allocator, types.span(tag.payloads)),
+                .list, .box => |elem| try stack.append(self.allocator, elem),
+            }
+        }
+        return false;
+    }
+
     fn completeTemplateReservation(
         self: *Builder,
         reservation: TemplateReservation,
