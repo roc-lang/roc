@@ -46,6 +46,7 @@ test "issue 11199: a call site supplying the field types of a generic record che
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     if (coord.hasUserErrors()) {
         var reports = coord.iterReports();
         while (reports.next()) |entry| {
@@ -229,6 +230,7 @@ test "issue 11199: a concrete unsupported field is rejected during checking" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 }
 

@@ -9,7 +9,6 @@ pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");
     pub const Type = @import("monotype/type.zig");
     pub const Lower = @import("monotype/lower.zig");
-    pub const Serialize = @import("monotype/serialize.zig");
     pub const Solve = @import("monotype/solve.zig");
     pub const Specialize = @import("monotype/specialize.zig");
 };
@@ -51,7 +50,6 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/type.zig"));
     std.testing.refAllDecls(@import("monotype/lower.zig"));
     std.testing.refAllDecls(@import("monotype/published_inputs.zig"));
-    std.testing.refAllDecls(@import("monotype/serialize.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));

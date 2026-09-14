@@ -72,7 +72,7 @@ pub const SemanticModuleData = struct {
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
-/// Checked-module output is either complete now or retained for platform/app finalization.
+/// Checked metadata is prepared now or retained for platform/app relation construction.
 pub const TypeCheckPublication = union(enum) {
     published: CheckedArtifact.CheckedModuleArtifact,
     deferred,
@@ -137,6 +137,7 @@ pub const ArtifactPublicationInputs = struct {
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
+    evaluation_phase: @FieldType(CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
     /// How this module's compile-time roots were established. Part of the
     /// checked-artifact cache identity. See `Can.Validation`.
     validation: Can.Validation = .checking,
@@ -658,6 +659,7 @@ pub fn typeCheckModule(
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
             .ctfe_options = ctfe_options,
+            .evaluation_phase = .post_frontend,
             .validation = validation,
         },
     );
@@ -729,6 +731,7 @@ pub fn publishFromPrebuiltModules(
             .explicit_roots = publication.explicit_roots,
             .hoisted_roots = publication.hoisted_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
+            .evaluation_phase = publication.evaluation_phase,
             .problem_store = publication.problem_store,
             .validation = publication.validation,
         },

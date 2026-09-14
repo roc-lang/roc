@@ -64,7 +64,6 @@ const NamePrefix = struct {
 pub const Snapshot = struct {
     types: Type.Store,
     names: names.NameStore,
-    imported_fns: []const Ast.ImportedFn,
     const_fn_evidence: []const checked.ConstStore.ConstFnEvidence,
     const_fn_evidence_frames: []const checked.ConstStore.ConstFnEvidenceFrame,
     current_loc: @import("base").SourceLoc,
@@ -82,7 +81,7 @@ pub const Snapshot = struct {
         program.names = self.names;
         program.names.allocator = allocator;
         program.names.proc_base_by_key = std.StringHashMap(names.ProcBaseKeyRef).init(allocator);
-        inline for (.{ "imported_fns", "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
+        inline for (.{ "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
             @field(program, field) = @TypeOf(@field(program, field)).fromOwnedSlice(@constCast(@field(self, field)));
         }
         program.current_loc = self.current_loc;
@@ -109,7 +108,6 @@ pub const ProgramInputs = struct {
     export_names: NamePrefix = .{},
     external_symbol_names: NamePrefix = .{},
     proc_bases: Prefix(names.ProcBaseKey) = .{},
-    imported_fns: Prefix(Ast.ImportedFn) = .{},
     const_fn_evidence: Prefix(checked.ConstStore.ConstFnEvidence) = .{},
     const_fn_evidence_frames: Prefix(checked.ConstStore.ConstFnEvidenceFrame) = .{},
 
@@ -118,7 +116,6 @@ pub const ProgramInputs = struct {
         var view = Snapshot{
             .types = Type.Store.init(allocator),
             .names = names.NameStore.init(allocator),
-            .imported_fns = &.{},
             .const_fn_evidence = &.{},
             .const_fn_evidence_frames = &.{},
             .current_loc = source.current_loc,
@@ -134,7 +131,7 @@ pub const ProgramInputs = struct {
         }
         view.names.proc_bases.items = std.ArrayList(names.ProcBaseKey).fromOwnedSlice(try self.proc_bases.publish(allocator, source.names.proc_bases.items.items));
         view.names.serialized = true;
-        inline for (.{ "imported_fns", "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
+        inline for (.{ "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
             @field(view, field) = try @field(self, field).publish(allocator, @field(source, field).unsafeRawItemsForView());
         }
         return view;
@@ -187,7 +184,7 @@ fn AppendIndexHashed(comptime K: type, comptime V: type, comptime hashKey: fn (K
             const hash = hashKey(key);
             var found = self.root.load(.acquire);
             while (found) |node| switch (node.*) {
-                .branch => |*branch| found = branch.children[(hash >> branch.bit) & 1].load(.acquire),
+                .branch => |*branch| found = branch.children[@as(usize, @intCast((hash >> branch.bit) & 1))].load(.acquire),
                 .leaf => break,
             };
             const entry = try allocator.create(Entry);
@@ -207,10 +204,10 @@ fn AppendIndexHashed(comptime K: type, comptime V: type, comptime hashKey: fn (K
                 var link = &self.root;
                 while (link.load(.acquire)) |node| {
                     if (node.* != .branch or node.branch.bit < bit) break;
-                    link = &node.branch.children[(hash >> node.branch.bit) & 1];
+                    link = &node.branch.children[@as(usize, @intCast((hash >> node.branch.bit) & 1))];
                 }
                 const branch = try allocator.create(Node);
-                const side = (hash >> bit) & 1;
+                const side: usize = @intCast((hash >> bit) & 1);
                 branch.* = .{ .branch = .{ .bit = bit, .children = .{ .init(null), .init(null) } } };
                 branch.branch.children[side] = .init(leaf);
                 branch.branch.children[1 - side] = .init(link.load(.acquire));
@@ -237,7 +234,7 @@ fn AppendIndexHashed(comptime K: type, comptime V: type, comptime hashKey: fn (K
             const hash = hashKey(key);
             var node = self.root.load(.acquire);
             while (node) |current| switch (current.*) {
-                .branch => |*branch| node = branch.children[(hash >> branch.bit) & 1].load(.acquire),
+                .branch => |*branch| node = branch.children[@as(usize, @intCast((hash >> branch.bit) & 1))].load(.acquire),
                 .leaf => |*leaf| return .{ .entry = if (leaf.hash == hash) leaf.entries.load(.acquire) else null, .key = key, .end = end },
             };
             return .{ .entry = null, .key = key, .end = end };

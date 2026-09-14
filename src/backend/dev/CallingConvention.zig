@@ -1195,7 +1195,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
         ///
         /// Note: On x86_64, this emits `call rel32` (E8 xx xx xx xx).
         ///       On aarch64, this emits `bl offset` (26-bit signed offset).
-        pub fn callRelocatable(self: *Self, symbol: SymbolTable.Id, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) Allocator.Error!void {
+        /// `codegen` is the target CodeGen owning `self.emit`: it records the
+        /// call's relocation and, on aarch64, registers the site so a far
+        /// image can redirect it to a stub.
+        pub fn callRelocatable(self: *Self, symbol: SymbolTable.Id, codegen: anytype) Allocator.Error!void {
             // Calculate total stack space needed (same as call/callReg)
             const stack_args_space: u32 = self.stack_arg_size;
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -1233,22 +1236,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
             try self.emitDeferredRegArgs();
 
             // Emit relocatable call instruction
-            const code_offset = self.emit.buf.items.len;
             if (comptime is_aarch64) {
-                // BL instruction with 0 offset placeholder
-                try self.emit.bl(0);
-                // Relocation points to the instruction itself for ARM64
-                try relocations.append(allocator, .{
-                    .linked_function = .{
-                        .offset = @intCast(code_offset),
-                        .symbol = symbol,
-                    },
-                });
+                std.debug.assert(&codegen.emit == self.emit);
+                try codegen.emitExternCall(symbol);
             } else {
+                const code_offset = self.emit.buf.items.len;
                 // call rel32 with 0 offset placeholder
                 try self.emit.callRel32(0);
                 // For x86_64, relocation points to the 4-byte offset after the E8 opcode
-                try relocations.append(allocator, .{
+                try codegen.relocations.append(codegen.allocator, .{
                     .linked_function = .{
                         .offset = @intCast(code_offset + 1),
                         .symbol = symbol,
@@ -2794,8 +2790,8 @@ test "relocatable call stabilizes memory args before clobbering base param regis
     var emit = Emit.init(std.testing.allocator);
     defer emit.deinit();
 
-    var relocs = std.ArrayList(Relocation).empty;
-    defer relocs.deinit(std.testing.allocator);
+    var owner: struct { allocator: std.mem.Allocator, relocations: std.ArrayList(Relocation) } = .{ .allocator = std.testing.allocator, .relocations = .empty };
+    defer owner.relocations.deinit(std.testing.allocator);
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
@@ -2806,7 +2802,7 @@ test "relocatable call stabilizes memory args before clobbering base param regis
     var symbols: SymbolTable.Table = .{};
     defer symbols.deinit(std.testing.allocator);
     const symbol = try symbols.intern(std.testing.allocator, "roc_test_target");
-    try builder.callRelocatable(symbol, std.testing.allocator, &relocs);
+    try builder.callRelocatable(symbol, &owner);
 
     // Without stabilization, the first argument would emit `mov rdi, [rdi]`
     // and the second would then read through the clobbered RDI.
@@ -2818,7 +2814,7 @@ test "relocatable call stabilizes memory args before clobbering base param regis
     // The original RDI is read into scratch before parameter registers move.
     // The x86 emitter currently uses the disp32 memory form even for offset 0.
     try std.testing.expect(findPattern7(emit.buf.items, 0x4C, 0x8B, 0x9F, 0x00, 0x00, 0x00, 0x00) != null);
-    try std.testing.expectEqual(@as(usize, 1), relocs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), owner.relocations.items.len);
 }
 
 test "parallel move: swap cycle on Windows x64 (RCX/RDX)" {

@@ -150,11 +150,6 @@ pub const LayoutRequest = struct {
 pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
 /// Request to make a lifted value available as static data.
 pub const StaticDataValue = Mono.StaticDataValue;
-/// Function imported from another Monotype shard.
-pub const ImportedFn = Mono.ImportedFn;
-/// Identifier for an imported function table entry.
-pub const ImportedFnId = Mono.ImportedFnId;
-
 /// A virtual source frame introduced by post-check inlining.
 pub const InlineScopeId = enum(u32) {
     _,
@@ -172,14 +167,12 @@ pub const InlineScope = struct {
 
 /// Read-only Monotype Lifted program view.
 ///
-/// Today this view borrows `Program` arrays. Lambda Solved consumes this shape
-/// so later cache-backed or builder-split lifted programs do not require a
-/// consumer rewrite.
+/// This view borrows `Program` arrays. Lambda Solved consumes this shape so a
+/// builder split does not require a consumer rewrite.
 pub const ProgramView = struct {
     names: *const names.NameStore,
     next_symbol: u32,
     types: Type.Store.View,
-    imported_fns: []const ImportedFn,
     fns: []const Fn,
     const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
     const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -399,26 +392,20 @@ pub const ProgramView = struct {
 /// Direct call target after Monotype lifting.
 pub const DirectCallee = union(enum(u8)) {
     local: FnId,
-    imported: ImportedFnId,
 };
 
 /// Return the lifted direct-call target after Monotype lifting.
 pub fn directCallee(call: Mono.CallProc) DirectCallee {
     return switch (call.callee) {
         .lifted => |fn_id| .{ .local = fn_id },
-        .func => |slot| switch (slot) {
-            .local => Common.invariant("Monotype Lifted direct call still referenced a Monotype function id"),
-            .imported => |imported| .{ .imported = imported },
-        },
+        .func => Common.invariant("Monotype Lifted direct call still referenced a Monotype function id"),
     };
 }
 
-/// Return the local lifted function id for a direct call, or null when it
-/// targets an imported shard.
+/// Return the local lifted function id for a direct call.
 pub fn localDirectCallee(call: Mono.CallProc) ?FnId {
     return switch (directCallee(call)) {
         .local => |fn_id| fn_id,
-        .imported => null,
     };
 }
 
@@ -428,7 +415,6 @@ pub const Program = struct {
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
-    imported_fns: ProgramList(ImportedFn, "imported_fns"),
     fns: ProgramList(Fn, "fns"),
     const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
     const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
@@ -523,7 +509,6 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         name_store: names.NameStore,
         types: Type.Store,
-        imported_fns: std.ArrayList(ImportedFn),
         const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
         const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
         exprs: std.ArrayList(Expr),
@@ -563,7 +548,6 @@ pub const Program = struct {
             .names = name_store,
             .next_symbol = next_symbol,
             .types = types,
-            .imported_fns = ProgramList(ImportedFn, "imported_fns").fromArrayList(imported_fns),
             .fns = .empty,
             .const_fn_evidence = ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence").fromArrayList(const_fn_evidence),
             .const_fn_evidence_frames = ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames").fromArrayList(const_fn_evidence_frames),
@@ -634,7 +618,7 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -655,7 +639,6 @@ pub const Program = struct {
         self.fns.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
-        self.imported_fns.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
     }
@@ -665,7 +648,6 @@ pub const Program = struct {
             .names = &self.names,
             .next_symbol = self.next_symbol,
             .types = self.types.view(),
-            .imported_fns = self.imported_fns.unsafeRawItemsForView(),
             .fns = self.fns.unsafeRawItemsForView(),
             .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
             .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
@@ -1030,10 +1012,6 @@ pub const Program = struct {
             .len = @intCast(text.len),
         });
         return id;
-    }
-
-    pub fn importedFnCount(self: *const Program) usize {
-        return self.imported_fns.len();
     }
 
     pub fn addRoot(self: *Program, root: Root) std.mem.Allocator.Error!void {
