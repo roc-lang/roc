@@ -644,6 +644,7 @@ pub fn run(
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     defer builder.recordParallelLaneMetrics();
+    try builder.seedProgramSourceFiles();
     var digest_stats: Type.Store.DigestStats = .{};
     program.types.digest_stats = if (builder.counters != null) &digest_stats else null;
     defer {
@@ -3022,6 +3023,11 @@ const Builder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
+    /// Program source-file id of every checked module in the lowering input,
+    /// keyed by module index. The table is seeded once in canonical order
+    /// before any body is lowered, so the ids written into source locations
+    /// are final and independent of specialization scheduling.
+    source_file_ids: std.AutoHashMap(u32, u32),
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
@@ -3181,6 +3187,7 @@ const Builder = struct {
             .allocator = allocator,
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
+            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
@@ -3211,6 +3218,98 @@ const Builder = struct {
         };
     }
 
+    const SourceFileSeed = struct {
+        module_idx: u32,
+        name: []const u8,
+        qualified_name: []const u8,
+        identity: [32]u8,
+
+        fn lessThan(_: void, left: SourceFileSeed, right: SourceFileSeed) bool {
+            switch (std.mem.order(u8, left.qualified_name, right.qualified_name)) {
+                .lt => return true,
+                .gt => return false,
+                .eq => {},
+            }
+            switch (std.mem.order(u8, &left.identity, &right.identity)) {
+                .lt => return true,
+                .gt => return false,
+                .eq => {},
+            }
+            return left.module_idx < right.module_idx;
+        }
+    };
+
+    /// Every checked module in the lowering input, ordered by qualified module
+    /// name and then content identity. Module indices are assigned in
+    /// discovery order and specialization bodies are lowered on parallel
+    /// lanes, so neither may decide the order of the program's source-file
+    /// table; this order depends only on the modules themselves.
+    fn canonicalSourceFiles(self: *Builder) Allocator.Error![]SourceFileSeed {
+        var seeds = std.ArrayList(SourceFileSeed).empty;
+        errdefer seeds.deinit(self.allocator);
+        var seen = std.AutoHashMap(u32, void).init(self.allocator);
+        defer seen.deinit();
+        try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(self.root_view));
+        for (self.modules.imports) |imported| {
+            try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(imported));
+        }
+        for (self.modules.root.relation_modules) |relation| {
+            try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(relation));
+        }
+        std.mem.sort(SourceFileSeed, seeds.items, {}, SourceFileSeed.lessThan);
+        return seeds.toOwnedSlice(self.allocator);
+    }
+
+    fn appendSourceFileSeed(
+        allocator: Allocator,
+        seeds: *std.ArrayList(SourceFileSeed),
+        seen: *std.AutoHashMap(u32, void),
+        view: ModuleView,
+    ) Allocator.Error!void {
+        const gop = try seen.getOrPut(view.module_identity.module_idx);
+        if (gop.found_existing) return;
+        try seeds.append(allocator, .{
+            .module_idx = view.module_identity.module_idx,
+            .name = view.module_env.module_name,
+            .qualified_name = view.module_env.qualifiedModuleName(),
+            .identity = view.module_identity.stable_hash,
+        });
+    }
+
+    /// Coordinator only: publish the canonical source-file table into the
+    /// program before any body is lowered. Worker builders share that program
+    /// read-only and derive the same ids with `initSourceFileIds`.
+    fn seedProgramSourceFiles(self: *Builder) Allocator.Error!void {
+        if (self.program.sourceFileCount() != 0) {
+            Common.invariant("Monotype program source files were seeded after lowering began");
+        }
+        const seeds = try self.canonicalSourceFiles();
+        defer self.allocator.free(seeds);
+        try self.source_file_ids.ensureTotalCapacity(@intCast(seeds.len));
+        for (seeds, 0..) |seed, index| {
+            const id = try self.program.addSourceFile(.{ .name = seed.name, .qualified_name = seed.qualified_name });
+            if (id != index) Common.invariant("Monotype program source file id did not match its canonical position");
+            self.source_file_ids.putAssumeCapacity(seed.module_idx, id);
+        }
+    }
+
+    /// Derive the canonical source-file ids without publishing the table;
+    /// the ids equal the positions `seedProgramSourceFiles` published.
+    fn initSourceFileIds(self: *Builder) Allocator.Error!void {
+        const seeds = try self.canonicalSourceFiles();
+        defer self.allocator.free(seeds);
+        try self.source_file_ids.ensureTotalCapacity(@intCast(seeds.len));
+        for (seeds, 0..) |seed, index| {
+            self.source_file_ids.putAssumeCapacity(seed.module_idx, @intCast(index));
+        }
+    }
+
+    /// Final program source-file id of a checked module's source locations.
+    fn sourceFileId(self: *const Builder, view: ModuleView) u32 {
+        return self.source_file_ids.get(view.module_identity.module_idx) orelse
+            Common.invariant("checked module reached body lowering without a canonical source file id");
+    }
+
     fn ensureSpecJobWorkerBuilder(
         worker: *SpecJobWorkerState,
         inputs: *const SpecJobWorkerInputs,
@@ -3233,6 +3332,7 @@ const Builder = struct {
             .timing = null,
         });
         errdefer builder.deinit();
+        try builder.initSourceFileIds();
         builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
@@ -3243,6 +3343,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.source_file_ids.deinit();
         self.declared_comptime_root_functions.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         for (self.spec_job_parallel_workers) |*worker| {
@@ -8471,7 +8572,6 @@ const Builder = struct {
 
     fn draftCoreBases(self: *Builder) DraftCoreLengths {
         var bases: DraftCoreLengths = @splat(0);
-        bases[@intFromEnum(DraftCoreKind.source_files)] = @intCast(self.program.sourceFileCount());
         bases[@intFromEnum(DraftCoreKind.string_literals)] = @intCast(self.program.stringLiteralCount());
         bases[@intFromEnum(DraftCoreKind.comptime_sites)] = @intCast(self.program.comptimeSiteCount());
         bases[@intFromEnum(DraftCoreKind.expr_ids)] = @intCast(self.program.exprIdCount());
@@ -8512,11 +8612,8 @@ const Builder = struct {
 
         var next = self.draftCoreBases();
         for (body_draft.owner_runs.items) |owner_run| {
-            const retain = draftOwnerRetained(owner_run.owner, emit_fns);
+            if (!draftOwnerRetained(owner_run.owner, emit_fns)) continue;
             for (0..draft_core_kind_count) |raw_kind| {
-                const kind: DraftCoreKind = @enumFromInt(raw_kind);
-                const retain_kind = retain or kind == .source_files;
-                if (!retain_kind) continue;
                 var index = owner_run.starts[raw_kind];
                 while (index < owner_run.ends[raw_kind]) : (index += 1) {
                     maps.values[raw_kind][index] = next[raw_kind];
@@ -13771,11 +13868,6 @@ const DraftStringLiteral = struct {
 /// Draft-side source file table entry: module display name plus the
 /// coordinator's package-qualified module identity (see
 /// `base.SourceFileEntry`).
-const DraftSourceFile = struct {
-    name: DraftSpan(u8),
-    qualified_name: DraftSpan(u8),
-};
-
 const DraftPackedListLiteral = struct {
     literal: DraftStringLiteralId,
     len: u32,
@@ -13797,7 +13889,6 @@ fn draftOwnerRetained(owner: DraftOwner, emit_fns: []const bool) bool {
 }
 
 const DraftCoreKind = enum(u8) {
-    source_files,
     string_literals,
     comptime_sites,
     branch_regions,
@@ -13935,8 +14026,6 @@ const BodyDraftStore = struct {
     runtime_schema_requests: std.ArrayList(DraftRuntimeSchemaRequest),
     comptime_sites: std.ArrayList(DraftComptimeSite),
     branch_regions: std.ArrayList(base.Region),
-    source_files: std.ArrayList(DraftSourceFile),
-    source_file_ids: std.AutoHashMap(u32, u32),
     local_names: std.ArrayList(DraftSpan(u8)),
     source_text_bytes: std.ArrayList(u8),
     expr_locs: std.ArrayList(base.SourceLoc),
@@ -14050,8 +14139,6 @@ const BodyDraftStore = struct {
             .runtime_schema_requests = .empty,
             .comptime_sites = .empty,
             .branch_regions = .empty,
-            .source_files = .empty,
-            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
             .local_names = .empty,
             .source_text_bytes = .empty,
             .expr_locs = .empty,
@@ -14243,8 +14330,6 @@ const BodyDraftStore = struct {
         self.expr_locs.deinit(self.allocator);
         self.source_text_bytes.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
-        self.source_file_ids.deinit();
-        self.source_files.deinit(self.allocator);
         self.branch_regions.deinit(self.allocator);
         self.comptime_sites.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
@@ -14343,7 +14428,6 @@ const BodyDraftStore = struct {
 
     fn coreLengths(self: *const BodyDraftStore) DraftCoreLengths {
         var lengths: DraftCoreLengths = undefined;
-        lengths[@intFromEnum(DraftCoreKind.source_files)] = @intCast(self.source_files.items.len);
         lengths[@intFromEnum(DraftCoreKind.string_literals)] = @intCast(self.string_literals.items.len);
         lengths[@intFromEnum(DraftCoreKind.comptime_sites)] = @intCast(self.comptime_sites.items.len);
         lengths[@intFromEnum(DraftCoreKind.branch_regions)] = @intCast(self.branch_regions.items.len);
@@ -14734,28 +14818,6 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(text.len) };
     }
 
-    fn addSourceFile(self: *BodyDraftStore, name: []const u8, qualified_name: []const u8) Allocator.Error!u32 {
-        const id: u32 = @intCast(self.source_files.items.len);
-        const text = try self.addSourceText(name);
-        const qualified_text = try self.addSourceText(qualified_name);
-        try self.source_files.append(self.allocator, .{
-            .name = text,
-            .qualified_name = qualified_text,
-        });
-        return id;
-    }
-
-    fn sourceFileIdFor(self: *BodyDraftStore, view: ModuleView) Allocator.Error!u32 {
-        const gop = try self.source_file_ids.getOrPut(view.module_identity.module_idx);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = try self.addSourceFile(
-                view.module_env.module_name,
-                view.module_env.qualifiedModuleName(),
-            );
-        }
-        return gop.value_ptr.*;
-    }
-
     fn setLocalName(self: *BodyDraftStore, id: DraftLocalId, name: []const u8) Allocator.Error!void {
         if (name.len == 0) return;
         self.local_names.items[@intFromEnum(id)] = try self.addSourceText(name);
@@ -15047,7 +15109,6 @@ const BodyDraftStore = struct {
             .str_pattern_step_start = @intCast(program.strPatternStepCount()),
             .branch_start = @intCast(program.branchCount()),
             .if_branch_start = @intCast(program.ifBranchCount()),
-            .source_file_start = @intCast(program.sourceFileCount()),
             .core_id_mode = .identity,
         };
     }
@@ -15082,14 +15143,6 @@ const BodyDraftStore = struct {
     ) Allocator.Error!void {
         const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
         const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
-
-        for (self.source_files.items, 0..) |file, index| {
-            if (!ids.retained(.source_files, index)) continue;
-            _ = try program.addSourceFile(.{
-                .name = self.sourceText(file.name),
-                .qualified_name = self.sourceText(file.qualified_name),
-            });
-        }
 
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
@@ -15922,7 +15975,6 @@ const FinalIdOffsets = struct {
     str_pattern_step_start: u32,
     branch_start: u32,
     if_branch_start: u32,
-    source_file_start: u32,
     fn_slots: []const ?Ast.FnSlot = &.{},
     def_ids: []const ?Ast.DefId = &.{},
     core_id_mode: CoreIdMode,
@@ -16087,13 +16139,11 @@ const FinalIdOffsets = struct {
         };
     }
 
-    fn sourceLoc(self: FinalIdOffsets, loc: base.SourceLoc) base.SourceLoc {
-        if (loc.file == base.SourceLoc.no_file) return loc;
-        return .{
-            .file = self.core(.source_files, loc.file, self.source_file_start),
-            .line = loc.line,
-            .column = loc.column,
-        };
+    /// Source locations already carry final program file ids (the program's
+    /// source-file table is seeded before any body is lowered), so sealing
+    /// leaves them unchanged.
+    fn sourceLoc(_: FinalIdOffsets, loc: base.SourceLoc) base.SourceLoc {
+        return loc;
     }
 };
 
@@ -17423,7 +17473,7 @@ const BodyContext = struct {
         var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         ctx.method_scope = method_scope;
-        ctx.source_file_id = try draft.sourceFileIdFor(view);
+        ctx.source_file_id = builder.sourceFileId(view);
         return ctx;
     }
 
@@ -32522,7 +32572,7 @@ const BodyContext = struct {
         );
         const previous_view = self.view;
         const previous_source_file_id = self.source_file_id;
-        const local_source_file_id = try self.draft.sourceFileIdFor(local_view);
+        const local_source_file_id = self.builder.sourceFileId(local_view);
         self.view = local_view;
         self.source_file_id = local_source_file_id;
         defer {
@@ -37398,7 +37448,7 @@ const BodyContext = struct {
         const previous_source_file_id = self.source_file_id;
         const previous_instantiation = self.instantiation;
         self.view = declaring_view;
-        self.source_file_id = try self.draft.sourceFileIdFor(declaring_view);
+        self.source_file_id = self.builder.sourceFileId(declaring_view);
         // Checked-type lookups validate instantiation-context ownership, so
         // the foreign expression gets its own context, exactly like a
         // foreign nominal backing instantiation.
@@ -46571,7 +46621,7 @@ const BodyContext = struct {
             Common.invariant("generated codec call materialized through a different active contract");
         }
         self.view = call.view;
-        self.source_file_id = try self.draft.sourceFileIdFor(call.view);
+        self.source_file_id = self.builder.sourceFileId(call.view);
         self.evidence = active.evidence;
         defer {
             self.view = previous_view;
@@ -59021,7 +59071,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .padding = ty },
     });
     const site = try draft.addComptimeSite(.if_, base.Region.zero(), null, &.{base.Region.zero()});
-    const source_file = try draft.addSourceFile("module.roc", "test.module.roc");
+    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc" });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
     const str_pat = try draft.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{
@@ -59081,7 +59131,6 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(@as(usize, 1), draft.string_literals.items.len);
     try std.testing.expectEqual(@as(usize, 1), draft.comptime_sites.items.len);
     try std.testing.expectEqual(@as(u32, 0), source_file);
-    try std.testing.expectEqual(@as(usize, 1), draft.source_files.items.len);
     try std.testing.expectEqual(@as(usize, 1), draft.local_names.items.len);
     try std.testing.expect(draft.local_names.items[@intFromEnum(local)].len != 0);
 
