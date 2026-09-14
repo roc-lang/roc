@@ -512,6 +512,26 @@ them.
    specialization cache (roc-lang/roc#11379). Gate: two builds of the same program produce
    byte-identical objects; one-thread and many-thread builds produce the same
    emitted identity manifest.
+
+   Status: layout digests, refcount helper names, and procedure identities are
+   in place. Every LIR procedure carries a `ProcIdentity` derived from its
+   Lambda Mono `FnSpec` (lifted source digest, solved function type rendered
+   with cycle back-references, capture ABI, return reuse), or for generated
+   roots from the Monotype `Def.root_identity` (static-data thunks, binding
+   roots, inspect/parse/encode helpers, procedure-use roots). SpecConstr
+   clones fold the pattern digest into the source digest; nominal types
+   render their backing, since a backing can hold lambda sets the type
+   arguments never mention. Direct LIR lowers one proc per identity: the
+   Monotype and lifting stages can produce several specializations with the
+   same identity (duplicate Monotype templates, a lambda lifted once per
+   occurrence, empty capture spans from two sources), and those share one
+   proc rather than emitting one procedure under two names. Objects name
+   procedures `roc__proc_{hex}` from that identity, so two programs that reach
+   the same specialization emit the same symbol. Still program-local, to be
+   made content-derived before any entry is written: ARC call variants hash
+   the raw return-layout index; Boxy procedures use their symbol ordinal; the
+   LLVM backend's inline-scope linkage names still come from `lir.Symbol`.
+   Demand classes and the demand-based request digest are not started.
 2. **Boundary compilation.** ARC signatures, tag reachability, SpecConstr, and
    inlining restricted to a specialization's closure when it is compiled as a
    cache entry; ABI record; static data and per-layout helpers as weak,

@@ -74,8 +74,8 @@ pub fn collectReferencedProcs(
 }
 
 /// Deterministic object-file symbol name for an internal LIR procedure.
-pub fn procSymbolName(allocator: Allocator, proc_symbol: lir.Symbol) Allocator.Error![]u8 {
-    return try std.fmt.allocPrint(allocator, "roc__proc_{x}", .{proc_symbol.raw()});
+pub fn procSymbolName(allocator: Allocator, identity: lir.ProcIdentity) Allocator.Error![]u8 {
+    return try std.fmt.allocPrint(allocator, "roc__proc_{s}", .{&identity.symbolHex()});
 }
 
 /// Checked modules whose constants can become target static data.
@@ -1271,7 +1271,7 @@ const StaticDataBuilder = struct {
                 },
                 .procedure => |proc_id| {
                     const cached_name = self.procedure_names.get(proc_id);
-                    const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpec(proc_id).name);
+                    const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpec(proc_id).identity);
                     errdefer if (cached_name == null) self.allocator.free(name);
                     if (cached_name == null) try self.procedure_names.put(proc_id, name);
                     dest.* = .{

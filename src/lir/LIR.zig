@@ -50,6 +50,47 @@ pub const Symbol = packed struct(u64) {
     }
 };
 
+/// Content identity of a lowered procedure: a digest of everything that
+/// determines its compiled bytes (see `postcheck/proc_identity.zig`). It is
+/// the same in every program that contains the procedure and is what its
+/// symbol name is derived from, so separately compiled objects can refer to
+/// one another.
+pub const ProcIdentity = struct {
+    bytes: [32]u8,
+
+    /// Hex of the leading 128 bits, for symbol names.
+    pub fn symbolHex(self: ProcIdentity) [32]u8 {
+        return std.fmt.bytesToHex(self.bytes[0..16].*, .lower);
+    }
+
+    /// Identity of a procedure a pass derives from this one: the same role
+    /// and key from the same origin yields the same identity.
+    pub fn derived(self: ProcIdentity, role: []const u8, key: []const u8) ProcIdentity {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.derived.v1");
+        hasher.update(&self.bytes);
+        hasher.update(role);
+        hasher.update(key);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Identity of a procedure that exists only within one program and is
+    /// never an object-cache entry: Boxy lowering output, whose programs do
+    /// not use the cache. `raw` is the program-local symbol.
+    pub fn programLocal(role: []const u8, raw: u64) ProcIdentity {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.program-local.v1");
+        hasher.update(role);
+        hasher.update(std.mem.asBytes(&raw));
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Identity for procedures built directly by unit tests.
+    pub fn forTest(ordinal: u32) ProcIdentity {
+        return programLocal("test", ordinal);
+    }
+};
+
 /// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {
     _,
@@ -1132,6 +1173,8 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
 /// hosted-proc metadata.
 pub const LirProcSpec = struct {
     name: Symbol,
+    /// Content identity; every symbol emitted for this procedure derives from it.
+    identity: ProcIdentity,
     args: LocalSpan,
     /// Producer-authored provenance for a function normalized from an
     /// iterator pipeline. Dev-only structural fusion consumes this bit; it

@@ -312,7 +312,7 @@ const Builder = struct {
             const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset + self.size(entry.capture_layout), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).name), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry });
+            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry });
             switch (entry.on_drop) {
                 .none => {},
                 .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
@@ -530,9 +530,9 @@ test "frozen root transcode maps erased worker and drop identities across target
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .args = .empty(), .ret_layout = .zst });
-    const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .args = .empty(), .ret_layout = .zst });
-    const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .args = .empty(), .ret_layout = .zst });
+    const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
+    const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
+    const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
     const str_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     const source_layout = try source.layouts.insertErasedCallable();
     const target_layout = try target.layouts.insertErasedCallable();

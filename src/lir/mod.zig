@@ -73,6 +73,8 @@ pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
+/// Content identity carried by every procedure spec; names the procedure symbol.
+pub const ProcIdentity = LIR.ProcIdentity;
 /// Explicit local metadata used throughout statement-only LIR.
 pub const Local = LIR.Local;
 /// Identifier of one LIR local.

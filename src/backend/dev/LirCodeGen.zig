@@ -25719,6 +25719,7 @@ fn addLocal(store: *LirStore, layout_idx: layout.Idx) Allocator.Error!LocalId {
 fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = LocalSpan.empty(),
         .body = body,
         .ret_layout = ret_layout,
@@ -25728,6 +25729,7 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Alloca
 fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(args),
         .body = body,
         .ret_layout = ret_layout,
@@ -26422,6 +26424,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
 
     const proc = lir.LIR.LirProcSpec{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(3),
         .args = args,
         .erased_reuse_arg = reuse_arg,
         .erased_call_args = arg_plan,
@@ -27572,6 +27575,7 @@ fn addHostedCallRoot(
 
     const hosted_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(params),
         .ret_layout = .i64,
         .hosted = .{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 },
@@ -27676,7 +27680,7 @@ test "symbol producer caches reuse identities and reset with generated code" {
     const local = try store.addLocal(.{ .layout_idx = .str });
     const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
     const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = .empty(), .body = body, .ret_layout = .str });
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str });
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {

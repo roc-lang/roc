@@ -1155,6 +1155,10 @@ pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
     fn_id: ?FnId = null,
+    /// Content identity of a definition that has no function template: a
+    /// static-data request thunk or a procedure-binding root, identified by
+    /// the checked request that produced it. Null when `fn_def` is present.
+    root_identity: ?names.TypeDigest = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,
