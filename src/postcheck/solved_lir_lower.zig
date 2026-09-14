@@ -1488,7 +1488,7 @@ const Lowerer = struct {
                 _ = try self.layoutOfType(ty);
             },
         }
-        try self.prepareWorkerBodyCalls(body, 0);
+        try self.prepareWorkerBodyCalls(body, spec.return_reuse, 0);
         return true;
     }
 
@@ -1623,6 +1623,7 @@ const Lowerer = struct {
     fn prepareWorkerBodyCalls(
         self: *Lowerer,
         expr_id: Lifted.ExprId,
+        return_reuse: ErasedReturnReuse,
         depth: usize,
     ) Common.LowerError!void {
         if (depth >= 256) Common.invariant("worker body preparation exceeded its certified depth");
@@ -1633,47 +1634,47 @@ const Lowerer = struct {
         const view = self.solved.lifted.view();
         switch (data) {
             .list, .tuple => |span| for (view.exprSpan(span)) |item| {
-                try self.prepareWorkerBodyCalls(item, next_depth);
+                try self.prepareWorkerBodyCalls(item, return_reuse, next_depth);
             },
             .record => |span| for (view.fieldExprSpan(span)) |field| {
-                try self.prepareWorkerBodyCalls(field.value, next_depth);
+                try self.prepareWorkerBodyCalls(field.value, return_reuse, next_depth);
             },
             .record_update => |update| {
-                try self.prepareWorkerBodyCalls(update.base, next_depth);
+                try self.prepareWorkerBodyCalls(update.base, return_reuse, next_depth);
                 for (view.fieldExprSpan(update.fields)) |field| {
-                    try self.prepareWorkerBodyCalls(field.value, next_depth);
+                    try self.prepareWorkerBodyCalls(field.value, return_reuse, next_depth);
                 }
             },
             .tag => |tag| for (view.exprSpan(tag.payloads)) |payload| {
-                try self.prepareWorkerBodyCalls(payload, next_depth);
+                try self.prepareWorkerBodyCalls(payload, return_reuse, next_depth);
             },
-            .nominal => |inner| try self.prepareWorkerBodyCalls(inner, next_depth),
-            .typed_boundary => |boundary| try self.prepareWorkerBodyCalls(boundary.value, next_depth),
+            .nominal => |inner| try self.prepareWorkerBodyCalls(inner, return_reuse, next_depth),
+            .typed_boundary => |boundary| try self.prepareWorkerBodyCalls(boundary.value, return_reuse, next_depth),
             .let_ => |let_| {
-                try self.prepareWorkerBodyCalls(let_.value, next_depth);
-                try self.prepareWorkerBodyCalls(let_.rest, next_depth);
+                try self.prepareWorkerBodyCalls(let_.value, return_reuse, next_depth);
+                try self.prepareWorkerBodyCalls(let_.rest, return_reuse, next_depth);
             },
-            .field_access => |access| try self.prepareWorkerBodyCalls(access.receiver, next_depth),
-            .tuple_access => |access| try self.prepareWorkerBodyCalls(access.tuple, next_depth),
+            .field_access => |access| try self.prepareWorkerBodyCalls(access.receiver, return_reuse, next_depth),
+            .tuple_access => |access| try self.prepareWorkerBodyCalls(access.tuple, return_reuse, next_depth),
             .if_ => |if_| {
                 for (view.ifBranchSpan(if_.branches)) |branch| {
-                    try self.prepareWorkerBodyCalls(branch.cond, next_depth);
-                    try self.prepareWorkerBodyCalls(branch.body, next_depth);
+                    try self.prepareWorkerBodyCalls(branch.cond, return_reuse, next_depth);
+                    try self.prepareWorkerBodyCalls(branch.body, return_reuse, next_depth);
                 }
-                try self.prepareWorkerBodyCalls(if_.final_else, next_depth);
+                try self.prepareWorkerBodyCalls(if_.final_else, return_reuse, next_depth);
             },
             .if_initialized_payload => |if_| {
-                try self.prepareWorkerBodyCalls(if_.cond, next_depth);
-                try self.prepareWorkerBodyCalls(if_.initialized, next_depth);
-                try self.prepareWorkerBodyCalls(if_.uninitialized, next_depth);
+                try self.prepareWorkerBodyCalls(if_.cond, return_reuse, next_depth);
+                try self.prepareWorkerBodyCalls(if_.initialized, return_reuse, next_depth);
+                try self.prepareWorkerBodyCalls(if_.uninitialized, return_reuse, next_depth);
             },
             .block => |block| {
                 for (view.stmtSpan(block.statements)) |stmt_id| {
-                    try self.prepareWorkerBodyStmtCalls(stmt_id, next_depth);
+                    try self.prepareWorkerBodyStmtCalls(stmt_id, return_reuse, next_depth);
                 }
-                try self.prepareWorkerBodyCalls(block.final_expr, next_depth);
+                try self.prepareWorkerBodyCalls(block.final_expr, return_reuse, next_depth);
             },
-            .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, next_depth),
+            .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, return_reuse, next_depth),
             .fn_ref => |fn_ref| {
                 const fn_symbol = self.solved.lifted.getFn(fn_ref.fn_id).symbol;
                 const content = self.types.get(expr_ty);
@@ -1706,34 +1707,46 @@ const Lowerer = struct {
                     Common.invariant("certified worker callable type did not contain its function reference");
                 }
                 for (view.captureOperandSpan(fn_ref.captures)) |capture| {
-                    try self.prepareWorkerBodyCalls(capture.value, next_depth);
+                    try self.prepareWorkerBodyCalls(capture.value, return_reuse, next_depth);
                 }
             },
             .low_level => |call| for (view.exprSpan(call.args)) |arg| {
-                try self.prepareWorkerBodyCalls(arg, next_depth);
+                try self.prepareWorkerBodyCalls(arg, return_reuse, next_depth);
             },
             .structural_eq => |eq| {
-                try self.prepareWorkerBodyCalls(eq.lhs, next_depth);
-                try self.prepareWorkerBodyCalls(eq.rhs, next_depth);
+                try self.prepareWorkerBodyCalls(eq.lhs, return_reuse, next_depth);
+                try self.prepareWorkerBodyCalls(eq.rhs, return_reuse, next_depth);
             },
             .structural_hash => |hash| {
-                try self.prepareWorkerBodyCalls(hash.value, next_depth);
-                try self.prepareWorkerBodyCalls(hash.hasher, next_depth);
+                try self.prepareWorkerBodyCalls(hash.value, return_reuse, next_depth);
+                try self.prepareWorkerBodyCalls(hash.hasher, return_reuse, next_depth);
             },
             .call_proc => |call| {
                 const callee = Lifted.directCallee(call).local;
                 const callee_fn_id = try self.ensureOwnFnSpec(callee, .finite);
                 _ = try self.procPlaceholder(callee_fn_id);
+                // A direct call may inherit the enclosing return destination.
+                // Prepare both permitted ABIs; lowering selects reuse from its
+                // destination demand, and only emitted calls become reachable.
+                if (self.solved.lifted.getFn(callee).body == .roc) {
+                    switch (return_reuse) {
+                        .none => {},
+                        .erased_callable => |capture_ty| {
+                            const reuse_fn_id = try self.ensureOwnFnSpecWithErasedReturnReuse(callee, capture_ty);
+                            _ = try self.procPlaceholder(reuse_fn_id);
+                        },
+                    }
+                }
                 if (!call.is_cold) {
                     if (self.inline_plan.bodyForFn(callee)) |inline_body| {
-                        try self.prepareWorkerBodyCalls(inline_body, next_depth);
+                        try self.prepareWorkerBodyCalls(inline_body, return_reuse, next_depth);
                     }
                 }
                 for (view.exprSpan(call.args)) |arg| {
-                    try self.prepareWorkerBodyCalls(arg, next_depth);
+                    try self.prepareWorkerBodyCalls(arg, return_reuse, next_depth);
                 }
                 for (view.captureOperandSpan(call.captures)) |capture| {
-                    try self.prepareWorkerBodyCalls(capture.value, next_depth);
+                    try self.prepareWorkerBodyCalls(capture.value, return_reuse, next_depth);
                 }
             },
             .local,
@@ -1776,13 +1789,14 @@ const Lowerer = struct {
     fn prepareWorkerBodyStmtCalls(
         self: *Lowerer,
         stmt_id: Lifted.StmtId,
+        return_reuse: ErasedReturnReuse,
         depth: usize,
     ) Common.LowerError!void {
         switch (self.solved.lifted.getStmt(stmt_id)) {
             .uninitialized => {},
-            .let_ => |let_| try self.prepareWorkerBodyCalls(let_.value, depth),
-            .expr => |expr| try self.prepareWorkerBodyCalls(expr, depth),
-            .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, depth),
+            .let_ => |let_| try self.prepareWorkerBodyCalls(let_.value, return_reuse, depth),
+            .expr => |expr| try self.prepareWorkerBodyCalls(expr, return_reuse, depth),
+            .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, return_reuse, depth),
             .expect, .dbg, .crash => Common.invariant("certified worker body contained an unsupported statement"),
         }
     }
