@@ -60002,7 +60002,7 @@ test "function context identity excludes draft local allocation ids" {
 
 test "lazy checked instantiation allocates only recursive placeholders and clears failed builds" {
     const Test = struct {
-        fn run(gpa: Allocator) !void {
+        fn run(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
             var name_store = names.NameStore.init(gpa);
             defer name_store.deinit();
             var type_store = Type.Store.init(gpa);

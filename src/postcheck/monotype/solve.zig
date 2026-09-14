@@ -10103,7 +10103,7 @@ test "iterator-free finalization performs no graph resolutions" {
 
 test "generated iterator index follows content replacement and argument unions" {
     const Test = struct {
-        fn run(gpa: Allocator) !void {
+        fn run(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
             var types = Type.Store.init(gpa);
             defer types.deinit();
             var name_store = names.NameStore.init(gpa);
@@ -10123,7 +10123,7 @@ test "generated iterator index follows content replacement and argument unions" 
                 for (graph.nodes.items, 0..) |content, i| {
                     if (GeneratedIteratorKey.fromContent(content)) |key| {
                         const bucket = graph.generated_iterator_index.get(key).?;
-                        std.debug.assert(std.mem.indexOfScalar(NodeId, bucket.items, @enumFromInt(i)) != null);
+                        std.debug.assert(std.mem.findScalar(NodeId, bucket.items, @enumFromInt(i)) != null);
                     }
                 }
             }
