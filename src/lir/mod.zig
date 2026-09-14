@@ -149,6 +149,7 @@ pub fn hasherU64Width(op: LowLevel) u8 {
 }
 
 test "lir tests" {
+    _ = @import("proc_passes_test.zig");
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);

@@ -68,7 +68,7 @@ const BranchRewriter = struct {
             const payload = assign.op.tag_payload_struct;
             if (payload.source != self.param) return null;
             std.debug.assert(payload.variant_index == self.variant_index);
-            cloner.local_map[@intFromEnum(assign.target)] = self.payload;
+            try cloner.local_map.put(assign.target, self.payload);
             return try cloner.cloneStmt(assign.next);
         }
         if (assign.op != .tag_payload) return null;
@@ -234,11 +234,11 @@ fn branchesAreOwnershipNeutral(
 ) ResourceError!bool {
     for (builds) |build| {
         const branch = switchTarget(store, switch_stmt, build.discriminant);
-        const definitions = try body_clone.collectReachableDefinitions(store, branch);
-        defer store.allocator.free(definitions);
-        for (definitions, 0..) |is_defined, local_index| {
-            if (!is_defined) continue;
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
+        var definitions = try body_clone.collectReachableDefinitions(store, branch);
+        defer definitions.deinit();
+        var definition_it = definitions.counts.iterator();
+        while (definition_it.next()) |entry| {
+            const local = entry.key_ptr.*;
             if (layouts.layoutContainsRefcounted(layouts.getLayout(store.getLocal(local).layout_idx))) return false;
         }
     }
@@ -416,8 +416,8 @@ fn applyCandidate(
         try join_params.record(store.getCFStmt(join_stmt).join);
 
         const branch = switchTarget(store, switch_stmt, build.discriminant);
-        const branch_defs = try body_clone.collectReachableDefinitions(store, branch);
-        defer store.allocator.free(branch_defs);
+        var branch_defs = try body_clone.collectReachableDefinitions(store, branch);
+        defer branch_defs.deinit();
         var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoins(store, .{
             .param = candidate.matched_value,
             .variant_index = build.variant_index,
@@ -429,7 +429,7 @@ fn applyCandidate(
         const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
         for (0..frame.len) |index| {
             const local = GuardedList.at(frame, index);
-            if (!branch_defs[@intFromEnum(local)]) cloner.local_map[@intFromEnum(local)] = local;
+            if (branch_defs.get(local) == 0) try cloner.local_map.put(local, local);
         }
         const body = try cloner.cloneStmt(branch);
         try cloned_locals.appendSlice(store.allocator, cloner.new_locals.items);

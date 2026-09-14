@@ -260,6 +260,37 @@ test "iterator-producing callees complete in worker-owned specialization drafts"
     );
 }
 
+test "LIR pass workers deterministically rewrite recursive aggregate loops" {
+    try harness.expectLirPassParallelismDeterministicLir(.{ .app_body =
+        \\walk : U64, { sum: U64, count: U64 } -> U64
+        \\walk = |n, state| if n == 0 {
+        \\    state.sum + state.count
+        \\} else {
+        \\    walk(n - 1, { sum: state.sum + n, count: state.count + 1 })
+        \\}
+        \\
+        \\walk_again : U64, U64 -> U64
+        \\walk_again = |n, total| if n == 0 total else walk_again(n - 1, total + n)
+        \\
+        \\build : U64 -> List(U64)
+        \\build = |n| {
+        \\    var $values = []
+        \\    var $i = 0
+        \\    while $i < n {
+        \\        $values = $values.append($i)
+        \\        $i = $i + 1
+        \\    }
+        \\    $values
+        \\}
+        \\
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    echo!(Str.inspect((walk(n, { sum: 0, count: 0 }), walk_again(n, 0), build(n))))
+        \\    Ok({})
+        \\}
+    }, .{}, &.{ .trmc, .scalarize, .loop_append });
+}
+
 test "self-tail proofs survive deterministic parallel body handoff" {
     try expectSpecializationParallelismDeterministicLir(
         \\walk : U64, U64 -> U64

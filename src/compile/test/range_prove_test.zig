@@ -70,6 +70,14 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     }
 }
 
+test "LIR pass workers deterministically prove runtime range guards" {
+    try harness.expectLirPassParallelismDeterministicLir(
+        .{ .app_body = fastloopApp("16") },
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        &.{.range},
+    );
+}
+
 test "a 16-byte margin guard proves away the read's bounds test and the advance's checks" {
     try harness.expectLirInspectionWithOptions(
         fastloopApp("16"),

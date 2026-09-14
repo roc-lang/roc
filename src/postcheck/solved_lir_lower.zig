@@ -1844,7 +1844,12 @@ const Lowerer = struct {
         proc.stack_probe = shard.stack_probe;
         proc.tail_calls = if (shard.tail_calls) |sites| .{
             .head = appended.relocation.stmt(shard.prefix, sites.head),
-            .loop = sites.loop,
+            // This is the builder's first identity above the emitted joins.
+            // With no joins, its fresh per-procedure identity stays zero.
+            .loop = if (@intFromEnum(sites.loop) == 0)
+                sites.loop
+            else
+                @enumFromInt(appended.relocation.join_point_id_base + @intFromEnum(sites.loop)),
         } else null;
         self.next_join_point = next_join_point;
         try self.folded_map_matches.appendSlice(self.allocator, shard.folded_map_matches);
