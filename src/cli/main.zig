@@ -16331,7 +16331,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
     diagnostics.graph.generated_private_guard_returns = 204;
-    diagnostics.graph.generated_private_scans = 205;
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
@@ -16347,14 +16346,13 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     const graph = monotypeGraphCounters(diagnostics);
     try std.testing.expectEqualStrings("Nodes created", graph[1].name);
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
-    try std.testing.expectEqualStrings("Generated-private guard returns", graph[26].name);
-    try std.testing.expectEqual(@as(u64, 204), graph[26].count);
-    try std.testing.expectEqualStrings("Generated-private containment queries", graph[15].name);
-    try std.testing.expectEqual(@as(u64, 205), graph[15].count);
     try std.testing.expectEqualStrings("Generated-private nodes visited", graph[17].name);
     try std.testing.expectEqual(@as(u64, 202), graph[17].count);
     try std.testing.expectEqualStrings("Nominal backing tombstone deletions", graph[22].name);
     try std.testing.expectEqual(@as(u64, 203), graph[22].count);
+    try std.testing.expectEqualStrings("Generated-private containment queries", graph[15].name);
+    try std.testing.expectEqualStrings("Generated-private guard returns", graph[26].name);
+    try std.testing.expectEqual(@as(u64, 204), graph[26].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);
