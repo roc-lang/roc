@@ -16380,6 +16380,14 @@ const InstantiatedFieldKind = struct {
     value: NodeId,
 };
 
+/// A checked type is either complete or being constructed in this scope.
+const InstantiationNode = union(enum) {
+    node: NodeId,
+    building: ?NodeId,
+};
+
+const InstantiationNodeMap = collections.DenseMap(checked.CheckedTypeId, InstantiationNode);
+
 /// The complete mutable state for one checked-type instantiation scope. Body
 /// lowering state remains on `BodyContext`; operations that only need a fresh
 /// type instantiation can swap this small state without constructing another
@@ -16388,11 +16396,11 @@ const TypeInstantiationContext = struct {
     allocator: Allocator,
     id: InstantiationScopeId,
     module_bytes: [32]u8,
-    node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    node_map: InstantiationNodeMap,
     field_kind_map: collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
+    decl_scopes: std.ArrayList(*InstantiationNodeMap) = .empty,
     field_kind_decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
 
     fn init(
@@ -16404,7 +16412,7 @@ const TypeInstantiationContext = struct {
             .allocator = allocator,
             .id = id,
             .module_bytes = module_bytes,
-            .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .node_map = InstantiationNodeMap.init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
         };
     }
@@ -19068,7 +19076,11 @@ const BodyContext = struct {
         if (copy_type_cells) {
             var node_iter = self.instantiation.node_map.iterator();
             while (node_iter.next()) |entry| {
-                try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                switch (entry.value_ptr.*) {
+                    .node => try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*),
+                    // A partial construction belongs only to its active scope.
+                    .building => {},
+                }
             }
         }
 
@@ -20207,16 +20219,23 @@ const BodyContext = struct {
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("checked_node_requests");
         const scoped_ty = self.scopedCheckedType(checked_ty);
-        if (self.scopedNode(scoped_ty)) |existing| {
+        if (try self.scopedNode(scoped_ty)) |existing| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
-        const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.putScopedNode(scoped_ty, placeholder);
+        const map = self.scopedNodeMap(scoped_ty);
+        try map.put(scoped_ty, .{ .building = null });
+        errdefer _ = map.remove(scoped_ty);
         const built = try self.instNodeContent(checked_ty);
-        try self.graph.unify(placeholder, built);
-        return placeholder;
+        // Recursive construction can grow the map; reacquire its entry.
+        const entry = map.getPtr(scoped_ty).?;
+        const result = if (entry.building) |placeholder| result: {
+            try self.graph.unify(placeholder, built);
+            break :result placeholder;
+        } else built;
+        entry.* = .{ .node = result };
+        return result;
     }
 
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
@@ -20241,21 +20260,29 @@ const BodyContext = struct {
     /// lookup: the same open checked type mentioned at two nesting levels of
     /// a recursive declaration expansion binds the formals differently, and
     /// an outer answer would collapse those distinct types into one node.
-    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
+    fn scopedNodeMap(self: *BodyContext, checked_ty: checked.CheckedTypeId) *InstantiationNodeMap {
         const scopes = self.instantiation.decl_scopes.items;
         if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
-            return self.instantiation.node_map.get(checked_ty);
+            return &self.instantiation.node_map;
         }
-        return scopes[scopes.len - 1].get(checked_ty);
+        return scopes[scopes.len - 1];
+    }
+
+    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
+        const entry = self.scopedNodeMap(checked_ty).getPtr(checked_ty) orelse return null;
+        switch (entry.*) {
+            .node => |node| return node,
+            .building => |existing| {
+                if (existing) |placeholder| return placeholder;
+                const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                entry.* = .{ .building = placeholder };
+                return placeholder;
+            },
+        }
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
-        const scopes = self.instantiation.decl_scopes.items;
-        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
-            try self.instantiation.node_map.put(checked_ty, node);
-            return;
-        }
-        try scopes[scopes.len - 1].put(checked_ty, node);
+        try self.scopedNodeMap(checked_ty).put(checked_ty, .{ .node = node });
     }
 
     /// Field-kind memoization scopes exactly like `scopedNode`. A kind cell
@@ -20302,17 +20329,12 @@ const BodyContext = struct {
             ) }),
             .empty_record => try self.graph.newNode(.empty_record),
             .empty_tag_union => try self.graph.newNode(.empty_tag_union),
-            .alias => |alias| try self.graph.newNode(.{ .named = .{
-                .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
-                .def = try self.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
-                .kind = .alias,
-                .builtin_owner = null,
-                .args = try self.instNodeSlice(alias.args),
-                .backing = .{
-                    .node = try self.instNode(alias.backing),
-                    .use = .inspectable,
-                },
-            } }),
+            .alias => |alias| alias: {
+                // Alias arguments instantiate in this exact scope, but an
+                // alias has no nominal runtime identity of its own.
+                for (alias.args) |arg| _ = try self.instNode(arg);
+                break :alias try self.instNode(alias.backing);
+            },
             .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(fields),
                 .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
@@ -20583,12 +20605,12 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        var scope = collections.DenseMap(checked.CheckedTypeId, NodeId).init(self.allocator);
+        var scope = InstantiationNodeMap.init(self.allocator);
         defer scope.deinit();
         var field_kind_scope = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
         defer field_kind_scope.deinit();
         for (formal_args, args) |formal, arg| {
-            try scope.put(self.scopedCheckedType(formal), arg);
+            try scope.put(self.scopedCheckedType(formal), .{ .node = arg });
         }
         try self.instantiation.decl_scopes.append(self.allocator, &scope);
         defer _ = self.instantiation.decl_scopes.pop();
@@ -22434,7 +22456,7 @@ const BodyContext = struct {
                 // default. Openness inside a custom target is not evidence
                 // that the target itself should default to a builtin.
                 if (self.graph.content(expr_node) == .unresolved) {
-                    self.graph.materializeLiteralDefault(expr_node);
+                    try self.graph.materializeLiteralDefault(expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
@@ -41180,7 +41202,7 @@ const BodyContext = struct {
                 .checked_error => continue,
             };
             const scoped_ty = self.scopedCheckedType(scheme_var);
-            if (self.scopedNode(scoped_ty)) |existing| {
+            if (try self.scopedNode(scoped_ty)) |existing| {
                 if (!self.graph.sameClass(existing, node)) try self.graph.unify(existing, node);
                 continue;
             }
@@ -46066,7 +46088,7 @@ const BodyContext = struct {
         node: NodeId,
     ) Allocator.Error!void {
         const scoped_ty = contract_ctx.scopedCheckedType(checked_ty);
-        if (contract_ctx.scopedNode(scoped_ty)) |existing| {
+        if (try contract_ctx.scopedNode(scoped_ty)) |existing| {
             try relateRequestComponent(self.graph, existing, node);
         } else {
             try contract_ctx.putScopedNode(scoped_ty, node);
@@ -59911,9 +59933,9 @@ test "checked type instantiation scopes have exact isolated identities" {
     try std.testing.expect(first.id != second.id);
     const checked_ty: checked.CheckedTypeId = @enumFromInt(11);
     const node: NodeId = @enumFromInt(13);
-    try first.node_map.put(checked_ty, node);
-    try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(checked_ty));
-    try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(checked_ty));
+    try first.node_map.put(checked_ty, .{ .node = node });
+    try std.testing.expectEqual(node, first.node_map.get(checked_ty).?.node);
+    try std.testing.expect(second.node_map.get(checked_ty) == null);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 
@@ -59976,4 +59998,113 @@ test "function context identity excludes draft local allocation ids" {
     restored[0].binder += 1;
     const different_binder_key = BodyContext.lexicalContextKeyFromEntries(base_key, &restored);
     try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
+}
+
+test "lazy checked instantiation allocates only recursive placeholders and clears failed builds" {
+    const Test = struct {
+        fn run(gpa: Allocator) !void {
+            var name_store = names.NameStore.init(gpa);
+            defer name_store.deinit();
+            var type_store = Type.Store.init(gpa);
+            defer type_store.deinit();
+            const graph = try InstGraph.create(gpa, &type_store, &name_store);
+            defer graph.destroy();
+            var diagnostics: solve.GraphDiagnostics = .{};
+            graph.setDiagnostics(&diagnostics);
+            var checked_types = checked.CheckedTypeStore{};
+            defer checked_types.deinit(std.testing.allocator);
+            const variable = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+            try checked_types.fillSyntheticTypeRoot(std.testing.allocator, variable, .{ .flex = .{} });
+            const function = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{variable}, variable);
+            const recursive = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+            try checked_types.fillSyntheticTypeRoot(std.testing.allocator, recursive, .{ .function = .{
+                .kind = .pure,
+                .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{ recursive, recursive }),
+                .ret = variable,
+            } });
+
+            const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+            try checked_types.fillSyntheticTypeRoot(std.testing.allocator, alias, .{ .alias = .{
+                .name = @enumFromInt(0),
+                .origin_module = @enumFromInt(0),
+                .owner_module = .{},
+                .backing = function,
+                .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{variable}),
+            } });
+
+            var builder: Builder = undefined;
+            builder.next_instantiation_scope = 0;
+            builder.timing = null;
+            builder.diagnostics = null;
+            builder.active_spec_job_diagnostics = null;
+            var ctx: BodyContext = undefined;
+            ctx.allocator = gpa;
+            ctx.builder = &builder;
+            ctx.graph = graph;
+            ctx.view.key = .{ .bytes = @splat(0) };
+            ctx.view.types = checked_types.view();
+            ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+            defer ctx.instantiation.deinit();
+            errdefer {
+                var entries = ctx.instantiation.node_map.valueIterator();
+                while (entries.next()) |entry| std.debug.assert(entry.* == .node);
+            }
+
+            const fn_node = try ctx.instNode(function);
+            try std.testing.expectEqual(@as(u64, 2), diagnostics.nodes_created);
+            try std.testing.expectEqual(@as(u64, 0), diagnostics.unify_requests);
+            try std.testing.expectEqual(fn_node, try ctx.instNode(function));
+            try std.testing.expectEqual(fn_node, try ctx.instNode(alias));
+            try std.testing.expectEqual(@as(u64, 2), diagnostics.nodes_created);
+            try std.testing.expectEqual(@as(u64, 0), diagnostics.unify_requests);
+            const rec_node = try ctx.instNode(recursive);
+            try std.testing.expectEqual(@as(u64, 4), diagnostics.nodes_created);
+            try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
+            const rec_fn = try graph.functionNodes(rec_node);
+            for (rec_fn.args) |arg| try std.testing.expect(graph.sameClass(rec_node, arg));
+            try std.testing.expectEqual(rec_node, try ctx.instNode(recursive));
+            const fresh = try ctx.freshInstNode(function);
+            try std.testing.expect(!graph.sameClass(fn_node, fresh));
+            try std.testing.expectEqual(fn_node, try ctx.instNode(function));
+        }
+    };
+    try Test.run(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{});
+}
+
+test "lazy checked placeholders obey closed and innermost declaration scopes" {
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    var types = Type.Store.init(gpa);
+    defer types.deinit();
+    const graph = try InstGraph.create(gpa, &types, &name_store);
+    defer graph.destroy();
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const open = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const closed = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    var ctx: BodyContext = undefined;
+    ctx.graph = graph;
+    ctx.view.types = checked_types.view();
+    ctx.instantiation = TypeInstantiationContext.init(gpa, @enumFromInt(0), @splat(0));
+    defer ctx.instantiation.deinit();
+    var outer = InstantiationNodeMap.init(gpa);
+    defer outer.deinit();
+    var inner = InstantiationNodeMap.init(gpa);
+    defer inner.deinit();
+    try ctx.instantiation.node_map.put(closed, .{ .building = null });
+    try outer.put(open, .{ .building = null });
+    try ctx.instantiation.decl_scopes.append(gpa, &outer);
+    const outer_node = (try ctx.scopedNode(open)).?;
+    try std.testing.expectEqual(outer_node, (try ctx.scopedNode(open)).?);
+    const closed_node = (try ctx.scopedNode(closed)).?;
+    try ctx.instantiation.decl_scopes.append(gpa, &inner);
+    try std.testing.expect(try ctx.scopedNode(open) == null);
+    try inner.put(open, .{ .building = null });
+    const inner_node = (try ctx.scopedNode(open)).?;
+    try std.testing.expect(!graph.sameClass(outer_node, inner_node));
+    try std.testing.expectEqual(closed_node, (try ctx.scopedNode(closed)).?);
+    _ = ctx.instantiation.decl_scopes.pop();
+    try std.testing.expectEqual(outer_node, (try ctx.scopedNode(open)).?);
 }

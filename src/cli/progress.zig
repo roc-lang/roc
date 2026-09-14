@@ -48,7 +48,7 @@ const max_subphases: usize = 25;
 // four entries; retain headroom so later explicit diagnostics are not silently
 // dropped merely because their recording order changes.
 const max_counter_groups: usize = 8;
-const max_counters_per_group: usize = 24;
+const max_counters_per_group: usize = 32;
 
 /// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
 /// This accommodates durations up to tens of minutes (5_999_000ms is just under 100 minutes).

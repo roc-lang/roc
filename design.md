@@ -8013,8 +8013,18 @@ looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. A child
 that needs independent generic cells receives a new scope identity; copying
-cells into that scope is explicit. Nodes begin unresolved. As relations are
-produced, explicit evidence from checked data unifies those nodes:
+cells into that scope is explicit. Checked-type construction first records an
+in-progress memo entry. Only a recursive lookup allocates an unresolved
+placeholder; completion unifies that placeholder with the built node. An
+acyclic construction caches the built node directly, without a placeholder or
+bridging relation. Checked aliases instantiate their explicit arguments and
+return their backing node directly: alias transparency does not depend on a
+placeholder's unification through the backing. Failed construction removes its
+in-progress entry. All graph
+nodes that were allocated remain permanent, including recursive placeholders;
+request side tables and argument-class snapshots retain their exact identities.
+As relations are produced, explicit evidence from checked data unifies those
+nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
