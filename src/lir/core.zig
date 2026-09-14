@@ -29,3 +29,6 @@ test "lir core declarations are referenced" {
     std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedArithmetic);
 }
+
+/// Canonical packed product data and committed-layout copy plans.
+pub const PackedData = @import("packed_data.zig");
