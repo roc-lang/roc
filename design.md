@@ -157,7 +157,39 @@ and is released after its last consumer, before compile-time evaluation; error
 exits also release it. Scheme hashing may reuse traversal
 capacity, but every complete digest starts fresh identity and cycle numbering,
 including after allocation failure. Neither this index nor hashing scratch is
-added to the serialized checked module or reused across source-store mutations.
+added to the serialized checked module. The source-scheme index never crosses
+source-store mutations. Type digest writers may retain allocation capacity
+while a source store changes, but no digest, type content, identity slot, or cycle
+slot survives between requests: each request traverses the current graph.
+
+Record and tag row ordering uses exact lexicographic name ranks, rebuilt lazily
+when an append-only interner grows. Large name sets use bytewise radix ordering,
+with an explicit end-of-name bucket; small sets use comparison sorting.
+Row sorting compares those ranks for small rows and uses at most four bytewise
+distribution passes for large rows. Ordered and reversed runs need no scratch.
+Constant digest tags batch their length prefix and text into one hash update;
+the SHA-256 input bytes and persisted key format are unchanged.
+Extension-chain visitation uses the same constant-time indexed stack as
+ancestor and identity tracking. Ranks are transient; frozen name buffers
+remain unchanged, with rank storage owned by the module view or its consumer.
+Identity enumeration and error inspection specialize that same ordered traversal
+without emitting hash bytes. Inspection keeps a request-local visited index,
+so repeated requests for a resolved root do not dispatch its children again;
+it retains first-encounter identity order.
+Digest emission still visits every occurrence required by the encoding. Neither
+inspection results nor visitation marks survive the request or source mutations.
+
+Identity and ancestor stacks own their paged ID-to-position indexes. A slot is
+live exactly when it addresses the current stack and the entry has that ID;
+popping, truncating, and clearing require no sparse-page writes or scans.
+Row normalization and constant-time identity/cycle lookups preserve the digest's
+existing traversal order, slot numbering, and encoded bytes.
+
+CheckedTypeStore.fromModule records identity-variable reachability and cycle reachability
+in a one-byte column indexed by immutable source variable. Each slot records
+unseen, active, or complete, plus those two booleans. The column is allocated
+once for the exact source domain and never crosses source-store mutations;
+recursive visits need no map growth, deletion, or tombstone probing.
 
 Instantiation substitutions, generalization visitation, and per-query function
 effect memos retain sparse storage while clearing and iterating only live
@@ -1582,6 +1614,11 @@ decides whether a source type name is inserted, shadows another type, replaces
 an auto-imported type, redeclares an existing type, or repeats the same external
 type must live in one place. Callers may choose which source operation they are
 performing, but they must not duplicate the type-binding collision matrix.
+
+Local type bindings record their exact declaration kind when introduced,
+including forward placeholders. Completing a placeholder fills its body without
+changing that kind. Scope aliases retain the same statement identity and need
+no scan or rebinding when its body becomes available.
 
 Source binding mutability comes only from an explicit `var` construct. CIR
 represents a mutable binder as `Pattern.var_assign` and an immutable binder as

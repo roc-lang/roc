@@ -15,6 +15,7 @@ pub const BuiltinModuleView = struct {
 
     /// Destroy the wrapper ModuleEnv without freeing the static builtin backing bytes.
     pub fn deinit(self: *BuiltinModuleView) void {
+        self.env.common.idents.deinitTextRanks();
         self.gpa.destroy(self.env);
         self.* = undefined;
     }
@@ -48,6 +49,11 @@ pub fn moduleView(
         source,
         module_name,
     ) catch return error.CorruptEmbeddedBuiltins;
+
+    // Checked publication can request many keys from this frozen source view.
+    // Share its lazy rank generation across those walks without touching the
+    // embedded interner or adding anything to the serialized representation.
+    try env.common.idents.enableTextRanks(gpa);
 
     return .{
         .env = env,
