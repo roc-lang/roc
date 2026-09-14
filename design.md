@@ -4631,6 +4631,15 @@ before any durable Monotype type is sealed. Together they compute:
   its components;
 - a hard minted depth limit of 16.
 
+The graph indexes generated iterators by producer kind, declaration, and
+callable evidence. Reuse compares current argument classes within that bucket;
+argument unions therefore cannot stale the index. Node creation, content
+replacement, and root redirection maintain the same inventory. A monotone
+provenance count lets both iterator finalization passes return without walking
+graphs that never contained generated iterators. Generated-private containment
+diagnostics distinguish the analogous zero-provenance guard from actual
+containment queries.
+
 A public `Iter` expected type constrains the checked result type; it does not
 veto producer-owned representation evidence. A source or adapter whose inputs
 prove a bounded chain mints its concrete result and relates that result to the
@@ -8013,8 +8022,17 @@ looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. A child
 that needs independent generic cells receives a new scope identity; copying
-cells into that scope is explicit. Nodes begin unresolved. As relations are
-produced, explicit evidence from checked data unifies those nodes:
+cells into that scope is explicit. Checked-type memo entries distinguish an
+in-progress construction from a completed node. Only a recursive lookup of an
+in-progress entry allocates an unresolved placeholder; completion joins that
+placeholder to the constructed node. Acyclic construction retains the built
+node directly. Failed construction removes its in-progress entry. Graph node
+identities remain append-only, including recursive placeholders, so argument
+class snapshots and per-node evidence retain their permanent addresses.
+Checked aliases instantiate their explicit arguments and return the checked
+backing's node directly. Their transparency must not depend on the presence of
+a placeholder relation; source spelling remains owned by checked data.
+As relations are produced, explicit evidence from checked data unifies nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
