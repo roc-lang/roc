@@ -391,6 +391,7 @@ const CustomCase = enum {
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
     native_build_thread_count_reproducible,
+    native_build_artifact_round_trip,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
@@ -1500,6 +1501,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_crash_arm64musl } },
@@ -3072,6 +3074,7 @@ fn runCustomCase(
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
+        .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
@@ -5672,6 +5675,42 @@ fn customNativeBuildThreadCountReproducible(
         if (!std.mem.eql(u8, outputs[1], outputs[2])) {
             return customFailure(allocator, timer, "{s}: native dev build bytes differ between two builds with the default worker count", .{roc_file});
         }
+    }
+    return null;
+}
+
+/// Every dev object compile under `ROC_DEV_ARTIFACT_ROUNDTRIP` also assembles
+/// the program from its own procedure artifacts and panics on any difference
+/// in code bytes, relocations, or unwind records (`ProcArtifact.verifyRoundTrip`
+/// in `src/backend/dev/ProcArtifact.zig`). A build that panics fails the
+/// "successfully building" check.
+fn customNativeBuildArtifactRoundTrip(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var round_trip_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone artifact round-trip environment: {}", .{err}),
+    };
+    defer round_trip_env.env_map.deinit();
+    round_trip_env.env_map.put("ROC_DEV_ARTIFACT_ROUNDTRIP", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the artifact round trip: {}", .{err});
+
+    for (thread_count_reproducible_apps, 0..) |roc_file, app_index| {
+        const output_path = std.fmt.allocPrint(allocator, "{s}/artifact_round_trip_{d}", .{ env.dirs.work_dir, app_index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+        if (runRocAndCheck(io, allocator, &round_trip_env, timer, timeout_ms, .{
+            .args = &.{ "build", "--no-cache", "--opt=dev", out_arg },
+            .roc_file = roc_file,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
+        })) |failure| return failure;
     }
     return null;
 }

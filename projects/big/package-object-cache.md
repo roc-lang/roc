@@ -568,11 +568,21 @@ them.
    the references before the same patch passes run. The slices, each its own
    PR stacked on the previous one:
 
-   1. Procedure artifacts in the dev backend: extract every compiled
-      procedure and refcount helper as an artifact, reassemble a program from
-      artifacts, and gate that a build assembled from its own artifacts is
-      byte-identical to a normal build (fixture apps and a backend unit
-      test). No cache, no store.
+   1. Procedure artifacts in the dev backend (done): the code generator logs
+      every range it emits with its producer and every reference from the
+      buffer into itself, `src/backend/dev/ProcArtifact.zig` lifts each range
+      into an artifact (bytes, references as artifact index plus delta,
+      named relocations, frame metadata) and places an artifact set back
+      into an open code generator, and `ROC_DEV_ARTIFACT_ROUNDTRIP` makes
+      every dev object compile assemble the program from its own artifacts
+      and panic on any difference in code bytes, relocations, or unwind
+      records. Gated by a CLI subcommands case over the fixture apps; the
+      full fixture corpus and the whole subcommands suite pass under the
+      flag. Not yet artifacts: aarch64 procedures, whose calls reach their targets
+      through registered branch sites and veneer islands that the artifact
+      references do not carry, so the round trip is x86_64 only for now; Boxy capture-drop helpers
+      are emitted inside their caller's bytes and are rejected as nested
+      regions (Boxy programs never use the cache). No cache, no store.
    2. Pack programs: lower one module's closed export set as a program with
       boundary-conservative passes (tag reachability treats root parameters
       as fully constructed; ARC signatures solved within the pack and
