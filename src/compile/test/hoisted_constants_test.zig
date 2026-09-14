@@ -738,7 +738,7 @@ fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!us
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
