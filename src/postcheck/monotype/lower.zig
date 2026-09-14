@@ -13,7 +13,7 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
 const solve = @import("solve.zig");
-const PublishedInputs = @import("published_inputs.zig");
+const WorkerInputs = @import("worker_inputs.zig");
 
 const InstGraph = solve.InstGraph;
 const InstNode = solve.InstNode;
@@ -2296,7 +2296,7 @@ const TemplateBodyScheduling = enum { immediate, queued };
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
 /// lanes continue working when an earlier dispatch delays ordered acceptance.
 const parallel_spec_jobs_per_lane: usize = 4;
-const PublishedSummaries = PublishedInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
+const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
 
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
@@ -2512,7 +2512,7 @@ pub const SpecJobWorkerState = struct {
     workspace: SpecJobWorkspace,
     builder: ?*Builder = null,
     /// Stable-address lane view of the captured worker read set.
-    /// It borrows publication storage and contains no coordinator output rows.
+    /// It borrows snapshot storage and contains no coordinator output rows.
     input_program: ?*Ast.Program = null,
     tasks_started: u64 = 0,
     counters: SpecializationCounters = .{},
@@ -2654,9 +2654,9 @@ const CompletedProcedureRootShard = struct {
 /// Captured immutable input for a root batch or one streaming specialization.
 const SpecJobWorkerInputs = struct {
     modules: Common.CheckedModules,
-    snapshot: *const PublishedInputs.Snapshot,
+    snapshot: *const WorkerInputs.Snapshot,
     proc_debug_names: bool,
-    interface_summaries: *const PublishedSummaries,
+    interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
     collect_counters: bool,
     collect_diagnostics: bool,
@@ -2680,7 +2680,7 @@ const PreparedSpecJob = struct {
 /// Caller-owned task storage. Executor callbacks write only their own element.
 const SpecJobTaskContext = struct {
     inputs: SpecJobWorkerInputs,
-    snapshot: PublishedInputs.Snapshot,
+    snapshot: WorkerInputs.Snapshot,
     workers: []?SpecJobWorkerState,
     prepared: PreparedSpecJob,
     shard: ?CompletedSpecJobShard = null,
@@ -3067,10 +3067,10 @@ const Builder = struct {
     spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
     spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
     spec_job_task_buffers: SpecJobTaskBuffers = .{},
-    published_inputs: PublishedInputs.ProgramInputs = .{},
-    published_summaries: ?PublishedSummaries = null,
+    worker_inputs: WorkerInputs.ProgramInputs = .{},
+    shared_summaries: ?SharedSummaries = null,
     interface_summaries: InterfaceSummaryCache,
-    coordinator_interface_summaries: ?*const PublishedSummaries = null,
+    coordinator_interface_summaries: ?*const SharedSummaries = null,
     coordinator_interface_summary_end: usize = 0,
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
@@ -3272,8 +3272,8 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
-        if (self.published_summaries) |*published| published.deinit();
-        self.published_inputs.deinit(self.allocator);
+        if (self.shared_summaries) |*summaries| summaries.deinit();
+        self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
@@ -3836,13 +3836,13 @@ const Builder = struct {
         }
     }
 
-    fn publishSpecJobInputs(self: *Builder) Allocator.Error!PublishedInputs.Snapshot {
-        if (self.published_summaries == null) self.published_summaries = PublishedSummaries.init(self.allocator);
-        const summaries = &self.published_summaries.?;
+    fn captureSpecJobInputs(self: *Builder) Allocator.Error!WorkerInputs.Snapshot {
+        if (self.shared_summaries == null) self.shared_summaries = SharedSummaries.init(self.allocator);
+        const summaries = &self.shared_summaries.?;
         for (self.interface_summaries.entries.items[summaries.count..]) |entry| {
             try summaries.insert(entry.address, entry);
         }
-        return self.published_inputs.publish(self.allocator, self.program);
+        return self.worker_inputs.capture(self.allocator, self.program);
     }
 
     fn rootSourceModule(self: *Builder, source_modules: []const checked.ModuleId, index: usize) checked.ModuleId {
@@ -3864,13 +3864,13 @@ const Builder = struct {
         defer self.allocator.free(tasks);
         const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, requests.len);
         defer self.allocator.free(completions);
-        const snapshot = try self.publishSpecJobInputs();
+        const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
             .modules = self.modules,
             .snapshot = &snapshot,
             .proc_debug_names = self.proc_debug_names,
-            .interface_summaries = &self.published_summaries.?,
-            .interface_summary_end = self.published_summaries.?.count,
+            .interface_summaries = &self.shared_summaries.?,
+            .interface_summary_end = self.shared_summaries.?.count,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -5160,15 +5160,15 @@ const Builder = struct {
                 } else {
                     const slot = submitted % capacity;
                     const context = &contexts[slot];
-                    const snapshot = try self.publishSpecJobInputs();
+                    const snapshot = try self.captureSpecJobInputs();
                     context.* = .{
                         .snapshot = snapshot,
                         .inputs = .{
                             .modules = self.modules,
                             .snapshot = &context.snapshot,
                             .proc_debug_names = self.proc_debug_names,
-                            .interface_summaries = &self.published_summaries.?,
-                            .interface_summary_end = self.published_summaries.?.count,
+                            .interface_summaries = &self.shared_summaries.?,
+                            .interface_summary_end = self.shared_summaries.?.count,
                             .collect_counters = self.counters != null,
                             .collect_diagnostics = self.diagnostics != null,
                             .inline_expects = self.inline_expects,

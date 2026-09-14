@@ -1,4 +1,4 @@
-//! Publication storage for specialization inputs. The coordinator is the sole
+//! Snapshot storage for specialization inputs. The coordinator is the sole
 //! writer; workers borrow captured prefixes until their task completes.
 const std = @import("std");
 const Ast = @import("ast.zig");
@@ -7,9 +7,9 @@ const checked = @import("check");
 const names = checked.CheckedNames;
 const Allocator = std.mem.Allocator;
 
-/// Contiguous append-only publication. Growth retains the old backing, so a
+/// Contiguous append-only storage. Growth retains the old backing, so a
 /// reader never follows a mutable list header. Geometric capacities bound all
-/// retained allocations by a constant multiple of the largest published prefix.
+/// retained allocations by a constant multiple of the largest captured prefix.
 /// Source prefixes are immutable; only the newly committed suffix is copied.
 fn Prefix(comptime T: type) type {
     return struct {
@@ -17,7 +17,7 @@ fn Prefix(comptime T: type) type {
         items: []T = &.{},
         capacity: usize = 0,
 
-        fn publish(self: *@This(), allocator: Allocator, source: []const T) Allocator.Error![]T {
+        fn capture(self: *@This(), allocator: Allocator, source: []const T) Allocator.Error![]T {
             std.debug.assert(source.len >= self.items.len);
             if (source.len > self.capacity) {
                 const capacity = std.math.ceilPowerOfTwo(usize, source.len) catch return error.OutOfMemory;
@@ -45,10 +45,10 @@ const NamePrefix = struct {
     bytes: Prefix(u8) = .{},
     ranges: Prefix(names.NameInterner.Range) = .{},
 
-    fn publish(self: *NamePrefix, allocator: Allocator, source: *const names.NameInterner) Allocator.Error!names.NameInterner {
+    fn capture(self: *NamePrefix, allocator: Allocator, source: *const names.NameInterner) Allocator.Error!names.NameInterner {
         return .{
-            .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(try self.bytes.publish(allocator, source.bytes.items.items)) },
-            .ranges = .{ .items = std.ArrayList(names.NameInterner.Range).fromOwnedSlice(try self.ranges.publish(allocator, source.ranges.items.items)) },
+            .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(try self.bytes.capture(allocator, source.bytes.items.items)) },
+            .ranges = .{ .items = std.ArrayList(names.NameInterner.Range).fromOwnedSlice(try self.ranges.capture(allocator, source.ranges.items.items)) },
             .supports_inserts = false,
         };
     }
@@ -90,7 +90,7 @@ pub const Snapshot = struct {
     }
 };
 
-/// The complete published read set. Final syntax and mutable reservation rows
+/// The complete captured read set. Final syntax and mutable reservation rows
 /// never enter a worker snapshot. Snapshots borrow this owner's allocations.
 pub const ProgramInputs = struct {
     types: Prefix(Type.Content) = .{},
@@ -111,7 +111,7 @@ pub const ProgramInputs = struct {
     const_fn_evidence: Prefix(checked.ConstStore.ConstFnEvidence) = .{},
     const_fn_evidence_frames: Prefix(checked.ConstStore.ConstFnEvidenceFrame) = .{},
 
-    pub fn publish(self: *ProgramInputs, allocator: Allocator, source: *const Ast.Program) Allocator.Error!Snapshot {
+    pub fn capture(self: *ProgramInputs, allocator: Allocator, source: *const Ast.Program) Allocator.Error!Snapshot {
         std.debug.assert(!source.types.hasSpeculativeConstruction());
         var view = Snapshot{
             .types = Type.Store.init(allocator),
@@ -122,17 +122,17 @@ pub const ProgramInputs = struct {
             .current_region = source.current_region,
         };
         inline for (.{ "types", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
-            const values = try @field(self, field).publish(allocator, @field(source.types, field).unsafeRawItemsForView());
+            const values = try @field(self, field).capture(allocator, @field(source.types, field).unsafeRawItemsForView());
             @field(view.types, field) = @TypeOf(@field(view.types, field)).fromOwnedSlice(values);
         }
         view.types.freeze();
         inline for (.{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" }) |field| {
-            @field(view.names, field) = try @field(self, field).publish(allocator, &@field(source.names, field));
+            @field(view.names, field) = try @field(self, field).capture(allocator, &@field(source.names, field));
         }
-        view.names.proc_bases.items = std.ArrayList(names.ProcBaseKey).fromOwnedSlice(try self.proc_bases.publish(allocator, source.names.proc_bases.items.items));
+        view.names.proc_bases.items = std.ArrayList(names.ProcBaseKey).fromOwnedSlice(try self.proc_bases.capture(allocator, source.names.proc_bases.items.items));
         view.names.serialized = true;
         inline for (.{ "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
-            @field(view, field) = try @field(self, field).publish(allocator, @field(source, field).unsafeRawItemsForView());
+            @field(view, field) = try @field(self, field).capture(allocator, @field(source, field).unsafeRawItemsForView());
         }
         return view;
     }
@@ -144,7 +144,7 @@ pub const ProgramInputs = struct {
 
 /// Single-writer, concurrent-reader append-only hash index. Patricia branches
 /// distinguish exact hash bits; collisions retain full keys and values. Inserts
-/// publish initialized nodes with release stores and never remove old entries.
+/// link initialized nodes with release stores and never remove old entries.
 /// Readers capture an entry boundary, so later inserts cannot expose identities
 /// outside the associated program snapshot. Space is linear in entry count.
 pub fn AppendIndex(comptime K: type, comptime V: type) type {
@@ -242,17 +242,17 @@ fn AppendIndexHashed(comptime K: type, comptime V: type, comptime hashKey: fn (K
     };
 }
 
-test "published prefixes survive growth and retain captured lengths" {
+test "captured prefixes survive growth and retain captured lengths" {
     var prefix: Prefix(u32) = .{};
     defer prefix.deinit(std.testing.allocator);
-    const first = try prefix.publish(std.testing.allocator, &.{1});
-    const second = try prefix.publish(std.testing.allocator, &.{ 1, 2, 3, 4 });
-    _ = try prefix.publish(std.testing.allocator, &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+    const first = try prefix.capture(std.testing.allocator, &.{1});
+    const second = try prefix.capture(std.testing.allocator, &.{ 1, 2, 3, 4 });
+    _ = try prefix.capture(std.testing.allocator, &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
     try std.testing.expectEqualSlices(u32, &.{1}, first);
     try std.testing.expectEqualSlices(u32, &.{ 1, 2, 3, 4 }, second);
 }
 
-test "published index preserves exact keys and snapshot visibility through splits" {
+test "captured index preserves exact keys and snapshot visibility through splits" {
     var index = AppendIndex(u32, u32).init(std.testing.allocator);
     defer index.deinit();
     for (0..1000) |key| try index.insert(@intCast(key), @intCast(key * 2));
@@ -267,20 +267,20 @@ test "published index preserves exact keys and snapshot visibility through split
     }
 }
 
-test "published program inputs stay sealed while the coordinator constructs more types" {
+test "captured program inputs stay sealed while the coordinator constructs more types" {
     const allocator = std.testing.allocator;
     var source = Ast.Program.init(allocator);
     defer source.deinit();
-    var publication: ProgramInputs = .{};
-    defer publication.deinit(allocator);
+    var inputs: ProgramInputs = .{};
+    defer inputs.deinit(allocator);
     const unit = try source.types.internZst(&source.names);
     const label = try source.names.internTagLabel("Before");
-    var snapshot = try publication.publish(allocator, &source);
+    var snapshot = try inputs.capture(allocator, &source);
     const old_count = snapshot.types.types.len();
     var latest = unit;
     for (0..256) |_| latest = try source.types.internList(&source.names, latest);
     _ = try source.names.internTagLabel("After");
-    const newer = try publication.publish(allocator, &source);
+    const newer = try inputs.capture(allocator, &source);
     try std.testing.expect(newer.types.types.len() > old_count);
     try std.testing.expectEqual(old_count, snapshot.types.types.len());
     try std.testing.expectEqualStrings("Before", snapshot.names.tagLabelText(label));
@@ -302,7 +302,7 @@ test "published program inputs stay sealed while the coordinator constructs more
     try std.testing.expectEqual(Type.Content.zst, destination.get(imported.roots[0]));
 }
 
-test "published index resolves hash collisions by full keys" {
+test "captured index resolves hash collisions by full keys" {
     const Collision = struct {
         fn hash(_: u32) u64 {
             return 0;
@@ -324,7 +324,7 @@ test "published index resolves hash collisions by full keys" {
     try std.testing.expectEqual(@as(?u32, null), absent.next());
 }
 
-test "published index readers retain a fixed view during concurrent inserts" {
+test "captured index readers retain a fixed view during concurrent inserts" {
     if (@import("builtin").single_threaded) return;
     const Index = AppendIndex(u32, u32);
     const Reader = struct {

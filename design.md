@@ -7933,25 +7933,25 @@ is discarded after an earlier serial claim, preserving cumulative lane ids.
 All accepted tasks are joined before releasing their contexts, including on OOM.
 
 Workers never borrow the mutable coordinator Program. Their captured input
-contains only committed types, canonical names, imported-function references,
+contains only committed types, interned names, imported-function references,
 and constant-function evidence. Each job also carries its own immutable
 reservation signature for recursive references. Mutable reservation rows and
-final syntax remain exclusively coordinator-owned contiguous arrays. Publication copies each newly committed
+final syntax remain exclusively coordinator-owned contiguous arrays. Snapshot storage copies each newly committed
 input suffix once and grows contiguous backing geometrically, retaining older
-backings for readers. This bounds publication storage and copying linearly in
+backings for readers. This bounds snapshot storage and copying linearly in
 the largest input prefix without changing downstream IR access. Each task has
 its own lengths and sealed construction state; reads above its boundary are
 invariant violations. A lane retains a stable input-store identity so cumulative
 relocation maps remain valid as its next captured prefix advances.
 
-Cross-job interface summaries publish through an append-only exact-key hash
+Cross-job interface summaries are shared through an append-only exact-key hash
 index with atomic links. Fully initialized entries become visible with release
-publication; workers acquire links and filter by their captured entry boundary,
+stores; workers acquire links and filter by their captured entry boundary,
 which matches the type/name snapshot. Patricia branches preserve all prior
 keys when splitting; full keys and existing exact evidence/type comparisons
 resolve collisions. Entries and their evidence remain alive until workers have
 joined. This keeps memo reuse concurrent without exposing mutable hash-table
-storage or making completion order semantic. Global identities are still
+storage or making results depend on completion order. Global identities are still
 assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.

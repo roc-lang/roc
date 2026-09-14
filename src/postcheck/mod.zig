@@ -49,7 +49,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));
     std.testing.refAllDecls(@import("monotype/lower.zig"));
-    std.testing.refAllDecls(@import("monotype/published_inputs.zig"));
+    std.testing.refAllDecls(@import("monotype/worker_inputs.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
