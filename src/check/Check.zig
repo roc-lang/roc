@@ -6682,10 +6682,23 @@ fn existingWhereMethodUse(
     std.debug.panic("where-method use record omitted its signature callable copy", .{});
 }
 
+/// The builtin `Try(ok, err)` identity handed to an instantiation that resolves
+/// polarity markers by position: a `Try` written as a where-method signature's
+/// direct result passes the widening adapter's reach to its ERROR row, so a
+/// referenced declaration standing in that position must too.
+fn tryNominalIdent(self: *const Self) Instantiator.TryNominalIdent {
+    return .{
+        .short = self.cir.idents.@"try",
+        .qualified = self.cir.idents.builtin_try,
+    };
+}
+
 /// Instantiate a type declaration's var for use in a type annotation,
 /// resolving polarity vars (the deferred tag-union extensions of alias
 /// declaration bodies) per `polarity_behavior`, starting the polarity walk at
-/// `polarity` (the polarity of the annotation position being generated).
+/// `polarity` (the polarity of the annotation position being generated) and the
+/// adapter-reach walk at `reach` (where that position sits relative to the row
+/// the result-row widening adapter can re-tag).
 fn instantiateVarPolarized(
     self: *Self,
     var_to_instantiate: Var,
@@ -6693,6 +6706,7 @@ fn instantiateVarPolarized(
     region_behavior: InstantiateRegionBehavior,
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
+    reach: Instantiator.AdapterReach,
     evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -6711,6 +6725,8 @@ fn instantiateVarPolarized(
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = polarity_behavior,
         .current_polarity = polarity,
+        .current_reach = reach,
+        .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
@@ -6885,7 +6901,7 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos);
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested);
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -6898,6 +6914,7 @@ fn instantiateVarWithSubsPolarized(
     region_behavior: InstantiateRegionBehavior,
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
+    reach: Instantiator.AdapterReach,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -6915,6 +6932,8 @@ fn instantiateVarWithSubsPolarized(
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = polarity_behavior,
         .current_polarity = polarity,
+        .current_reach = reach,
+        .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
@@ -15411,6 +15430,25 @@ const GenTypeAnnoCtx = union(enum) {
         };
     }
 
+    /// Where a referenced declaration's own root sits relative to the row the
+    /// result-row widening adapter can re-tag. `.defer_open` carries the walk
+    /// on from here, so a marker the referenced declaration mints under a
+    /// `List`, a record field, a tuple, a tag payload, a function or a
+    /// non-`Try` nominal closes instead of reopening per use.
+    fn instantiationReach(self: GenTypeAnnoCtx) Instantiator.AdapterReach {
+        return switch (self) {
+            .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
+                // A declaration standing as the whole where-method signature
+                // is walked by the instantiator from its direct result.
+                .signature, .result => .result,
+                .try_row => .try_row,
+                .nested => .nested,
+            },
+            // A declaration body has no use-site result position to reach.
+            .type_decl => .nested,
+        };
+    }
+
     /// How polarity vars in referenced type declarations should be
     /// instantiated when this ctx generates a lookup/apply of a declaration.
     fn polarityVarBehavior(self: GenTypeAnnoCtx) PolarityVarBehavior {
@@ -15422,6 +15460,12 @@ const GenTypeAnnoCtx = union(enum) {
                 // decides them — but only where the result-row widening
                 // adapter could re-tag the row. Elsewhere the alias
                 // contributes its row as written, like a negative position.
+                //
+                // `.defer_open` is position-aware INSIDE the referenced
+                // declaration too (`instantiationReach` starts its walk here):
+                // an alias declaration mints a marker for every extensionless
+                // tag union at any depth, and only the ones standing on this
+                // position's own row stay deferred.
                 .per_use => switch (anno_ctx.adapter_reach) {
                     .signature, .result, .try_row => .defer_open,
                     .nested => .close,
@@ -15611,17 +15655,49 @@ fn annoIsAnonymousOpenExt(self: *const Self, ext_anno_idx: CIR.TypeAnno.Idx) boo
     return ext_anno == .rigid_var and ext_anno.rigid_var.name.eql(self.cir.idents.open_ext);
 }
 
+/// The statement index of the builtin `Try` declaration, in the module that
+/// owns it. Null when this compilation has no builtin module to resolve
+/// against, in which case nothing can be the builtin `Try`.
+fn builtinTrySourceDecl(self: *const Self) ?u32 {
+    if (self.isCheckingBuiltinModuleDirectly()) {
+        return @intFromEnum(self.findLocalTypeDeclByName(self.cir.idents.@"try") orelse return null);
+    }
+    const indices = self.builtin_ctx.builtin_indices orelse return null;
+    return @intFromEnum(indices.try_type);
+}
+
+/// Whether an external type reference resolves into the builtin module.
+fn externalTypeRefTargetsBuiltin(self: *const Self, import_idx: CIR.Import.Idx) bool {
+    const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse return false;
+    if (module_idx >= self.imported_modules.len) return false;
+    return self.imported_modules[module_idx].module_role == .builtin;
+}
+
 /// Whether this type application is the builtin `Try(ok, err)`. A `Try`
-/// result's two rows are the only positions below a where-method signature's
+/// result's ERROR row is the only position below a where-method signature's
 /// direct result that the result-row widening adapter re-tags (design.md
-/// "Result-Row Widening Adapter"), so they are the only nested output
-/// positions that keep per-use opening. Recognized by name, like every other
-/// builtin nominal reached from an annotation; a local type that shadows the
-/// name only keeps today's more permissive opening for its own signature.
+/// "Result-Row Widening Adapter"), so it is the only nested output position
+/// that keeps per-use opening.
+///
+/// The application's BASE decides this, not the name it was written with.
+/// Shadowing a builtin type is only a warning and the local binding wins, so
+/// `Try(a, b) := [Yes(a), No(b)]` in scope makes a written `Try(ok, err)` that
+/// LOCAL nominal — matching on the interned name alone would open a row
+/// lowering will not adapt, which is a wrong tag layout rather than a
+/// diagnostic. `Try` is not one of the compiler-constructed builtin
+/// annotations (`List`, `Box`, the numerics), so `.builtin` is never it.
 fn annoApplyIsBuiltinTry(self: *const Self, apply: CIR.TypeAnno.Apply) bool {
     if (self.cir.store.sliceTypeAnnos(apply.args).len != 2) return false;
-    const decl = builtinNominalDeclForIdentInEnv(self.cir, apply.name) orelse return false;
-    return decl == .try_type;
+    const try_source_decl = self.builtinTrySourceDecl() orelse return false;
+    return switch (apply.base) {
+        .builtin, .pending => false,
+        // Only inside Builtin itself does a local declaration name the builtin
+        // `Try`; anywhere else a local `Try` is the user's own declaration.
+        .local => |local| self.isCheckingBuiltinModuleDirectly() and
+            @intFromEnum(local.decl_idx) == try_source_decl,
+        .external => |ext| self.externalTypeRefTargetsBuiltin(ext.module_idx) and
+            ext.target_node_idx == try_source_decl,
+    };
 }
 
 /// Push every constraint one where clause places on `owner_var`. A method
@@ -16005,9 +16081,11 @@ fn generateWhereAliasReferenceArgs(
 ) std.mem.Allocator.Error!void {
     // A reference's arguments are substituted into the declaration's
     // parameters, which are matched rather than produced, so they carry the
-    // written, closed meaning.
+    // written, closed meaning. That is a nested position by definition: the
+    // enclosing annotation's own reach names a RESULT, and a where clause is
+    // not one, so the reach must not be forwarded intact.
     for (self.whereAliasReferenceArgs(alias)) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, .neg);
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx.withReach(.nested), .neg);
     }
 }
 
@@ -16025,7 +16103,7 @@ fn instantiateWhereAliasConstraint(
         // A faithful copy: the declaration's where-method signatures keep
         // their polarity markers, which the referencing annotation's own body
         // uses and obligations resolve.
-        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos),
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -16260,6 +16338,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .{ .explicit = anno_region },
                             ctx.polarityVarBehavior(),
                             polarity,
+                            ctx.instantiationReach(),
                             .none,
                         );
                         _ = try self.unify(anno_var, instantiated_var, env);
@@ -16273,6 +16352,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .{ .explicit = anno_region },
                             ctx.polarityVarBehavior(),
                             polarity,
+                            ctx.instantiationReach(),
                             .none,
                         );
                         _ = try self.unify(anno_var, ext_instantiated_var, env);
@@ -16457,6 +16537,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         .{ .explicit = anno_region },
                         ctx.polarityVarBehavior(),
                         polarity,
+                        ctx.instantiationReach(),
                     );
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                         try self.markErroneous(anno_var);
@@ -16540,6 +16621,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .{ .explicit = anno_region },
                             ctx.polarityVarBehavior(),
                             polarity,
+                            ctx.instantiationReach(),
                         );
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                             try self.markErroneous(anno_var);

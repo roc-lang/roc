@@ -1612,14 +1612,16 @@ fn graphHostedTryWideningOrNull(
     const public_err = (try graph.tagRowNodesOrNull(public_try.err)) orelse return null;
     const request_err = (try graph.tagRowNodesOrNull(request_try.err)) orelse return null;
 
+    // A declared label the request dropped, or a payload arity it changed,
+    // would make the adapter re-tag into a layout the caller does not read.
     if (request_err.tags.len < public_err.tags.len) {
-        Common.invariant("hosted Try request removed a declared error label");
+        Common.compilerBug("hosted Try request removed a declared error label");
     }
     for (public_err.tags) |public_tag| {
         const request_tag = graphTagByName(request_err.tags, public_tag.name) orelse
-            Common.invariant("hosted Try request removed a declared error label");
+            Common.compilerBug("hosted Try request removed a declared error label");
         if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.invariant("hosted Try request changed a declared error payload arity");
+            Common.compilerBug("hosted Try request changed a declared error payload arity");
         }
     }
     return .{
@@ -1671,16 +1673,20 @@ fn hostedTryWideningRequestHasAdditionalErrors(
     return widening.request_err.len > widening.public_err.len;
 }
 
+/// Returns whether the hosted `Try` widening claimed the request, which is the
+/// fact hosted template completion consumes: the adapter keeps the extern
+/// boundary at the declared host ABI and re-tags into the requested error row.
 fn relateHostedFunctionRequestInterface(
     graph: *InstGraph,
     capability: ?HostedTryAdapterCapability,
     public_fn: NodeId,
     request_fn: NodeId,
-) Allocator.Error!void {
+) Allocator.Error!bool {
     if (capability) |hosted_try| {
-        if (try relateHostedTryWidening(graph, hosted_try, public_fn, request_fn)) return;
+        if (try relateHostedTryWidening(graph, hosted_try, public_fn, request_fn)) return true;
     }
     try relateFunctionRequestInterface(graph, public_fn, request_fn);
+    return false;
 }
 
 /// A public/request node pair this relation still owes a graph relation.
@@ -1805,18 +1811,20 @@ fn relateIncludedRowPayloads(
     public_row: NodeId,
     request_row: NodeId,
 ) Allocator.Error!void {
+    // Each guard here stands between the adapter and a wrong tag layout, so
+    // all of them stop the build in every mode.
     if (!isBareTagRowNode(graph, public_row) or !isBareTagRowNode(graph, request_row)) {
-        Common.invariant("result-row widening related a non-tag-union row");
+        Common.compilerBug("result-row widening related a non-tag-union row");
     }
     const public = (try graph.tagRowNodesOrNull(public_row)) orelse
-        Common.invariant("result-row widening related a non-tag-union row");
+        Common.compilerBug("result-row widening related a non-tag-union row");
     const request = (try graph.tagRowNodesOrNull(request_row)) orelse
-        Common.invariant("result-row widening related a non-tag-union row");
+        Common.compilerBug("result-row widening related a non-tag-union row");
     for (public.tags) |public_tag| {
         const request_tag = graphTagByName(request.tags, public_tag.name) orelse
-            Common.invariant("result-row widening request removed a declared label");
+            Common.compilerBug("result-row widening request removed a declared label");
         if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.invariant("result-row widening request changed a declared payload arity");
+            Common.compilerBug("result-row widening request changed a declared payload arity");
         }
         for (public_tag.payloads, request_tag.payloads) |public_payload, request_payload| {
             try relateRequestComponent(graph, public_payload, request_payload);
@@ -1824,30 +1832,41 @@ fn relateIncludedRowPayloads(
     }
 }
 
-/// Relate a request whose result row includes the template's closed published
-/// row (design.md "Result-Row Widening Adapter"). Arguments and every non-row
-/// component stay exact graph relations; only the request's extra result
-/// labels stay outside the template's row, so the request survives to template
-/// completion where the widening adapter is generated. Returns false when the
-/// request is not a result-row widening, leaving the caller's ordinary
-/// relation in charge.
-fn relateResultRowWidening(
+/// Recognize a request whose result row includes the template's closed
+/// published row (design.md "Result-Row Widening Adapter"). Nothing is related
+/// here, so a site that cannot reach an adapter can ask the question and then
+/// decline without having already taken the rows apart.
+fn resultRowWideningRequestOrNull(
     graph: *InstGraph,
     declared_row: ClosedResultRow,
     public_fn: NodeId,
     request_fn: NodeId,
-) Allocator.Error!bool {
-    if (graph.sameClass(public_fn, request_fn)) return false;
+) Allocator.Error!?ResultRowWidening {
+    if (graph.sameClass(public_fn, request_fn)) return null;
     // Only a directly function-shaped pair is inspected here. Reading a
     // function interface through a named backing is the caller's ordinary
     // relation's business, not this one's.
-    if (!isFunctionNode(graph, public_fn) or !isFunctionNode(graph, request_fn)) return false;
+    if (!isFunctionNode(graph, public_fn) or !isFunctionNode(graph, request_fn)) return null;
     const public = try graph.functionNodes(public_fn);
     const request = try graph.functionNodes(request_fn);
     if (public.args.len != request.args.len) {
-        Common.invariant("result-row widening request changed arity from its checked interface");
+        Common.compilerBug("result-row widening request changed arity from its checked interface");
     }
-    const widening = (try resultRowWideningOrNull(graph, declared_row, public.ret, request.ret)) orelse return false;
+    return try resultRowWideningOrNull(graph, declared_row, public.ret, request.ret);
+}
+
+/// Relate a recognized result-row widening. Arguments and every non-row
+/// component stay exact graph relations; only the request's extra result
+/// labels stay outside the template's row, so the request survives to template
+/// completion where the widening adapter is generated.
+fn applyResultRowWidening(
+    graph: *InstGraph,
+    widening: ResultRowWidening,
+    public_fn: NodeId,
+    request_fn: NodeId,
+) Allocator.Error!void {
+    const public = try graph.functionNodes(public_fn);
+    const request = try graph.functionNodes(request_fn);
     for (public.args, request.args) |public_arg, request_arg| {
         try relateRequestComponent(graph, public_arg, request_arg);
     }
@@ -1855,21 +1874,62 @@ fn relateResultRowWidening(
         try relateRequestComponent(graph, pair.public, pair.request);
     }
     try relateIncludedRowPayloads(graph, widening.widened.public, widening.widened.request);
-    return true;
+}
+
+/// Whether the site asking for a result-row widening relation can reach the
+/// generated adapter that serves it.
+///
+/// design.md "Result-Row Widening Adapter": because the relation deliberately
+/// declines to unify the two rows, it must fail CLOSED. A request related this
+/// way that then does NOT reach an adapter leaves a callee producing one tag
+/// layout and a caller reading another — a wrong value rather than a crash. A
+/// site that cannot reach `completeTemplateReservation` therefore states
+/// `.no_adapter` and relates exactly instead, so the widening meets the
+/// ordinary `unifyTagRows` rejection.
+const AdapterReachability = enum {
+    /// The request is served by a procedure template specialization, whose
+    /// completion mints the adapter for a recorded widening.
+    adapter_reachable,
+    /// No `completeTemplateReservation` runs for this request: a `.local_proc`
+    /// dispatch target has no `checked_fn_root` and no template reservation, and
+    /// a caller-owned specialization lowers its body inline at the declared
+    /// interface.
+    no_adapter,
+};
+
+/// Whether a resolved dispatch target's callee can reach a widening adapter.
+/// Only a procedure template is specialized through
+/// `completeTemplateReservation`; a lambda-bound local procedure has no
+/// `checked_fn_root` and no template reservation, and a structural registry
+/// result has no callable body at all, so neither can ever be served by one.
+fn dispatchTargetAdapterReachability(target: static_dispatch.MethodTarget) AdapterReachability {
+    return switch (target.kind) {
+        .procedure => .adapter_reachable,
+        .local_proc, .structural => .no_adapter,
+    };
 }
 
 /// `relateFunctionRequestInterface` for a template that may publish a closed
 /// result row: when the request's result row includes it, the two relate
-/// component-wise without unifying the rows.
+/// component-wise without unifying the rows. Returns whether the relation
+/// declined to unify, which is exactly the fact template completion consumes.
 fn relateClosedResultRowRequestInterface(
     graph: *InstGraph,
     view: ModuleView,
     checked_fn_ty: checked.CheckedTypeId,
     public_fn: NodeId,
     request_fn: NodeId,
+    reachability: AdapterReachability,
 ) Allocator.Error!bool {
     const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return false;
-    return try relateResultRowWidening(graph, declared_row, public_fn, request_fn);
+    const widening = (try resultRowWideningRequestOrNull(graph, declared_row, public_fn, request_fn)) orelse
+        return false;
+    switch (reachability) {
+        .adapter_reachable => {},
+        .no_adapter => return false,
+    }
+    try applyResultRowWidening(graph, widening, public_fn, request_fn);
+    return true;
 }
 
 /// Rendered length `hostedExternAbiViolationMessage` never exceeds.
@@ -2561,6 +2621,11 @@ const LoweredTemplate = struct {
     evidence: []const SpecEvidence = &.{},
     /// Exact durable topology for the complete lexical evidence chain.
     topology: ?StoredConstFnEvidence = null,
+    /// The request relation's answer recorded by the first requesting edge. A
+    /// specialization is either a widening adapter or a definition at its own
+    /// requested row, never both, so a later edge that reuses this identity
+    /// with the other answer is a disagreement about the callee's tag layout.
+    widened_result_row: bool = false,
 };
 
 const TemplateReservation = struct {
@@ -2608,6 +2673,11 @@ const PendingSpecJob = struct {
     subst: ?SealedSubstitution,
     signature_relation: Ast.SignatureRelation,
     codec_contract: ?SealedCodecContractContext,
+    /// The request relation's own answer for this specialization: whether it
+    /// declined to unify the template's closed published result row with the
+    /// requested one. Completion mints a widening adapter exactly when this is
+    /// set (design.md "Result-Row Widening Adapter").
+    widened_result_row: bool,
 };
 
 /// One reserved template body lowered into graph-local and draft-local state,
@@ -4289,6 +4359,13 @@ const Builder = struct {
         checked_capability: ?checked.HostedTryAdapterCapability,
     ) Allocator.Error!?HostedTryAdapterCapability {
         const capability = checked_capability orelse return null;
+        // `try_error_type_arg_index` names the cell the widening relation opens
+        // and the cell the adapter re-tags; `err_type_arg_index` is the same
+        // fact carried from the checker. Cross-check them once, here, so the
+        // two cannot drift into opening one cell and re-tagging another.
+        if (capability.err_type_arg_index != try_error_type_arg_index) {
+            Common.compilerBug("checker-recorded Try error type-argument index disagreed with the widening relation's");
+        }
         return .{
             .def = try self.typeDef(
                 view,
@@ -5142,6 +5219,9 @@ const Builder = struct {
             null,
             if (self.comptime_value_reads) .queued else .immediate,
             null,
+            // A root is requested at the template's own declared type, which
+            // no relation ever widened.
+            false,
         );
     }
 
@@ -5294,6 +5374,7 @@ const Builder = struct {
         retained_topology: ?EvidenceChain,
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
+        widened_result_row: bool,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -5333,6 +5414,13 @@ const Builder = struct {
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
             if (!specEvidenceVectorEql(existing.evidence, spec_evidence)) {
                 Common.invariant("Monotype specialization hit disagreed on dispatch evidence");
+            }
+            // Two edges that reuse one specialization identity must agree about
+            // whether it is a widening adapter. A disagreement would define the
+            // callee at one row and call it at another, so it stops the build in
+            // every mode (design.md "Result-Row Widening Adapter").
+            if (existing.widened_result_row != widened_result_row) {
+                Common.compilerBug("Monotype specialization cache hit disagreed on its result-row widening");
             }
             if (stored_source_topology) |requested| {
                 const existing_topology = existing.topology orelse
@@ -5376,6 +5464,7 @@ const Builder = struct {
                                 null,
                                 job.signature_relation,
                                 job.codec_contract,
+                                job.widened_result_row,
                             );
                             return existing.def;
                         },
@@ -5453,6 +5542,7 @@ const Builder = struct {
                 .spec = spec,
                 .evidence = spec_evidence,
                 .topology = stored_source_topology,
+                .widened_result_row = widened_result_row,
             });
             break :blk .{
                 .reservation = .{
@@ -5486,6 +5576,7 @@ const Builder = struct {
                     .subst = subst,
                     .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
+                    .widened_result_row = widened_result_row,
                 });
                 self.next_spec_dispatch_index += 1;
                 self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
@@ -5513,6 +5604,7 @@ const Builder = struct {
             retained_topology,
             signature_relation,
             codec_contract,
+            widened_result_row,
         );
         return reservation.def;
     }
@@ -5565,9 +5657,19 @@ const Builder = struct {
         capability: ?HostedTryAdapterCapability,
     };
 
-    /// Plan the adapter for a request whose result row includes this
-    /// template's closed published row, or null when the request is not such a
-    /// widening (design.md "Result-Row Widening Adapter").
+    /// Plan the adapter for a specialization whose request relation DECLINED to
+    /// unify the template's closed published row with the requested one
+    /// (design.md "Result-Row Widening Adapter"). `widened_result_row` is that
+    /// relation's own answer, carried here from the specialization request; it
+    /// is the single source of truth for whether an adapter is owed. Re-deriving
+    /// the answer from the checked root instead would let the relation and the
+    /// completion disagree — the relation declining with no adapter minted is a
+    /// silent miscompile, and an adapter minted where the relation unified is a
+    /// spurious narrow specialization behind a pointless re-tag.
+    ///
+    /// Everything below the gate is the adapter's construction, and every step
+    /// of it must succeed: a recorded widening that cannot be built stops the
+    /// build rather than falling back to a definition at the wrong row.
     ///
     /// The declared labels are read from `lowerType` of the checked root. That
     /// is sound only because `closedResultRowOrNull` refused every row whose
@@ -5582,8 +5684,11 @@ const Builder = struct {
         view: ModuleView,
         template: checked.CheckedProcedureTemplate,
         requested_fn_ty: Type.TypeId,
+        widened_result_row: bool,
     ) Allocator.Error!?ResultRowWideningAdapter {
-        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse return null;
+        if (!widened_result_row) return null;
+        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse
+            Common.compilerBug("result-row widening relation declined for a template with no closed published result row");
         // Everything below is coordinator-program work: `requested_fn_ty` is a
         // program id, `sameMonoType` compares through `program.types`, and the
         // interned narrowed source type is handed to a program-domain
@@ -5598,15 +5703,12 @@ const Builder = struct {
         defer coordinator_types.end();
         const declared_source_fn_ty = template.checked_fn_root;
         const declared_mono_fn_ty = try self.lowerType(view, declared_source_fn_ty);
-        // The cheap predicate first. This pre-step runs for every
-        // specialization of every template with a closed result row, and
-        // almost all of them request exactly the declared type. Nothing below
-        // is needed for those, and each guard below compiles to `unreachable`
-        // outside a debug build.
-        if (try self.sameMonoType(declared_mono_fn_ty, requested_fn_ty)) return null;
+        if (try self.sameMonoType(declared_mono_fn_ty, requested_fn_ty)) {
+            Common.compilerBug("result-row widening relation declined for a request at the declared type");
+        }
         const capability = try self.hostedTryAdapterCapability(view, template.hosted_try_adapter);
         const try_capability: ?HostedTryAdapterCapability = if (declared_row.behind_try)
-            capability orelse Common.invariant("closed Try result row had no checker-recorded Try capability")
+            capability orelse Common.compilerBug("closed Try result row had no checker-recorded Try capability")
         else
             null;
         try self.requireLoweredDeclaredRowLabels(view, declared_row, try_capability, declared_mono_fn_ty);
@@ -5614,7 +5716,7 @@ const Builder = struct {
             try_capability,
             declared_mono_fn_ty,
             requested_fn_ty,
-        )) orelse return null;
+        )) orelse Common.compilerBug("result-row widening relation declined for a request lowering cannot adapt");
         // The narrowed source carries exactly the declared labels, so the
         // recursive specialization below is a fixpoint of this pre-step and
         // cannot widen again.
@@ -5623,7 +5725,7 @@ const Builder = struct {
             declared_mono_fn_ty,
             source_fn_ty,
         )) |_| {
-            Common.invariant("result-row widening adapter source type widened the declared row again");
+            Common.compilerBug("result-row widening adapter source type widened the declared row again");
         }
         return .{
             .declared_source_fn_ty = declared_source_fn_ty,
@@ -5646,13 +5748,13 @@ const Builder = struct {
         const declared_fn = self.functionShape(declared_mono_fn_ty, "declared template root type was not a function");
         const row_ty = if (capability) |try_capability|
             ((try self.hostedTryInfoOrNull(try_capability, declared_fn.ret)) orelse
-                Common.invariant("closed Try result row did not lower to its checker-recorded Try nominal")).err_ty
+                Common.compilerBug("closed Try result row did not lower to its checker-recorded Try nominal")).err_ty
         else
             declared_fn.ret;
         const lowered_tags = self.bareTagUnionTagsOrNull(row_ty) orelse
-            Common.invariant("closed result row did not lower to a tag union");
+            Common.compilerBug("closed result row did not lower to a tag union");
         if (lowered_tags.len != checkedClosedRowLabelCount(view, declared_row.row)) {
-            Common.invariant("lowered declared result row disagreed with the checker's published labels");
+            Common.compilerBug("lowered declared result row disagreed with the checker's published labels");
         }
     }
 
@@ -5703,6 +5805,9 @@ const Builder = struct {
             null,
             .immediate,
             codec_contract,
+            // The adapter's own source is requested at the DECLARED row, the
+            // fixpoint `resultRowWideningAdapterOrNull` asserts.
+            false,
         );
         const adapter_template = Ast.FnTemplate{
             .fn_def = .{ .checked_generated = template_ref },
@@ -5747,6 +5852,7 @@ const Builder = struct {
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
         codec_contract: ?SealedCodecContractContext,
+        widened_result_row: bool,
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
@@ -5780,7 +5886,12 @@ const Builder = struct {
         // (closed) hosted error row through `?`, and the adapter keeps the
         // extern boundary at its declared type instead of emitting a hosted
         // spec whose layout would not match the host ABI.
-        if (try self.resultRowWideningAdapterOrNull(view, template, lower_fn_ty)) |adapter| {
+        if (try self.resultRowWideningAdapterOrNull(
+            view,
+            template,
+            lower_fn_ty,
+            widened_result_row,
+        )) |adapter| {
             try self.completeResultRowWideningAdapter(
                 reservation,
                 fn_template,
@@ -5931,7 +6042,12 @@ const Builder = struct {
         job: PendingSpecJob,
     ) Allocator.Error!bool {
         if (job.fn_template.cached != null or template.target == .hosted) return true;
-        return (try self.resultRowWideningAdapterOrNull(view, template, job.fn_ty)) != null;
+        return (try self.resultRowWideningAdapterOrNull(
+            view,
+            template,
+            job.fn_ty,
+            job.widened_result_row,
+        )) != null;
     }
 
     /// Execute queued specialization bodies in dispatch order until the wave
@@ -6274,6 +6390,7 @@ const Builder = struct {
                 null,
                 job.signature_relation,
                 job.codec_contract,
+                job.widened_result_row,
             );
             self.acceptSpecDispatch(job.dispatch_index);
             return;
@@ -7139,16 +7256,17 @@ const Builder = struct {
         // ever be generated and the caller would call the narrow body through
         // its wide request. Declining here leaves the ordinary relation — and
         // its loud rejection of a widened closed row — in charge.
-        const widened_result_row = template.target != .hosted and
-            !local_context_dependent and
+        const closed_row_widened = template.target != .hosted and
             try relateClosedResultRowRequestInterface(
                 source_ctx.graph,
                 view,
                 template.checked_fn_root,
                 root_node,
                 request_fn_node,
+                if (local_context_dependent) .no_adapter else .adapter_reachable,
             );
-        if (widened_result_row) {
+        var hosted_widened = false;
+        if (closed_row_widened) {
             // Every component was related above; joining the two function
             // interfaces here would unify the rows this relation kept apart.
         } else if (!local_context_dependent and
@@ -7160,7 +7278,10 @@ const Builder = struct {
             try relateConstructionFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         } else {
             if (template.target == .hosted) {
-                try relateHostedFunctionRequestInterface(
+                // Hosted Try Question Widening is the instance of the rule
+                // where the declared row is the host ABI; the adapter keeps the
+                // extern boundary at the declared type.
+                hosted_widened = try relateHostedFunctionRequestInterface(
                     source_ctx.graph,
                     try self.hostedTryAdapterCapability(view, template.hosted_try_adapter),
                     root_node,
@@ -7175,6 +7296,13 @@ const Builder = struct {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
+        // This is the one relation whose answer becomes the specialization's
+        // own: completion mints the widening adapter exactly when this record
+        // says the relation declined to unify the two rows, instead of deriving
+        // a second answer from the checked root (design.md "Result-Row Widening
+        // Adapter").
+        const widened_result_row = closed_row_widened or hosted_widened;
+        source_ctx.draft.template_specs.items[spec_index].widened_result_row = widened_result_row;
         if (!widened_result_row and
             !local_context_dependent and
             signature_relation != .independent_roots and
@@ -7196,12 +7324,6 @@ const Builder = struct {
         }
         if (template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
-        }
-        // Fail closed: the body lowered below is this specialization's only
-        // definition, so a result-row widening that survived the relation
-        // above would be called at a row nothing re-tags into.
-        if (widened_result_row) {
-            Common.invariant("result-row widening relation reached a caller-owned template body");
         }
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
@@ -8823,6 +8945,9 @@ const Builder = struct {
             null,
             .immediate,
             null,
+            // Root and wrapper paths request the binding's own published type;
+            // no request relation ran, so no widening was recorded.
+            false,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -8918,6 +9043,10 @@ const Builder = struct {
                     retained,
                     .immediate,
                     null,
+                    // A restored constant function reproduces a specialization
+                    // that was already reserved at this exact type; the
+                    // identity hit above carries its recorded answer.
+                    false,
                 );
                 return self.defFnId(def);
             },
@@ -10291,6 +10420,7 @@ const Builder = struct {
                 null,
                 body_scheduling,
                 codec_contract,
+                spec.widened_result_row,
             );
             break :blk .{ .local = self.defFnId(def) };
         };
@@ -10799,6 +10929,7 @@ const Builder = struct {
                 } else null,
                 .requires_local = spec.requires_local,
                 .local_context_dependent = spec.local_context_dependent,
+                .widened_result_row = spec.widened_result_row,
                 .lexical_owner = spec.lexical_owner,
                 .fn_id = spec.fn_id,
                 .def_id = spec.def_id,
@@ -13991,6 +14122,11 @@ const DraftTemplateSpec = struct {
     demand_frame_floor: RuntimeDemandGuardFrameStack = .{},
     requires_local: bool = false,
     local_context_dependent: bool = false,
+    /// Whether this request's relation declined to unify the template's closed
+    /// published result row with the requested one. Recorded by the relation
+    /// and consumed by `completeTemplateReservation`, which mints the widening
+    /// adapter exactly when it is set (design.md "Result-Row Widening Adapter").
+    widened_result_row: bool = false,
     lexical_owner: ?DraftOwner = null,
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
@@ -14024,6 +14160,8 @@ const SealedTemplateSpec = struct {
     codec_contract: ?SealedCodecContractContext,
     requires_local: bool,
     local_context_dependent: bool,
+    /// The request relation's recorded answer, carried to completion.
+    widened_result_row: bool,
     lexical_owner: ?DraftOwner,
     fn_id: DraftFnId,
     def_id: ?DraftDefId,
@@ -22231,7 +22369,9 @@ const BodyContext = struct {
         try callee_ctx.seedSubstitution(callee_ctx.evidence.schema.?, edge.subst);
         const root_node = try callee_ctx.instNode(template.checked_fn_root);
         if (template.target == .hosted) {
-            try relateHostedFunctionRequestInterface(
+            // The replayed summary shapes the request; the specialization this
+            // request later reaches records the widening for completion.
+            _ = try relateHostedFunctionRequestInterface(
                 self.graph,
                 try self.builder.hostedTryAdapterCapability(callee_view, template.hosted_try_adapter),
                 root_node,
@@ -22243,6 +22383,9 @@ const BodyContext = struct {
             template.checked_fn_root,
             root_node,
             request_fn_node,
+            // A `.local_proc` target returned above, so this request is always
+            // served by a procedure template specialization.
+            .adapter_reachable,
         )) {
             try relateConstructionFunctionRequestInterface(self.graph, root_node, request_fn_node);
         }
@@ -32719,6 +32862,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         plan_ctx: *BodyContext,
         plan_fn_ty: checked.CheckedTypeId,
+        reachability: AdapterReachability,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
         const plan_function = plan_ctx.checkedFunctionType(plan_fn_ty);
@@ -32737,6 +32881,7 @@ const BodyContext = struct {
             source_fn_ty,
             fn_node,
             plan_node,
+            reachability,
         )) {
             try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
         }
@@ -42775,7 +42920,7 @@ const BodyContext = struct {
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
         const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
         const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
-        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, constraint_node);
+        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, constraint_node, dispatchTargetAdapterReachability(target.target));
     }
 
     /// Only requirements whose producer says their dispatcher originates in
@@ -43286,6 +43431,7 @@ const BodyContext = struct {
             lookup.target.callable_ty,
             target_node,
             request_node,
+            dispatchTargetAdapterReachability(lookup.target),
         )) return;
         try relateFunctionRequestInterface(self.graph, target_node, request_node);
     }
@@ -43298,7 +43444,12 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         var target_ctx = try self.methodTargetContext(lookup);
         defer target_ctx.deinit();
-        const target_node = try target_ctx.instantiateTargetFromPlanNode(lookup.target.callable_ty, plan_ctx, plan_callable_ty);
+        const target_node = try target_ctx.instantiateTargetFromPlanNode(
+            lookup.target.callable_ty,
+            plan_ctx,
+            plan_callable_ty,
+            dispatchTargetAdapterReachability(lookup.target),
+        );
         if (lookup.instantiation) |instantiation| {
             var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
             defer edge_ctx.deinit();
@@ -43674,6 +43825,7 @@ const BodyContext = struct {
         root_fn_ty: checked.CheckedTypeId,
         root_node: NodeId,
         request_fn_node: NodeId,
+        reachability: AdapterReachability,
     ) Allocator.Error!void {
         if (try relateClosedResultRowRequestInterface(
             self.graph,
@@ -43681,6 +43833,7 @@ const BodyContext = struct {
             root_fn_ty,
             root_node,
             request_fn_node,
+            reachability,
         )) return;
         if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
             try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
@@ -43765,7 +43918,7 @@ const BodyContext = struct {
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
-                try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node);
+                try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
                 const edge = try self.deriveTargetEdge(&target_ctx, templateSchemaIn(lookup.view, &template), evidence_source);
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
@@ -43783,7 +43936,7 @@ const BodyContext = struct {
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(source_fn_ty);
-                try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node);
+                try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
                 const edge = try self.deriveTargetEdge(&target_ctx, self.scopeSchema(lookup.view, local.dispatch_scope), evidence_source);
                 break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
                     .{
@@ -57256,6 +57409,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .subst = null,
                 .signature_relation = .independent_roots,
                 .codec_contract = null,
+                .widened_result_row = false,
             };
         }
     }.make;

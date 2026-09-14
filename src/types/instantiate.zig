@@ -29,6 +29,30 @@ const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
+/// Type-argument index of `Builtin.Try`'s error row. The Monotype widening
+/// relation (`lower.zig`'s `try_error_type_arg_index`) opens the same cell, and
+/// `Check.annoApplyIsBuiltinTry`'s caller passes the adapter's reach to the
+/// same index for a `Try` written inline.
+const try_error_type_arg_index: u32 = 1;
+
+/// Where a position sits relative to the result row the Monotype result-row
+/// widening adapter can re-tag (design.md "Result-Row Widening Adapter"). The
+/// checker's annotation walk makes this decision for rows written inline in a
+/// signature; this axis makes the same decision for rows a referenced type
+/// declaration contributes, so the set of positions a use may WIDEN stays equal
+/// to the set lowering can ADAPT no matter how the row was spelled.
+pub const AdapterReachPosition = enum {
+    /// The instantiation root's own row: the position the referencing
+    /// annotation put this declaration in, when that is the signature's direct
+    /// result.
+    result,
+    /// The ERROR argument of a `Try` standing in that direct result.
+    try_row,
+    /// Every other position: inside a `List`, a record field, a tuple, a tag
+    /// payload, a function, or a non-`Try` nominal.
+    nested,
+};
+
 /// The explicit declaration-backed opening operation (issue #9983): make a
 /// fresh copy of `decl`'s backing template with the application's actual
 /// `args` substituted for the declaration's formals, positionally.
@@ -192,6 +216,9 @@ const AliasFrame = struct {
     args_count: u32,
     /// Base of this frame's child results in `Scratch.value_stack`.
     vars_base: u32,
+    /// The adapter reach surrounding this alias. An alias is transparent, so
+    /// its backing keeps the reach; its type arguments are nested positions.
+    saved_reach: AdapterReachPosition,
 };
 
 const TupleFrame = struct {
@@ -207,6 +234,12 @@ const NominalFrame = struct {
     args_start: u32,
     args_count: u32,
     vars_base: u32,
+    /// The adapter reach surrounding this nominal application. A `Try` written
+    /// as the direct result passes it to the ERROR argument; every other
+    /// argument of every nominal is a nested position.
+    saved_reach: AdapterReachPosition,
+    /// Whether this application is the builtin `Try(ok, err)`.
+    is_try: bool,
 };
 
 const FuncFrame = struct {
@@ -253,6 +286,10 @@ const TagUnionFrame = struct {
     tags_base: u32,
     tags_range: Tag.SafeMultiList.Range = undefined,
     stage: enum { tags, await_ext } = .tags,
+    /// The adapter reach surrounding this union. Its EXT is the position a
+    /// polarity marker occupies, so the ext keeps the reach; tag payloads are
+    /// nested positions.
+    saved_reach: AdapterReachPosition,
 };
 
 /// Type to manage instantiation.
@@ -323,6 +360,29 @@ pub const Instantiator = struct {
     /// surrounding polarity and re-asserts the stage-appropriate value
     /// before every child it requests.
     current_polarity: Polarity = .pos,
+    /// Where the position currently being instantiated sits relative to the
+    /// row the Monotype result-row widening adapter can re-tag. Starts at the
+    /// reach of the instantiation ROOT (callers using `.defer_open` set it) and
+    /// demotes to `.nested` under every constructor except the two the adapter
+    /// reaches through. Only consulted by `.defer_open`.
+    current_reach: AdapterReachPosition = .nested,
+    /// Identity of the builtin `Try(ok, err)` nominal. When null, no nominal is
+    /// treated as a `Try`, so a `Try` error row reached through a declaration
+    /// reference is a nested position like any other nominal argument.
+    try_nominal: ?TryNominalIdent = null,
+
+    /// How to recognize the builtin `Try(ok, err)` nominal while walking. Both
+    /// spellings are needed for the same reason `builtinNominalDeclForIdentInEnv`
+    /// accepts both: a `Try` written through its module interns the qualified
+    /// name. Builtin origin is required on top of the name, so a user nominal
+    /// that shadows `Try` is not mistaken for it.
+    pub const TryNominalIdent = struct {
+        short: Ident.Idx,
+        qualified: Ident.Idx,
+    };
+
+    /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
+    pub const AdapterReach = AdapterReachPosition;
 
     /// Expected shape is structural context, not another use of a constrained
     /// value. Its source keeps every dispatch obligation; the shape copy must
@@ -383,10 +443,19 @@ pub const Instantiator = struct {
         /// embedded in alias bodies.
         resolve_by_polarity,
         /// Like `resolve_by_polarity` for negative positions (closed), but a
-        /// marker in a positive position is copied as a fresh marker: the copy
-        /// is itself a deferred signature whose own uses decide (a where-alias
+        /// marker in a positive position that the result-row widening adapter
+        /// could re-tag is copied as a fresh marker: the copy is itself a
+        /// deferred signature whose own uses decide (a where-alias
         /// declaration's method signature copied into a referencing
         /// annotation, or an alias body embedded in one).
+        ///
+        /// A marker reached under any other constructor closes. Deferring it
+        /// would reopen, per use, a row Monotype cannot adapt — an alias
+        /// declaration mints a marker for every extensionless tag union at any
+        /// depth, so `Statuses : List([Ok(Str), Err(Str)])` as a where-method
+        /// result would otherwise let a use widen the row inside the `List`.
+        /// The set of positions a use may WIDEN is kept equal to the set
+        /// lowering can ADAPT (design.md "Result-Row Widening Adapter").
         defer_open,
     };
 
@@ -404,6 +473,16 @@ pub const Instantiator = struct {
 
     fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
         return self.idents.getText(idx);
+    }
+
+    /// Whether this nominal application is the builtin `Try(ok, err)`. Builtin
+    /// origin is required alongside the name, so a user nominal that shadows
+    /// `Try` keeps every one of its type arguments a nested position.
+    fn nominalIsBuiltinTry(self: *const Self, nominal: NominalType) bool {
+        const try_nominal = self.try_nominal orelse return false;
+        if (!nominal.originIsBuiltin()) return false;
+        const name = nominal.ident.ident_idx;
+        return name.eql(try_nominal.short) or name.eql(try_nominal.qualified);
     }
 
     fn scratch(self: *Self) *Scratch {
@@ -697,7 +776,10 @@ pub const Instantiator = struct {
                                 .neg => .{ .structure = .empty_tag_union },
                             },
                             .defer_open => switch (self.current_polarity) {
-                                .pos => .{ .rigid = Rigid.init(rigid.name) },
+                                .pos => switch (self.current_reach) {
+                                    .result, .try_row => Content{ .rigid = Rigid.init(rigid.name) },
+                                    .nested => Content{ .structure = .empty_tag_union },
+                                },
                                 .neg => .{ .structure = .empty_tag_union },
                             },
                         };
@@ -834,6 +916,7 @@ pub const Instantiator = struct {
                     .args_start = @intFromEnum(arg_span.start),
                     .args_count = arg_span.count,
                     .vars_base = @intCast(machine.value_stack.items.len),
+                    .saved_reach = self.current_reach,
                 } });
                 return false;
             },
@@ -890,6 +973,8 @@ pub const Instantiator = struct {
                             .args_start = @intFromEnum(arg_span.start),
                             .args_count = arg_span.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_reach = self.current_reach,
+                            .is_try = self.nominalIsBuiltinTry(nominal),
                         } });
                         return false;
                     },
@@ -965,6 +1050,7 @@ pub const Instantiator = struct {
                             .ext = tag_union.ext,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .tags_base = @intCast(machine.pending_tags.items.len),
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -1033,6 +1119,7 @@ pub const Instantiator = struct {
                     }
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
                     frame.stage = .await_fn;
+                    self.current_reach = .nested;
                     if (!try self.requestVar(constraint.fn_var, false)) return false;
                 },
                 .await_fn => {
@@ -1053,6 +1140,7 @@ pub const Instantiator = struct {
                 .dispatch_part_or_item => {
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
                     const metadata = constraint.interpolation;
+                    self.current_reach = .nested;
                     if (frame.part_idx == metadata.interpolated_parts.len()) {
                         frame.stage = .await_item;
                         if (!try self.requestVar(metadata.item_var, false)) return false;
@@ -1101,11 +1189,15 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+                self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == frame.args_count) {
                 const backing_var = self.store.getAliasBackingVar(frame.alias);
+                // An alias is transparent: its backing occupies the same
+                // position the alias reference does.
+                self.current_reach = frame.saved_reach;
                 if (!try self.requestVar(backing_var, false)) return false;
                 continue;
             }
@@ -1132,6 +1224,7 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.elems_count) {
                 const elem_var = self.store.vars.items.items[frame.elems_start + arrived];
+                self.current_reach = .nested;
                 if (!try self.requestVar(elem_var, false)) return false;
                 continue;
             }
@@ -1150,6 +1243,15 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+                // A `Try` written as the direct result passes the adapter's
+                // reach to its ERROR row. The ok row is deliberately NOT
+                // reachable: the adapter asserts the ok type is unchanged.
+                self.current_reach = if (frame.is_try and
+                    frame.saved_reach == .result and
+                    arrived == try_error_type_arg_index)
+                    .try_row
+                else
+                    .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
@@ -1175,20 +1277,26 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
-                // Argument positions negate the surrounding polarity.
+                // Argument positions negate the surrounding polarity. No
+                // position inside a function is adapter-reachable: the adapter
+                // re-tags the result it is generated for, never a row inside a
+                // function that result contains.
                 self.current_polarity = frame.saved_polarity.flip();
+                self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == args_count) {
                 // The return position preserves the surrounding polarity.
                 self.current_polarity = frame.saved_polarity;
+                self.current_reach = .nested;
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
             }
             if (arrived < args_count + 1 + deps_count) {
                 const dep_var = self.store.vars.items.items[@intFromEnum(frame.func.effect_deps.start) + (arrived - args_count - 1)];
                 self.current_polarity = frame.saved_polarity;
+                self.current_reach = .nested;
                 if (!try self.requestVar(dep_var, false)) return false;
                 continue;
             }
@@ -1239,12 +1347,14 @@ pub const Instantiator = struct {
                                 break :blk field.presence.presenceVar().?;
                             },
                         };
+                        self.current_reach = .nested;
                         if (!try self.requestVar(child_var, false)) return false;
                         continue;
                     }
                     frame.fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
                     machine.value_stack.items.len = frame.vars_base;
                     frame.stage = .await_ext;
+                    self.current_reach = .nested;
                     if (!try self.requestVar(frame.ext, false)) return false;
                 },
                 .await_ext => {
@@ -1281,6 +1391,7 @@ pub const Instantiator = struct {
                         break :blk field.presence.presenceVar().?;
                     },
                 };
+                self.current_reach = .nested;
                 if (!try self.requestVar(child_var, false)) return false;
                 continue;
             }
@@ -1338,6 +1449,9 @@ pub const Instantiator = struct {
                         frame.tags_range = try self.store.appendTags(machine.pending_tags.items[frame.tags_base..]);
                         machine.pending_tags.items.len = frame.tags_base;
                         frame.stage = .await_ext;
+                        // The ext is the position a polarity marker occupies,
+                        // so it keeps this union's own reach.
+                        self.current_reach = frame.saved_reach;
                         if (!try self.requestVar(frame.ext, false)) return false;
                         continue;
                     }
@@ -1349,6 +1463,7 @@ pub const Instantiator = struct {
                         // Indexing through tag.args.start only happens when the
                         // tag has payloads; start may be undefined when count is 0.
                         const arg_var = self.store.vars.items.items[@intFromEnum(tag.args.start) + arrived];
+                        self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
                         continue;
                     }
