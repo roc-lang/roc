@@ -394,10 +394,21 @@ pub const Evaluator = struct {
             .str_lit => |sid| return .{ .str = self.program.stringLiteralText(sid) },
             .bytes_lit => |literal| {
                 const bytes = self.program.stringLiteralText(literal.literal);
-                const width: usize = literal.element.byteWidth();
+                const width: usize = if (literal.element) |scalar| scalar.byteWidth() else literal.product_width;
                 if (bytes.len != @as(usize, literal.len) * width) return self.unsupported_("packed list literal byte length");
                 const elems = self.alloc().alloc(Value, literal.len) catch return error.OutOfMemory;
-                for (elems, 0..) |*elem, i| elem.* = self.packedScalarValue(literal.element, bytes[i * width ..][0..width]);
+                const list_type = self.structural(expr.ty);
+                if (list_type != .list) return self.unsupported_("packed list had non-list type");
+                for (elems, 0..) |*elem, i| {
+                    const item = bytes[i * width ..][0..width];
+                    if (literal.element) |scalar| {
+                        elem.* = self.packedScalarValue(scalar, item);
+                    } else {
+                        var cursor: usize = 0;
+                        elem.* = try self.packedProductValue(list_type.list, item, &cursor);
+                        if (cursor != width) return self.unsupported_("packed product width disagreed with checked type");
+                    }
+                }
                 return .{ .list = elems };
             },
             .static_data_candidate => |cand| return self.evalExpr(frame, cand.runtime_expr),
@@ -498,6 +509,34 @@ pub const Evaluator = struct {
                 return self.raiseAbort(.expect_err, msg.str);
             },
         }
+    }
+
+    fn packedProductValue(self: *Evaluator, ty: Type.TypeId, bytes: []const u8, cursor: *usize) EvalError!Value {
+        return switch (self.structural(ty)) {
+            .zst => .unit,
+            .primitive => |primitive| switch (primitive) {
+                .str, .bool => self.unsupported_("non-product primitive in packed product"),
+                inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => |scalar| blk: {
+                    const encoding = @field(check.ConstStore.ConstPackedScalar, @tagName(scalar));
+                    const width = encoding.byteWidth();
+                    const start = cursor.*;
+                    cursor.* += width;
+                    if (cursor.* > bytes.len) return self.unsupported_("packed product scalar exceeded item bytes");
+                    break :blk self.packedScalarValue(encoding, bytes[start..][0..width]);
+                },
+            },
+            .record => |fields| blk: {
+                const out = try self.alloc().alloc(Value, fields.len);
+                for (0..fields.len) |i| out[i] = try self.packedProductValue(self.program.types.fieldAt(fields, i).ty, bytes, cursor);
+                break :blk .{ .record = out };
+            },
+            .tuple => |items| blk: {
+                const out = try self.alloc().alloc(Value, items.len);
+                for (0..items.len) |i| out[i] = try self.packedProductValue(self.program.types.typeAt(items, i), bytes, cursor);
+                break :blk .{ .tuple = out };
+            },
+            .named, .capture_record, .tag_union, .list, .box, .callable, .erased_fn, .erased_capture_ptr => self.unsupported_("non-product type in packed product"),
+        };
     }
 
     fn packedScalarValue(self: *Evaluator, element: check.ConstStore.ConstPackedScalar, bytes: []const u8) Value {
@@ -687,7 +726,6 @@ pub const Evaluator = struct {
     fn evalDirectCall(self: *Evaluator, frame: *Frame, call: Ast.DirectCall) EvalError!Value {
         const fn_id = switch (call.target) {
             .local => |id| id,
-            .imported => return self.unsupported_("imported function call"),
         };
         const args = try self.evalExprSpan(frame, call.args);
         return self.callFn(fn_id, args);

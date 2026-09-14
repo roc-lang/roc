@@ -2,7 +2,7 @@
 //! bodies.
 //!
 //! For each corpus program, the harness compiles once (Debug pipeline,
-//! specialization cache disabled, in-place list transforms off) while
+//! in-place list transforms off) while
 //! capturing the Debug verifier's materialized Lambda Mono program. It then
 //! executes the program twice:
 //!

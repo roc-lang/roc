@@ -31455,7 +31455,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 96 uses 128-bit type and evidence content hashes.
     // Version 97 stores the builtin-identity-to-declaration index.
     // Version 98 uses 256-bit SHA-256 type and evidence content hashes.
-    const serialized_layout_version: u32 = 98;
+    // Version 99 stores packed fixed-product lists with an optional scalar
+    // encoding and their padding-free product width.
+    const serialized_layout_version: u32 = 99;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -38079,8 +38081,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x16, 0xF3, 0x5F, 0x4C, 0x78, 0x6A, 0xB9, 0x57, 0x2F, 0x99, 0xDD, 0xA0, 0x24, 0x50, 0x30, 0xDF,
-        0x49, 0xB4, 0x35, 0x33, 0xD6, 0x4B, 0xCD, 0x07, 0x8D, 0x1F, 0xA1, 0x21, 0x5C, 0x85, 0x54, 0xD9,
+        0x81, 0xB3, 0xAC, 0xCC, 0xC6, 0x3B, 0xC0, 0x50, 0xD9, 0xF6, 0xD0, 0x36, 0x57, 0xD7, 0x27, 0x4C,
+        0x5D, 0x81, 0xB1, 0xD3, 0xDA, 0x1F, 0x15, 0x23, 0x62, 0xDA, 0x49, 0xF3, 0x88, 0x32, 0x65, 0xAF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -1201,9 +1201,7 @@ pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8
 
 /// Debug-only: compile an inspect-wrapped program for the native target while
 /// capturing the Debug verifier's materialized Lambda Mono program in
-/// `materialized_out`. Compiles with the specialization cache disabled (so
-/// every function body materializes locally rather than loading as an
-/// imported shard) and the in-place list-transform paths off (so the
+/// `materialized_out`. Compiles with the in-place list-transform paths off (so the
 /// materialized tree stays on the copy paths a tree evaluator executes).
 pub fn compileInspectedProgramWithLambdaMono(
     allocator: Allocator,
@@ -1230,7 +1228,6 @@ pub fn compileInspectedProgramWithLambdaMono(
     const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, .{
         .list_in_place_map = false,
         .inline_expects = if (inline_expects_enabled) .run else .omit,
-        .monotype_cache = lir.CheckedPipeline.MonotypeCacheControl.disabled,
         .debug_materialized_out = materialized_out,
     });
     errdefer {
@@ -1894,9 +1891,6 @@ const LowerToLirOptions = struct {
     /// shared-list, slice, and layout-mismatch cases. The Lambda Mono
     /// differential harness disables this so its tree stays on the copy path.
     list_in_place_map: bool = true,
-    /// Specialization cache control; the differential harness disables the
-    /// cache so every function body materializes locally.
-    monotype_cache: lir.CheckedPipeline.MonotypeCacheControl = .{},
     /// Debug-only capture slot for the verifier's materialized Lambda Mono
     /// program.
     debug_materialized_out: ?*?lir.CheckedPipeline.LambdaMonoProgram = null,
@@ -1979,7 +1973,6 @@ fn lowerCheckedRootWithViews(
             .inline_mode = options.inline_mode,
             .list_in_place_map = options.list_in_place_map,
             .inline_expects = options.inline_expects,
-            .monotype_cache = options.monotype_cache,
             .tag_reachability = options.tag_reachability,
             .prove_ranges = options.prove_ranges,
             .debug_materialized_out = options.debug_materialized_out,

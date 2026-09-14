@@ -28,14 +28,8 @@ pub fn ProgramSpanBorrow(comptime T: type, comptime field_name: []const u8) type
     return GuardedList.BorrowSpan(T, "monotype.Program." ++ field_name);
 }
 
-/// Monotype ids are local to the `ProgramView` or mapped shard that owns the
-/// corresponding side array. In particular, expression, pattern, statement,
-/// local, definition, function, string-literal, compile-time-site, and type ids
-/// must not be interpreted against another shard's arrays. Cross-shard function
-/// references are represented only by `FnSlot.imported`, whose `ImportedFnId`
-/// indexes an import table entry containing the target `ShardId` and local
-/// `FnId` inside that shard. Specialization records store local `FnId`s because
-/// a record belongs to exactly one shard.
+/// Monotype ids are local to the `ProgramView` that owns the corresponding side
+/// array and must not be interpreted against another program's arrays.
 /// Identifier for an expression in Monotype IR.
 pub const ExprId = enum(u32) { _ };
 /// Identifier for a pattern in Monotype IR.
@@ -48,10 +42,6 @@ pub const NestedDefId = enum(u32) { _ };
 pub const FnId = enum(u32) { _ };
 /// Identifier for a specialization record in a Monotype program.
 pub const SpecId = enum(u32) { _ };
-/// Identifier for a loaded specialization shard. Shard 0 is the current build.
-pub const ShardId = enum(u32) { local = 0, _ };
-/// Identifier for an imported function entry in a Monotype program view.
-pub const ImportedFnId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
 /// Identifier for a lexically scoped Monotype Lifted join point.
@@ -67,22 +57,73 @@ pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
+/// Checked-blob identity borrowed only while a body draft is being built.
+pub const ConstBlobView = struct {
+    module_bytes: [32]u8,
+    data: check.ConstStore.ConstBlobDataId,
+    bytes: []const u8,
+};
+
+/// Shared immutable storage for restored blobs. IR copies retain ownership;
+/// they never copy the payload or retain a pointer into a checked module.
+pub const SharedLiteralBacking = struct {
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    refs: std.atomic.Value(usize) = .init(1),
+
+    fn init(allocator: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!*SharedLiteralBacking {
+        const owned = try allocator.dupe(u8, bytes);
+        errdefer allocator.free(owned);
+        const self = try allocator.create(SharedLiteralBacking);
+        self.* = .{ .allocator = allocator, .bytes = owned };
+        return self;
+    }
+    /// Retain the immutable backing when another IR takes ownership.
+    pub fn retain(self: *SharedLiteralBacking) void {
+        _ = self.refs.fetchAdd(1, .monotonic);
+    }
+    /// Release ownership, freeing the backing after its final user.
+    pub fn release(self: *SharedLiteralBacking) void {
+        if (self.refs.fetchSub(1, .acq_rel) == 1) {
+            const allocator = self.allocator;
+            allocator.free(self.bytes);
+            allocator.destroy(self);
+        }
+    }
+};
+
+const ConstBlobKey = struct { module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId };
+
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {
     backing: []const u8,
+    shared: ?*SharedLiteralBacking = null,
     offset: u32,
     len: u32,
+
+    /// Release this literal's owned or shared backing.
+    pub fn deinit(self: StringLiteral, allocator: std.mem.Allocator) void {
+        if (self.shared) |owner| owner.release() else allocator.free(self.backing);
+    }
+
+    /// Copy literal metadata and retain shared constant payloads.
+    pub fn clone(self: StringLiteral, allocator: std.mem.Allocator) std.mem.Allocator.Error!StringLiteral {
+        var result = self;
+        if (self.shared) |owner| owner.retain() else result.backing = try allocator.dupe(u8, self.backing);
+        return result;
+    }
 
     pub fn text(self: StringLiteral) []const u8 {
         return self.backing[self.offset..][0..self.len];
     }
 };
 
-/// Readonly packed scalar-list data carried without one expression per item.
+/// Readonly packed list data carried without one expression per item.
 pub const PackedListLiteral = struct {
     literal: StringLiteralId,
     len: u32,
-    element: check.ConstStore.ConstPackedScalar,
+    element: ?check.ConstStore.ConstPackedScalar,
+    product_width: u32 = 0,
 };
 
 /// Slice descriptor over one of the program side arrays.
@@ -193,16 +234,9 @@ pub const Fn = struct {
     signature_relation: SignatureRelation = .independent_roots,
 };
 
-/// Function imported from another specialization shard.
-pub const ImportedFn = extern struct {
-    shard: ShardId,
-    fn_id: FnId,
-};
-
-/// Direct function slot in a Monotype program shard.
+/// Direct function slot in a Monotype program.
 pub const FnSlot = union(enum(u8)) {
     local: FnId,
-    imported: ImportedFnId,
 };
 
 /// Identifier for a hosted callable in durable specialization identities.
@@ -724,11 +758,6 @@ pub fn procCalleeForSlot(slot: FnSlot) ProcCallee {
     return .{ .func = slot };
 }
 
-/// Construct a direct call target for a function imported from a loaded shard.
-pub fn importedProcCallee(imported: ImportedFnId) ProcCallee {
-    return .{ .func = .{ .imported = imported } };
-}
-
 /// Direct call to a known function.
 pub const CallProc = struct {
     callee: ProcCallee,
@@ -1229,8 +1258,6 @@ pub const CallTargetVerifyError = enum {
     local_fn_type_not_function,
     local_fn_definition_arity_mismatch,
     local_call_arity_mismatch,
-    imported_fn_out_of_bounds,
-    imported_local_fn_out_of_bounds,
     lifted_fn_before_lifting,
 };
 
@@ -1251,13 +1278,11 @@ pub const CompletedTypeIdVerifyError = enum {
 
 /// Read-only Monotype program view.
 ///
-/// Today this view borrows the builder-owned arrays in `Program`. The durable
-/// specialization-cache form should expose the same shape from mapped sections.
+/// This view borrows the builder-owned arrays in `Program`.
 pub const ProgramView = struct {
     names: *const names.NameStore,
     types: Type.Store.View,
     specs: []const SpecRecord,
-    imported_fns: []const ImportedFn,
     fns: []const Fn,
     const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
     const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -1378,12 +1403,6 @@ pub const ProgramView = struct {
     }
 
     pub fn verifyCallTargets(self: ProgramView) ?CallTargetVerifyError {
-        for (self.imported_fns) |imported| {
-            if (imported.shard == .local and @intFromEnum(imported.fn_id) >= self.fns.len) {
-                return .imported_local_fn_out_of_bounds;
-            }
-        }
-
         for (self.defs) |def| {
             if (def.fn_id) |fn_id| {
                 if (self.verifyFnDefinition(fn_id, def.args)) |err| return err;
@@ -1406,9 +1425,6 @@ pub const ProgramView = struct {
                         const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
                         if (std.meta.activeTag(fn_ty) != .func) return .local_fn_type_not_function;
                         if (fn_ty.func.args.len != call.args.len) return .local_call_arity_mismatch;
-                    },
-                    .imported => |imported| {
-                        if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
                     },
                 },
                 .lifted => return .lifted_fn_before_lifting,
@@ -1440,7 +1456,6 @@ pub const ProgramBuilder = struct {
     next_symbol: u32,
     types: Type.Store,
     specs: ProgramList(SpecRecord, "specs"),
-    imported_fns: ProgramList(ImportedFn, "imported_fns"),
     fns: ProgramList(Fn, "fns"),
     const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
     const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
@@ -1466,6 +1481,7 @@ pub const ProgramBuilder = struct {
     branches: ProgramList(Branch, "branches"),
     if_branches: ProgramList(IfBranch, "if_branches"),
     string_literals: ProgramList(StringLiteral, "string_literals"),
+    const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
@@ -1500,7 +1516,6 @@ pub const ProgramBuilder = struct {
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .specs = .empty,
-            .imported_fns = .empty,
             .fns = .empty,
             .const_fn_evidence = .empty,
             .const_fn_evidence_frames = .empty,
@@ -1548,7 +1563,7 @@ pub const ProgramBuilder = struct {
         errdefer result.deinit();
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
-        inline for (.{ "specs", "imported_fns", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
@@ -1617,7 +1632,10 @@ pub const ProgramBuilder = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
+        var backings = self.const_blob_backings.valueIterator();
+        while (backings.next()) |owner| owner.*.release();
+        self.const_blob_backings.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -1640,7 +1658,6 @@ pub const ProgramBuilder = struct {
         self.fns.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
-        self.imported_fns.deinit(self.allocator);
         self.specs.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -1690,16 +1707,6 @@ pub const ProgramBuilder = struct {
 
     pub fn fnsView(self: *const ProgramBuilder) []const Fn {
         return self.fns.unsafeRawItemsForView();
-    }
-
-    pub fn addImportedFn(self: *ProgramBuilder, imported: ImportedFn) std.mem.Allocator.Error!ImportedFnId {
-        const id: ImportedFnId = @enumFromInt(@as(u32, @intCast(self.imported_fns.len())));
-        try self.imported_fns.append(self.allocator, imported);
-        return id;
-    }
-
-    pub fn importedFnsView(self: *const ProgramBuilder) []const ImportedFn {
-        return self.imported_fns.unsafeRawItemsForView();
     }
 
     pub fn addDef(self: *ProgramBuilder, def: Def) std.mem.Allocator.Error!DefId {
@@ -1781,7 +1788,6 @@ pub const ProgramBuilder = struct {
             .names = &self.names,
             .types = self.types.view(),
             .specs = self.specs.unsafeRawItemsForView(),
-            .imported_fns = self.imported_fns.unsafeRawItemsForView(),
             .fns = self.fns.unsafeRawItemsForView(),
             .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
             .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
@@ -1963,6 +1969,24 @@ pub const ProgramBuilder = struct {
 
     pub fn addStringLiteral(self: *ProgramBuilder, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
         return try self.addStringView(text, 0, @intCast(text.len));
+    }
+
+    /// Restore a view, copying each owner-relative checked blob at most once.
+    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+        const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
+        const owner = self.const_blob_backings.get(key) orelse blk: {
+            const created = try SharedLiteralBacking.init(self.allocator, bytes);
+            self.const_blob_backings.put(self.allocator, key, created) catch |err| {
+                created.release();
+                return err;
+            };
+            break :blk created;
+        };
+        if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("constant blob view exceeded its backing");
+        const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.len())));
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = offset, .len = len });
+        owner.retain();
+        return id;
     }
 
     pub fn addStringView(self: *ProgramBuilder, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
@@ -2343,6 +2367,27 @@ test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+test "restored constant blob views share storage across IR ownership transfers" {
+    const gpa = std.testing.allocator;
+    var const_store = check.ConstStore.ConstStore.init(gpa);
+    defer const_store.deinit();
+    const data = try const_store.addBlobData("abcdefgh");
+
+    var program = ProgramBuilder.init(gpa);
+    var program_alive = true;
+    defer if (program_alive) program.deinit();
+    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh", 0, 4);
+    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh", 2, 6);
+    const first = program.string_literals.get(@intFromEnum(a));
+    const second = program.string_literals.get(@intFromEnum(b));
+    try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);
+    const cloned = try second.clone(gpa);
+    defer cloned.deinit(gpa);
+    program.deinit();
+    program_alive = false;
+    try std.testing.expectEqualStrings("cdefgh", cloned.text());
+}
+
 test "final Monotype capture identities preserve direct aliases" {
     var program = Program.init(std.testing.allocator);
     defer program.deinit();
@@ -2435,7 +2480,7 @@ test "completed monotype type id verifier requires frozen in-bounds type ids" {
     );
 }
 
-test "monotype call target verifier checks local and imported slots" {
+test "monotype call target verifier checks local slots" {
     {
         var program = Program.init(std.testing.allocator);
         defer program.deinit();
@@ -2448,22 +2493,6 @@ test "monotype call target verifier checks local and imported slots" {
         const fn_id = try program.addFn(testFnSource(fn_ty));
         _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
             .callee = localProcCallee(fn_id),
-            .args = Span(ExprId).empty(),
-        } } });
-        try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
-    }
-
-    {
-        var program = Program.init(std.testing.allocator);
-        defer program.deinit();
-
-        const unit_ty = try program.types.add(.zst);
-        const imported = try program.addImportedFn(.{
-            .shard = @enumFromInt(1),
-            .fn_id = undefined, // external-shard function id is not inspected by this verifier test
-        });
-        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-            .callee = importedProcCallee(imported),
             .args = Span(ExprId).empty(),
         } } });
         try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
@@ -2530,21 +2559,9 @@ test "monotype call target verifier checks local and imported slots" {
         } } });
         try std.testing.expectEqual(CallTargetVerifyError.local_call_arity_mismatch, program.verifyCallTargets().?);
     }
-
-    {
-        var program = Program.init(std.testing.allocator);
-        defer program.deinit();
-
-        const unit_ty = try program.types.add(.zst);
-        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-            .callee = importedProcCallee(@enumFromInt(99)),
-            .args = Span(ExprId).empty(),
-        } } });
-        try std.testing.expectEqual(CallTargetVerifyError.imported_fn_out_of_bounds, program.verifyCallTargets().?);
-    }
 }
 
-test "fresh single-shard view preserves builder local call graph" {
+test "fresh program view preserves builder local call graph" {
     var program = Program.init(std.testing.allocator);
     defer program.deinit();
 
@@ -2632,7 +2649,6 @@ fn collectSingleShardLocalCallTargets(
         switch (expr.data.call_proc.callee) {
             .func => |slot| switch (slot) {
                 .local => |fn_id| try out.append(allocator, fn_id),
-                .imported => return error.TestUnexpectedResult,
             },
             .lifted => return error.TestUnexpectedResult,
         }

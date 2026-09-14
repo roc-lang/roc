@@ -866,10 +866,6 @@ const Solver = struct {
                         if (cursor < args.len) return .{ .expr = .{ .id = args[cursor], .expected = self.program.types.spanItem(func.args, cursor) } };
                         return try self.captureRequest(callee, call.captures, cursor - args.len);
                     },
-                    .imported => {
-                        if (cursor < args.len) return .{ .expr = .{ .id = args[cursor] } };
-                        if (call.captures.len != 0) Common.invariant("imported direct call carried local capture operands");
-                    },
                 }
             },
             .low_level => |call| {
@@ -1211,7 +1207,6 @@ const Solver = struct {
         else if (tag == .call_proc)
             switch (Lifted.directCallee(expr.data.call_proc)) {
                 .local => |callee| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)])).ret,
-                .imported => try self.lowerTypeFresh(expr.ty),
             }
         else
             try self.lowerTypeFresh(expr.ty);
@@ -3615,7 +3610,6 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
         allocator,
         names.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs

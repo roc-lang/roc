@@ -5475,7 +5475,7 @@ pub const Interpreter = struct {
         }
 
         if (byte_len_usize == 0) {
-            return self.rocListToValue(RocList.empty(), target_layout);
+            return self.rocListToValue(.{ .bytes = null, .length = elem_len, .capacity_or_alloc_ptr = RocList.encodeCapacity(elem_len) }, target_layout);
         }
 
         if (builtin.mode == .Debug) {

@@ -1848,9 +1848,9 @@ const Builder = struct {
                     .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => boxyPlanInvariant("stored list node had a non-list stored type"),
                 } else null;
                 switch (list_value) {
-                    // Packed scalar elements carry no nested ConstStore nodes, so
+                    // Packed products carry no nested ConstStore nodes, so
                     // there is nothing further to analyze for representation.
-                    .scalar_bytes => {},
+                    .packed_bytes => {},
                     .nodes => |children| for (children) |child| try self.analyzeStaticConstNode(store_view, child, elem_rep, elem_type, visited),
                 }
             },

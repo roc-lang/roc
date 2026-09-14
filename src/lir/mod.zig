@@ -177,3 +177,6 @@ test "lir tests" {
     std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
 }
+
+/// Canonical packed product data and committed-layout copy plans.
+pub const PackedData = core.PackedData;
