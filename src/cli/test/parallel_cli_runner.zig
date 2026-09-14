@@ -392,6 +392,7 @@ const CustomCase = enum {
     default_platform_wasm32_archive_reproducible,
     native_build_thread_count_reproducible,
     native_build_artifact_round_trip,
+    native_build_pack_objects,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
@@ -1502,6 +1503,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_crash_arm64musl } },
@@ -3075,6 +3077,7 @@ fn runCustomCase(
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
+        .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
@@ -5711,6 +5714,66 @@ fn customNativeBuildArtifactRoundTrip(
             .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
             .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
         })) |failure| return failure;
+    }
+    return null;
+}
+
+/// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
+/// module's closed exports as a pack program and write one object and one
+/// manifest per module next to the output (`writePackObjects` in
+/// `src/cli/main.zig`). Two builds must write identical pack files, the
+/// Builtin pack must have roots, and with the artifact round trip enabled
+/// every pack object must assemble from its own artifacts.
+fn customNativeBuildPackObjects(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var pack_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack environment: {}", .{err}),
+    };
+    defer pack_env.env_map.deinit();
+    pack_env.env_map.put("ROC_DEV_PACK_OBJECTS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack objects: {}", .{err});
+    pack_env.env_map.put("ROC_DEV_ARTIFACT_ROUNDTRIP", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the artifact round trip: {}", .{err});
+
+    const roc_file = "test/fx/hello_world.roc";
+    const suffixes = [_][]const u8{ "pack_a", "pack_b" };
+    var outputs: [suffixes.len][]const u8 = undefined;
+    for (suffixes, 0..) |suffix, index| {
+        outputs[index] = std.fmt.allocPrint(allocator, "{s}/{s}", .{ env.dirs.work_dir, suffix }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, outputs[index]) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+        if (runRocAndCheck(io, allocator, &pack_env, timer, timeout_ms, .{
+            .args = &.{ "build", "--no-cache", "--opt=dev", out_arg },
+            .roc_file = roc_file,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
+        })) |failure| return failure;
+    }
+
+    const pack_files = [_][]const u8{ "pack.Builtin.o", "pack.Builtin.manifest", "pack.Stdout.o", "pack.Stdout.manifest", "pack.hello_world.o", "pack.hello_world.manifest" };
+    for (pack_files) |pack_file| {
+        var contents: [suffixes.len][]const u8 = undefined;
+        for (outputs, 0..) |output, index| {
+            const path = std.fmt.allocPrint(allocator, "{s}.{s}", .{ output, pack_file }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate pack path: {}", .{err});
+            contents[index] = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+                return customFailure(allocator, timer, "pack file {s} was not written: {}", .{ path, err });
+        }
+        defer for (contents) |bytes| allocator.free(bytes);
+        if (!std.mem.eql(u8, contents[0], contents[1])) {
+            return customFailure(allocator, timer, "{s}: pack bytes differ between two builds", .{pack_file});
+        }
+        if (std.mem.endsWith(u8, pack_file, ".manifest") and std.mem.find(u8, contents[0], "root roc__proc_") == null) {
+            return customFailure(allocator, timer, "{s}: pack manifest names no root procedure", .{pack_file});
+        }
     }
     return null;
 }

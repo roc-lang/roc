@@ -8431,6 +8431,91 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
 
 /// Build using the dev backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
+/// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
+/// module's closed exports as a pack program and write one object and one
+/// manifest per module next to the output (`<output>.pack.<module>.o` and
+/// `.manifest`). This is the pack-program gate for the object cache
+/// (`projects/big/package-object-cache.md`); no build reads these files.
+fn writePackObjects(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+    final_output_path: []const u8,
+) CliMainError!void {
+    if (std.c.getenv("ROC_DEV_PACK_OBJECTS") == null) return;
+    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(artifacts);
+    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+
+    for (artifacts) |artifact| {
+        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
+        defer ctx.gpa.free(roots);
+        const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
+        const file_name = try ctx.arena.dupe(u8, module_name);
+        for (file_name) |*byte| {
+            if (!std.ascii.isAlphanumeric(byte.*)) byte.* = '_';
+        }
+        const object_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.o", .{ final_output_path, file_name });
+        const manifest_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.manifest", .{ final_output_path, file_name });
+        if (roots.len == 0) {
+            // A module with no closed exports has an empty pack; the manifest
+            // still records that it was considered.
+            backend.writeFileWindowsAvSafe(ctx.io.std_io, manifest_path, "") catch {
+                return error.NativeCompilationFailed;
+            };
+            continue;
+        }
+        const imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
+        defer ctx.gpa.free(imports);
+        const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
+        defer ctx.gpa.free(relations);
+
+        var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
+        config.target.post_check_executor = build_env.postCheckExecutor();
+        var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports, relations, roots, config.target);
+        defer lowered.deinit();
+
+        const static_data_exports = try compile.static_data_exports.buildStaticData(
+            ctx.gpa,
+            .{
+                .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relations),
+                .imports = imports,
+            },
+            &lowered,
+            target,
+            .{},
+        );
+        defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+
+        var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+        _ = object_compiler.compileToObjectFileAndWrite(
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            &.{},
+            static_data_exports,
+            lowered.lir_result.store.getProcSpecs(),
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
+            target,
+            object_path,
+            ctx.coreCtx(),
+        ) catch |err| {
+            std.log.err("Pack compilation for {s} failed: {}", .{ module_name, err });
+            return error.NativeCompilationFailed;
+        };
+
+        const manifest = try lir.PackProgram.manifestBytes(ctx.gpa, &lowered);
+        defer ctx.gpa.free(manifest);
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, manifest_path, manifest) catch {
+            return error.NativeCompilationFailed;
+        };
+    }
+}
+
 fn nativeBuildEntrypoints(
     ctx: *CliCtx,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
@@ -10381,6 +10466,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.NativeCompilationFailed;
     };
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    try writePackObjects(ctx, &build_env, root_artifact, args, target, final_output_path);
 
     reporter.begin("Linking");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);

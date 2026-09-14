@@ -63,6 +63,11 @@ pub const ProcIdentity = struct {
         return std.fmt.bytesToHex(self.bytes[0..16].*, .lower);
     }
 
+    /// The object symbol that names this procedure in every program.
+    pub fn symbolName(self: ProcIdentity, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        return std.fmt.allocPrint(allocator, "roc__proc_{s}", .{&self.symbolHex()});
+    }
+
     /// Identity of a procedure a pass derives from this one: the same role
     /// and key from the same origin yields the same identity.
     pub fn derived(self: ProcIdentity, role: []const u8, key: []const u8) ProcIdentity {

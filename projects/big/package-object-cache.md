@@ -583,13 +583,30 @@ them.
       references do not carry, so the round trip is x86_64 only for now; Boxy capture-drop helpers
       are emitted inside their caller's bytes and are rejected as nested
       regions (Boxy programs never use the cache). No cache, no store.
-   2. Pack programs: lower one module's closed export set as a program with
-      boundary-conservative passes (tag reachability treats root parameters
-      as fully constructed; ARC signatures solved within the pack and
-      recorded per entry), producing artifacts plus a manifest. Gate: the
-      pack program for each fixture platform and for `Builtin.roc` lowers,
-      its artifacts assemble into an object with no unresolved symbols other
-      than host and builtin externs, and two builds write identical bytes.
+   2. Pack programs (done): `src/lir/pack_program.zig` lowers one module's
+      closed exports (exported procedure bindings with a checked body whose
+      argument and result types mention no type variable and no function
+      type, nominal backings included) as a program of their own, and
+      `ROC_DEV_PACK_OBJECTS` makes a native dev build write one object and
+      one manifest per visible module next to the output. No pass needed a
+      boundary mode: tag reachability already treats every parameter as
+      fully constructed and narrows only through returns of bodies it can
+      see, and ARC solves the pack's own fixpoint; the manifest records each
+      root's symbol and borrowed-parameter mask. Gate: a CLI subcommands case
+      builds twice with the flag and the artifact round trip, requires
+      identical pack bytes, roots in the Builtin, platform, and app packs,
+      and no round-trip difference. Measured on the fixture apps: the
+      Builtin pack has 1284 closed roots, deterministic across builds, and
+      its only undefined symbols are `roc_builtins_*` and host symbols.
+      Two findings shape slice 3. First, dev builds inline nearly every
+      closed builtin call, so an app's own procedures almost never coincide
+      with the Builtin pack; the sharing that matters in dev is between an
+      app's pack (its own functions plus the builtin instantiations at its
+      types) and the previous version of that same pack after an edit,
+      exactly the "warmness survives edits" case. Second, a platform
+      module's pack references hosted functions by their declared names
+      (`line!`), which the app build resolves through the platform's hosted
+      tables; linking a platform pack needs the same resolution.
    3. Store and hit: pack files under the cache root, the per-machine index,
       the Monotype reservation-time hit for closed requests that records an
       external reference and skips lowering, artifact splicing in the object
