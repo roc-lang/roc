@@ -956,7 +956,7 @@ pub const Program = struct {
         writeIdentityBytes(&hasher, "roc.lifted.fn-source.v1");
         if (fn_.source) |template| {
             writeIdentityBytes(&hasher, "template");
-            writeFnDefDigest(&hasher, template.fn_def);
+            writeFnDefDigest(&hasher, &self.names, template.fn_def);
             hasher.update(&template.source_fn_key.bytes);
             hasher.update(&template.evidence_digest.bytes);
             const mono_digest = self.types.specializationDigest(&self.names, template.mono_fn_ty);
@@ -1439,8 +1439,19 @@ test "monotype lifted declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-fn writeFnDefDigest(hasher: *TypeDigestHasher, fn_def: Mono.FnDef) void {
-    writeIdentityBytes(hasher, @tagName(fn_def));
+fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: Mono.FnDef) void {
+    // Whether a template was requested from its own module or from an
+    // importer changes nothing about the code it lowers to, so both spellings
+    // digest alike; otherwise a package's pack and the apps that import it
+    // would name the same specialization differently.
+    writeIdentityBytes(hasher, switch (fn_def) {
+        .local_template, .imported_template => "template",
+        .local_hosted, .imported_hosted => "hosted",
+        .nested => "nested",
+        .checked_generated => "checked_generated",
+        .parser_runtime => "parser_runtime",
+        .encoder_for_runtime => "encoder_for_runtime",
+    });
     switch (fn_def) {
         .local_template, .imported_template, .checked_generated => |template| writeProcTemplateDigest(hasher, template),
         .nested => |nested| {
@@ -1460,10 +1471,11 @@ fn writeFnDefDigest(hasher: *TypeDigestHasher, fn_def: Mono.FnDef) void {
                 writeIdentityBytes(hasher, "no-local-proc-context");
             }
         },
+        // A hosted function is named by its external symbol; its dispatch
+        // slot is assigned per program and is not part of the code it names.
         .local_hosted, .imported_hosted => |hosted_fn| {
             writeProcTemplateDigest(hasher, hosted_fn.template);
-            writeIdentityU32(hasher, @intFromEnum(hosted_fn.external_symbol_name));
-            writeIdentityU32(hasher, hosted_fn.dispatch_index);
+            writeIdentityBytes(hasher, name_store.externalSymbolNameText(hosted_fn.external_symbol_name));
         },
         .parser_runtime => |runtime| {
             writeProcTemplateDigest(hasher, runtime.owner);

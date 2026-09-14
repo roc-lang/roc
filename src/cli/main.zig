@@ -8440,11 +8440,24 @@ fn writePackObjects(
     ctx: *CliCtx,
     build_env: *BuildEnv,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    app_imports: []const check.CheckedArtifact.ImportedModuleView,
+    app_relations: []const check.CheckedArtifact.ImportedModuleView,
+    app_lowered: *const lir.CheckedPipeline.LoweredProgram,
     args: cli_args.BuildArgs,
     target: RocTarget,
     final_output_path: []const u8,
 ) CliMainError!void {
     if (std.c.getenv("ROC_DEV_PACK_OBJECTS") == null) return;
+    {
+        // The app program's own procedures, in the same shape as a pack
+        // manifest, so identities can be compared across the two lowerings.
+        const app_manifest = try lir.PackProgram.manifestBytes(ctx.gpa, app_lowered);
+        defer ctx.gpa.free(app_manifest);
+        const app_manifest_path = try std.fmt.allocPrint(ctx.arena, "{s}.app.manifest", .{final_output_path});
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, app_manifest_path, app_manifest) catch {
+            return error.NativeCompilationFailed;
+        };
+    }
     const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(artifacts);
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
@@ -8468,21 +8481,40 @@ fn writePackObjects(
             };
             continue;
         }
-        const imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
-        defer ctx.gpa.free(imports);
+        const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
+        defer ctx.gpa.free(own_imports);
+        // A platform's internal modules bind their hosted functions through
+        // the platform module's hosted section, which names declarations
+        // across every module the platform reaches; the pack lowers with the
+        // program's whole module set in view, exactly as the app does, and
+        // Monotype lowers only what the pack's roots reach.
+        var imports = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer imports.deinit(ctx.gpa);
+        try imports.appendSlice(ctx.gpa, own_imports);
+        const root_view = check.CheckedArtifact.importedView(root_artifact);
+        for ([_][]const check.CheckedArtifact.ImportedModuleView{ &.{root_view}, app_imports, app_relations }) |views| {
+            for (views) |view| {
+                if (std.meta.eql(view.key, artifact.key)) continue;
+                var present = false;
+                for (imports.items) |existing| {
+                    if (std.meta.eql(existing.key, view.key)) present = true;
+                }
+                if (!present) try imports.append(ctx.gpa, view);
+            }
+        }
         const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
         defer ctx.gpa.free(relations);
 
         var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
         config.target.post_check_executor = build_env.postCheckExecutor();
-        var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports, relations, roots, config.target);
+        var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
         defer lowered.deinit();
 
         const static_data_exports = try compile.static_data_exports.buildStaticData(
             ctx.gpa,
             .{
                 .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relations),
-                .imports = imports,
+                .imports = imports.items,
             },
             &lowered,
             target,
@@ -10466,7 +10498,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.NativeCompilationFailed;
     };
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
-    try writePackObjects(ctx, &build_env, root_artifact, args, target, final_output_path);
+    try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
 
     reporter.begin("Linking");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);

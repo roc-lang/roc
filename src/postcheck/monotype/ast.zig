@@ -324,7 +324,7 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
 /// mutable because type digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    writeFnDef(&hasher, template.fn_def);
+    writeFnDef(&hasher, name_store, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
     writeBytes(&hasher, &template.evidence_digest.bytes);
     const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
@@ -572,14 +572,17 @@ test "function evidence identity uses checked callable type keys" {
     ));
 }
 
-fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
+fn writeFnDef(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: FnDef) void {
+    // Whether a template was requested from its own module or from an
+    // importer changes nothing about the code it lowers to, so both spellings
+    // digest alike.
     switch (fn_def) {
         .local_template => |template| {
-            writeBytes(hasher, "local_template");
+            writeBytes(hasher, "template");
             writeProcTemplate(hasher, template);
         },
         .imported_template => |template| {
-            writeBytes(hasher, "imported_template");
+            writeBytes(hasher, "template");
             writeProcTemplate(hasher, template);
         },
         .nested => |nested| {
@@ -601,12 +604,12 @@ fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
             }
         },
         .local_hosted => |hosted| {
-            writeBytes(hasher, "local_hosted");
-            writeHostedFn(hasher, hosted);
+            writeBytes(hasher, "hosted");
+            writeHostedFn(hasher, name_store, hosted);
         },
         .imported_hosted => |hosted| {
-            writeBytes(hasher, "imported_hosted");
-            writeHostedFn(hasher, hosted);
+            writeBytes(hasher, "hosted");
+            writeHostedFn(hasher, name_store, hosted);
         },
         .checked_generated => |template| {
             writeBytes(hasher, "checked_generated");
@@ -625,10 +628,11 @@ fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
     }
 }
 
-fn writeHostedFn(hasher: *TypeDigestHasher, hosted: HostedFn) void {
+fn writeHostedFn(hasher: *TypeDigestHasher, name_store: *const names.NameStore, hosted: HostedFn) void {
+    // The dispatch slot is assigned per program and is not part of the code
+    // the hosted function names.
     writeProcTemplate(hasher, hosted.template);
-    writeU32(hasher, @intFromEnum(hosted.external_symbol_name));
-    writeU32(hasher, hosted.dispatch_index);
+    writeBytes(hasher, name_store.externalSymbolNameText(hosted.external_symbol_name));
 }
 
 fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
