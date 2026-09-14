@@ -293,15 +293,13 @@ pub const ParallelMetricsSnapshot = struct {
     /// Sum of executor callback intervals; overlapping work is counted once per
     /// callback and can therefore exceed wall time.
     worker_work_ns: u64 = 0,
-    /// Sum of validation, serial retry, discard, and ordered commit intervals
-    /// after executor barriers.
+    /// Sum of validation, discard, and ordered commit intervals after executor
+    /// barriers.
     coordinator_post_batch_work_ns: u64 = 0,
     root_tasks_submitted: u64 = 0,
     root_tasks_committed: u64 = 0,
-    root_tasks_retried_serial: u64 = 0,
     specialization_tasks_submitted: u64 = 0,
     specialization_tasks_committed: u64 = 0,
-    specialization_tasks_retried_serial: u64 = 0,
     specialization_tasks_discarded_ready: u64 = 0,
     task_waves: u64 = 0,
     /// Largest executor width represented by any aggregated lowering.
@@ -310,6 +308,12 @@ pub const ParallelMetricsSnapshot = struct {
     peak_worker_lanes_used: u64 = 0,
     /// Tasks after the first task on a lane within one lowering invocation.
     within_lowering_lane_reuse_tasks: u64 = 0,
+    /// Largest number of lightweight specialization identities waiting in the
+    /// deterministic FIFO.
+    peak_specialization_jobs_pending: u64 = 0,
+    /// Largest number of completed heavyweight shards retained at one ordered
+    /// commit barrier.
+    peak_specialization_shards_retained: u64 = 0,
 };
 
 /// Timings for coordinator wall phases and aggregate executor work owned by
@@ -523,7 +527,7 @@ const ProcedureTimingScope = struct {
 };
 
 /// Aggregate elapsed coordinator work after an executor batch has completed,
-/// including validation, serial retry, discard, and ordered commit.
+/// including validation, discard, and ordered commit.
 ///
 /// This overlaps the coordinator's procedure wall-time classification and is
 /// therefore reported as work rather than as another sequential phase.
@@ -606,6 +610,7 @@ pub const BodyDiagnostics = struct {
     spec_job_shards_lowered: u64 = 0,
     spec_job_shards_committed: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
+    eager_iterator_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
     deferred_template_bodies_lowered: u64 = 0,
     lowered_template_bodies_discarded: u64 = 0,
@@ -2345,10 +2350,11 @@ const TemplateReservation = struct {
 };
 
 /// How a template specialization's body is produced once its identity is
-/// reserved. Callers that consume the callee's solved representation (roots,
-/// iterator-inline completion, restored constant functions, hosted adapter
-/// sources) lower the body immediately; a seal-time symbolic request only
-/// reserves the identity and queues the body for the scheduler's wave drain.
+/// reserved. Roots, restored constant functions, and hosted adapter sources
+/// lower the body immediately; a seal-time symbolic request only reserves the
+/// identity and queues the body for the scheduler's wave drain. Iterator
+/// producers needed before seal stay draft-local instead of entering this
+/// coordinator-owned path.
 const TemplateBodyScheduling = enum { immediate, queued };
 
 /// Keep more ready jobs in each executor run than there are worker lanes.
@@ -2357,8 +2363,8 @@ const TemplateBodyScheduling = enum { immediate, queued };
 /// the completed shards retained until each batch reaches its commit barrier.
 const parallel_spec_jobs_per_lane: usize = 4;
 
-const SpecJobRunId = enum(u64) { _ };
-var next_spec_job_run_id = std.atomic.Value(u64).init(0);
+const SpecJobRunId = enum(u32) { _ };
+var next_spec_job_run_id = std.atomic.Value(u32).init(0);
 
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
@@ -2783,7 +2789,6 @@ const SpecJobTaskContext = struct {
     prepared: PreparedSpecJob,
     shard: ?CompletedSpecJobShard = null,
     failed: bool = false,
-    retry_serial: bool = false,
     completed: bool = false,
     worker_work_ns: u64 = 0,
     lane_task_started: bool = false,
@@ -2814,7 +2819,6 @@ const ProcedureRootTaskContext = struct {
     request: checked.RootRequest,
     shard: ?CompletedProcedureRootShard = null,
     failed: bool = false,
-    retry_serial: bool = false,
     completed: bool = false,
     worker_work_ns: u64 = 0,
     lane_task_started: bool = false,
@@ -3111,6 +3115,20 @@ const SymbolDomains = struct {
     }
 };
 
+fn appendRuntimeSchemaRequestToProgram(
+    program: *Ast.Program,
+    request: Ast.RuntimeSchemaRequest,
+) Allocator.Error!void {
+    for (program.runtimeSchemaRequestsView()) |existing| {
+        if (existing.def.module == request.def.module and
+            existing.def.type_name == request.def.type_name)
+        {
+            return;
+        }
+    }
+    try program.addRuntimeSchemaRequest(request);
+}
+
 const Builder = struct {
     allocator: Allocator,
     spec_job_run_id: SpecJobRunId,
@@ -3132,11 +3150,8 @@ const Builder = struct {
     target_usize: base.target.TargetUsize,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*Timing,
-    /// Executor workers use the existing allocation error channel as a private
-    /// unwind when a representation-sensitive call must re-run on the
-    /// coordinator. No worker result is committed in that case.
+    /// Marks callbacks that must leave coordinator-owned stores unchanged.
     spec_job_parallel_callback: bool = false,
-    spec_job_requires_serial_retry: bool = false,
     symbols: SymbolDomains = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
@@ -3267,7 +3282,7 @@ const Builder = struct {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
         const raw_spec_job_run_id = next_spec_job_run_id.fetchAdd(1, .monotonic);
-        if (raw_spec_job_run_id == std.math.maxInt(u64)) {
+        if (raw_spec_job_run_id == std.math.maxInt(u32)) {
             Common.compilerBug("Monotype specialization run identity overflow");
         }
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
@@ -4104,17 +4119,12 @@ const Builder = struct {
             if (context.failed) return error.OutOfMemory;
         }
         for (contexts) |*context| {
-            if (context.retry_serial) {
-                if (self.timing) |timing| timing.parallel.root_tasks_retried_serial +%= 1;
-                try self.lowerRoot(context.request);
-            } else {
-                const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
-                try self.appendRuntimeSchemaRequestsForDef(def);
-                try self.program.addRoot(.{ .def = def, .request = context.request });
-                if (self.timing) |timing| timing.parallel.root_tasks_committed +%= 1;
-                context.shard.?.deinit();
-                context.shard = null;
-            }
+            const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
+            try self.appendRuntimeSchemaRequestsForDef(def);
+            try self.program.addRoot(.{ .def = def, .request = context.request });
+            if (self.timing) |timing| timing.parallel.root_tasks_committed +%= 1;
+            context.shard.?.deinit();
+            context.shard = null;
         }
     }
 
@@ -4242,12 +4252,7 @@ const Builder = struct {
     }
 
     fn appendRuntimeSchemaRequest(self: *Builder, request: Ast.RuntimeSchemaRequest) Allocator.Error!void {
-        for (self.program.runtimeSchemaRequestsView()) |existing| {
-            if (existing.def.module == request.def.module and existing.def.type_name == request.def.type_name) {
-                return;
-            }
-        }
-        try self.program.addRuntimeSchemaRequest(request);
+        try appendRuntimeSchemaRequestToProgram(self.program, request);
     }
 
     fn lowerProcedureUseRoot(
@@ -5023,6 +5028,7 @@ const Builder = struct {
                 });
                 self.next_spec_dispatch_index += 1;
                 self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+                self.recordPendingSpecJobPeak();
                 return reservation.def;
             },
         }
@@ -5344,6 +5350,7 @@ const Builder = struct {
                 };
             }
             self.recordParallelWorkerWork(contexts[0..batch_len]);
+            self.recordRetainedSpecShardPeak(contexts[0..batch_len]);
             if (run_error) |err| return err;
 
             var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
@@ -5371,18 +5378,10 @@ const Builder = struct {
                     Common.compilerBug("post-check executor omitted a specialization completion");
                 }
                 if (context.failed) return error.OutOfMemory;
-                if (context.retry_serial) {
-                    if (context.shard != null) {
-                        Common.compilerBug("serial specialization retry retained a worker shard");
-                    }
-                    if (self.timing) |timing| timing.parallel.specialization_tasks_retried_serial +%= 1;
-                    try self.executePendingSpecJob(context.prepared.job);
-                    continue;
-                }
                 switch (self.spec_store.recordStatus(context.prepared.job.spec)) {
                     .ready => {
-                        // A preceding serial retry may have claimed this queued
-                        // reservation immediately. Accept the ready entry and
+                        // An earlier-dispatched shard may have eagerly committed
+                        // this same iterator producer. Accept the ready entry and
                         // discard its independently lowered body. The worker's
                         // cumulative type/name suffix must still be absorbed so
                         // later epochs from that worker retain exact ids.
@@ -5417,6 +5416,7 @@ const Builder = struct {
                 context.shard = null;
             }
             initialized_contexts = 0;
+            self.compactAcceptedPendingSpecJobs();
         }
         self.pending_spec_jobs.clearRetainingCapacity();
         self.pending_spec_jobs_head = 0;
@@ -5469,7 +5469,6 @@ const Builder = struct {
         builder.current_loc = context.inputs.current_loc;
         builder.current_region = context.inputs.current_region;
         builder.spec_job_parallel_callback = true;
-        builder.spec_job_requires_serial_retry = false;
         defer builder.spec_job_parallel_callback = false;
         var shard = builder.lowerPendingSpecJobToShard(
             worker,
@@ -5479,17 +5478,9 @@ const Builder = struct {
             context.prepared.method_scope,
             context.prepared.template,
         ) catch {
-            if (builder.spec_job_requires_serial_retry) {
-                builder.spec_job_requires_serial_retry = false;
-                context.retry_serial = true;
-            } else {
-                context.failed = true;
-            }
+            context.failed = true;
             return context;
         };
-        if (builder.spec_job_requires_serial_retry) {
-            Common.compilerBug("parallel specialization retry escaped worker lowering");
-        }
         if (context.inputs.collect_counters) {
             shard.specialization_counter_delta = worker.counters;
         }
@@ -5527,7 +5518,6 @@ const Builder = struct {
         builder.current_loc = context.inputs.current_loc;
         builder.current_region = context.inputs.current_region;
         builder.spec_job_parallel_callback = true;
-        builder.spec_job_requires_serial_retry = false;
         defer builder.spec_job_parallel_callback = false;
         var shard = builder.lowerProcedureUseRootToShard(
             worker,
@@ -5536,12 +5526,7 @@ const Builder = struct {
             context.request.procedure_use orelse
                 Common.compilerBug("procedure root task lost its procedure use"),
         ) catch {
-            if (builder.spec_job_requires_serial_retry) {
-                builder.spec_job_requires_serial_retry = false;
-                context.retry_serial = true;
-            } else {
-                context.failed = true;
-            }
+            context.failed = true;
             return context;
         };
         if (context.inputs.collect_counters) shard.specialization_counter_delta = worker.counters;
@@ -5665,6 +5650,41 @@ const Builder = struct {
         }
     }
 
+    fn recordPendingSpecJobPeak(self: *Builder) void {
+        const executor = self.post_check_executor orelse return;
+        if (executor.worker_count <= 1) return;
+        const timing = self.timing orelse return;
+        timing.parallel.peak_specialization_jobs_pending = @max(
+            timing.parallel.peak_specialization_jobs_pending,
+            @as(u64, @intCast(self.pending_spec_jobs.items.len - self.pending_spec_jobs_head)),
+        );
+    }
+
+    fn recordRetainedSpecShardPeak(self: *Builder, contexts: []const SpecJobTaskContext) void {
+        const timing = self.timing orelse return;
+        var retained: u64 = 0;
+        for (contexts) |context| {
+            if (context.shard != null) retained += 1;
+        }
+        timing.parallel.peak_specialization_shards_retained = @max(
+            timing.parallel.peak_specialization_shards_retained,
+            retained,
+        );
+    }
+
+    fn compactAcceptedPendingSpecJobs(self: *Builder) void {
+        const accepted = self.pending_spec_jobs_head;
+        if (accepted == 0) return;
+        const remaining = self.pending_spec_jobs.items.len - accepted;
+        std.mem.copyForwards(
+            PendingSpecJob,
+            self.pending_spec_jobs.items[0..remaining],
+            self.pending_spec_jobs.items[accepted..],
+        );
+        self.pending_spec_jobs.items.len = remaining;
+        self.pending_spec_jobs_head = 0;
+    }
+
     fn ensureSpecJobTaskBuffers(
         self: *Builder,
         batch_capacity: usize,
@@ -5702,9 +5722,8 @@ const Builder = struct {
     /// only ordered program appends happen after the result crosses the handoff.
     ///
     /// Deferred preparation executes against the worker's private Builder and
-    /// workspace. A representation-sensitive immediate callee still needs
-    /// coordinator reservation and completion, so executor callbacks unwind and
-    /// retry that uncommon whole job on the existing serial path.
+    /// workspace. Representation-sensitive iterator callees lower eagerly into
+    /// this same draft, so callbacks never publish coordinator state.
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         worker: *SpecJobWorkerState,
@@ -6400,6 +6419,7 @@ const Builder = struct {
             .method_scope = source_ctx.method_scope.key,
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
+            .symbol = symbol,
             .request_fn_node = request_fn_node,
             .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
             .evidence = evidence,
@@ -6536,6 +6556,147 @@ const Builder = struct {
         source_ctx.draft.template_specs.items[spec_index].demand_end =
             @intCast(source_ctx.draft.runtime_value_demands.items.len);
         return .{ .local = .{ .draft = fn_id } };
+    }
+
+    /// Lower one already-registered context-free specialization into the
+    /// caller's graph and body store when its iterator representation is needed
+    /// before the ordinary deferred coordinator boundary.
+    fn lowerDraftTemplateSpecBody(
+        self: *Builder,
+        source_ctx: *BodyContext,
+        spec_index: usize,
+        view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+    ) Allocator.Error!NodeId {
+        if (spec_index >= source_ctx.draft.template_specs.items.len) {
+            Common.invariant("draft template body index was outside the specialization table");
+        }
+        const spec = source_ctx.draft.template_specs.items[spec_index];
+        if (spec.state != .lowering) {
+            Common.invariant("draft template body lowering began outside the lowering state");
+        }
+        if (spec.local_context_dependent) {
+            Common.invariant("context-free draft template lowering received lexical state");
+        }
+        if (template.target == .hosted) {
+            Common.invariant("hosted template entered Roc draft body lowering");
+        }
+
+        const fn_id = spec.fn_id;
+        const top_level_def = try source_ctx.draft.reserveDef(.{ .draft_fn = fn_id });
+        source_ctx.draft.template_specs.items[spec_index].def_id = top_level_def;
+
+        const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
+        defer owner_scope.leave();
+        try self.registerDraftProcDebugNameForTemplate(
+            source_ctx.draft,
+            spec.symbol,
+            view,
+            spec.template_ref,
+        );
+
+        var body_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self,
+            view,
+            source_ctx.method_scope,
+            spec.template_ref,
+            source_ctx.graph,
+            source_ctx.draft,
+        );
+        body_ctx.evidence = rootEvidenceWithSubstitution(
+            spec.template_ref,
+            templateSchemaIn(view, &template),
+            .{ .vector = spec.evidence, .subst = spec.subst },
+        );
+        try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, spec.subst);
+        body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames;
+        body_ctx.frozen_sealed_emission = source_ctx.frozen_sealed_emission;
+        body_ctx.frozen_type_finals = source_ctx.frozen_type_finals;
+        body_ctx.frozen_codec_calls = source_ctx.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = source_ctx.frozen_field_defaults;
+        defer body_ctx.deinit();
+        if (spec.lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
+
+        const root_node = try body_ctx.instNode(template.checked_fn_root);
+        if (source_ctx.draft.fns.items[@intFromEnum(fn_id)].signature_relation == .independent_roots) {
+            const public_request = source_ctx.graph.requestSourceInterface(spec.request_fn_node) orelse
+                spec.request_fn_node;
+            try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
+            try relateConstructionFunctionRequestInterface(source_ctx.graph, root_node, spec.request_fn_node);
+        } else if (try source_ctx.graph.containsGeneratedPrivate(spec.request_fn_node)) {
+            if (source_ctx.graph.requestSourceInterface(spec.request_fn_node)) |source_fn_node| {
+                try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
+            }
+            try relateFunctionRequestInterface(source_ctx.graph, root_node, spec.request_fn_node);
+        } else {
+            try source_ctx.graph.unify(root_node, spec.request_fn_node);
+        }
+        if (source_ctx.draft.fns.items[@intFromEnum(fn_id)].signature_relation != .independent_roots) {
+            try relateFunctionRequestInterface(source_ctx.graph, root_node, spec.request_fn_node);
+        }
+        if (spec.codec_contract) |contract| {
+            try body_ctx.instantiateCodecContractAtCall(
+                contract.anchor,
+                contract.constructor_node,
+                contract.shape_node,
+            );
+        }
+        try body_ctx.instantiateTemplateDispatchRelations(template, null);
+        try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
+        body_ctx.owner_context_fn_key = spec.source_fn_key;
+        body_ctx.current_fn_key = spec.source_fn_key;
+
+        // A generated-private request is the exact runtime interface owned by
+        // this specialization. The checked root remains the public interface
+        // used to instantiate dispatch relations, but lowering the body
+        // against it would discard the producer-supplied private backing from
+        // parameters and returns.
+        const body_fn_node = if (try source_ctx.graph.containsGeneratedPrivate(spec.request_fn_node))
+            spec.request_fn_node
+        else
+            root_node;
+        const lowered = try body_ctx.lowerTemplateBodyAtNode(spec.template_ref, template, body_fn_node);
+        const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
+            body_fn_node,
+            lowered.ret,
+            body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+        );
+        const completed_fn_ret = (try source_ctx.graph.functionNodes(completed_fn_node)).ret;
+        const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
+
+        var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
+        completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
+        source_ctx.draft.setDef(top_level_def, .{
+            .symbol = spec.symbol,
+            .fn_def = completed_template,
+            .fn_id = .{ .draft = fn_id },
+            .args = lowered.args,
+            .body = .{ .roc = lowered.body },
+            .ret = completed_ret_cell,
+        });
+        source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
+        source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
+        const lookup_prefix = try source_ctx.draft.template_spec_lookup.internPrefix(
+            DraftTemplateFamilyAddress.init(
+                spec.template_ref,
+                spec.method_scope,
+                spec.source_fn_key,
+            ),
+            completed_template.evidence_digest.bytes,
+        );
+        try updateTemplateSpecInterfaceLookups(
+            source_ctx.draft,
+            self.allocator,
+            source_ctx.graph,
+            lookup_prefix,
+            completed_fn_node,
+            @intCast(spec_index),
+        );
+        source_ctx.draft.template_specs.items[spec_index].state = .lowered;
+        source_ctx.draft.template_specs.items[spec_index].demand_end =
+            @intCast(source_ctx.draft.runtime_value_demands.items.len);
+        return completed_fn_node;
     }
 
     fn markTemplateReady(self: *Builder, fn_id: Ast.FnId, fn_ty: Type.TypeId) Allocator.Error!void {
@@ -9389,37 +9550,6 @@ const Builder = struct {
         body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
     }
 
-    /// Resolve one context-free procedure request from an immutable view of its
-    /// caller-owned interface. The callee body lowers in its own instantiation
-    /// graph; only its completed function type can flow back to a live caller.
-    fn resolveDeferredTemplateSpecAtType(
-        self: *Builder,
-        body_draft: *BodyDraftStore,
-        spec_index: usize,
-        draft_fn_ty: Type.TypeId,
-        coordinator_fn_ty: Type.TypeId,
-        coordinator_subst: SealedSubstitution,
-        body_scheduling: TemplateBodyScheduling,
-        codec_contract: ?SealedCodecContractContext,
-    ) Allocator.Error!void {
-        if (spec_index >= body_draft.template_specs.items.len) {
-            Common.invariant("deferred template specialization index was outside the draft table");
-        }
-        const spec = body_draft.template_specs.items[spec_index];
-        if (spec.state != .deferred) return;
-        const resolved_slot = try self.resolveDeferredTemplateSpecValueAtType(
-            body_draft,
-            spec,
-            draft_fn_ty,
-            coordinator_fn_ty,
-            coordinator_subst,
-            body_scheduling,
-            codec_contract,
-        );
-        body_draft.template_specs.items[spec_index].resolved_slot = resolved_slot;
-        body_draft.template_specs.items[spec_index].state = .resolved;
-    }
-
     fn resolveDeferredTemplateSpecValueAtType(
         self: *Builder,
         body_draft: *BodyDraftStore,
@@ -9622,6 +9752,21 @@ const Builder = struct {
         const identities = try self.allocator.alloc(?Ast.SpecIdentity, body_draft.fns.items.len);
         defer self.allocator.free(identities);
         @memset(identities, null);
+        const solved_fn_tys = try self.allocator.alloc(Type.TypeId, body_draft.fns.items.len);
+        defer self.allocator.free(solved_fn_tys);
+        for (body_draft.sealed_template_specs.items) |*spec| {
+            spec.committed_request_fn_ty = try committed_types.commitType(spec.request_fn_ty);
+            spec.committed_codec_contract = if (spec.codec_contract) |contract|
+                self.codecContractIdentity(.{
+                    .anchor = contract.anchor,
+                    .constructor_ty = try committed_types.commitType(
+                        contract.constructor_ty,
+                    ),
+                    .shape_ty = try committed_types.commitType(contract.shape_ty),
+                })
+            else
+                null;
+        }
         for (body_draft.sealed_nested_specs.items) |*spec| {
             spec.sealed_codec_contract = if (spec.codec_contract) |contract|
                 self.codecContractIdentity(.{
@@ -9671,7 +9816,7 @@ const Builder = struct {
             // Evidence does not participate in the specialization type digest.
             const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, 0, 0);
             const fn_ty = sealed_template.mono_fn_ty;
-            const digest = self.specializationTypeDigest(fn_ty);
+            solved_fn_tys[raw_index] = fn_ty;
             const requested_evidence = StoredConstFnEvidence{
                 .nodes = body_draft.constFnEvidence(fn_.source.const_evidence),
                 .frames = body_draft.constFnEvidenceFrames(fn_.source.const_evidence_frames),
@@ -9683,24 +9828,17 @@ const Builder = struct {
             var lexical_owner: ?DraftOwner = null;
             if (template_spec) |spec| {
                 if (!spec.local_context_dependent) {
-                    const codec_contract = if (spec.codec_contract) |contract|
-                        self.codecContractIdentity(.{
-                            .anchor = contract.anchor,
-                            .constructor_ty = try committed_types.commitType(
-                                contract.constructor_ty,
-                            ),
-                            .shape_ty = try committed_types.commitType(contract.shape_ty),
-                        })
-                    else
-                        null;
+                    const request_fn_ty = spec.committed_request_fn_ty orelse
+                        Common.compilerBug("template specialization request type was not committed");
+                    const request_digest = self.specializationTypeDigest(request_fn_ty);
                     identity = templateSpecIdentity(
                         spec.template_ref,
                         spec.method_scope,
                         spec.source_fn_key,
                         sealed_template.evidence_digest,
-                        codec_contract,
-                        fn_ty,
-                        digest,
+                        spec.committed_codec_contract,
+                        request_fn_ty,
+                        request_digest,
                     );
                 }
                 lexical_owner = spec.lexical_owner;
@@ -9710,6 +9848,7 @@ const Builder = struct {
             if (identity == null) {
                 if (nested_by_fn.get(draft_id)) |spec| {
                     if (!spec.local_context_dependent) {
+                        const solved_digest = self.specializationTypeDigest(fn_ty);
                         identity = nestedSpecIdentity(
                             spec.nested,
                             spec.method_scope,
@@ -9718,7 +9857,7 @@ const Builder = struct {
                             spec.capture_abi_digest,
                             spec.sealed_codec_contract,
                             fn_ty,
-                            digest,
+                            solved_digest,
                         );
                     }
                     lexical_owner = spec.lexical_owner;
@@ -9760,6 +9899,40 @@ const Builder = struct {
                                 .head = prior_template.const_evidence_frame_head,
                             };
                             if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
+                            if (std.debug.runtime_safety and
+                                !try self.program.types.typeEql(
+                                    &self.program.names,
+                                    solved_fn_tys[prior],
+                                    fn_ty,
+                                ))
+                            {
+                                Common.compilerBug("equal draft specialization identities produced different solved types");
+                            }
+                            if (fn_.signature_relation == .exact_graph) {
+                                const prior_slot = fn_slots[prior] orelse
+                                    Common.invariant("duplicate draft specialization had no retained function slot");
+                                switch (prior_slot) {
+                                    .local => |retained_fn| {
+                                        if (@intFromEnum(retained_fn) >= self.program.fnCount()) {
+                                            for (fn_slots[0..raw_index], emit_fns[0..raw_index], 0..) |candidate_slot, emits, candidate_index| {
+                                                if (emits and std.meta.eql(candidate_slot, prior_slot)) {
+                                                    body_draft.fns.items[candidate_index].signature_relation = .exact_graph;
+                                                    break;
+                                                }
+                                            } else {
+                                                Common.invariant("duplicate draft specialization lost its retained body");
+                                            }
+                                        } else {
+                                            self.promoteFnSignatureRelation(retained_fn, .exact_graph);
+                                        }
+                                    },
+                                    .imported => |retained_fn| {
+                                        if (self.importedFnSignatureRelation(retained_fn) != .exact_graph) {
+                                            continue;
+                                        }
+                                    },
+                                }
+                            }
                             fn_slots[raw_index] = fn_slots[prior];
                             emit_fns[raw_index] = false;
                             if (template_spec != null) {
@@ -9771,7 +9944,7 @@ const Builder = struct {
                         }
                     }
                 } else {
-                    const committed: ?specialize.LookupResult = if (!allow_identity_merge)
+                    var committed: ?specialize.LookupResult = if (!allow_identity_merge)
                         null
                     else if (allow_imported)
                         try self.spec_store.find(wanted, specializationEvidenceView(requested_evidence))
@@ -9780,6 +9953,30 @@ const Builder = struct {
                     else
                         null;
                     if (committed) |hit| {
+                        if (fn_.signature_relation == .exact_graph) {
+                            switch (hit) {
+                                .local => |local| self.promoteFnSignatureRelation(local.fn_id, .exact_graph),
+                                .loaded => |imported| if (self.importedFnSignatureRelation(imported) != .exact_graph) {
+                                    committed = null;
+                                },
+                            }
+                        }
+                    }
+                    if (committed) |hit| {
+                        if (std.debug.runtime_safety) {
+                            switch (hit) {
+                                .local => |local| if (local.status == .ready and
+                                    !try self.program.types.typeEql(
+                                        &self.program.names,
+                                        local.solved_fn_ty,
+                                        fn_ty,
+                                    ))
+                                {
+                                    Common.compilerBug("equal committed specialization identities produced different solved types");
+                                },
+                                .loaded => {},
+                            }
+                        }
                         const committed_evidence = switch (hit) {
                             .local => |local| programViewFnEvidence(self.program.view(), self.program.fnSource(local.fn_id)),
                             .loaded => |imported| self.importedFnEvidence(imported),
@@ -9928,7 +10125,9 @@ const Builder = struct {
             body_draft.template_specs.items.len,
         );
         for (body_draft.template_specs.items) |spec| {
-            const request_ty = try sealer.sealNode(spec.request_fn_node);
+            const request_ty = try sealer.sealNode(
+                spec.lookup_request_fn_node orelse spec.request_fn_node,
+            );
             if (spec.eager_resolution) |eager| {
                 const eager_ty = try sealer.sealType(eager.fn_ty);
                 const eager_request_ty = try sealer.sealNode(eager.request_fn_node);
@@ -9957,6 +10156,7 @@ const Builder = struct {
                 .local_context_dependent = spec.local_context_dependent,
                 .lexical_owner = spec.lexical_owner,
                 .fn_id = spec.fn_id,
+                .def_id = spec.def_id,
                 .subst = try sealSubstitutionWithSealer(body_draft.allocator, sealer, spec.subst),
                 .resolved_slot = spec.resolved_slot,
             });
@@ -10109,6 +10309,7 @@ const Builder = struct {
             break :blk try committed_types.sealType(ty);
         } else null;
         try self.markDraftNestedReady(body_draft, body_ids);
+        try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         var returned_ids = body_ids;
@@ -10167,6 +10368,7 @@ const Builder = struct {
         );
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
         try self.markDraftNestedReady(body_draft, body_ids);
+        try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         var returned_ids = body_ids;
@@ -10203,6 +10405,75 @@ const Builder = struct {
                 .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("nested draft definition did not reference a nested function"),
             }
             try self.markNestedFnReady(fn_id, fn_template.mono_fn_ty);
+        }
+    }
+
+    /// Publish eagerly lowered context-free template bodies after their
+    /// function and definition ranges have committed. Duplicate bodies already
+    /// map to the winning slot, so only the first new local target creates a
+    /// specialization record.
+    fn finalizeDraftTemplateSpecs(
+        self: *Builder,
+        body_draft: *const BodyDraftStore,
+        ids: FinalIdOffsets,
+    ) Allocator.Error!void {
+        for (body_draft.sealed_template_specs.items) |spec| {
+            if (spec.state != .lowered or spec.local_context_dependent) continue;
+            const draft_def = spec.def_id orelse
+                Common.invariant("eager context-free template body had no top-level definition");
+            if (!ids.hasFnSlot(spec.fn_id)) continue;
+
+            const fn_id = switch (ids.fnSlot(spec.fn_id)) {
+                .local => |local| local,
+                .imported => continue,
+            };
+            const fn_template = self.program.fnSource(fn_id);
+            const solved_fn_ty = fn_template.mono_fn_ty;
+            const request_fn_ty = spec.committed_request_fn_ty orelse
+                Common.compilerBug("eager template request type was not committed");
+            const request_digest = self.specializationTypeDigest(request_fn_ty);
+            const evidence = programViewFnEvidence(self.program.view(), fn_template);
+            const identity = templateSpecIdentity(
+                spec.template_ref,
+                spec.method_scope,
+                spec.source_fn_key,
+                fn_template.evidence_digest,
+                spec.committed_codec_contract,
+                request_fn_ty,
+                request_digest,
+            );
+            if (try self.spec_store.findLocal(
+                identity,
+                specializationEvidenceView(evidence),
+            )) |hit| {
+                if (hit.fn_id != fn_id) {
+                    Common.invariant("eager template duplicate committed to a different winning function");
+                }
+                self.promoteFnSignatureRelation(
+                    fn_id,
+                    body_draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation,
+                );
+                continue;
+            }
+
+            const spec_id = try self.addTemplateSpecRecord(
+                spec.template_ref,
+                spec.method_scope,
+                spec.source_fn_key,
+                evidence,
+                request_fn_ty,
+                request_digest,
+                spec.committed_codec_contract,
+                fn_id,
+                .lowering,
+            );
+            try self.lowered_templates.put(fn_id, .{
+                .def = ids.def(draft_def),
+                .spec = spec_id,
+                .evidence = spec.evidence,
+                .topology = null,
+            });
+            try self.markTemplateReady(fn_id, solved_fn_ty);
         }
     }
 
@@ -10247,8 +10518,14 @@ const Builder = struct {
         for (body_draft.sealed_template_specs.items) |spec| {
             switch (spec.state) {
                 .resolved => {},
-                .lowered => if (!spec.local_context_dependent)
-                    Common.invariant("context-free procedure body was lowered into its caller's draft"),
+                .lowered => {
+                    if (spec.local_context_dependent and spec.def_id != null) {
+                        Common.invariant("lexically dependent procedure body became a top-level definition");
+                    }
+                    if (!spec.local_context_dependent and spec.def_id == null) {
+                        Common.invariant("eager context-free procedure body had no top-level definition");
+                    }
+                },
                 .deferred => Common.invariant("deferred template specialization reached commit before resolution"),
                 .lowering => Common.invariant("caller-owned template specialization reached commit before its body lowered"),
             }
@@ -12959,6 +13236,9 @@ const DraftTemplateSpec = struct {
     method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    /// Worker-local symbol retained when a deferred request must eagerly lower
+    /// into this draft to reveal its iterator result representation.
+    symbol: Common.Symbol,
     request_fn_node: NodeId,
     /// Stable public request retained only when eager iterator completion
     /// replaces `request_fn_node` with its producer-completed private callable.
@@ -12986,6 +13266,9 @@ const DraftTemplateSpec = struct {
     lexical_context_key: ?names.TypeDigest = null,
     codec_contract: ?DraftCodecContractContext = null,
     fn_id: DraftFnId,
+    /// Top-level body definition for an eagerly lowered context-free template.
+    /// Lexically dependent procedures remain in `nested_defs` instead.
+    def_id: ?DraftDefId = null,
     resolved_slot: ?Ast.FnSlot = null,
     /// Mid-lowering iterator-result completion may resolve a body before the
     /// graph's final seal. Commit re-seals this retained request and proves the
@@ -13013,7 +13296,10 @@ const SealedTemplateSpec = struct {
     local_context_dependent: bool,
     lexical_owner: ?DraftOwner,
     fn_id: DraftFnId,
+    def_id: ?DraftDefId,
     resolved_slot: ?Ast.FnSlot,
+    committed_request_fn_ty: ?Type.TypeId = null,
+    committed_codec_contract: ?Ast.CodecContractIdentity = null,
 };
 
 /// Seal a draft request's substitution with the graph sealer that seals its
@@ -14108,9 +14394,6 @@ const BodyDraftStore = struct {
     /// Retains imported `TypeId` mappings while this body lowers into its
     /// graph-owned store.
     program_type_relocation: ?Type.Store.TypeRelocation,
-    /// Retains graph-to-program mappings across eager coordinator calls and the
-    /// final ordered commit.
-    committed_type_relocation: ?Type.Store.TypeRelocation,
     /// Interface-replay memo shared by every template request lowered into
     /// this draft's graph. Entries hold graph-owned provisional views, so the
     /// memo is graph-qualified state and is discarded with the graph.
@@ -14208,7 +14491,6 @@ const BodyDraftStore = struct {
             .spec_job_workspace = null,
             .mutable_graph_names = null,
             .program_type_relocation = null,
-            .committed_type_relocation = null,
         };
     }
 
@@ -14294,32 +14576,6 @@ const BodyDraftStore = struct {
         return &self.program_type_relocation.?;
     }
 
-    fn ensureCommittedTypeRelocation(
-        self: *BodyDraftStore,
-        graph: *InstGraph,
-        program: *Ast.Program,
-    ) *Type.Store.TypeRelocation {
-        if (graph.types == &program.types) {
-            Common.invariant("shared-store body requested a graph-to-program type relocation");
-        }
-        if (self.spec_job_workspace) |workspace| {
-            if (graph.types != &workspace.types or graph.name_store != &workspace.name_store) {
-                Common.compilerBug("Monotype specialization draft committed through an unrelated workspace");
-            }
-            return workspace.committedTypeRelocation(program);
-        }
-        if (self.committed_type_relocation == null) {
-            self.committed_type_relocation = Type.Store.TypeRelocation.init(
-                self.allocator,
-                graph.types,
-                graph.name_store,
-                &program.types,
-                &program.names,
-            );
-        }
-        return &self.committed_type_relocation.?;
-    }
-
     fn deinit(self: *BodyDraftStore) void {
         self.interface_replay.deinit(self.allocator);
         for (self.template_specs.items) |*spec| {
@@ -14367,7 +14623,6 @@ const BodyDraftStore = struct {
         self.expr_impossibility_proofs.deinit(self.allocator);
         self.impossibility_proof_ids.deinit(self.allocator);
         self.impossibility_proofs.deinit(self.allocator);
-        if (self.committed_type_relocation) |*relocation| relocation.deinit();
         if (self.program_type_relocation) |*relocation| relocation.deinit();
         self.uninhabited_type_cache.deinit();
         self.generated_try_types.deinit();
@@ -15131,7 +15386,7 @@ const BodyDraftStore = struct {
 
         self.spec_job_workspace = null;
         self.mutable_graph_names = null;
-        if (self.program_type_relocation != null or self.committed_type_relocation != null) {
+        if (self.program_type_relocation != null) {
             Common.compilerBug("ordinary specialization draft retained a graph-qualified relocation");
         }
     }
@@ -15156,8 +15411,7 @@ const BodyDraftStore = struct {
             self.nested_specs.items.len != 0 or
             self.spec_job_workspace != null or
             self.mutable_graph_names != null or
-            self.program_type_relocation != null or
-            self.committed_type_relocation != null)
+            self.program_type_relocation != null)
         {
             Common.invariant("graph-qualified state remained in a sealed specialization result");
         }
@@ -15500,7 +15754,7 @@ const BodyDraftStore = struct {
         try program.runtime_schema_requests.ensureUnusedCapacity(program.allocator, self.runtime_schema_requests.items.len);
         for (self.runtime_schema_requests.items, 0..) |request, index| {
             if (!ids.retained(.runtime_schema_requests, index)) continue;
-            program.runtime_schema_requests.appendAssumeCapacity(.{
+            try appendRuntimeSchemaRequestToProgram(program, .{
                 .def = try committed_types.commitTypeDef(request.def),
                 .ty = try request.ty.sealCommitted(committed_types),
             });
@@ -17078,29 +17332,6 @@ const BodyContext = struct {
             &self.builder.program.names,
             relocation,
             &.{program_ty},
-        );
-        defer imported.deinit();
-        return imported.roots[0];
-    }
-
-    /// Export one immutable graph-store snapshot for a synchronous coordinator
-    /// operation. Graph refinement materializes a different snapshot id, so the
-    /// final seal imports that newer closure independently through the same map.
-    /// Architecture checks restrict this escape hatch to the few operations
-    /// whose durable identities must be established before the ordered commit.
-    fn commitGraphType(self: *BodyContext, graph_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.typeStore() == &self.builder.program.types) return graph_ty;
-        const relocation = self.draft.ensureCommittedTypeRelocation(self.graph, self.builder.program);
-        // Store entries are immutable snapshots even when the active graph has a
-        // node associated with this id. Refinement allocates another id, so a
-        // cumulative mapping always retains the earlier snapshot's contents.
-        if (relocation.get(self.typeStore(), graph_ty)) |mapped| return mapped;
-        var imported = try self.builder.program.types.importTypes(
-            &self.builder.program.names,
-            self.typeStore(),
-            self.graph.name_store,
-            relocation,
-            &.{graph_ty},
         );
         defer imported.deinit();
         return imported.roots[0];
@@ -33643,19 +33874,18 @@ const BodyContext = struct {
     }
 
     /// A public iterator result can carry a producer-authored private witness
-    /// that only the callee body discovers. Resolve that context-free callee in
-    /// its own graph before the caller consumes the result, then import the
-    /// completed function type into the still-live caller graph. Other results
-    /// keep the ordinary end-of-graph deferred path.
+    /// that only the callee body discovers. Lower that context-free callee into
+    /// the same worker-owned graph and draft before the caller consumes the
+    /// result. Other results keep the ordinary end-of-graph deferred path.
     fn completeDeferredIteratorResult(
         self: *BodyContext,
         draft_fn: DraftFnId,
     ) Allocator.Error!NodeId {
         const current_node = try self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph);
         const current_fn = try self.graph.functionNodes(current_node);
-        if (!try self.graph.containsIteratorInterface(current_fn.ret) or
-            try self.graph.containsGeneratedPrivate(current_fn.ret))
-        {
+        const has_iterator_result = try self.graph.containsIteratorInterface(current_fn.ret);
+        const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret);
+        if (!has_iterator_result or has_private_result) {
             return current_node;
         }
         // Representation-bearing inputs still belong to the caller's live
@@ -33694,62 +33924,28 @@ const BodyContext = struct {
         if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
-        if (self.builder.spec_job_parallel_callback) {
-            // This path consumes a callee's solved private iterator
-            // representation immediately and still performs coordinator-owned
-            // reservation/body completion. Leave the frozen worker result
-            // uncommitted and re-run this uncommon job on the serial executor.
-            self.builder.spec_job_requires_serial_retry = true;
-            return error.OutOfMemory;
-        }
-        const coordinator_request_fn_ty = try self.commitGraphType(request_fn_ty);
-        const sealed_subst = (try self.sealSubstitution(spec.subst)) orelse
-            Common.invariant("eagerly completed template request left its substitution open");
-        // Sealed in the graph's own store; every slot commits to the program
-        // store before the substitution leaves this graph.
-        const coordinator_subst: SealedSubstitution = if (sealed_subst.len == 0) &.{} else blk: {
-            const committed = try self.builder.evidence_arena.allocator().alloc(SealedSubstSlot, sealed_subst.len);
-            for (sealed_subst, committed) |slot, *out| {
-                out.* = switch (slot) {
-                    .checked_error => .checked_error,
-                    .ty => |ty| .{ .ty = try self.commitGraphType(ty) },
-                };
-            }
-            break :blk committed;
-        };
-        const codec_contract: ?SealedCodecContractContext = if (spec.codec_contract) |contract| .{
-            .anchor = contract.anchor,
-            .constructor_ty = try self.commitGraphType(
-                try self.activeTypeFromNode(contract.constructor_node),
-            ),
-            .shape_ty = try self.commitGraphType(try self.activeTypeFromNode(contract.shape_node)),
-        } else null;
-        // Iterator-inline completion consumes the callee's solved private
-        // representation, so the body must lower now rather than queue.
-        try self.builder.resolveDeferredTemplateSpecAtType(
-            self.draft,
+        const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(spec.template_ref));
+        const template = view.templates.get(spec.template_ref.template);
+        // A hosted declaration has no Roc body that can author a private
+        // iterator representation. Its public request remains the exact ABI.
+        if (template.target == .hosted) return current_node;
+
+        // Lower into the caller's worker-owned draft. The function keeps its
+        // own ownership range, so ordered commit can retain or discard it
+        // independently of the caller and map recursive references in one pass.
+        self.draft.template_specs.items[spec_index].state = .lowering;
+        self.builder.countBodyDiagnostic("eager_iterator_template_bodies_lowered");
+        const completed_node = try self.builder.lowerDraftTemplateSpecBody(
+            self,
             spec_index,
-            request_fn_ty,
-            coordinator_request_fn_ty,
-            coordinator_subst,
-            .immediate,
-            codec_contract,
+            view,
+            template,
         );
         self.draft.template_specs.items[spec_index].eager_resolution = .{
             .request_fn_node = spec.request_fn_node,
             .fn_ty = request_fn_ty,
         };
 
-        const resolved = self.draft.template_specs.items[spec_index].resolved_slot orelse
-            Common.invariant("eager iterator-result completion produced no specialization target");
-        const completed_node = switch (resolved) {
-            .local => |final_fn| try self.programFnSourceTypeNode(final_fn),
-            // Loaded specializations are indexed only by their solved shape.
-            // A public request that needs new private evidence therefore
-            // lowers locally; an exact loaded request already carries that
-            // evidence in `current_node`.
-            .imported => return current_node,
-        };
         const completed_ty = try self.activeTypeFromNode(completed_node);
         // Adoption is keyed on the produced result representation, the same
         // predicate `adoptCompletedIteratorResult` applies: a completion whose
@@ -41267,25 +41463,6 @@ const BodyContext = struct {
             }
             try self.putScopedNode(scoped_ty, node);
         }
-    }
-
-    /// Seal a live substitution for a request that leaves this graph. Null
-    /// when a slot is still open beyond the explicit specialization defaults.
-    fn sealSubstitution(self: *BodyContext, subst: SpecSubstitution) Allocator.Error!?SealedSubstitution {
-        if (subst.len == 0) return &.{};
-        const arena = self.builder.evidence_arena.allocator();
-        const out = try arena.alloc(SealedSubstSlot, subst.len);
-        for (subst, out) |slot, *sealed| {
-            sealed.* = switch (slot) {
-                .checked_error => .checked_error,
-                .node => |node| blk: {
-                    if (try self.graph.typeIsResolved(node)) break :blk .{ .ty = try self.activeTypeFromNode(node) };
-                    if (try self.graph.typeIsSpecializationDefaultable(node)) break :blk .{ .ty = try self.graph.specializationTypeViewForNode(node) };
-                    return null;
-                },
-            };
-        }
-        return out;
     }
 
     /// Live slots for a sealed substitution imported into this context's
@@ -59729,6 +59906,10 @@ test "body draft commit relocates core type and name fields out of private store
             .def = .{ .module = module, .type_name = type_name },
             .ty = list_cell,
         });
+        try draft.runtime_schema_requests.append(allocator, .{
+            .def = .{ .module = module, .type_name = type_name },
+            .ty = list_cell,
+        });
 
         try graph.freezeRelations();
         var sealer = GraphTypeFinals.init(graph);
@@ -59785,6 +59966,7 @@ test "body draft commit relocates core type and name fields out of private store
         "value",
         program.names.recordFieldLabelText(GuardedList.at(program.recordDestructSpan(program.getPatAt(2).data.record), 0).name),
     );
+    try std.testing.expectEqual(@as(usize, 1), program.runtimeSchemaRequestsView().len);
     const schema = program.runtimeSchemaRequestsView()[0];
     try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), program.names.moduleIdentityBytes(schema.def.module));
     try std.testing.expectEqualStrings("Model", program.names.typeNameText(schema.def.type_name));

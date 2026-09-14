@@ -56,9 +56,6 @@ test "issue 10831: repeated annotated calls reuse one specialization" {
         \\}
     , .{
         .proc_debug_names = true,
-        // Iterator-result evidence still requires synchronous completion. The
-        // parallel specialization executor must fall this body back to the
-        // coordinator without publishing partial worker state.
         .specialization_workers = 4,
     }, expectSingleSourceRefreshSpecialization);
 }

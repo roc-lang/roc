@@ -249,3 +249,85 @@ test "post-check executor run drains accepted tasks after submit OOM" {
     try std.testing.expect(contexts[1].ran);
     try std.testing.expect(!contexts[2].ran);
 }
+
+test "post-check executor never admits more tasks than worker capacity" {
+    const TaskContext = struct {
+        ran: bool = false,
+
+        fn run(context_opaque: *anyopaque, _: Worker) ?*anyopaque {
+            const self: *@This() = @ptrCast(@alignCast(context_opaque));
+            self.ran = true;
+            return self;
+        }
+    };
+    const Harness = struct {
+        accepted: [7]Task = undefined,
+        accepted_len: usize = 0,
+        received: usize = 0,
+        active: usize = 0,
+        peak_active: usize = 0,
+        lane_state: *LaneState,
+
+        fn begin(_: *anyopaque) void {}
+
+        fn submitTask(context_opaque: *anyopaque, task: Task) std.mem.Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(context_opaque));
+            if (self.active >= 2) {
+                @panic("post-check executor admitted work beyond its worker capacity");
+            }
+            self.accepted[self.accepted_len] = task;
+            self.accepted_len += 1;
+            self.active += 1;
+            self.peak_active = @max(self.peak_active, self.active);
+        }
+
+        fn receive(context_opaque: *anyopaque) Completion {
+            const self: *@This() = @ptrCast(@alignCast(context_opaque));
+            const task = self.accepted[self.received];
+            self.received += 1;
+            const value = task.run(task.context, .{
+                .id = task.id % 2,
+                .allocator = std.testing.allocator,
+                .scratch = std.testing.allocator,
+                .lane_state = self.lane_state,
+            });
+            self.active -= 1;
+            return .{
+                .id = task.id,
+                .worker_id = task.id % 2,
+                .value = value,
+            };
+        }
+
+        fn end(context_opaque: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(context_opaque));
+            std.debug.assert(self.active == 0);
+            std.debug.assert(self.received == self.accepted_len);
+        }
+    };
+
+    var lane_state = LaneState.init(std.testing.allocator);
+    defer lane_state.deinit();
+    var harness = Harness{ .lane_state = &lane_state };
+    const executor = Executor{
+        .context = &harness,
+        .worker_count = 2,
+        .beginFn = Harness.begin,
+        .submitFn = Harness.submitTask,
+        .receiveFn = Harness.receive,
+        .endFn = Harness.end,
+    };
+    var contexts = [_]TaskContext{ .{}, .{}, .{}, .{}, .{}, .{}, .{} };
+    var tasks: [contexts.len]Task = undefined;
+    var completions: [contexts.len]Completion = undefined;
+    for (&tasks, &contexts, 0..) |*task, *context, index| {
+        task.* = .{ .id = index, .context = context, .run = TaskContext.run };
+    }
+
+    try executor.run(&tasks, &completions);
+
+    try std.testing.expectEqual(@as(usize, 2), harness.peak_active);
+    try std.testing.expectEqual(@as(usize, 0), harness.active);
+    try std.testing.expectEqual(tasks.len, harness.received);
+    for (contexts) |context| try std.testing.expect(context.ran);
+}

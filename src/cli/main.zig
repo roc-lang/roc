@@ -16113,7 +16113,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
@@ -16128,6 +16128,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]p
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
+        .{ .name = "Eager iterator template bodies lowered", .count = body.eager_iterator_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
         .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
@@ -16150,15 +16151,15 @@ fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSn
         .{ .name = "Coordinator post-batch work (ns)", .count = parallel.coordinator_post_batch_work_ns },
         .{ .name = "Root tasks submitted", .count = parallel.root_tasks_submitted },
         .{ .name = "Root tasks committed", .count = parallel.root_tasks_committed },
-        .{ .name = "Root tasks retried serially", .count = parallel.root_tasks_retried_serial },
         .{ .name = "Specialization tasks submitted", .count = parallel.specialization_tasks_submitted },
         .{ .name = "Specialization tasks committed", .count = parallel.specialization_tasks_committed },
-        .{ .name = "Specialization tasks retried serially", .count = parallel.specialization_tasks_retried_serial },
         .{ .name = "Specialization tasks discarded ready", .count = parallel.specialization_tasks_discarded_ready },
         .{ .name = "Parallel task waves", .count = parallel.task_waves },
         .{ .name = "Peak worker lanes available", .count = parallel.peak_worker_lanes_available },
         .{ .name = "Peak worker lanes used", .count = parallel.peak_worker_lanes_used },
         .{ .name = "Tasks reusing a lowering lane", .count = parallel.within_lowering_lane_reuse_tasks },
+        .{ .name = "Peak specialization jobs pending", .count = parallel.peak_specialization_jobs_pending },
+        .{ .name = "Peak specialization shards retained", .count = parallel.peak_specialization_shards_retained },
     };
 }
 
