@@ -1521,7 +1521,7 @@ pub const MonoLlvmCodeGen = struct {
         const args_buf = try self.allocArgBuffer(arg_layouts, true);
         const raw_args = wip.arg(2);
         for (0..params.len) |i| {
-            const size = self.layoutByteSize(arg_layouts[i]);
+            const size = self.layoutDataSize(arg_layouts[i]);
             if (size == 0) continue;
             const source_ptr = try self.loadPointer(try self.offsetPtr(raw_args, @intCast(i * self.targetWordSize())));
             try self.copyBytes(try self.offsetPtr(args_buf, offsets[i]), source_ptr, size, self.alignmentForLayout(arg_layouts[i]));
@@ -2048,7 +2048,7 @@ pub const MonoLlvmCodeGen = struct {
                 .indirect => {
                     const src = wip.arg(param_cursor);
                     param_cursor += 1;
-                    const size = self.layoutByteSize(arg_layout);
+                    const size = self.layoutDataSize(arg_layout);
                     if (size != 0) {
                         try self.copyBytes(try self.offsetPtr(args_buf, offset), src, size, self.alignmentForLayout(arg_layout));
                     }
@@ -2516,7 +2516,7 @@ pub const MonoLlvmCodeGen = struct {
             const param_slot = self.slot(param);
             if (param_slot.size == 0) continue;
             const src = try self.offsetPtr(args_ptr, GuardedList.at(offsets, i));
-            try self.copyBytes(param_slot.ptr, src, param_slot.size, param_slot.alignment);
+            try self.copyBytes(param_slot.ptr, src, self.layoutDataSize(self.localLayout(param)), param_slot.alignment);
         }
     }
 
@@ -3386,7 +3386,7 @@ pub const MonoLlvmCodeGen = struct {
                 const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
                 const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
                 const src = try self.offsetPtr(base.ptr, offset);
-                try self.copyBytes(target_slot.ptr, src, self.layoutByteSize(field_layout), self.alignmentForLayout(field_layout));
+                try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(field_layout), self.alignmentForLayout(field_layout));
             },
             .tag_payload => |ref| {
                 try self.prepareLocalWrite(target);
@@ -3401,14 +3401,14 @@ pub const MonoLlvmCodeGen = struct {
                     src = try self.offsetPtr(base.ptr, offset);
                     copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
                 }
-                try self.copyBytes(target_slot.ptr, src, self.layoutByteSize(copy_layout), self.alignmentForLayout(copy_layout));
+                try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(copy_layout), self.alignmentForLayout(copy_layout));
             },
             .tag_payload_struct => |ref| {
                 try self.prepareLocalWrite(target);
                 try self.materializeLocalIfDeferred(ref.source);
                 const base = try self.resolveTagBase(ref.source);
                 const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
-                try self.copyBytes(target_slot.ptr, base.ptr, self.layoutByteSize(payload_layout), self.alignmentForLayout(payload_layout));
+                try self.copyBytes(target_slot.ptr, base.ptr, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
             },
         }
     }
@@ -4354,7 +4354,7 @@ pub const MonoLlvmCodeGen = struct {
         for (0..field_locals.len) |i| {
             const field_local = GuardedList.at(field_locals, i);
             const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
-            const field_size = self.layoutByteSize(field_layout);
+            const field_size = self.layoutDataSize(field_layout);
             if (field_size == 0) continue;
             const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
             const dst = try self.offsetPtr(allocated.ptr, offset);
@@ -4390,7 +4390,7 @@ pub const MonoLlvmCodeGen = struct {
         for (0..field_locals.len) |i| {
             const field_local = GuardedList.at(field_locals, i);
             const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
-            const field_size = self.layoutByteSize(field_layout);
+            const field_size = self.layoutDataSize(field_layout);
             if (field_size == 0) continue;
             const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
             const field_dst = try self.offsetPtr(dst, offset);
@@ -4402,7 +4402,7 @@ pub const MonoLlvmCodeGen = struct {
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
 
         const dst = try self.loadPointer(self.slot(dest).ptr);
-        const layout_size = self.layoutByteSize(tag_layout);
+        const layout_size = self.layoutDataSize(tag_layout);
         if (layout_size == 0) return;
 
         try self.zeroBytes(dst, layout_size);
@@ -8046,7 +8046,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitReturn(self: *MonoLlvmCodeGen, value: LocalId) Error!void {
         try self.materializeLocalIfDeferred(value);
         const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
-        const size = self.layoutByteSize(self.current_ret_layout);
+        const size = self.layoutDataSize(self.current_ret_layout);
         if (size > 0) {
             try self.copyBytes(ret_ptr, self.slot(value).ptr, size, self.alignmentForLayout(self.current_ret_layout));
         }
@@ -8298,7 +8298,7 @@ pub const MonoLlvmCodeGen = struct {
         if (try self.propagateDeferredStrCapture(target, source)) return;
         try self.materializeLocalIfDeferred(source);
         try self.prepareLocalWrite(target);
-        try self.copyBytes(target_slot.ptr, self.slot(source).ptr, target_slot.size, target_slot.alignment);
+        try self.copyBytes(target_slot.ptr, self.slot(source).ptr, self.layoutDataSize(self.localLayout(target)), target_slot.alignment);
     }
 
     fn emitStrLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: StrLiteral) Error!void {
@@ -10572,7 +10572,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_src = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
         const payload_layout = self.tagPayloadLayout(self.localLayout(target), 1);
         try self.emitTagLiteral(target, 1, null);
-        try self.copyBytes(self.slot(target).ptr, elem_src, self.layoutByteSize(payload_layout), self.alignmentForLayout(payload_layout));
+        try self.copyBytes(self.slot(target).ptr, elem_src, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
         _ = wip.br(after) catch return error.OutOfMemory;
         wip.cursor = .{ .block = after };
     }
@@ -11665,6 +11665,20 @@ pub const MonoLlvmCodeGen = struct {
 
     fn layoutByteSize(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) u32 {
         return self.sizeAlignOf(layout_idx).size;
+    }
+
+    /// The bytes of a value that carry meaning: a tag union ends at its
+    /// discriminant, and the alignment tail after it is never read, since
+    /// equality and hashing walk the variant's fields. Copying or zeroing that
+    /// tail is wasted work, and a tail a few bytes long lowers to overlapping
+    /// partial stores that a following load of the same bytes cannot be
+    /// forwarded from.
+    fn layoutDataSize(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) u32 {
+        const lay = self.layoutValue(layout_idx);
+        if (lay.tag != .tag_union) return self.layoutByteSize(layout_idx);
+        const data = self.layouts().getTagUnionData(lay.getTagUnion().idx);
+        if (data.discriminant_size == 0) return self.layoutByteSize(layout_idx);
+        return @as(u32, data.discriminant_offset.get(self.layouts().targetUsize())) + data.discriminant_size;
     }
 
     fn llvmAlignment(_: *MonoLlvmCodeGen, roc_alignment: layout.RocAlignment) LlvmBuilder.Alignment {
