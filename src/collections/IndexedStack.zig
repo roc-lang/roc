@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// A stack of integer or enum IDs with constant-time lookup of live positions.
 pub fn IndexedStack(comptime K: type) type {
     return struct {
         const Self = @This();
@@ -32,7 +33,29 @@ pub fn IndexedStack(comptime K: type) type {
             return switch (@typeInfo(K)) {
                 .int => @intCast(key),
                 .@"enum" => @intCast(@intFromEnum(key)),
-                else => @compileError("IndexedStack keys must be integer IDs"),
+                .type,
+                .void,
+                .bool,
+                .noreturn,
+                .float,
+                .pointer,
+                .array,
+                .@"struct",
+                .comptime_float,
+                .comptime_int,
+                .undefined,
+                .null,
+                .optional,
+                .error_union,
+                .error_set,
+                .@"union",
+                .@"fn",
+                .@"opaque",
+                .frame,
+                .@"anyframe",
+                .vector,
+                .enum_literal,
+                => @compileError("IndexedStack keys must be integer IDs"),
             };
         }
 
