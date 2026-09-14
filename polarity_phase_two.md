@@ -768,8 +768,49 @@ described in full, with trailers):
 | `vrpryvko` | W4 | landed, implemented + reviewed; tests and fixtures only |
 | `wrtzpoum` | design.md widening decision | landed |
 | `ktlykkxv` | W6a | landed; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
+| `vruxrtsl` | W6b, Monotype half | landed + pushed; three probes green on both backends, postcheck 457/457, lir-inline at baseline parity, W6a gate 2/2. Adversarial review in flight |
 
-Bookmark `jared/polarity` points at `ktlykkxv` (W6a) and is pushed.
+Bookmark `jared/polarity` points at `vruxrtsl` (W6b Monotype half) and is pushed.
+
+W6b's Monotype half needed no change to `solve.zig`: the widening relation
+never unifies the differing rows, so `RowWidthRelation` is untouched and
+neither `unifyTagRows`'s panic nor the `relateOpaqueInterface` twin is
+reachable from it. It applied at NINE relation sites, not the six the plan
+named — the evidence target root, the draft-template path, and interface
+replay also unify a closed root with a widened request — and adapter spec
+jobs had to route to the coordinator from two dispatch points, not one.
+
+**As pushed, `vruxrtsl` is NOT landable.** Adversarial review found three
+blockers, all of which turn a previously loud panic into a WRONG RUNTIME
+VALUE. Two claims in that commit's message are also false and must not be
+trusted: there is no `hasPrivateTypeDestination()` guard in the pre-step,
+and the borrow-across-transaction fix it claims is not in the diff
+(`requested_args` is still spanned before `beginTransaction` and duped after
+`commitTransaction`). Both verified directly in the source.
+
+| # | Defect | Consequence |
+|---|---|---|
+| B1 | `resultRowWideningOrNull` accepts a widening at ANY type argument of a same-definition nominal — a `Try`'s **Ok** arg, or any alias type argument. The gate computes a `ClosedResultRow` but never passes it to the relation, and `resultRowWideningAdapterSourceType` narrows only the ERR row, so it returns null and no adapter is minted while the rows stay unrelated. | miscompile |
+| B2 | On the `local_context_dependent` path the relation is honoured but the body is lowered at the declared row and no adapter is generated — the adapter exists at exactly one site, the relation at nine. | miscompile |
+| B3 | The pre-step mixes worker-workspace and coordinator type ids (`lowerType` writes to `activeTypeStore()`, `sameMonoType` reads `program.types`). In release this is an arbitrary in-bounds read. | miscompile |
+
+Root cause, and the fix to make: **three sources of truth for "is this row
+closed"** — the graph (`tagRowIsClosed`, unresolved ext ⇒ open), the
+dispatch callable's checked type (a fresh clone), and the template root's
+checked type. The relation uses the first two, the adapter the third, and
+every gap between them is a wrong tag discriminant. The relation must
+RECORD the widening it performed and completion must CONSUME that record,
+instead of re-deriving the answer from a different type. Every site that
+declines to unify must fail CLOSED: assert an adapter is reachable, so an
+uncovered site restores the panic rather than silently miscompiling.
+
+Also to fix: the closedness rule classifies an ordinary implicitly-open
+annotated result row as closed, so the adapter fires for a broad class of
+ordinary programs (not just where-method uses, contradicting this plan's
+own premise that "only where-method uses can reach it") and pulls them out
+of parallel body shards onto the coordinator — a compile-time regression.
+And the pre-step's capability invariant is evaluated before the predicate
+that says the path is relevant, adding release-mode UB sites on a hot path.
 
 ### 8.1.1 W6b restart (2026-09-14)
 
@@ -823,6 +864,95 @@ Recorded here rather than rediscovered later:
   deriving a `.roc` template's declared row from `lowerType` of the checked
   root yields a silently wrong type. The declared row comes from the
   request, guarded explicitly.
+
+### 8.1.3 Grounding pass against the code (2026-09-14)
+
+Every remaining item was re-grounded in the source before implementation.
+Corrections to sections 1-7, which are NOT amended in place so the drift
+stays visible:
+
+**Verification tooling — the most important finding.** Only two mechanisms
+can prove the widening adapter actually ran: counting Monotype fns whose
+`source.fn_def == .checked_generated`, or the specialization counters
+(`monotypeCountersForModule` / `expectMonotypeSpecializationCountersWithin`).
+**Every CLI fixture is mechanism-blind** — `OpenMethodWidenedCaller` asserts
+only exit success, "All (1) tests passed", and the absence of panic needles,
+so it passes identically whether the program compiles to one wide
+specialization or to an adapter plus a narrow one. `lir_inline_test` runs the
+LIR interpreter ONLY, so dev-backend coverage exists solely through
+`test/cli`. A value-only probe must therefore use a tag that SORTS BETWEEN
+the declared tags and observe every constructor, and even then it cannot say
+which mechanism ran.
+
+**There is no snapshot of lowered output anywhere.** The `# MONO` snapshot
+section is a CIR re-emitter (`snapshot_tool` `generateMonoSection`), not
+Monotype/LIR. W2b's stated gate — "`run-check-snapshots` must show no
+lowered-output change against W2a" — is therefore **impossible as written**.
+Substitute a Monotype view equivalence (`expectEquivalentMonotypeProgramViews`)
+or spec-count equality in a lir test.
+
+**W6b / B1.** Confirmed structurally. `resultRowWideningOrNull` accepts a
+widening at EITHER `Try` type argument, while `closedResultRowOrNull`,
+`checkedRootHasClosedResultRow`, `requireLoweredDeclaredRowLabels`,
+`resultRowWideningAdapterSourceType` and `resultRowWideningAdapterBody` all
+handle only `args[1]` (the error row). That asymmetry is the bug, and the fix
+is a five-function lockstep change.
+
+**W6b / B2 — the plan's reproduction recipe is wrong.**
+`local_context_dependent` is driven by a `.local_proc` evidence TARGET
+(`specEvidenceLocalOwner`), not by "a dispatch from inside a generalized
+local scope". A dispatch inside `helper = |r| ...` does NOT make the target
+`.local_proc`; the closed-row template's own evidence must point at a
+lambda-bound method declared by a statement inside a function body. A probe
+written from the plan's description passes and proves nothing. The miscompile
+at the inline-body path stays UNPINNED until a fixture reproduces it. Note
+the separate `.local_proc` route through `lowerDraftNestedFromContext`
+PANICS rather than miscompiling.
+
+**W6b rule text does not exist.** Five code comments cite a design.md
+"Result-Row Widening Adapter" section that was never written.
+
+**A `Try`'s OK row is not adapter-reachable, and never was.** This plan says
+throughout that the adapter re-tags "the direct result row and a `Try`'s
+rows", plural. That is wrong: `closedResultRowOrNull` returns
+`nominal.args[1]` (the error argument) and nothing for `args[0]`, and
+`hostedTryReturnInjectionExpr` asserts `sameMonoType(ok, ok)` with
+`Common.invariant("Try adapter changed Ok type")`. A probe widening a `Try`'s
+ok row against a closed implementation panics on both the pre-W6b and
+post-W6b binaries. **The adapter-reachable set is exactly: the direct result
+row, and a `Try`'s ERROR row.** Decided 2026-09-14: both halves are
+restricted to that set rather than extending the adapter to the ok row —
+the relation relates every other type argument (a `Try`'s `args[0]`, every
+alias type argument) at `.exact` so a widening there restores the loud panic,
+and per-use opening is withheld from those positions in the checker. An
+ok-row widening is therefore an ordinary mismatch at the body use, like any
+other nested position. Extending the adapter to the ok row is a follow-up
+under §6, not part of W6b.
+
+**W2b.** The four BodyContext restores are confirmed (line numbers drifted
+by roughly +510-530), but the Builder-level `restoreConstParserRuntimeFnExpr`
+takes its OWN eager resolved view, so the optional-field fix needs SIX sites,
+not four, and the plan's claim that the Builder-level restore "is unaffected"
+holds only for prepared codec calls. `groundRowDefaults` has ONE production
+caller plus five in unit tests — not the thirteen the plan feared. The
+existing deferred-structural boundary record cannot be reused as-is: it
+carries a dispatch plan and structural evidence where the stored restore
+needs a const fn value, a store view, capture lets and a precomputed parser
+plan. Sizing: ~500-800 lines.
+
+**W8.** `findBestTypoSuggestions` (`report.zig`) is the wrong citation — it
+handles RECORD-FIELD typos; the tag typo hint comes from the snapshot diff
+and arrives automatically once real snapshots are supplied, so the bespoke
+hint is simply deleted. A type snapshot CANNOT be built without minting a
+var, and "mint and discard under a probe" is not viable because probe
+rollback truncates the type store and invalidates the region index the report
+needs — so mint for real at the entry's region. The audit does not currently
+hold the annotated UNION var (only the ext var and the listed tags), so
+`ImplicitOpenExt` must carry it, added at three mint sites; the alias-marker
+site is the hard one, having neither the union var nor a reliable region.
+Eleven integration-test sites and exactly one CLI test, both as the plan
+says; ZERO snapshots carry the old title, so that regeneration step is a
+no-op. Sizing: ~150-250 lines.
 
 ### 8.2 The working agreement Jared set (binding)
 

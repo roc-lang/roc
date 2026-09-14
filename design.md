@@ -4610,8 +4610,10 @@ nominal field) cannot yet serve a widened use; W6b adds a result-row
 widening adapter at the template boundary, generalizing the hosted `Try`
 adapter, which re-tags only the direct result row and a `Try`'s rows.
 Per-use opening applies only at the output positions the adapter can
-re-tag: the signature's direct result row, and the two rows of a `Try`
-result. A tag union in any OTHER output position (inside a `List`, a
+re-tag: the signature's direct result row, and the ERROR row of a `Try`
+result. A `Try`'s ok row is not adaptable — the adapter asserts the ok type
+is unchanged — so it is not opened either. A tag union in any OTHER output
+position (inside a `List`, a
 record field, a tuple, a tag payload, a non-`Try` nominal) keeps its row
 as written, exactly as a negative position does, so a body use that tries
 to widen it is an ordinary type mismatch reported at the body use. This
@@ -4701,6 +4703,44 @@ non-hosted callee's annotated error row is implicitly open, so `?` flows it
 into the enclosing row through ordinary unification, and the enclosing
 annotation's audit rejects an error it does not list (pinned by the
 "polarity - try" tests in src/check/test/type_checking_integration.zig).
+
+### Result-Row Widening Adapter
+
+A procedure template whose published result row is CLOSED may be requested at
+a row that INCLUDES it — the same tags with usable payloads, plus others.
+The request is related component-wise WITHOUT unifying the two rows, the
+template is specialized at its own declared row, and a generated
+`.checked_generated` adapter at the requested row calls that specialization
+and re-tags its result. Hosted Try Question Widening is the instance of this
+rule where the declared row is the host ABI; the extern boundary is still
+emitted at the declared row, as Host Symbol ABI requires.
+
+Only two positions are adapted: the template's DIRECT result row, and the
+ERROR row of a `Try` result. A `Try`'s ok row is not adapted — the adapter
+asserts the ok type is unchanged — and neither is a row nested inside a
+`List`, a record field, a tuple, a tag payload, or a non-`Try` nominal,
+because re-tagging cannot reach into those positions without a general
+row-subsumption coercion (see the follow-ups this design defers).
+
+The set of positions a use may WIDEN is therefore kept equal to the set
+lowering can ADAPT, and it is kept equal by construction rather than by a
+second rule that could drift: polarity's per-use opening is withheld at
+generation time from every position outside that set, so a use that tries to
+widen an unadaptable position is an ordinary type mismatch at the use itself,
+carrying the use's own region, rather than a lowering failure with no
+diagnostic channel.
+
+Because the relation deliberately declines to unify the two rows, it must
+fail CLOSED: a request that is related this way and then does NOT reach an
+adapter would leave a callee producing one tag layout and a caller reading
+another, which is a wrong value rather than a crash. Every site that declines
+to unify therefore requires that an adapter is reachable for that request;
+where it is not, the site relates exactly instead and the ordinary
+`unifyTagRows` invariant reports the widening.
+
+Since a payload's representation is taken from the REQUEST rather than from
+the declared type, a polymorphic implementation's rigid payloads are correct
+by construction: the declared row supplies only the set of labels.
 
 ### Derived Parser Tag-Row Closure
 
