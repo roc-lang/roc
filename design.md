@@ -5669,15 +5669,22 @@ closed-source value: a top-level constant, an input-position parameter, a
 nominal field) cannot yet serve a widened use; W6b adds a result-row
 widening adapter at the template boundary, generalizing the hosted `Try`
 adapter, which re-tags only the direct result row and a `Try`'s rows.
-Decided 2026-09-03: per-use opening applies at EVERY output position of
-the signature, not only the positions the adapter can re-tag; for a marker
-in any other output position (inside a `List`, a record field, a tuple, a
-tag payload, a non-`Try` nominal) that a body use widened, the checked scheme
-instantiation reports a problem when the resolved implementation's row at that marker
-is closed, before unifying the implementation with the signature — a
-check-time rejection that names the implementation and is lifted as the
-coercion generator grows. Open implementations at nested positions are
-unaffected. A second lowering consequence: a Builtin format method's protocol result row (the ok
+Per-use opening applies only at the output positions the adapter can
+re-tag: the signature's direct result row, and the two rows of a `Try`
+result. A tag union in any OTHER output position (inside a `List`, a
+record field, a tuple, a tag payload, a non-`Try` nominal) keeps its row
+as written, exactly as a negative position does, so a body use that tries
+to widen it is an ordinary type mismatch reported at the body use. This
+keeps the set of positions a use may widen equal to the set lowering can
+adapt, by construction rather than by a second rule; the set grows as the
+coercion generator grows. (Decided 2026-09-03 as the converse — open
+everywhere, reject a closed implementation at the obligation — and
+reversed 2026-09-14: the obligation instantiates the enclosing scheme with
+`PolarityVarBehavior.close`, so it observes `[]` rather than a marker, and
+a marker's structural position is not recorded when it is minted; keying
+the rejection by structural path would have required a serialized
+cross-module position table for a rule strictly narrower than the
+adapter's own lowerability test.) A second lowering consequence: a Builtin format method's protocol result row (the ok
 payload of `parse_record_start`, for instance) is now quantified in its
 scheme, so a stored codec restore, which emits its generated bodies from
 resolved views before the specialization graph freezes, reaches that row
