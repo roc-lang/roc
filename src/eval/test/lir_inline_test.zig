@@ -16,7 +16,6 @@ const layout_mod = @import("layout");
 const LayoutIdx = layout_mod.Idx;
 const MonoAst = postcheck.Monotype.Ast;
 const MonoLower = postcheck.Monotype.Lower;
-const MonoType = postcheck.Monotype.Type;
 
 const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || error{
     TestExpectedEqual,
@@ -235,8 +234,6 @@ fn lowerMonotypeModule(
 }
 
 const LowerMonotypeOptions = struct {
-    specialization_cache: MonoLower.SpecializationCacheControl = .{},
-    loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -287,8 +284,6 @@ fn lowerMonotypeModuleWithOptions(
             .requests = root_requests,
         },
         .{
-            .specialization_cache = options.specialization_cache,
-            .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
             .post_check_executor = options.post_check_executor,
@@ -548,150 +543,6 @@ fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
     lowered.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), peak_allocator.current_bytes);
     return peak_allocator.peak_bytes;
-}
-
-fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
-    try std.testing.expectEqual(lhs.next_symbol, rhs.next_symbol);
-
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Content, lhs.types.types, rhs.types.types);
-    try std.testing.expectEqualSlices(?check.CheckedNames.TypeDigest, lhs.types.type_digests, rhs.types.type_digests);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.TypeId, lhs.types.spans, rhs.types.spans);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Field, lhs.types.fields, rhs.types.fields);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Tag, lhs.types.tags, rhs.types.tags);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.DeclaredField, lhs.types.declared_fields, rhs.types.declared_fields);
-
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.SpecRecord, lhs.specs, rhs.specs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ImportedFn, lhs.imported_fns, rhs.imported_fns);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Fn, lhs.fns, rhs.fns);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Def, lhs.defs, rhs.defs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.NestedDef, lhs.nested_defs, rhs.nested_defs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Expr, lhs.exprs, rhs.exprs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Pat, lhs.pats, rhs.pats);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Stmt, lhs.stmts, rhs.stmts);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Local, lhs.locals, rhs.locals);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ExprId, lhs.expr_ids, rhs.expr_ids);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.PatId, lhs.pat_ids, rhs.pat_ids);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.TypedLocal, lhs.typed_locals, rhs.typed_locals);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StmtId, lhs.stmt_ids, rhs.stmt_ids);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.FieldExpr, lhs.field_exprs, rhs.field_exprs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RecordDestruct, lhs.record_destructs, rhs.record_destructs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StrPatternStep, lhs.str_pattern_steps, rhs.str_pattern_steps);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Branch, lhs.branches, rhs.branches);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.IfBranch, lhs.if_branches, rhs.if_branches);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Root, lhs.roots, rhs.roots);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.LayoutRequest, lhs.layout_requests, rhs.layout_requests);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RuntimeSchemaRequest, lhs.runtime_schema_requests, rhs.runtime_schema_requests);
-    try std.testing.expectEqualSlices(base.SourceLoc, lhs.expr_locs, rhs.expr_locs);
-    try std.testing.expectEqualSlices(base.Region, lhs.expr_regions, rhs.expr_regions);
-    try std.testing.expectEqualSlices(base.SourceLoc, lhs.stmt_locs, rhs.stmt_locs);
-    try std.testing.expectEqualSlices(base.Region, lhs.stmt_regions, rhs.stmt_regions);
-}
-
-const DurableTypeSnapshot = struct {
-    view: MonoType.DurableView,
-    type_digests: []check.CheckedNames.TypeDigest,
-
-    fn deinit(self: DurableTypeSnapshot, allocator: Allocator) void {
-        allocator.free(self.type_digests);
-    }
-};
-
-fn durableTypeSnapshot(allocator: Allocator, program: *MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
-    const store_view = program.types.view();
-    const type_digests = try allocator.alloc(check.CheckedNames.TypeDigest, store_view.types.len);
-    errdefer allocator.free(type_digests);
-
-    for (type_digests, 0..) |*digest, index| {
-        digest.* = store_view.type_digests[index] orelse
-            program.types.typeDigest(&program.names, @enumFromInt(@as(u32, @intCast(index))));
-    }
-
-    return .{
-        .view = .{
-            .types = store_view.types,
-            .type_digests = type_digests,
-            .spans = store_view.spans,
-            .fields = store_view.fields,
-            .tags = store_view.tags,
-            .declared_fields = store_view.declared_fields,
-        },
-        .type_digests = type_digests,
-    };
-}
-
-fn digestBytesEqual(lhs: check.CheckedNames.TypeDigest, rhs: check.CheckedNames.TypeDigest) bool {
-    return std.mem.eql(u8, lhs.bytes[0..], rhs.bytes[0..]);
-}
-
-fn specRecordMatches(
-    allocator: Allocator,
-    name_store: *const check.CheckedNames.NameStore,
-    candidate_types: anytype,
-    candidate: MonoAst.SpecRecord,
-    expected_types: anytype,
-    expected: MonoAst.SpecRecord,
-) Allocator.Error!bool {
-    if (!std.meta.eql(candidate.identity.callable, expected.identity.callable)) return false;
-    if (!digestBytesEqual(candidate.identity.source_fn_ty_digest, expected.identity.source_fn_ty_digest)) return false;
-    if (!digestBytesEqual(candidate.identity.request_fn_ty_digest, expected.identity.request_fn_ty_digest)) return false;
-    if (!digestBytesEqual(candidate.solved_fn_ty_digest, expected.solved_fn_ty_digest)) return false;
-    return try MonoType.typeEqlAcrossStores(
-        allocator,
-        name_store,
-        candidate_types,
-        candidate.solved_fn_ty,
-        expected_types,
-        expected.solved_fn_ty,
-    );
-}
-
-fn specCoveredByLocalOrLoaded(
-    allocator: Allocator,
-    cached: MonoAst.ProgramView,
-    loaded: MonoLower.LoadedSpecializationShard,
-    expected_types: anytype,
-    expected: MonoAst.SpecRecord,
-) Allocator.Error!bool {
-    for (cached.specs) |candidate| {
-        if (try specRecordMatches(allocator, cached.names, cached.types, candidate, expected_types, expected)) return true;
-    }
-
-    for (loaded.specs) |candidate| {
-        if (try specRecordMatches(allocator, cached.names, loaded.types, candidate, expected_types, expected)) return true;
-    }
-
-    return false;
-}
-
-fn expectSpecsCoveredByCachedOrLoaded(
-    allocator: Allocator,
-    no_cache: MonoAst.ProgramView,
-    cached: MonoAst.ProgramView,
-    loaded: MonoLower.LoadedSpecializationShard,
-) TestError!void {
-    for (no_cache.specs) |expected| {
-        if (!try specCoveredByLocalOrLoaded(allocator, cached, loaded, no_cache.types, expected)) {
-            return error.MissingProcSpec;
-        }
-    }
-}
-
-fn isUnaryPrimitiveFnSpec(view: MonoAst.ProgramView, record: MonoAst.SpecRecord, primitive: MonoType.Primitive) bool {
-    const func = switch (view.types.get(record.solved_fn_ty)) {
-        .func => |func| func,
-        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return false,
-    };
-    const args = view.types.span(func.args);
-    if (args.len != 1) return false;
-    const arg_matches = switch (view.types.get(args[0])) {
-        .primitive => |arg| arg == primitive,
-        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
-    };
-    const ret_matches = switch (view.types.get(func.ret)) {
-        .primitive => |ret| ret == primitive,
-        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
-    };
-    return arg_matches and ret_matches;
 }
 
 fn lowerModuleWithInlineExpects(
@@ -2395,26 +2246,59 @@ test "interface summaries relocate across bodies and executor lanes" {
     const Executor = struct {
         allocator: Allocator,
         next_lane: usize,
+        pending: [2]TaskExecutor.Completion = undefined,
+        pending_len: usize = 0,
+        lane_states: [2]TaskExecutor.LaneState = .{
+            TaskExecutor.LaneState.init(std.testing.allocator),
+            TaskExecutor.LaneState.init(std.testing.allocator),
+        },
 
-        fn run(context: *anyopaque, tasks: []const TaskExecutor.Task, completions: []TaskExecutor.Completion) Allocator.Error!void {
+        fn deinit(self: *@This()) void {
+            for (&self.lane_states) |*state| state.deinit();
+        }
+
+        fn begin(context: *anyopaque) void {
             const self: *@This() = @ptrCast(@alignCast(context));
-            for (tasks, 0..) |task, index| {
-                const lane = self.next_lane;
-                self.next_lane = (lane + 1) % 2;
-                completions[tasks.len - 1 - index] = .{
-                    .id = task.id,
-                    .worker_id = lane,
-                    .value = task.run(task.context, .{
-                        .id = lane,
-                        .allocator = self.allocator,
-                        .scratch = self.allocator,
-                    }),
-                };
-            }
+            std.debug.assert(self.pending_len == 0);
+        }
+
+        fn submit(context: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            const lane = self.next_lane;
+            self.next_lane = (lane + 1) % 2;
+            self.pending[self.pending_len] = .{
+                .id = task.id,
+                .worker_id = lane,
+                .value = task.run(task.context, .{
+                    .id = lane,
+                    .allocator = self.allocator,
+                    .scratch = self.allocator,
+                    .lane_state = &self.lane_states[lane],
+                }),
+            };
+            self.pending_len += 1;
+        }
+
+        fn receive(context: *anyopaque) TaskExecutor.Completion {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.pending_len -= 1;
+            return self.pending[self.pending_len];
+        }
+
+        fn end(context: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            std.debug.assert(self.pending_len == 0);
         }
 
         fn executor(self: *@This()) TaskExecutor.Executor {
-            return .{ .context = self, .worker_count = 2, .runFn = run };
+            return .{
+                .context = self,
+                .worker_count = 2,
+                .beginFn = begin,
+                .submitFn = submit,
+                .receiveFn = receive,
+                .endFn = end,
+            };
         }
     };
     const source =
@@ -2428,7 +2312,9 @@ test "interface summaries relocate across bodies and executor lanes" {
         \\main = |s| (left(s), right(s))
     ;
     var first_executor = Executor{ .allocator = allocator, .next_lane = 0 };
+    defer first_executor.deinit();
     var second_executor = Executor{ .allocator = allocator, .next_lane = 1 };
+    defer second_executor.deinit();
     var first_diagnostics: MonoLower.Diagnostics = .{};
     var second_diagnostics: MonoLower.Diagnostics = .{};
     var first = try lowerMonotypeModuleWithOptions(allocator, source, .{
@@ -2953,80 +2839,6 @@ test "alias-heavy generic specialization count does not exceed backing types" {
     defer alias.deinit(allocator);
 
     try std.testing.expect(alias.mono.view().specs.len <= backing.mono.view().specs.len);
-}
-
-test "disabling monotype specialization cache does not change monotype output" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\identity : a -> a
-        \\identity = |value| value
-        \\
-        \\main : { n : U64, flag : Bool }
-        \\main = {
-        \\    { n: identity(1), flag: identity(Bool.True) }
-        \\}
-    ;
-
-    var default = try lowerMonotypeModule(allocator, source);
-    defer default.deinit(allocator);
-
-    var disabled = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .specialization_cache = .disabled,
-    });
-    defer disabled.deinit(allocator);
-
-    try expectEquivalentMonotypeProgramViews(default.mono.view(), disabled.mono.view());
-}
-
-test "monotype specialization cache read reuses loaded hits and lowers fresh misses" {
-    const allocator = std.testing.allocator;
-    const mixed_source =
-        \\identity : a -> a
-        \\identity = |value| value
-        \\
-        \\main : { n : U64, flag : Bool }
-        \\main = {
-        \\    { n: identity(1), flag: identity(Bool.True) }
-        \\}
-    ;
-
-    var loaded_program = try lowerMonotypeModule(allocator, mixed_source);
-    defer loaded_program.deinit(allocator);
-    const loaded_program_view = loaded_program.mono.view();
-
-    const selected_loaded_spec = for (loaded_program_view.specs) |record| {
-        if (isUnaryPrimitiveFnSpec(loaded_program_view, record, .u64)) break record;
-    } else return error.MissingProcSpec;
-    const loaded_specs = [_]MonoAst.SpecRecord{selected_loaded_spec};
-
-    const loaded_types = try durableTypeSnapshot(allocator, &loaded_program.mono);
-    defer loaded_types.deinit(allocator);
-    const loaded_shards = [_]MonoLower.LoadedSpecializationShard{.{
-        .shard_id = @enumFromInt(1),
-        .types = loaded_types.view,
-        .specs = &loaded_specs,
-        .fns = loaded_program_view.fns,
-        .const_fn_evidence = loaded_program_view.const_fn_evidence,
-        .const_fn_evidence_frames = loaded_program_view.const_fn_evidence_frames,
-    }};
-
-    var no_cache = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
-        .specialization_cache = .disabled,
-    });
-    defer no_cache.deinit(allocator);
-
-    var counters: MonoLower.SpecializationCounters = .{};
-    var cached = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
-        .specialization_cache = .{},
-        .loaded_specialization_shards = &loaded_shards,
-        .specialization_counters = &counters,
-    });
-    defer cached.deinit(allocator);
-
-    try std.testing.expect(cached.mono.view().imported_fns.len > 0);
-    try std.testing.expect(cached.mono.view().specs.len < no_cache.mono.view().specs.len);
-    try std.testing.expect(counters.template_misses > 0);
-    try expectSpecsCoveredByCachedOrLoaded(allocator, no_cache.mono.view(), cached.mono.view(), loaded_shards[0]);
 }
 
 test "nested function specializations keep equal types at different sites distinct" {
@@ -8123,15 +7935,11 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
         .mono_fn_ty = worker_fn_ty,
     });
 
-    const opaque_scalar = try mono.addImportedFn(.{ .shard = @enumFromInt(1), .fn_id = @enumFromInt(1) });
-
     const pair_local = try mono.addLocalWithBinder(@enumFromInt(1), pair_ty, shared_binder);
     const scalar_local = try mono.addLocalWithBinder(@enumFromInt(2), u32_ty, shared_binder);
 
-    const scalar_value = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .call_proc = .{
-        .callee = MonoAst.importedProcCallee(opaque_scalar),
-        .args = MonoAst.Span(MonoAst.ExprId).empty(),
-    } } });
+    const scalar_literal = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .int_lit = .{ .bytes = @splat(0), .kind = .u128 } } });
+    const scalar_value = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .dbg = scalar_literal } });
     const scalar_pat = try mono.addPat(.{ .ty = u32_ty, .data = .{ .bind = scalar_local } });
 
     const pair_ref = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .local = pair_local } });
@@ -10529,4 +10337,54 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
     const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
     defer allocator.free(output);
     try std.testing.expectEqualStrings("[120, 121, 122]", output);
+}
+
+test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Pair := { a: U8, z: U64 }
+        \\xs = List.repeat(Pair.{ a: 3, z: 42 }, 2)
+        \\identity : a -> a
+        \\identity = |x| x
+        \\main : U64 -> U64
+        \\main = |i| {
+        \\    ys = identity(xs).set(i, Pair.{ a: 9, z: 77 }) ?? []
+        \\    x = xs.get(i) ?? Pair.{ a: 0, z: 0 }
+        \\    y = ys.get(i) ?? Pair.{ a: 0, z: 0 }
+        \\    x.a.to_u64() + x.z + y.a.to_u64() + y.z
+        \\}
+    ;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var found_packed = false;
+        for (result.store.getCFStmts()) |stmt| {
+            if (stmt == .assign_literal and stmt.assign_literal.value == .bytes_literal) {
+                if (stmt.assign_literal.value.bytes_literal.len == 2) found_packed = true;
+            }
+        }
+        try std.testing.expect(found_packed);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                runtime_env.get_ops(),
+                .preserve,
+            );
+            defer interpreter.deinit();
+            var index: u64 = 1;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&index),
+            });
+            try std.testing.expectEqual(@as(u64, 131), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
 }

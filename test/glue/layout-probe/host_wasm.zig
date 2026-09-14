@@ -250,7 +250,18 @@ fn checkProvidedAbi() void {
     if (!sameBytes(abi.roc_provide_vector_tuple(tuple), tuple)) fail("provided vector tuple mismatch");
 
     const tag = abi.roc_make_vector_tag();
-    if (!sameBytes(abi.roc_provide_vector_tag(tag), tag)) fail("provided vector tag mismatch");
+    const tag_back = abi.roc_provide_vector_tag(tag);
+    // Compare the active fields; union and payload padding carry no value.
+    if (tag_back.tag != .Pair) {
+        fail("provided vector tag discriminant mismatch");
+    } else {
+        const payload = tag_back.payload_pair();
+        if (payload._0 != 0x1020304050607080 or
+            @as(u128, @bitCast(payload._1)) != 0x00112233445566778899aabbccddeeff)
+        {
+            fail("provided vector tag payload mismatch");
+        }
+    }
 
     const exhausted = abi.roc_provide_exhaust_registers(1, 2, 3, 4, 5, 6, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, u8x16);
     if (!sameBytes(exhausted, u8x16)) fail("provided exhausted-register vector mismatch");

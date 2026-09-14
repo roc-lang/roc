@@ -62,6 +62,7 @@ fn compileWithCache(
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     var reports = coord.iterReports();
     while (reports.next()) |entry| {
