@@ -60003,7 +60003,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
 
 test "issue 11362: allocation failure removes active checked instantiation markers" {
     const Scenario = struct {
-        fn run(allocator: Allocator) !void {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
             const gpa = std.testing.allocator;
             var name_store = names.NameStore.init(gpa);
             defer name_store.deinit();
