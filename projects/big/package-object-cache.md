@@ -193,7 +193,7 @@ distinct layout (`list_of_zst`).
 This is a compile-time win on its own, since every build emits fewer
 specializations, and it multiplies the reach of the shared tiers: a `none` or
 `layout` specialization requested by an app is far more likely to already
-exist in the prebuilt builtin set or in another app's entries than a
+exist in another module's pack than a
 full-type one.
 
 ### Lambda identities are site-and-shape, never body content
@@ -335,17 +335,17 @@ file per module.
 **A module's pack contains every specialization its code reaches that is not
 already in the pack of a module it imports.** For a package module such as
 roc-deflate's `HuffmanEncode.roc` that is its own functions at their concrete
-types plus the builtin instantiations it uses that `Builtin.roc`'s own pack
-does not carry, such as `List.get` at `List(U32)`. A module that imports
+types plus the builtin instantiations it uses, such as `List.get` at
+`List(U32)`. A module that imports
 `HuffmanEncode` excludes what that pack already holds and adds only what is
 new to it. An app's root module gets a pack holding its own functions plus
 the cross-module specializations it is the first to need, such as
 `Signal.map` at the app's `Model` with the app's lambda. Because the set is
 computed against the imports' packs, which are themselves functions of the
 imports' content, the pack is a function of the module and its transitive
-imports and nothing else. `Builtin.roc`'s pack is produced by the compiler
-build and extended with the curated seed list, which is part of the compiler.
-A pack is one file: header, sorted index from identity to offset and length,
+imports and nothing else. `Builtin.roc` has no pack: every builtin
+instantiation belongs to the pack of the module that requested it (see
+"Builtins are not cached"). A pack is one file: header, sorted index from identity to offset and length,
 entry blobs.
 
 The pack's content is canonical, not "whatever this build reached". It is the
@@ -403,8 +403,7 @@ one is never read again. The sweep gives `pkg/` a 30-day window and `local/`
 a window on the order of one day, so rewritten packs cannot pile up while
 optimized dependency packs survive. The split is by origin, not by backend
 mode: a dev-backend pack for a downloaded package is as stable as the LLVM
-one, and only rewrites of local modules accumulate. The builtin seed pack
-ships inside the compiler's version directory and is not swept.
+one, and only rewrites of local modules accumulate.
 
 For these two directories the sweep ages a file by `now - max(atime, mtime)`
 rather than mtime alone, so that an in-use pack is not deleted and rebuilt
@@ -447,26 +446,26 @@ added to its key, and the app image streamed into shared memory resolves
 package symbols by name at relocation time. Only the app image reloads on an
 edit.
 
-## Prebuilt builtin specializations
+## Builtins are not cached
 
-`Builtin.roc` is the one package every program depends on, and its
-instantiations recur across unrelated apps: request digests are content
-identities, and in the census one `List.len` instantiation appeared under the
-same identity in 11 of 15 apps, 57 of roc-deflate's 146 builtin
-specializations recurred in other apps, and about half of each roc-signals
-app's builtin specializations were shared with its siblings. The compiler
-build therefore produces a seed set of cache entries, LLVM-optimized, and
-ships them the way `roc_builtins.o` is shipped today (`src/cli/main.zig:459`).
-The seed set is every closed specialization reachable from `Builtin.roc`'s own
-monomorphic code (its internal uses of `List(U8)`, `List(Str)`, `Str`, and
-the numeric types) plus a curated list of request types added as measurements
-justify them. Seed entries are ordinary content-addressed entries under the
-same identities, so an app that requests one gets a hit with no special path,
-and an app that requests something outside the set falls through to ordinary
-lowering. Whether the set is embedded in the binary or materialized into the
-cache directory on first use is an implementation choice; either way the set
-is regenerated per compiler build because the identity folds in the builtin
-artifact.
+`Builtin.roc` gets no pack and the compiler ships no prebuilt entries. The
+census suggested otherwise: builtin request digests recur across unrelated
+apps, and about half of each roc-signals app's builtin specializations were
+shared with its siblings. Measuring what survives to an object showed why
+that does not translate into hits. A dev build inlines nearly every closed
+builtin call through single-use inlining and SpecConstr, so the roc-parser
+app's own pack holds 216 procedures and shares none with the 1284 closed
+roots a `Builtin.roc` pack would hold; the builtin code an app keeps as
+procedures is its polymorphic instantiations at the app's own types, which
+belong to the requester's pack under the rule above. An optimized build is
+worse served: a cached builtin object is opaque to LLVM, so a call into it
+stays a call where today the body is inlined and optimized in the caller's
+context. Caching builtins would therefore cost store space and index time in
+dev for no hits, and code quality in optimized builds. Builtin instantiations
+are ordinary entries in the requesting module's pack, and tier 1 pays off
+where its census numbers came from: URL packages such as roc-deflate whose
+own closed procedures are large enough not to be inlined and are compiled
+once per package version.
 
 ## Optimized objects
 
@@ -546,14 +545,12 @@ them.
    content-named symbols. Gate: the cold-versus-warm differential over the
    full test corpus.
 3. **Tier 1 with dev objects.** Reservation-time hit, manifests, on-disk
-   store, LLD linking, `Builtin.roc` and roc-deflate as the first packages.
+   store, LLD linking, roc-deflate as the first package.
    Gate: differential plus a CI measurement of warm dev build time on the
    census apps.
 4. **LLVM objects.** C-ABI boundary emission in the LLVM backend, download-time
-   optimization of tier 1, cross-backend linking, and the prebuilt builtin
-   seed set produced at compiler build time. Gate: differential across
-   backend mixes, and a check that every seed entry is byte-identical to what
-   an app build would produce for the same identity.
+   optimization of tier 1, and cross-backend linking. Gate: differential
+   across backend mixes.
    Implementation order for milestones 2 and 3, decided 2026-09-14 after
    reading the dev backend: the dev backend already keeps every reference
    between procedures symbolic until a final patch pass (`pending_calls`,
@@ -594,16 +591,16 @@ them.
       see, and ARC solves the pack's own fixpoint; the manifest records each
       root's symbol and borrowed-parameter mask. Gate: a CLI subcommands case
       builds twice with the flag and the artifact round trip, requires
-      identical pack bytes, roots in the Builtin, platform, and app packs,
-      and no round-trip difference. Measured on the fixture apps: the
-      Builtin pack has 1284 closed roots, deterministic across builds, and
-      its only undefined symbols are `roc_builtins_*` and host symbols.
-      Two findings shape slice 3. First, dev builds inline nearly every
-      closed builtin call, so an app's own procedures almost never coincide
-      with the Builtin pack; the sharing that matters in dev is between an
-      app's pack (its own functions plus the builtin instantiations at its
-      types) and the previous version of that same pack after an edit,
-      exactly the "warmness survives edits" case. Second, a platform
+      identical pack bytes, roots in the platform and app packs, and no
+      round-trip difference. Measured on the fixture apps: packs are
+      deterministic across builds, and their only undefined symbols are
+      `roc_builtins_*` and host symbols. Two findings shape slice 3. First,
+      dev builds inline nearly every closed builtin call, which is why
+      `Builtin.roc` gets no pack ("Builtins are not cached"); the sharing
+      that matters in dev is between an app's pack (its own functions plus
+      the builtin instantiations at its types) and the previous version of
+      that same pack after an edit, exactly the "warmness survives edits"
+      case. Second, a platform
       module's pack references hosted functions by their declared names
       (`line!`), which the app build resolves through the platform's hosted
       tables; linking a platform pack needs the same resolution.

@@ -3078,7 +3078,9 @@ pub const BuildEnv = struct {
     }
 
     /// Every checked artifact `root_artifact` can lower against, other than
-    /// itself: the builtin module followed by its lowering-visible modules.
+    /// itself and the builtin module: its lowering-visible modules in order.
+    /// Builtins get no pack of their own; their instantiations belong to the
+    /// pack of the module that requests them.
     pub fn collectVisibleArtifacts(
         self: *const BuildEnv,
         allocator: Allocator,
@@ -3087,7 +3089,6 @@ pub const BuildEnv = struct {
         var artifacts = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
         errdefer artifacts.deinit(allocator);
         const builtin_artifact = &self.builtin_modules.checked_artifact;
-        try artifacts.append(allocator, builtin_artifact);
         for (root_artifact.lowering_visibility.module_ids) |key| {
             if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
             if (checkedArtifactKeysEqual(key, builtin_artifact.key)) continue;

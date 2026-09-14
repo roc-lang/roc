@@ -5758,7 +5758,7 @@ fn customNativeBuildPackObjects(
         })) |failure| return failure;
     }
 
-    const pack_files = [_][]const u8{ "pack.Builtin.o", "pack.Builtin.manifest", "pack.Stdout.o", "pack.Stdout.manifest", "pack.hello_world.o", "pack.hello_world.manifest" };
+    const pack_files = [_][]const u8{ "pack.Stdout.o", "pack.Stdout.manifest", "pack.hello_world.o", "pack.hello_world.manifest" };
     for (pack_files) |pack_file| {
         var contents: [suffixes.len][]const u8 = undefined;
         for (outputs, 0..) |output, index| {
