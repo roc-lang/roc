@@ -12864,6 +12864,15 @@ Shared metadata locals are needed only for merged definitions, and tracked
 edges retain their existing hot path. Debug validation checks that every planned
 definition emitted its metadata.
 
+Versioning (a head that dispatches on the ownership flags to a unique-only
+copy of the loop body) is applied only to leaf loops: promoted loops whose
+body contains neither another promoted loop nor a procedure call. It exists
+to take the per-set flag branch out of a loop the backend can vectorize or
+schedule as one block. A loop that calls a procedure or nests another
+versioned loop is not such a loop, and cloning it would double the emitted
+body for every level of nesting to remove one predictable branch per site;
+it keeps its flag-dispatched sets instead.
+
 `List.map` may overwrite a uniquely owned input list's buffer instead of
 allocating an output list when the input and output item representations are
 interchangeable in one allocation. Fully concrete items require the same
