@@ -10110,7 +10110,7 @@ test "iterator finalization guards perform no graph walks without provenance" {
 
 test "generated iterator index preserves evidence, argument classes, unions and replacements" {
     const Scenario = struct {
-        fn run(allocator: Allocator) !void {
+        fn run(allocator: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
             var types = Type.Store.init(allocator);
             defer types.deinit();
             var name_store = names.NameStore.init(allocator);

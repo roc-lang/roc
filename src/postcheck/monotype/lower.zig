@@ -60000,7 +60000,7 @@ test "function context identity excludes draft local allocation ids" {
     try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
 }
 
-fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) !void {
+fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const gpa = std.testing.allocator;
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
