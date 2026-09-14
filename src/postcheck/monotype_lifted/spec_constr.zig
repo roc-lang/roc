@@ -5687,11 +5687,7 @@ const Cloner = struct {
             },
             .let_ => |let_| return try self.cloneLetValue(let_, bindings),
             .loop_ => |loop| return try self.cloneLoopValue(expr.ty, loop, bindings, null),
-            .block => |block| {
-                if (self.purpose == .loop_exit_selection) return try self.cloneExitBlockValue(expr.ty, block, bindings);
-                if (try self.cloneBlockValue(block, bindings)) |value| return value;
-                return .{ .expr = try self.cloneExprPlain(expr_id) };
-            },
+            .block => |block| return try self.cloneBlockValue(expr.ty, block, bindings),
             .field_access => |field| return try self.cloneFieldAccessValue(expr_id, expr.ty, field, bindings),
             .tuple_access => |access| {
                 if (self.selectedTupleItem(access)) |item| return .{ .expr = item };
@@ -6638,6 +6634,13 @@ const Cloner = struct {
         var value_bindings: BindingChain = .{};
         const value = try self.cloneExprValueInto(let_.value, &value_bindings);
         bindings.appendChain(value_bindings);
+        return try self.cloneLetWithValue(let_, value, bindings);
+    }
+
+    /// Consume an already-cloned producer. Block traversal uses this only when
+    /// the value needs a shared continuation; ordinary bindings stay in its
+    /// iterative statement walk.
+    fn cloneLetWithValue(self: *Cloner, let_: anytype, value: Value, bindings: *BindingChain) Common.LowerError!Value {
         const value_expr = try self.materialize(value);
         if (if (self.purpose == .loop_exit_selection) null else self.caseExprFromValue(value)) |case_expr| {
             if (try self.cloneLetOfCase(let_, case_expr)) |data| {
@@ -6646,14 +6649,7 @@ const Cloner = struct {
             }
         }
         const change_start = self.subst.watermark();
-        const bound = try self.bindPatToReusableValue(let_.bind, value);
-        if (bound == .match) {
-            const rest = try self.cloneExprValueInto(let_.rest, bindings);
-            try self.subst.restoreFloatingLoopCarries(change_start);
-            return rest;
-        }
-        self.subst.restore(change_start);
-        if (try self.bindPatToPositionedReusableValue(let_.bind, let_.value, false, value, bindings)) {
+        if (try self.bindLetValue(let_.bind, let_.value, value, bindings)) {
             const rest = try self.cloneExprValueInto(let_.rest, bindings);
             try self.subst.restoreFloatingLoopCarries(change_start);
             return rest;
@@ -6678,6 +6674,19 @@ const Cloner = struct {
             .rest = rest,
             .comptime_site = let_.comptime_site,
         } } }) };
+    }
+
+    fn bindLetValue(
+        self: *Cloner,
+        pat_id: Ast.PatId,
+        source_value: Ast.ExprId,
+        value: Value,
+        bindings: *BindingChain,
+    ) Common.LowerError!bool {
+        const change_start = self.subst.watermark();
+        if (try self.bindPatToReusableValue(pat_id, value) == .match) return true;
+        self.subst.restore(change_start);
+        return try self.bindPatToPositionedReusableValue(pat_id, source_value, false, value, bindings);
     }
 
     /// Consume the immutable function demand plan. This returns completed
@@ -8215,87 +8224,145 @@ const Cloner = struct {
         }
     }
 
-    /// A block whose statements all dissolve—each binding retains its strict
-    /// work in the block's source-ordered binding chain, and each discarded
-    /// expression is speculatable—is transparent to value flow: its result keeps the final
-    /// expression's structure. A statement that must stay a statement (an
-    /// effect, a runtime destructure, control flow) pins the block, which
-    /// then materializes as written. Returns null on a pinned block with all
-    /// speculative work undone.
+    /// Clone each source statement once. Strict bindings can travel with the
+    /// result's structure; retained statements keep that structure inside its
+    /// block. Encountering a retained statement never restarts prefix cloning.
     fn cloneBlockValue(
         self: *Cloner,
+        ty: Type.TypeId,
         block: anytype,
         bindings: *BindingChain,
-    ) Common.LowerError!?Value {
-        // The block-final position is the capability that makes an
-        // `unreachable` marker valid. Treating this block as transparent would
-        // let the marker escape into an ordinary expression position (for
-        // example, the rest of a synthesized `let`).
-        if (self.pass.program.getExpr(block.final_expr).data == .@"unreachable") return null;
-
+    ) Common.LowerError!Value {
+        if (self.purpose == .loop_exit_selection) return try self.cloneExitBlockValue(ty, block, bindings);
         const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
         var block_bindings: BindingChain = .{};
+        var statements = std.ArrayList(Ast.StmtId).empty;
+        defer statements.deinit(self.pass.allocator);
+        const terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
 
-        const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
-        defer self.pass.allocator.free(source);
-
-        for (source) |stmt_id| {
+        for (0..block.statements.len) |index| {
+            const stmt_id = GuardedList.at(self.pass.program.stmtSpan(block.statements), index);
+            const source_context = try self.enterStmtSource(stmt_id);
+            defer source_context.restore(self);
             const stmt = self.pass.program.getStmt(stmt_id);
-            const let_ = switch (stmt) {
-                .let_ => |let_| let_,
-                // Preserve a discarded expression's opaque work as strict
-                // bindings at this exact statement position. Only its
-                // structurally work-free result is discarded.
-                .expr => |stmt_expr| {
+            switch (stmt) {
+                .let_ => |let_| {
+                    var case_value: ?Value = null;
+                    if (!let_.recursive and !terminated) {
+                        const value = try self.cloneExprValueInto(let_.value, &block_bindings);
+                        if (self.caseExprFromValue(value) == null) {
+                            if (try self.bindLetValue(let_.pat, let_.value, value, &block_bindings)) continue;
+                            // Keep an ordinary runtime destructure at its
+                            // source position without turning the remaining
+                            // statement span into nested let expressions.
+                            const pattern = try self.clonePat(let_.pat, .bind_runtime);
+                            const residual = try self.addStmt(.{ .let_ = .{
+                                .pat = pattern,
+                                .value = try self.materialize(value),
+                                .comptime_site = let_.comptime_site,
+                            } });
+                            try self.appendBindingStmts(block_bindings, &statements);
+                            block_bindings = .{};
+                            try statements.append(self.pass.allocator, residual);
+                            continue;
+                        }
+                        case_value = value;
+                    }
+                    if (!let_.recursive and
+                        (!terminated or
+                            (self.pass.program.getExpr(let_.value).data == .loop_ and
+                                (self.pass.tuplePatternIsPartiallyUsedInBlockTail(
+                                    let_.pat,
+                                    self.pass.program.stmtSpan(block.statements),
+                                    index + 1,
+                                    block.final_expr,
+                                ) or
+                                    try self.pass.aggregateLoopBindingIsPartiallyUsedInBlockTail(
+                                        let_.pat,
+                                        let_.value,
+                                        self.pass.program.stmtSpan(block.statements),
+                                        index + 1,
+                                        block.final_expr,
+                                    )))))
+                    {
+                        // The untouched suffix is source, not cloned output.
+                        // Give let-of-case one shared continuation without
+                        // copying or speculatively walking that suffix.
+                        const template_start = self.pass.program.exprCount();
+                        const tail = try self.pass.program.addExpr(.{ .ty = ty, .data = .{ .block = .{
+                            .statements = .{
+                                .start = block.statements.start + @as(u32, @intCast(index)) + 1,
+                                .len = block.statements.len - @as(u32, @intCast(index)) - 1,
+                            },
+                            .final_expr = block.final_expr,
+                        } } });
+                        try self.registerCloneTemplate(template_start);
+                        const continuation = .{
+                            .bind = let_.pat,
+                            .value = let_.value,
+                            .rest = tail,
+                            .comptime_site = let_.comptime_site,
+                        };
+                        const value = if (case_value) |cloned|
+                            try self.cloneLetWithValue(continuation, cloned, &block_bindings)
+                        else
+                            try self.cloneLetValue(continuation, &block_bindings);
+                        return try self.finishBlockValue(ty, terminated, &statements, block_bindings, value, bindings);
+                    }
+                    if (let_.recursive and statements.items.len == 0 and !terminated) {
+                        // Recursive bindings remain runtime anchors even
+                        // when the surrounding block exposes its tail value.
+                        const cloned = try self.cloneStmt(stmt_id);
+                        block_bindings.appendChain(cloned.bindings);
+                        const anchor = cloned.stmt orelse
+                            Common.invariant("recursive statement dissolved while cloning a transparent block");
+                        try block_bindings.appendStatement(self.arena.allocator(), anchor);
+                        continue;
+                    }
+                },
+                .expr => |stmt_expr| if (statements.items.len == 0 and !terminated) {
                     const discarded = try self.cloneExprValueInto(stmt_expr, &block_bindings);
                     _ = try self.makeReusableForMatch(discarded, &block_bindings);
                     continue;
                 },
-                .uninitialized, .expect, .dbg, .return_, .crash => {
-                    self.subst.restore(change_start);
-                    return null;
-                },
-            };
-            if (let_.recursive) {
-                // Clone the recursive statement through the ordinary path,
-                // which reserves a fresh runtime local before cloning the
-                // initializer and then exposes the initializer's known value
-                // to the remainder. The retained statement is the explicit
-                // graph anchor for every symbolic back-edge to that local.
-                const cloned = try self.cloneStmt(stmt_id);
-                block_bindings.appendChain(cloned.bindings);
-                const anchor = cloned.stmt orelse
-                    Common.invariant("recursive statement dissolved while cloning a transparent block");
-                try block_bindings.appendStatement(self.arena.allocator(), anchor);
-                continue;
+                .uninitialized, .expect, .dbg, .return_, .crash => {},
             }
-            const value = try self.cloneExprValueInto(let_.value, &block_bindings);
-            if (self.caseExprFromValue(value) != null) {
-                self.subst.restore(change_start);
-                return null;
-            }
-            if (try self.bindPatToReusableValue(let_.pat, value) == .match) continue;
-            if (!try self.bindPatToPositionedReusableValue(let_.pat, let_.value, let_.recursive, value, &block_bindings)) {
-                self.subst.restore(change_start);
-                return null;
-            }
+            const cloned = try self.cloneStmt(stmt_id);
+            block_bindings.appendChain(cloned.bindings);
+            try self.appendBindingStmts(block_bindings, &statements);
+            block_bindings = .{};
+            if (cloned.stmt) |out| try statements.append(self.pass.allocator, out);
         }
 
         const final = try self.cloneExprValueInto(block.final_expr, &block_bindings);
-        self.subst.restore(change_start);
-        bindings.appendChain(block_bindings);
-        return final;
+        return try self.finishBlockValue(ty, terminated, &statements, block_bindings, final, bindings);
     }
 
-    /// Exit selection traverses a statement span once. A selected binding owns
-    /// the remaining source span directly, avoiding copied suffixes and the
-    /// general block cloner's speculative normalization/re-cloning.
-    fn cloneExitBlock(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Ast.ExprId {
-        var bindings: BindingChain = .{};
-        const value = try self.cloneExitBlockValue(ty, block, &bindings);
-        return try self.wrapBindings(bindings, try self.materialize(value));
+    fn finishBlockValue(
+        self: *Cloner,
+        ty: Type.TypeId,
+        terminated: bool,
+        statements: *std.ArrayList(Ast.StmtId),
+        block_bindings: BindingChain,
+        value: Value,
+        bindings: *BindingChain,
+    ) Common.LowerError!Value {
+        // An unreachable final marker is valid only inside the block whose
+        // earlier statement terminates. It must never escape as a value.
+        if (statements.items.len == 0 and !terminated) {
+            bindings.appendChain(block_bindings);
+            return value;
+        }
+        return .{ .expr = try self.emitBlockWithTail(ty, statements, .{
+            .reused = null,
+            .bindings = block_bindings,
+            .value = value,
+        }) };
     }
 
+    /// Exit selection consumes its planned source continuation directly, rather
+    /// than running the general let-of-case transformations over that suffix.
     fn cloneExitBlockValue(self: *Cloner, ty: Type.TypeId, block: anytype, bindings: *BindingChain) Common.LowerError!Value {
         const change_start = self.subst.watermark();
         defer self.subst.restore(change_start);
@@ -8364,63 +8431,9 @@ const Cloner = struct {
     }
 
     fn cloneBlock(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Ast.ExprId {
-        if (self.purpose == .loop_exit_selection) return try self.cloneExitBlock(ty, block);
-        const change_start = self.subst.watermark();
-        defer self.subst.restore(change_start);
-
-        const terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
-
-        const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
-        defer self.pass.allocator.free(source);
-
-        var statements = std.ArrayList(Ast.StmtId).empty;
-        defer statements.deinit(self.pass.allocator);
-        for (source, 0..) |stmt, index| {
-            // A binding statement is a let expression over the block's tail.
-            // Cloning it as one lets a branch-built value sink the tail into
-            // the branches, where each branch's constructor is known.
-            switch (self.pass.program.getStmt(stmt)) {
-                .let_ => |let_| if (!let_.recursive and
-                    (!terminated or
-                        (self.pass.program.getExpr(let_.value).data == .loop_ and
-                            (self.pass.tuplePatternIsPartiallyUsedInBlockTail(
-                                let_.pat,
-                                self.pass.program.stmtSpan(block.statements),
-                                index + 1,
-                                block.final_expr,
-                            ) or
-                                try self.pass.aggregateLoopBindingIsPartiallyUsedInBlockTail(
-                                    let_.pat,
-                                    let_.value,
-                                    self.pass.program.stmtSpan(block.statements),
-                                    index + 1,
-                                    block.final_expr,
-                                )))))
-                {
-                    // The synthetic `let` is a template built from source
-                    // parts for this clone to read as source.
-                    const template_start = self.pass.program.exprCount();
-                    const tail = try self.pass.program.addExpr(.{ .ty = ty, .data = .{ .block = .{
-                        .statements = try self.pass.program.addStmtSpan(source[index + 1 ..]),
-                        .final_expr = block.final_expr,
-                    } } });
-                    const synthetic = try self.pass.program.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
-                        .bind = let_.pat,
-                        .value = let_.value,
-                        .rest = tail,
-                        .comptime_site = let_.comptime_site,
-                    } } });
-                    try self.registerCloneTemplate(template_start);
-                    return try self.emitBlockWithTail(ty, &statements, try self.cloneExprParts(synthetic));
-                },
-                .uninitialized, .expr, .expect, .dbg, .return_, .crash => {},
-            }
-            const cloned = try self.cloneStmt(stmt);
-            try self.appendBindingStmts(cloned.bindings, &statements);
-            if (cloned.stmt) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
-        }
-
-        return try self.emitBlockWithTail(ty, &statements, try self.cloneExprParts(block.final_expr));
+        var bindings: BindingChain = .{};
+        const value = try self.cloneBlockValue(ty, block, &bindings);
+        return try self.wrapBindings(bindings, try self.materialize(value));
     }
 
     /// Emit a block from cloned statements and its cloned tail. The tail's
@@ -10906,6 +10919,33 @@ const Cloner = struct {
         }
     }
 
+    const SourceContext = struct {
+        loc: SourceLoc,
+        region: Region,
+        inline_scope: Ast.InlineScopeId,
+
+        fn restore(self: SourceContext, cloner: *Cloner) void {
+            cloner.current_loc = self.loc;
+            cloner.current_region = self.region;
+            cloner.current_inline_scope = self.inline_scope;
+        }
+    };
+
+    fn enterStmtSource(self: *Cloner, stmt_id: Ast.StmtId) Allocator.Error!SourceContext {
+        const saved = SourceContext{
+            .loc = self.current_loc,
+            .region = self.current_region,
+            .inline_scope = self.current_inline_scope,
+        };
+        errdefer saved.restore(self);
+        try self.adoptStmtInlineScope(stmt_id);
+        const stmt_loc = self.pass.program.stmtLoc(stmt_id);
+        if (stmt_loc.hasLocation()) self.current_loc = stmt_loc;
+        const stmt_region = self.pass.program.stmtRegion(stmt_id);
+        if (!stmt_region.isEmpty()) self.current_region = stmt_region;
+        return saved;
+    }
+
     /// Clone one statement. A binding statement whose value's opaque leaves
     /// can all be named dissolves instead: the returned binding chain is
     /// placed by the caller at this statement's position—the same
@@ -10913,18 +10953,8 @@ const Cloner = struct {
     /// structured value for the rest of the block. `stmt` is null when the
     /// source binding dissolved completely.
     fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!ClonedStmt {
-        const saved_loc = self.current_loc;
-        defer self.current_loc = saved_loc;
-        const saved_region = self.current_region;
-        defer self.current_region = saved_region;
-        const saved_inline_scope = self.current_inline_scope;
-        defer self.current_inline_scope = saved_inline_scope;
-        try self.adoptStmtInlineScope(stmt_id);
-        const stmt_loc = self.pass.program.stmtLoc(stmt_id);
-        if (stmt_loc.hasLocation()) self.current_loc = stmt_loc;
-        const stmt_region = self.pass.program.stmtRegion(stmt_id);
-        if (!stmt_region.isEmpty()) self.current_region = stmt_region;
-
+        const source_context = try self.enterStmtSource(stmt_id);
+        defer source_context.restore(self);
         const stmt = self.pass.program.getStmt(stmt_id);
         var bindings: BindingChain = .{};
         const cloned: ?Ast.Stmt = switch (stmt) {
@@ -14428,6 +14458,131 @@ test "SpecConstr keeps a transparent recursive anchor and its initializer bindin
     defer scope.bound.deinit();
     defer scope.joins.deinit();
     try scope.walkExpr(wrapped);
+}
+
+test "SpecConstr clones nested block prefixes once before retained statements" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const literal = try program.addStringLiteral("value");
+    const leaf = try program.addExpr(.{ .ty = str_ty, .data = .{ .str_lit = literal } });
+    const depth = 8;
+    var body = leaf;
+    for (0..depth) |index| {
+        const local = try program.addLocal(@enumFromInt(index + 1), str_ty);
+        const pattern = try program.addPat(.{ .ty = str_ty, .data = .{ .bind = local } });
+        const bind = try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = body } });
+        const observe = try program.addStmt(.{ .dbg = leaf });
+        const result = try program.addExpr(.{ .ty = str_ty, .data = .{ .local = local } });
+        body = try program.addExpr(.{ .ty = str_ty, .data = .{ .block = .{
+            .statements = try program.addStmtSpan(&.{ bind, observe }),
+            .final_expr = result,
+        } } });
+    }
+    program.next_symbol = depth + 1;
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const before = program.exprCount();
+    _ = try cloner.cloneExpr(body);
+
+    // A retained statement after each prefix used to reject a speculative
+    // block clone and re-clone that prefix, multiplying work at every nesting
+    // level. Bound total construction, not merely the small final body.
+    try std.testing.expect(program.exprCount() - before <= 12 * depth);
+}
+
+test "SpecConstr keeps flat block bindings out of continuation templates" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const literal = try program.addStringLiteral("value");
+    var value = try program.addExpr(.{ .ty = str_ty, .data = .{ .str_lit = literal } });
+    var statements = std.ArrayList(Ast.StmtId).empty;
+    defer statements.deinit(allocator);
+    const binding_count = 1024;
+    for (0..binding_count) |index| {
+        const local = try program.addLocal(@enumFromInt(index + 1), str_ty);
+        const pattern = try program.addPat(.{ .ty = str_ty, .data = .{ .bind = local } });
+        try statements.append(allocator, try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = value } }));
+        value = try program.addExpr(.{ .ty = str_ty, .data = .{ .local = local } });
+    }
+    const body = try program.addExpr(.{ .ty = str_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(statements.items),
+        .final_expr = value,
+    } } });
+    program.next_symbol = binding_count + 1;
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const before = program.exprCount();
+    _ = try cloner.cloneExpr(body);
+    // Ordinary sequential bindings are processed iteratively. Only a
+    // branch-built value needs a source template for its shared continuation.
+    try std.testing.expectEqual(@as(usize, 0), cloner.clone_templates.items.len);
+    try std.testing.expect(program.exprCount() - before <= 4 * binding_count);
+}
+
+test "SpecConstr residual block destructures preserve statement source context" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const present = try program.names.internTagLabel("Present");
+    const missing = try program.names.internTagLabel("Missing");
+    const tags = try program.types.addTagVariants(&program.names, &.{
+        .{ .name = present, .checked_name = present, .payloads = try program.types.addSpan(&.{str_ty}) },
+        .{ .name = missing, .checked_name = missing, .payloads = .empty() },
+    });
+    const tagged_ty = try program.types.add(.{ .tag_union = tags });
+    const input = try program.addLocal(@enumFromInt(1), tagged_ty);
+    const payload = try program.addLocal(@enumFromInt(2), str_ty);
+    const input_expr = try program.addExpr(.{ .ty = tagged_ty, .data = .{ .local = input } });
+    const result = try program.addExpr(.{ .ty = str_ty, .data = .{ .local = payload } });
+    const payload_pat = try program.addPat(.{ .ty = str_ty, .data = .{ .bind = payload } });
+    const pattern = try program.addPat(.{ .ty = tagged_ty, .data = .{ .tag = .{
+        .name = present,
+        .payloads = try program.addPatSpan(&.{payload_pat}),
+    } } });
+    const stmt_loc: SourceLoc = .{ .file = 1, .line = 3, .column = 5 };
+    const stmt_region = Region.from_raw_offsets(20, 40);
+    try program.comptime_sites.append(allocator, .{ .kind = .destructure, .region = stmt_region });
+    const site: Ast.ComptimeSiteId = @enumFromInt(0);
+    program.current_loc = stmt_loc;
+    program.current_region = stmt_region;
+    const binding = try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = input_expr, .comptime_site = site } });
+    program.current_loc = .{ .file = 1, .line = 1, .column = 1 };
+    program.current_region = Region.from_raw_offsets(0, 80);
+    const body = try program.addExpr(.{ .ty = str_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{binding}),
+        .final_expr = result,
+    } } });
+    program.next_symbol = 3;
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const cloned = program.getExpr(try cloner.cloneExpr(body)).data.block;
+    try std.testing.expectEqual(@as(u32, 1), cloned.statements.len);
+    const cloned_stmt = GuardedList.at(program.stmtSpan(cloned.statements), 0);
+    try std.testing.expectEqualDeep(stmt_loc, program.stmtLoc(cloned_stmt));
+    try std.testing.expectEqualDeep(stmt_region, program.stmtRegion(cloned_stmt));
+    const cloned_bind = program.getStmt(cloned_stmt).let_;
+    try std.testing.expectEqual(site, cloned_bind.comptime_site.?);
+    const cloned_tag = program.getPat(cloned_bind.pat).data.tag;
+    const cloned_payload = program.getPat(GuardedList.at(program.patSpan(cloned_tag.payloads), 0)).data.bind;
+    try std.testing.expect(cloned_payload != payload);
+    try std.testing.expectEqual(cloned_payload, program.getExpr(cloned.final_expr).data.local);
 }
 
 test "SpecConstr accepts a transparent alias record update base" {
