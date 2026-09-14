@@ -1584,8 +1584,20 @@ const Lowerer = struct {
             },
             .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, next_depth),
             .fn_ref => |fn_ref| {
-                const fn_id = try self.ensureOwnFnSpec(fn_ref.fn_id, .finite);
-                _ = try self.procPlaceholder(fn_id);
+                const content = self.types.get(expr_ty);
+                const variants = self.types.fnVariantSpan(switch (content) {
+                    .callable => |variants| variants,
+                    .erased_fn => |erased| erased.members,
+                    else => Common.invariant("function value preparation received a non-callable type"),
+                });
+                const source = self.solved.lifted.getFn(fn_ref.fn_id).symbol;
+                for (0..variants.len) |variant_index| {
+                    const variant = GuardedList.at(variants, variant_index);
+                    if (variant.source != source) continue;
+                    if (variant.capture_ty) |capture_ty| _ = try self.layoutOfType(capture_ty);
+                    _ = try self.procPlaceholder(variant.target);
+                    break;
+                } else Common.invariant("callable preparation did not contain the referenced function");
                 for (view.captureOperandSpan(fn_ref.captures)) |capture| {
                     try self.prepareWorkerBodyCalls(capture.value, next_depth);
                 }
