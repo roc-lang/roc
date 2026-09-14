@@ -492,6 +492,7 @@ fn compileWithCodeGen(
 
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
+    codegen.finishImage() catch return CompilationError.OutOfMemory;
     const code = codegen.getGeneratedCode();
     const relocations = codegen.getRelocations();
 
@@ -601,7 +602,7 @@ fn resolveObjectSymbols(
         .linked_function => |function| {
             symbols[@intFromEnum(function.symbol)].is_function = true;
         },
-        .linked_data, .local_data, .jmp_to_return => {},
+        .linked_data, .local_data, .jmp_to_return, .retired => {},
     };
     for (definitions) |definition| {
         const symbol = &symbols[@intFromEnum(definition.id)];

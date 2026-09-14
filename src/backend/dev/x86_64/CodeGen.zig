@@ -656,7 +656,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Patch a jump target
-        pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) void {
+        pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const offset: i32 = @intCast(@as(i64, @intCast(target_loc)) - @as(i64, @intCast(patch_loc + 4)));
             const bytes: [4]u8 = @bitCast(offset);
             @memcpy(self.emit.buf.items[patch_loc..][0..4], &bytes);

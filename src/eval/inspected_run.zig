@@ -423,6 +423,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             arg_layouts,
             proc.ret_layout,
         );
+        try codegen.finishImage();
         var exec_mem = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
             codegen.getGeneratedCode(),
             entrypoint.offset,

@@ -1343,6 +1343,7 @@ fn lowerDevEvalAndFinishRoots(
     }
     defer if (boxy_global_installed) boxy_abi.deinitGlobal();
 
+    try codegen.finishImage();
     var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
     defer executable.deinit();
 
