@@ -79,6 +79,9 @@ pub const BodyPrefix = struct {
 pub const BodyShard = struct {
     store: *const Self,
     prefix: BodyPrefix,
+    /// Destination base for the shard's separately owned erased-call layouts.
+    /// Zero preserves spans for callers already using the destination domain.
+    erased_arg_layout_base: u32 = 0,
 };
 
 /// Base indices used to translate references from a private shard to the
@@ -100,6 +103,7 @@ pub const BodyRelocation = struct {
     string_bytes: u32,
     join_point_id_base: u32,
     relocate_join_point_ids: bool,
+    erased_arg_layout_base: u32 = 0,
 
     pub fn local(self: BodyRelocation, prefix: BodyPrefix, id: LocalId) LocalId {
         return relocateBodyValue(LocalId, id, prefix, self);
@@ -310,6 +314,9 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         inline for (type_info.@"struct".fields) |field| {
             @field(result, field.name) = relocateBodyValue(field.type, @field(value, field.name), prefix, bases);
         }
+        if (T == @FieldType(CFStmt, "assign_call_erased")) {
+            if (result.arg_layouts.len != 0) result.arg_layouts.start += bases.erased_arg_layout_base;
+        }
         return result;
     }
     if (comptime std.meta.activeTag(type_info) == .@"union") {
@@ -371,6 +378,7 @@ pub fn appendBodyShard(
         .string_bytes = self.ownStringByteCount(),
         .join_point_id_base = join_point_id_base orelse 0,
         .relocate_join_point_ids = join_point_id_base != null,
+        .erased_arg_layout_base = shard.erased_arg_layout_base,
     };
     const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
     const local_len = source.locals.len() - source_prefix.locals;
@@ -1889,6 +1897,42 @@ test "source file table stores display and package-qualified names per entry" {
     try std.testing.expectEqualStrings("app.Cfg", store.sourceFileQualifiedName(0));
     try std.testing.expectEqualStrings("pf.Cfg", store.sourceFileQualifiedName(1));
     try std.testing.expectEqualStrings("app.Utils", store.sourceFileQualifiedName(2));
+}
+
+test "body shard relocates erased-call layouts into the program table" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    var coordinator = Self.init(allocator);
+    defer coordinator.deinit();
+    const closure = try coordinator.addLocal(.{ .layout_idx = .u64 });
+    var worker = try coordinator.cloneForBodyShard(allocator);
+    defer worker.deinit();
+    const prefix = worker.captureBodyPrefix();
+    const arg = try worker.addLocal(.{ .layout_idx = .u64 });
+    const result = try worker.addLocal(.{ .layout_idx = .u64 });
+    const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } });
+    const call = try worker.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = try worker.addLocalSpan(&.{arg}),
+        .arg_layouts = .{ .start = 1, .len = 1 },
+        .arg_plan = try worker.internErasedCallArgsPlan(&layouts, &.{.u64}),
+        .next = ret,
+    } });
+    var runtime_layouts: std.ArrayList(layout.Idx) = .empty;
+    defer runtime_layouts.deinit(allocator);
+    try runtime_layouts.appendSlice(allocator, &.{ .u8, .u16 });
+    var shard = try worker.captureBodyShard(prefix);
+    shard.erased_arg_layout_base = @intCast(runtime_layouts.items.len);
+    try runtime_layouts.appendSlice(allocator, &.{ .u32, .u64 });
+    const appended = try coordinator.appendBodyShard(shard, call, .empty(), null);
+    const relocated = coordinator.getCFStmt(appended.root.?).assign_call_erased;
+    try std.testing.expectEqual(@as(u32, 3), relocated.arg_layouts.start);
+    try std.testing.expectEqual(@as(u32, 1), relocated.arg_layouts.len);
+    try std.testing.expectEqual(layout.Idx.u64, runtime_layouts.items[relocated.arg_layouts.start]);
+    try std.testing.expectEqual(appended.relocation.local(prefix, result), relocated.target);
+    try std.testing.expectEqual(closure, relocated.closure);
 }
 
 test "body shard relocates producer tail-call links" {
