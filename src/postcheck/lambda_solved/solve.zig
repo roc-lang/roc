@@ -760,6 +760,10 @@ const Solver = struct {
                 const children = self.lifted.exprSpan(if (expr.data == .tuple) expr.data.tuple else expr.data.tag.payloads);
                 return if (cursor < children.len) .{ .expr = .{ .id = children[cursor] } } else null;
             },
+            .inline_expects_enabled => {},
+            .comptime_value => |value| {
+                return if (cursor == 0) .{ .expr = .{ .id = value.initializer, .generated_backing = true } } else null;
+            },
             .static_data_candidate, .nominal => {
                 const child = if (expr.data == .nominal) expr.data.nominal else expr.data.static_data_candidate.runtime_expr;
                 return if (cursor == 0) .{ .expr = .{ .id = child, .generated_backing = true } } else null;
@@ -778,6 +782,10 @@ const Solver = struct {
         switch (expr.data) {
             .local => |local| try self.unify(expected, self.localTy(local)),
             .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .comptime_exhaustiveness_failed, .@"unreachable" => {},
+            .inline_expects_enabled => {},
+            .comptime_value => |value| {
+                if (cursor == 0) return .{ .expr = .{ .id = value.initializer, .expected = expected } };
+            },
             .static_data_candidate => |candidate| {
                 if (cursor == 0) return .{ .expr = .{ .id = candidate.runtime_expr, .expected = expected } };
             },
@@ -857,10 +865,6 @@ const Solver = struct {
                         if (cursor == 0) try self.unify(expected, func.ret);
                         if (cursor < args.len) return .{ .expr = .{ .id = args[cursor], .expected = self.program.types.spanItem(func.args, cursor) } };
                         return try self.captureRequest(callee, call.captures, cursor - args.len);
-                    },
-                    .imported => {
-                        if (cursor < args.len) return .{ .expr = .{ .id = args[cursor] } };
-                        if (call.captures.len != 0) Common.invariant("imported direct call carried local capture operands");
                     },
                 }
             },
@@ -1203,7 +1207,6 @@ const Solver = struct {
         else if (tag == .call_proc)
             switch (Lifted.directCallee(expr.data.call_proc)) {
                 .local => |callee| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)])).ret,
-                .imported => try self.lowerTypeFresh(expr.ty),
             }
         else
             try self.lowerTypeFresh(expr.ty);
@@ -3607,7 +3610,6 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
         allocator,
         names.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs

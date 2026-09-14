@@ -81,6 +81,7 @@ test "issue 10724: dispatch whose argument is a canonicalization error reports i
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(coord.hasUserErrors());
     var found_empty_tuple = false;

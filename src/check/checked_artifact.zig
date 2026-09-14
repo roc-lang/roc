@@ -682,6 +682,8 @@ pub const PublishInputs = struct {
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     hoisted_roots: []const hoist_roots.SelectedHoistedRoot = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
+    /// Prepared metadata may serve frontend imports; evaluation and cache publication wait.
+    evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
 };
@@ -689,6 +691,7 @@ pub const PublishInputs = struct {
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
     pub const Error = Allocator.Error || std.Thread.SpawnError || error{
+        RuntimeError,
         EmptyCode,
         MmapFailed,
         MprotectFailed,
@@ -30941,7 +30944,56 @@ pub const DispatchEvidenceFailure = struct {
     method: ?canonical.MethodNameId = null,
 };
 
-/// Public `CheckedModuleArtifact` declaration.
+/// Ordered compile-time debug observations owned by checked publication and
+/// replayed from cache without executing their roots again.
+pub const CompileTimeDebugStore = struct {
+    pub const Entry = extern struct { root: ComptimeRootId, message_start: u32, message_len: u32 };
+    pub const Input = struct { root: ComptimeRootId, message: []const u8 };
+    entries: []const Entry = &.{},
+    bytes: []const u8 = &.{},
+
+    pub const Serialized = extern struct {
+        entries: SerializedSlice(Entry) = .{},
+        bytes: SerializedSlice(u8) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeDebugStore, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub fn init(allocator: Allocator, inputs: []const Input) Allocator.Error!CompileTimeDebugStore {
+        var byte_count: usize = 0;
+        for (inputs) |input| byte_count += input.message.len;
+        const entries = try allocator.alloc(Entry, inputs.len);
+        errdefer allocator.free(entries);
+        const bytes = try allocator.alloc(u8, byte_count);
+        var offset: usize = 0;
+        for (inputs, entries) |input, *entry| {
+            entry.* = .{ .root = input.root, .message_start = @intCast(offset), .message_len = @intCast(input.message.len) };
+            @memcpy(bytes[offset..][0..input.message.len], input.message);
+            offset += input.message.len;
+        }
+        return .{ .entries = entries, .bytes = bytes };
+    }
+
+    pub fn validate(self: CompileTimeDebugStore, root_count: usize) error{CorruptArtifact}!void {
+        for (self.entries) |entry| {
+            if (@intFromEnum(entry.root) >= root_count or entry.message_start > self.bytes.len or
+                entry.message_len > self.bytes.len - entry.message_start) return error.CorruptArtifact;
+        }
+    }
+
+    pub fn message(self: CompileTimeDebugStore, entry: Entry) []const u8 {
+        return self.bytes[entry.message_start..][0..entry.message_len];
+    }
+
+    pub fn deinit(self: *CompileTimeDebugStore, allocator: Allocator) void {
+        allocator.free(self.entries);
+        allocator.free(self.bytes);
+        self.* = .{};
+    }
+};
+
+/// Checked module publication, including typed stores and compile-time observations.
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
     canonical_names: canonical.CanonicalNameStore,
@@ -30984,6 +31036,9 @@ pub const CheckedModuleArtifact = struct {
     hoisted_constants: HoistedConstTable,
     const_templates: ConstTemplateTable,
     const_store: ConstStore,
+    compile_time_debug: CompileTimeDebugStore = .{},
+    /// Process-local publication state; cache entries always contain finalized output.
+    evaluation_state: enum { prepared, finalized } = .finalized,
     /// 16-byte-aligned buffer backing a relocated (frozen) artifact loaded from
     /// the disk cache or the compiler's static builtin data. When set, every
     /// sub-store's slices alias this buffer, so `deinit` handles this buffer plus
@@ -31124,11 +31179,13 @@ pub const CheckedModuleArtifact = struct {
         hoisted_constants: HoistedConstTable.Serialized,
         const_templates: ConstTemplateTable.Serialized,
         const_store: ConstStore.Serialized,
+        compile_time_debug: CompileTimeDebugStore.Serialized,
 
         comptime {
             const owner_only_fields = [_][]const u8{
                 "module_env", // Written as the checked-cache env blob and injected during artifact deserialize.
                 "serialized_backing", // Runtime ownership for relocated cache/static bytes, not checked data.
+                "evaluation_state", // Process-local preparation state; cached output is finalized.
                 "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
             };
             collections.serde_validation.assertBidirectionalFieldSet(
@@ -31146,8 +31203,9 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size. The optional-field body tables
             // add three pointers beyond the current-main count, and the
-            // record-unset label pool one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 218);
+            // record-unset label pool one more. Ordered debug entries and their
+            // byte pool add two explicit relocation pointers.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 220);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -31159,6 +31217,7 @@ pub const CheckedModuleArtifact = struct {
             gpa: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!void {
+            if (artifact.evaluation_state != .finalized) checkedArtifactInvariant("cannot serialize prepared checked module", .{});
             self.key = artifact.key;
             self.module_identity = ModuleIdentitySerialized.encode(artifact.module_identity);
             try self.direct_import_artifact_keys.serialize(artifact.direct_import_artifact_keys, gpa, writer);
@@ -31199,6 +31258,7 @@ pub const CheckedModuleArtifact = struct {
             try self.hoisted_constants.serialize(&artifact.hoisted_constants, gpa, writer);
             try self.const_templates.serialize(&artifact.const_templates, gpa, writer);
             try self.const_store.serialize(&artifact.const_store, gpa, writer);
+            try self.compile_time_debug.serialize(&artifact.compile_time_debug, gpa, writer);
         }
 
         /// Materialize a frozen artifact from its relocated `backing` buffer (whose
@@ -31218,6 +31278,10 @@ pub const CheckedModuleArtifact = struct {
         pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
             if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
             try artifact_serialize.validateSerialized(Serialized, self, backing_len);
+            const base_addr = @intFromPtr(self);
+            const observations = self.compile_time_debug.deserialize(base_addr);
+            const roots = self.compile_time_roots.deserialize(base_addr);
+            try observations.validate(roots.roots.len);
         }
 
         pub fn deserialize(
@@ -31290,6 +31354,7 @@ pub const CheckedModuleArtifact = struct {
                 .hoisted_constants = self.hoisted_constants.deserialize(base_addr),
                 .const_templates = self.const_templates.deserialize(base_addr),
                 .const_store = self.const_store.deserialize(base_addr, gpa),
+                .compile_time_debug = self.compile_time_debug.deserialize(base_addr),
             };
         }
     };
@@ -31390,7 +31455,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 96 uses 128-bit type and evidence content hashes.
     // Version 97 stores the builtin-identity-to-declaration index.
     // Version 98 uses 256-bit SHA-256 type and evidence content hashes.
-    const serialized_layout_version: u32 = 98;
+    // Version 99 stores packed fixed-product lists with an optional scalar
+    // encoding and their padding-free product width.
+    const serialized_layout_version: u32 = 99;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -31478,6 +31545,7 @@ pub const CheckedModuleArtifact = struct {
             self.* = undefined;
             return;
         }
+        self.compile_time_debug.deinit(allocator);
         self.const_store.deinit();
         self.const_templates.deinit(allocator);
         self.hoisted_constants.deinit(allocator);
@@ -32487,6 +32555,8 @@ pub const CheckedModuleArtifact = struct {
     }
 
     pub fn verifyComplete(self: *const CheckedModuleArtifact) Allocator.Error!void {
+        if (self.evaluation_state != .finalized) checkedArtifactInvariant("complete checked module still awaits evaluation", .{});
+        self.compile_time_debug.validate(self.compile_time_roots.roots.len) catch checkedArtifactInvariant("compile-time debug observation has an invalid root or message range", .{});
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
@@ -35627,19 +35697,23 @@ pub fn publishFromTypedModule(
         .hoisted_constants = hoisted_constants,
         .const_templates = const_templates,
         .const_store = checked_const_store,
+        .evaluation_state = .prepared,
     };
     checked_const_store = ConstStore.init(allocator);
     errdefer artifact.const_store.deinit();
 
-    try inputs.compile_time_finalizer.run(
-        allocator,
-        &artifact,
-        inputs.imports,
-        inputs.available_artifacts,
-        inputs.relation_artifacts,
-        inputs.problem_store,
-    );
-    try artifact.verifyComplete();
+    if (inputs.evaluation_phase == .immediate) {
+        try inputs.compile_time_finalizer.run(
+            allocator,
+            &artifact,
+            inputs.imports,
+            inputs.available_artifacts,
+            inputs.relation_artifacts,
+            inputs.problem_store,
+        );
+        artifact.evaluation_state = .finalized;
+        try artifact.verifyComplete();
+    }
     return artifact;
 }
 
@@ -38003,11 +38077,12 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // Tripwire: an *accidental* change to `CheckedModuleArtifact.Serialized`'s layout
     // would make a previously-baked builtin blob / cached artifact relocate into a
     // mismatched struct. It flips this hash and fails here. On an *intentional* layout
-    // change, bump `serialized_layout_version` and replace the golden bytes below with
-    // the ones this assertion prints.
+    // change, replace the golden bytes below with the assertion output. Bump
+    // `serialized_layout_version` only for semantic changes the structural hash
+    // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x9F, 0xF4, 0x6E, 0x5A, 0x33, 0xF0, 0xC6, 0x6A, 0x75, 0x42, 0x18, 0x20, 0x78, 0xF9, 0x5B, 0x48,
-        0x48, 0x71, 0xE6, 0x09, 0x6F, 0x40, 0xF8, 0x78, 0x15, 0x06, 0xDB, 0x19, 0x25, 0xC4, 0x7A, 0xE0,
+        0x81, 0xB3, 0xAC, 0xCC, 0xC6, 0x3B, 0xC0, 0x50, 0xD9, 0xF6, 0xD0, 0x36, 0x57, 0xD7, 0x27, 0x4C,
+        0x5D, 0x81, 0xB1, 0xD3, 0xDA, 0x1F, 0x15, 0x23, 0x62, 0xDA, 0x49, 0xF3, 0x88, 0x32, 0x65, 0xAF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -38228,4 +38303,28 @@ test "issue 11128 source scheme publication hashes each source root once" {
     }
     try std.testing.expectEqual(digests, writer.test_digests);
     try std.testing.expectEqual(allocations, counter.allocated_bytes);
+}
+
+test "compile-time debug store validates root identities and message ranges" {
+    const allocator = std.testing.allocator;
+    const messages = [_][]const u8{ "first", "second" };
+    var inputs: [messages.len]CompileTimeDebugStore.Input = undefined;
+    for (messages, &inputs, 0..) |message, *input, index| {
+        input.* = .{ .root = @enumFromInt(index), .message = message };
+    }
+    var observations = try CompileTimeDebugStore.init(allocator, &inputs);
+    defer observations.deinit(allocator);
+    try observations.validate(2);
+    try std.testing.expectEqualStrings("second", observations.message(observations.entries[1]));
+    try std.testing.expectError(error.CorruptArtifact, observations.validate(1));
+    const malformed: CompileTimeDebugStore = .{
+        .entries = &.{.{ .root = observations.entries[0].root, .message_start = 2, .message_len = std.math.maxInt(u32) }},
+        .bytes = "abc",
+    };
+    try std.testing.expectError(error.CorruptArtifact, malformed.validate(1));
+    const outside: CompileTimeDebugStore = .{
+        .entries = &.{.{ .root = observations.entries[0].root, .message_start = 4, .message_len = 0 }},
+        .bytes = "abc",
+    };
+    try std.testing.expectError(error.CorruptArtifact, outside.validate(1));
 }

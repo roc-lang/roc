@@ -265,12 +265,13 @@ pub const GenerationMode = enum {
 
 /// Compiler-internal callbacks emitted only for native compile-time evaluation.
 pub const ComptimeHooks = struct {
+    ensure_static_value: *const fn (*RocOps, u32) callconv(.c) void,
     branch_taken: *const fn (*RocOps, u32, u32) callconv(.c) void,
     exhaustiveness_failed: *const fn (*RocOps, u32) callconv(.c) void,
-    /// (roc_ops, region start, region end, source file, line, column): the
+    /// (roc_ops, region start, region end, source file, line, column, statement): the
     /// statement's resolved location rides along with its region so the host
     /// knows which module's source the byte offsets belong to.
-    failure_region: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
+    failure_region: *const fn (*RocOps, u32, u32, u32, u32, u32, u32) callconv(.c) void,
     call_enter: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
     call_exit: *const fn (*RocOps) callconv(.c) void,
 };
@@ -840,6 +841,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compile-time execution normalizes every produced NaN before it can
         /// enter static data. Ordinary runtime code preserves target NaN bits.
         float_nan_mode: builtins.float_bits.NanMode,
+        /// Explicit execution-environment policy for shared compile-time LIR.
+        dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
         /// Borrowed producer declarations and cached IDs for internal static roots.
         static_data_symbols: collections.DenseMap(lir.LIR.StaticDataId, StaticDataSymbol),
         literal_symbols: collections.DenseMap(u32, SymbolTable.Id),
@@ -7963,6 +7966,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (narrowEnum(HasherOp, ll.op)) {
                 .dict_pseudo_seed => {
                     if (args.len != 0) unreachable;
+                    if (self.dict_seed_mode == .comptime_zero) return .{ .immediate_i64 = 0 };
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.dict_pseudo_seed));
                     return try self.scalarRetReg();
@@ -20560,6 +20564,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.generateBoxyDictProcThunks();
         }
 
+        /// Compile the complete demand list produced by LIR reachability.
+        /// Original store ids are retained, so a shared union program remains
+        /// available for a later consumer with its own machine-code policy.
+        pub fn compileSelectedProcSpecs(self: *Self, demand: []const lir.LIR.LirProcSpecId) Allocator.Error!void {
+            self.assertImageOpen();
+            for (demand) |proc_id| {
+                const proc = self.store.getProcSpec(proc_id);
+                std.debug.assert(!proc.is_static_initializer);
+                std.debug.assert(self.proc_registry.get(@intFromEnum(proc_id)) == null);
+                try self.proc_registry.put(@intFromEnum(proc_id), .{
+                    .id = proc_id,
+                    .code_start = unresolved_proc_code_start,
+                    .code_end = 0,
+                    .name = proc.name,
+                    .args = proc.args,
+                });
+            }
+            for (demand) |proc_id| {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.maybeEmitBranchIsland();
+                    try self.codegen.compactBranchSites();
+                }
+                try self.compileProcSpec(proc_id, self.store.getProcSpec(proc_id));
+            }
+            try self.patchPendingCalls();
+            try self.patchPendingProcAddrs();
+            try self.generateBoxyDictProcThunks();
+        }
+
         /// Generate the exact dictionary/inspect worker thunks named by LIR.
         fn generateBoxyDictProcThunks(self: *Self) Allocator.Error!void {
             for (self.boxy_worker_procs) |proc_id| {
@@ -22640,7 +22673,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .boxy_dynamic_frac_literal => |lit| try self.generateBoxyDynamicFracLiteral(assign.target, lit),
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
                                 .null_ptr => .{ .immediate_i64 = 0 },
-                                .static_data => |id| try self.generateStaticDataLiteral(id, self.localLayout(assign.target)),
+                                .static_data => |id| blk: {
+                                    if (self.comptime_hooks) |hooks| {
+                                        try self.spillAllVectorLocals();
+                                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                                        try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+                                        try builder.addImmArg(@intCast(@intFromEnum(id)));
+                                        try builder.call(@intFromPtr(hooks.ensure_static_value));
+                                    }
+                                    break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
+                                },
                                 .proc_ref => |proc_id| blk: {
                                     const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
                                     const reg = try self.allocTempGeneral();
@@ -23891,7 +23933,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (bytes.len == 0) {
                 try self.codegen.emitLoadImm(ptr_reg, 0);
                 try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+                try self.codegen.emitLoadImm(ptr_reg, literal.len);
                 try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                try self.codegen.emitLoadImm(ptr_reg, @as(i64, literal.len) << 1);
                 try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
             } else {
                 switch (self.generation_mode) {
@@ -24164,7 +24208,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stmt_id = self.current_stmt_id orelse return;
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const region = self.store.stmtRegion(stmt_id);
-            if (region.isEmpty()) return;
             const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -24174,6 +24217,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intCast(loc.file));
             try builder.addImmArg(@intCast(loc.line));
             try builder.addImmArg(@intCast(loc.column));
+            try builder.addImmArg(@intCast(@intFromEnum(stmt_id)));
             try builder.call(@intFromPtr(hooks.failure_region));
         }
 
@@ -27606,6 +27650,10 @@ test "symbol producer caches reuse identities and reset with generated code" {
     var store = LirStore.init(allocator);
     defer store.deinit();
     const literal = try store.insertString("a readonly literal with more than twenty three bytes");
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } });
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = .empty(), .body = body, .ret_layout = .str });
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
@@ -27639,4 +27687,56 @@ test "symbol producer caches reuse identities and reset with generated code" {
         const literal_symbol = try codegen.staticStringSymbol(literal);
         try std.testing.expectEqualStrings(strings.find(literal).?.symbol_name, codegen.getSymbolNames()[@intFromEnum(literal_symbol)]);
     }
+}
+
+test "dev explicit procedure demand leaves runtime-only body uncompiled" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    const runtime = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 99, .layout_idx = .i64 } }, .i64);
+    const compile_time = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, roc_target_mod.host_cpu.level());
+    defer codegen.deinit();
+    try codegen.compileSelectedProcSpecs(&.{compile_time});
+    try std.testing.expect(codegen.compiledProcSymbol(runtime) == null);
+    try std.testing.expect(codegen.compiledProcSymbol(compile_time) != null);
+    try std.testing.expectEqual(@as(usize, 2), store.procSpecCount());
+}
+
+test "branch location checkpoints restore only changed bindings in a wide procedure" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    defer codegen.deinit();
+    for (0..4096) |index| try codegen.setLocalLocation(@intCast(index), .{ .immediate_i64 = @intCast(index) });
+    const outer = try codegen.captureStmtEnv();
+    try std.testing.expectEqual(outer.undo_mark, codegen.local_location_undo.items.len);
+    try codegen.setLocalLocation(7, .{ .immediate_i64 = 100 });
+    try codegen.setLocalLocation(5000, .{ .immediate_i64 = 200 });
+    {
+        const inner = try codegen.captureStmtEnv();
+        try codegen.setLocalLocation(7, .{ .immediate_i64 = 300 });
+        try codegen.setLocalLocation(6000, .{ .immediate_i64 = 400 });
+        try std.testing.expectEqual(outer.undo_mark + 4, codegen.local_location_undo.items.len);
+        codegen.restoreStmtEnv(&inner);
+        try std.testing.expectEqual(@as(i64, 100), codegen.local_locations.get(7).?.immediate_i64);
+        try std.testing.expect(codegen.local_locations.get(6000) == null);
+        try std.testing.expectEqual(outer.undo_mark + 2, codegen.local_location_undo.items.len);
+    }
+    codegen.restoreStmtEnv(&outer);
+    try std.testing.expectEqual(@as(i64, 7), codegen.local_locations.get(7).?.immediate_i64);
+    try std.testing.expect(codegen.local_locations.get(5000) == null);
+    try std.testing.expectEqual(@as(usize, 4096), codegen.local_locations.count());
+    try std.testing.expectEqual(outer.undo_mark, codegen.local_location_undo.items.len);
+    // A sibling begins at the same exact environment without scanning it.
+    try codegen.setLocalLocation(8, .{ .immediate_i64 = 500 });
+    codegen.restoreStmtEnv(&outer);
+    try std.testing.expectEqual(@as(i64, 8), codegen.local_locations.get(8).?.immediate_i64);
 }
