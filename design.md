@@ -7785,19 +7785,33 @@ lowering wall phases directly rather than projecting Monotype categories onto
 work it does not perform.
 
 Solved-to-LIR lowering uses the same ownership rule at a narrower boundary.
-Only closed procedure bodies whose syntax is proven body-local enter an
-executor batch. Each callback reads a frozen coordinator prefix and writes a
-private LIR store suffix; calls, captures, compile-time sites, static data,
-dynamic inline scopes, and other globally interned state remain serial
-barriers. Source local names are returned with the suffix and interned by the
-coordinator, preserving serial string identity without making the string store
-concurrent. After the full batch returns, the coordinator appends the suffixes
-in function-worklist order and relocates every body-local statement, local,
-span, branch, join, pattern, and metadata reference. This keeps procedure and
-store identity independent of completion order while allowing the supported
-body traversal itself to run without locks. Widening the parallel subset
-requires a corresponding immutable or shard-owned boundary for each newly
-admitted global side table, not ad hoc worker mutation.
+Runtime procedure bodies, including finite and erased callable ABIs, enter
+an executor batch after coordinator preflight closes their representation
+dependencies. Preparation follows explicit expression, statement, pattern,
+local, callable-signature, and selected inline-body edges. Visited identity
+sets bound this work by the graph, not a syntax-depth cutoff. A callable's
+encoded variants supply its targets and capture types; preparation never
+substitutes an independently inferred finite specialization. Type closure
+includes storage and value types so typed boundaries and projections can use
+their inherited representations without worker-side interning.
+
+Preflight reserves both direct-call ABIs permitted by a body's erased-return
+destination shape. It cannot use the call expression's own type to select one:
+lowering may receive a different expected destination type. The existing affine
+destination-demand proof alone selects reuse during emission. Preparing a
+procedure identity never makes it reachable; only emitted references do.
+
+Each callback reads a frozen coordinator prefix and writes a private LIR store
+suffix. Strings, names, inline scopes, patterns, control-flow tables, erased
+argument plans, loop bindings, and ownership provenance are body-owned.
+Compile-time observation sites and static-initializer requests remain serial
+barriers; hosted procedures have no Roc body. There is no serial replay of an
+admitted body: a missing prepared identity is a compiler invariant violation.
+After the full batch returns, the coordinator appends suffixes and applies
+their reachability discoveries in function-worklist order, relocating every
+body-local reference, including join identities. This keeps procedure and store
+identity independent of worker count and completion order without concurrent
+mutation of coordinator state.
 
 A typed boundary is worker-admissible exactly when its child is
 worker-admissible. Its source and destination types and layouts belong to the

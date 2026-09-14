@@ -98,6 +98,135 @@ test "Solved-LIR finite capturing bodies lower deterministically on workers" {
     try expectSolvedLirCapturingBodyParallelismDeterministicLir();
 }
 
+test "Solved-LIR runtime finite dispatch literals and patterns commit deterministically on workers" {
+    // Runtime arguments keep the selected finite closure and string/list
+    // patterns alive; constant-only initialization would not exercise admission.
+    try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
+        \\choose = |flag, offset| if flag {
+        \\    |value| value + offset
+        \\} else {
+        \\    |value| value * offset
+        \\}
+        \\
+        \\dispatch = |text, count| {
+        \\    adjustment = match text {
+        \\        "worker" => 3.U64
+        \\        "" => 1.U64
+        \\        _ => 2.U64
+        \\    }
+        \\    bytes = if count == 0 Str.to_utf8("serial") else Str.to_utf8("parallel")
+        \\    first = match bytes {
+        \\        [byte, ..] => byte.to_u64()
+        \\        [] => 0.U64
+        \\    }
+        \\    callback = choose(count == 0, adjustment)
+        \\    callback(count) + first
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    text = match args {
+        \\        [first, ..] => first
+        \\        [] => ""
+        \\    }
+        \\    result = dispatch(text, args.len().to_u64())
+        \\    if result == 0 Ok({}) else Err(Exit(1))
+        \\}
+    }, .{}, &.{ .indirect_call, .match, .literal }, null);
+}
+
+test "Solved-LIR runtime loops joins try and crash commit deterministically on workers" {
+    // The early return and nested branch force loop exits and joins. Both the
+    // fallible edge and crash depend on input, rather than a static initializer.
+    try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
+        \\validate : U64 -> Try(U64, [Exit(I8)])
+        \\validate = |limit| if limit == 100 Err(Exit(2)) else Ok(limit)
+        \\
+        \\walk : U64 -> Try(U64, [Exit(I8)])
+        \\walk = |limit| {
+        \\    checked = if limit == 99 {
+        \\        crash "runtime worker crash"
+        \\    } else {
+        \\        validate(limit)?
+        \\    }
+        \\    var $index = 0.U64
+        \\    var $total = 0.U64
+        \\    while $index < checked {
+        \\        if $index == 7 {
+        \\            return Ok($total)
+        \\        } else {
+        \\            increment = if $index == 2 3.U64 else 1.U64
+        \\            $total = $total + increment
+        \\            $index = $index + 1
+        \\        }
+        \\    }
+        \\    Ok($total)
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    match walk(args.len().to_u64()) {
+        \\        Ok(result) => if result == 0 Ok({}) else Err(Exit(1))
+        \\        Err(Exit(code)) => Err(Exit(code))
+        \\    }
+        \\}
+    }, .{}, &.{ .loop, .match, .literal }, null);
+}
+
+test "Solved-LIR runtime nested nominal record and interpolation patterns commit deterministically on workers" {
+    // Nested payloads and both ends of the string pattern depend on host input.
+    // Wrappers-only inlining preserves the worker-owned match procedures.
+    try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
+        \\Envelope := [Message({ label: Str, payload: [Count(U64), Missing] }), Empty]
+        \\
+        \\decode : Envelope -> U64
+        \\decode = |envelope| match envelope {
+        \\    Message({ label: "prefix${capture}suffix", payload: Count(count) }) => count + capture.to_utf8().len().to_u64()
+        \\    Message({ label: "prefix${capture}", payload: Missing }) => capture.to_utf8().len().to_u64()
+        \\    Message({ label: _, payload: Count(count) }) => count
+        \\    Message({ label: _, payload: Missing }) => 1
+        \\    Empty => 0
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    label = match args {
+        \\        [first, ..] => first
+        \\        [] => ""
+        \\    }
+        \\    count = args.len().to_u64()
+        \\    payload = if count == 1 Missing else Count(count)
+        \\    envelope : Envelope
+        \\    envelope = if count == 0 Empty else Message({ label, payload })
+        \\    result = decode(envelope)
+        \\    if result == 0 Ok({}) else Err(Exit(1))
+        \\}
+    }, .{ .inline_mode = .wrappers }, &.{ .match, .literal }, null);
+}
+
+test "Solved-LIR runtime recursive local closure commits deterministically on workers" {
+    // The recursive closure captures a runtime offset and escapes through a
+    // finite choice, retaining both its recursive binding and an indirect call.
+    try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
+        \\make_counter = |offset, flag| {
+        \\    count : U64 -> U64
+        \\    count = |remaining| if remaining == 0 offset else count(remaining - 1) + 1
+        \\    if flag count else |remaining| remaining + offset
+        \\}
+        \\
+        \\run = |size| {
+        \\    counter = make_counter(size, size > 1)
+        \\    counter(size)
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    result = run(args.len().to_u64())
+        \\    if result == 0 Ok({}) else Err(Exit(1))
+        \\}
+    }, .{ .inline_mode = .wrappers }, &.{ .indirect_call, .capturing }, null);
+}
+
 test "iterator-producing callees complete in worker-owned specialization drafts" {
     try expectEagerIteratorSpecializationParallelismDeterministicLir(
         \\make_iter : List(U64) -> [Ready(Iter(U64))]
