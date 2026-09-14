@@ -1175,7 +1175,7 @@ pub const InstGraph = struct {
 
     fn removeGeneratedIteratorKey(self: *InstGraph, node: NodeId, key: GeneratedIteratorKey) void {
         var bucket = self.generated_iterator_index.fetchRemove(key).?.value;
-        const position = std.mem.indexOfScalar(NodeId, bucket.items, node).?;
+        const position = std.mem.findScalar(NodeId, bucket.items, node).?;
         _ = bucket.swapRemove(position);
         if (bucket.items.len == 0) {
             bucket.deinit(self.allocator);
@@ -1198,9 +1198,9 @@ pub const InstGraph = struct {
         const key = self.generated_iterator_keys.get(node) orelse return;
         self.removeGeneratedIteratorKey(node, key);
         for (key.args, 0..) |arg, i| {
-            if (std.mem.indexOfScalar(NodeId, key.args[0..i], arg) != null) continue;
+            if (std.mem.findScalar(NodeId, key.args[0..i], arg) != null) continue;
             const uses = self.generated_iterators_by_root.getPtr(arg).?;
-            _ = uses.swapRemove(std.mem.indexOfScalar(NodeId, uses.items, node).?);
+            _ = uses.swapRemove(std.mem.findScalar(NodeId, uses.items, node).?);
         }
         std.debug.assert(self.generated_iterator_keys.remove(node));
     }
@@ -1208,7 +1208,7 @@ pub const InstGraph = struct {
     fn indexGeneratedIterator(self: *InstGraph, node: NodeId, content_value: InstNode) Allocator.Error!void {
         const named = switch (content_value) {
             .named => |named| named,
-            else => {
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {
                 self.unregisterGeneratedIterator(node);
                 return;
             },
@@ -1232,7 +1232,7 @@ pub const InstGraph = struct {
         try self.generated_iterator_keys.put(node, key);
         try self.insertGeneratedIteratorKey(node, key);
         for (args, 0..) |arg, i| {
-            if (std.mem.indexOfScalar(NodeId, args[0..i], arg) != null) continue;
+            if (std.mem.findScalar(NodeId, args[0..i], arg) != null) continue;
             const uses = try self.generated_iterators_by_root.getOrPut(arg);
             if (!uses.found_existing) uses.value_ptr.* = .empty;
             try uses.value_ptr.append(self.allocator, node);
@@ -1248,7 +1248,7 @@ pub const InstGraph = struct {
         for (affected.items) |node| {
             const key = self.generated_iterator_keys.get(node).?;
             self.removeGeneratedIteratorKey(node, key);
-            const already_uses_winner = std.mem.indexOfScalar(NodeId, key.args, winner) != null;
+            const already_uses_winner = std.mem.findScalar(NodeId, key.args, winner) != null;
             for (key.args) |*arg| {
                 if (arg.* == loser) arg.* = winner;
             }
@@ -7101,7 +7101,7 @@ test "issue 11362: generated iterator index releases allocations on failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testGeneratedIteratorIndex, .{});
 }
 
-fn testGeneratedIteratorIndex(gpa: Allocator) !void {
+fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     var types = Type.Store.init(gpa);
     defer types.deinit();
     var name_store = names.NameStore.init(gpa);
@@ -10312,4 +10312,93 @@ test "recursive nominal backing can meet an alias to that nominal" {
     try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     try std.testing.expectEqual(nominal, graph.find(nominal));
     try std.testing.expectEqual(alias, graph.find(alias));
+}
+
+test "issue 11362: iterator-free finalization performs no graph traversal" {
+    var type_store = Type.Store.init(std.testing.allocator);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(std.testing.allocator, &type_store, &name_store);
+    defer graph.destroy();
+    _ = try graph.newNode(.{ .primitive = .str });
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+    try graph.finalizeGeneratedIteratorRepresentations();
+    try graph.finalizeGeneratedIteratorIdentities();
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.union_find_resolutions);
+}
+
+test "issue 11362: generated iterator index follows root unions and producer replacement" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    const module = try name_store.internModuleIdentity(&([_]u8{0x62} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const component = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const backing = try graph.newNode(.empty_record);
+    const public_named: InstNamed = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .def = .{ .module = module, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{ .node = backing, .use = .runtime_layout_only },
+    };
+    const public = try graph.newNode(.{ .named = public_named });
+    var minted = public_named;
+    minted.def.iterator_kind = .list;
+    minted.def.iterator_representation = .minted;
+    minted.args = try graph.arena().dupe(NodeId, &.{ item, component });
+    minted.backing.?.authority = .generated_private;
+    minted.generated_iterator = .{
+        .callable_evidence = null,
+        .public_source = .{
+            .named_type = public_named.named_type,
+            .def = public_named.def,
+            .kind = public_named.kind,
+            .builtin_owner = .iter,
+            .backing = public_named.backing.?,
+            .declared_order = &.{},
+        },
+    };
+    const first = try graph.newNode(.{ .named = minted });
+    const second = try graph.addRecursiveNode(minted, struct {
+        fn fill(named: InstNamed, _: NodeId) Allocator.Error!InstNode {
+            return .{ .named = named };
+        }
+    }.fill);
+    try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
+    try std.testing.expectEqual(@as(u32, 1), graph.generated_iterator_index.count());
+    try std.testing.expect(graph.generated_iterator_nodes > 0);
+    try std.testing.expectEqual(@as(?NodeId, null), graph.findGeneratedIterator(public, .single, &.{component}, null));
+    try std.testing.expectEqual(@as(?NodeId, null), graph.findGeneratedIterator(public, .list, &.{}, null));
+
+    // Arguments are compared by their current class, not their minted id.
+    const resolved = try graph.newNode(.{ .primitive = .str });
+    try graph.unify(component, resolved);
+    try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{resolved}, null).?);
+    try graph.union_(second, first);
+    try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
+
+    // Changing callable evidence moves the live node to a different bucket.
+    minted.generated_iterator.?.callable_evidence = .{ .bytes = @splat(0x62) };
+    try graph.setContent(second, .{ .named = minted });
+    try std.testing.expectEqual(@as(?NodeId, null), graph.findGeneratedIterator(public, .list, &.{component}, null));
+    try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, minted.generated_iterator.?.callable_evidence).?);
+    try std.testing.expectEqual(@as(u32, 1), graph.generated_iterator_index.count());
+
+    // Removing provenance removes membership; permanent request identities live on.
+    graph.registerConstructorEvidenceRequest(second);
+    try graph.registerRequestSourceInterface(second, public);
+    try graph.setContent(second, .{ .named = public_named });
+    try std.testing.expectEqual(@as(u32, 0), graph.generated_iterator_index.count());
+    try std.testing.expect(graph.requestPropagatesConstructorEvidence(second));
+    try std.testing.expectEqual(public, graph.requestSourceInterface(second).?);
+    try std.testing.expect(graph.generated_iterator_nodes > 0);
 }

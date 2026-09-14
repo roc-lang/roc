@@ -34,6 +34,8 @@ pub const GuardedList = @import("GuardedList.zig");
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
+pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
+
 pub const DenseMap = @import("DenseMap.zig").DenseMap;
 pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
 pub const ScopedBitSet = @import("ScopedBitSet.zig");
@@ -147,6 +149,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
+    std.testing.refAllDecls(@import("IndexedStack.zig"));
     std.testing.refAllDecls(@import("ScopedBitSet.zig"));
     std.testing.refAllDecls(@import("RekeyingHashMap.zig"));
 }
