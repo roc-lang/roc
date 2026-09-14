@@ -71,6 +71,7 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         TestUnexpectedResult,
         UnsupportedBuiltinAnnotationOnly,
         UnsupportedHeader,
+        UnsupportedTarget,
         WriteFailed,
     };
 
@@ -691,7 +692,7 @@ test "issue 11376: folded record List.repeat does not grow LIR per element" {
     try std.testing.expectEqual(small, larger);
 }
 
-fn repeatedRecordListLirSize(comptime count: usize) !usize {
+fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!usize {
     const gpa = std.testing.allocator;
     const source = std.fmt.comptimePrint(
         \\app [main!] {{ pf: platform "./.roc_echo_platform/main.roc" }}

@@ -37324,41 +37324,6 @@ fn constListElemType(module: ProcedureModuleView, checked_ty: checked.CheckedTyp
     return nominal.args[0];
 }
 
-/// Decode one element of a packed scalar constant list into the same
-/// `ConstScalar` a `.scalar` child node would have carried. Multi-byte values
-/// use the little-endian encoding recorded by the ConstStore writer; vector
-/// elements are read as their 16-byte value into `u128`, matching how the
-/// writer stores a standalone vector scalar.
-fn packedConstListElementScalar(
-    element: check.ConstStore.ConstPackedScalar,
-    bytes: []const u8,
-) checked.ConstScalar {
-    return switch (element) {
-        .i8 => .{ .i8 = @bitCast(bytes[0]) },
-        .u8 => .{ .u8 = bytes[0] },
-        .i16 => .{ .i16 = std.mem.readInt(i16, bytes[0..2], .little) },
-        .u16 => .{ .u16 = std.mem.readInt(u16, bytes[0..2], .little) },
-        .i32 => .{ .i32 = std.mem.readInt(i32, bytes[0..4], .little) },
-        .u32 => .{ .u32 = std.mem.readInt(u32, bytes[0..4], .little) },
-        .i64 => .{ .i64 = std.mem.readInt(i64, bytes[0..8], .little) },
-        .u64 => .{ .u64 = std.mem.readInt(u64, bytes[0..8], .little) },
-        .i128 => .{ .i128 = std.mem.readInt(i128, bytes[0..16], .little) },
-        .u128 => .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) },
-        .f32 => .{ .f32_bits = std.mem.readInt(u32, bytes[0..4], .little) },
-        .f64 => .{ .f64_bits = std.mem.readInt(u64, bytes[0..8], .little) },
-        .dec => .{ .dec_bits = std.mem.readInt(i128, bytes[0..16], .little) },
-        .u8x16,
-        .i8x16,
-        .u16x8,
-        .i16x8,
-        .u32x4,
-        .i32x4,
-        .u64x2,
-        .i64x2,
-        => .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) },
-    };
-}
-
 fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
     const nominal = resolvedNominalPayload(module, checked_ty);
     if (nominal.builtin != .box or nominal.args.len != 1) {

@@ -5267,7 +5267,7 @@ Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve
 canonical scalar bits, and initialize target padding. Compatible contiguous
 regions use bulk copies. Packed data remains a literal through specialization;
-list length must not create per-element executable IR, including in static
+list length must not create per-item executable IR, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed representation and descriptor
 plans, including any required storage adaptation, without unrolling the list.

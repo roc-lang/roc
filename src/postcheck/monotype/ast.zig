@@ -2025,8 +2025,10 @@ pub const ProgramBuilder = struct {
         const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
         const owner = self.const_blob_backings.get(key) orelse blk: {
             const created = try SharedLiteralBacking.init(self.allocator, bytes);
-            errdefer created.release();
-            try self.const_blob_backings.put(self.allocator, key, created);
+            self.const_blob_backings.put(self.allocator, key, created) catch |err| {
+                created.release();
+                return err;
+            };
             break :blk created;
         };
         if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("constant blob view exceeded its backing");
