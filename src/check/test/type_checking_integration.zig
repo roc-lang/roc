@@ -8959,6 +8959,47 @@ test "check type - polarity - nested widening is rejected even against an open i
     );
 }
 
+test "check type - polarity - where-method Try ok row stays closed as written" {
+    // The adapter-reachable set is exactly the direct result row and a `Try`'s
+    // ERROR row: `closedResultRowOrNull` narrows `Try`'s `args[1]`, and
+    // `hostedTryReturnInjectionExpr` asserts the ok type is unchanged. Per-use
+    // opening is therefore withheld from a `Try`'s ok row too, so widening it
+    // is an ordinary mismatch at the body use rather than a lowering panic.
+    // `m`'s implementation publishes the closed row, which is the case the
+    // adapter exists for and the case it cannot reach here.
+    const source =
+        \\describe : a -> Try([Some(Str), None], [E1]) where [a.m : a -> Try([Some(Str)], [E1])]
+        \\describe = |x| x.m()
+        \\
+        \\closed_try : Try([Some(Str)], [E1])
+        \\closed_try = Ok(Some("cv"))
+        \\
+        \\Job := [Pending].{
+        \\    m : Job -> Try([Some(Str)], [E1])
+        \\    m = |_| closed_try
+        \\}
+    ;
+    // The region is the body use, not the signature and not the obligation.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\describe = |x| x.m()
+        \\```
+        \\               ^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Try([Some(Str)], [E1])
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    Try([None, Some(Str)], [E1])
+        \\
+        \\
+    );
+}
+
 test "check type - polarity - explicit anonymous ext in a function's output position warns redundant" {
     // A function generalizes regardless of the `..`, and its output union is
     // implicitly open, so the `..` adds nothing.

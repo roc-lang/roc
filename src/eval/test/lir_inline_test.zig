@@ -8516,6 +8516,192 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
     try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
 }
 
+test "W6b closed impl reached through nested evidence is adapted" {
+    const allocator = std.testing.allocator;
+    // `Wrap.status` carries its OWN where-clause, so the obligation that
+    // reaches it drags a second requirement along, and its published result
+    // row is still closed by `closed_ok` / `closed_err`. `describe` uses the
+    // method twice in one body — exhaustively at the declared row and widened
+    // — so the adapter is minted beside an ordinary declared-row
+    // specialization of the same template. `test/cli`'s
+    // `WidenNestedEvidenceClosedImpl.roc` runs this program on both backends
+    // and only proves it computes the right answer; the adapter count is what
+    // proves the mechanism.
+    const source =
+        \\closed_ok : [Ok(Str), Err(Str)]
+        \\closed_ok = Ok("ok")
+        \\
+        \\closed_err : [Ok(Str), Err(Str)]
+        \\closed_err = Err("err")
+        \\
+        \\Wrap(a) := [W(a)].{
+        \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
+        \\    status = |w| match w { W(inner) => if inner.name() == "thing" closed_ok else closed_err }
+        \\}
+        \\
+        \\Thing := [T].{
+        \\    name : Thing -> Str
+        \\    name = |_| "thing"
+        \\}
+        \\
+        \\Other := [O].{
+        \\    name : Other -> Str
+        \\    name = |_| "other"
+        \\}
+        \\
+        \\describe : x -> [Ok(Str), Err(Str), Extra] where [x.status : x -> [Ok(Str), Err(Str)]]
+        \\describe = |x| {
+        \\    first = match x.status() {
+        \\        Ok(s) => s
+        \\        Err(e) => e
+        \\    }
+        \\    if first == "" Extra else x.status()
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Wrap.W(Thing.T))) == "Ok(ok)"
+        \\expect show(describe(Wrap.W(Other.O))) == "Err(err)"
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    // One adapter per (template specialization, requested type): `Wrap(Thing)`
+    // and `Wrap(Other)` are distinct specializations of `status`, so each
+    // widened request gets its own.
+    try std.testing.expectEqual(@as(usize, 2), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "W6b closed impl with rigid payloads is adapted at the requested payloads" {
+    const allocator = std.testing.allocator;
+    // `Relay(a).route` publishes the closed row `[Ok(a), Err(a)]` — closed
+    // because it returns its own input-position parameter — with RIGID
+    // payloads. `lowerCheckedTypeVariable` seals a rigid to the empty tag
+    // union, so the adapter's narrowed source type must take its payloads
+    // from the REQUEST rather than from `lowerType` of the checked root
+    // (`resultRowWideningAdapterOrNull`'s doc comment). Both constructors go
+    // through the adapter, so a payload taken from the declared type would
+    // be a zero-sized representation rather than a `Str`.
+    const source =
+        \\Relay(a) := [R(a)].{
+        \\    route : Relay(a), [Ok(a), Err(a)] -> [Ok(a), Err(a)]
+        \\    route = |_, v| v
+        \\}
+        \\
+        \\describe : r, [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str), Extra] where [r.route : r, [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]]
+        \\describe = |x, v| x.route(v)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Relay.R("seed"), Ok("arg"))) == "Ok(arg)"
+        \\expect show(describe(Relay.R("seed"), Err("bad"))) == "Err(bad)"
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    // Both expects request `Relay(Str).route` at the same widened type, so
+    // the adapter is keyed once.
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "polarity W3 open-method widening adapter counts" {
+    const allocator = std.testing.allocator;
+    // `test/cli/OpenMethodWidenedCaller.roc` and `OpenMethodOwnRowCaller.roc`
+    // are mechanism-blind: they assert exit status, the pass line and the
+    // absence of panic needles, so they pass whether the program compiles to
+    // one wide specialization or to an adapter plus a narrow one. These
+    // counts are what makes a change to their specialization strategy visible.
+    const widened =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var widened_lowered = try lowerMonotypeModuleWithOptions(allocator, widened, .{
+        .root_selection = .test_expects,
+    });
+    defer widened_lowered.deinit(allocator);
+
+    // `OpenMethodOwnRowCaller.roc`: the same program with nothing widened.
+    const own_row =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var own_row_lowered = try lowerMonotypeModuleWithOptions(allocator, own_row, .{
+        .root_selection = .test_expects,
+    });
+    defer own_row_lowered.deinit(allocator);
+
+    // The widened program without the intermediate `wrap`: `?` widens the
+    // method's own published row directly.
+    const direct =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = rows.wrapped()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var direct_lowered = try lowerMonotypeModuleWithOptions(allocator, direct, .{
+        .root_selection = .test_expects,
+    });
+    defer direct_lowered.deinit(allocator);
+
+    // One adapter, not zero: `wrap`'s own published error row is closed and
+    // `?` requests it wider. `wrapped` is called at its declared row here, so
+    // the adapter can only be `wrap`'s — an ordinary annotated function, not a
+    // where-method. The third program drops `wrap` and widens the method
+    // itself, and mints exactly one adapter of its own.
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&widened_lowered.mono));
+    // Nothing is requested wider than it was published, so no adapter exists.
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&own_row_lowered.mono));
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&direct_lowered.mono));
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10301: a list produced by an
 // opaque effectful expression and iterated by `for` must scalarize into a raw
 // indexed loop in the root proc, leaving no per-element iterator-step calls in

@@ -954,6 +954,45 @@ Eleven integration-test sites and exactly one CLI test, both as the plan
 says; ZERO snapshots carry the old title, so that regeneration step is a
 no-op. Sizing: ~150-250 lines.
 
+### 8.1.4 Second review round (2026-09-14): the structural fix is still owed
+
+The blocker fixes closed B1 and B3 but the same defect SHAPE reappeared at
+new sites, because the prescribed root fix was skipped.
+
+| # | Defect | Status |
+|---|---|---|
+| B1' | `.defer_open` is position-blind. A DECLARATION REFERENCE at `.result`/`.try_row` defers every marker beneath it, at any depth, because the instantiator flips polarity only through `stepFunc` — `List`/record/tuple/tag-payload args never demote. So `Statuses : List([Ok(Str), Err(Str)])` as a where-method result reopens the nested marker. | CONFIRMED BY PROBE: checks clean, then panics in `unifyTagRows` |
+| B2' | `.local_proc` dispatch targets decline at three sites where the adapter is unreachable BY CONSTRUCTION (a local proc has no `checked_fn_root` and never reaches `completeTemplateReservation`). Prevented only by an incidental exact re-relate, which is `Common.invariant` — `unreachable` in release. | code-confirmed |
+| B3' | The relation is handed `lookup.target.callable_ty`, completion uses `template.checked_fn_root` — and it is `checked_fn_root` that is the SUBSTITUTING clone (`specializeRoot`), the opposite of what was assumed. Closedness is id-independent for a fresh tail, but a substituted tail flips the predicate, fail-open and unguarded. | code-confirmed |
+
+Also: the fail-closed assert added for B2 is STATICALLY DEAD (its condition
+already contains `!local_context_dependent`), and both new `lir_inline_test`s
+are COMPILE-ONLY — `lowerMonotypeModuleWithOptions` never runs the
+interpreter, so they pin "an adapter was minted" and no value correctness. An
+adapter with a wrong tag mapping passes both.
+
+**Why it recurred: an over-broad scope rule.** This plan's restart rule was
+written into subagent briefs as "no new side tables", and the implementer
+therefore skipped the prescribed fix — "the relation RECORDS the widening it
+performed and completion CONSUMES that record" — because it appeared to need
+new state. That is the wrong reading. The explosion this branch is recovering
+from was 42 SERIALIZED `ModuleEnv` tables plus validator families; a value
+threaded along a call path is not that. **Corrected rule: prefer the smallest
+state that solves the problem, and add a table when one is genuinely needed,
+justifying it. What is forbidden is unjustified proliferation, fixing
+pre-existing `main` defects, and exceeding a stated budget without stopping.**
+
+Required for the next round, in priority order:
+1. One source of truth: the relation records the widening; completion consumes
+   it. No re-derivation from a different type id.
+2. Fail-closed at ALL FIVE declining sites, with live assertions.
+3. `.defer_open` becomes position-aware: defer only a marker on the
+   instantiation root's own row or the root `Try`'s `args[1]`; close every
+   marker reached under any other constructor.
+4. Tests that EXECUTE, not merely lower.
+5. `annoApplyIsBuiltinTry` gates on `apply.base == .builtin`, not ident text
+   (shadowing `Try` is only a warning and the local binding wins).
+
 ### 8.2 The working agreement Jared set (binding)
 
 - This session's driver owned jj; subagents never ran state-changing jj
