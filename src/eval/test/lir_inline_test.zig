@@ -8801,6 +8801,122 @@ test "W6a open where-method widening and nested evidence lower through explicit 
     try std.testing.expectEqualStrings("True", output);
 }
 
+/// Monotype functions defined as generated adapters. The result-row widening
+/// adapter is the only producer of `.checked_generated` in a plain Roc module,
+/// so this count is the mechanism witness: a program that compiles the impl at
+/// the caller's wide row instead reports zero while still running correctly.
+fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
+    var count: usize = 0;
+    for (program.view().fns) |function| {
+        switch (function.source.fn_def) {
+            .checked_generated => count += 1,
+            .local_template,
+            .imported_template,
+            .nested,
+            .local_hosted,
+            .imported_hosted,
+            .parser_runtime,
+            .encoder_for_runtime,
+            => {},
+        }
+    }
+    return count;
+}
+
+test "W6b widened closed where-method impl is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // `status` is published at the closed row `[Ok(Str), Err(Str)]` while
+    // `describe` requests `[Ok(Str), Err(Str), Extra]`. The impl must stay
+    // specialized at its declared row and be reached through a generated
+    // adapter that re-tags into the requested row (design.md "Result-Row
+    // Widening Adapter"). Running the program proves neither: it produces the
+    // same answer whether the impl was adapted or simply specialized wide, so
+    // the adapter count is the only witness.
+    const widened =
+        \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\closed_value : [Ok(Str), Err(Str)]
+        \\closed_value = Ok("cv")
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\
+        \\main = 0
+    ;
+    var widened_lowered = try lowerMonotypeModuleWithOptions(allocator, widened, .{
+        .root_selection = .test_expects,
+    });
+    defer widened_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&widened_lowered.mono));
+
+    // The control: the same dispatch requested at the impl's own row. Nothing
+    // is widened, so no adapter may be minted.
+    const exact =
+        \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\closed_value : [Ok(Str), Err(Str)]
+        \\closed_value = Ok("cv")
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str)] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})" }
+        \\
+        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\
+        \\main = 0
+    ;
+    var exact_lowered = try lowerMonotypeModuleWithOptions(allocator, exact, .{
+        .root_selection = .test_expects,
+    });
+    defer exact_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&exact_lowered.mono));
+}
+
+test "W6b question-widened closed Try impl is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // The `Try` instance of the same mechanism: `fetch` publishes the closed
+    // error row `[NotFound]` and `?` requests `[NotFound, Other]`, so the
+    // adapter unwraps the declared-row `Try` and re-wraps its error into the
+    // wider row.
+    const source =
+        \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\closed_try : Try(Str, [NotFound])
+        \\closed_try = Ok("hit")
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |_| closed_try
+        \\}
+        \\
+        \\expect match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10301: a list produced by an
 // opaque effectful expression and iterated by `for` must scalarize into a raw
 // indexed loop in the root proc, leaving no per-element iterator-step calls in
