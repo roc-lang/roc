@@ -2545,7 +2545,10 @@ fn registerTypeDecl(
         }
     };
 
-    // Create the real statement and add it to scratch statements
+    // The parser inventory and every scope insertion already carry the exact
+    // declaration kind. Completing a placeholder fills its body without
+    // changing the kind observed by any existing scope alias.
+    std.debug.assert(std.meta.activeTag(self.env.store.getStatement(type_decl_stmt_idx)) == std.meta.activeTag(type_decl_stmt));
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     if (ast_stmt_idx) |idx| {
         try self.parser_type_decl_states.put(
@@ -2562,11 +2565,6 @@ fn registerTypeDecl(
     if (append_statement_now) {
         try self.env.store.addScratchStatement(type_decl_stmt_idx);
     }
-
-    // If this entry was a placeholder, any aliases that point at the reused
-    // statement need their local binding kind refreshed to match the real
-    // declaration (`:` vs `:=` / opaque).
-    self.refreshTypeBindingKindForStatement(type_decl_stmt_idx, type_decl.kind);
 
     const node_idx_u32: u32 = @intFromEnum(type_decl_stmt_idx);
 
@@ -2605,10 +2603,6 @@ fn localTypeBindingInputForKind(kind: AST.TypeDeclKind, stmt_idx: Statement.Idx)
         .nominal, .@"opaque" => Scope.TypeBindingInput{ .local_nominal = stmt_idx },
         .where_alias => Scope.TypeBindingInput{ .local_where_alias = stmt_idx },
     };
-}
-
-fn localTypeBindingForKind(kind: AST.TypeDeclKind, stmt_idx: Statement.Idx) Scope.TypeBinding {
-    return Scope.inputToBinding(localTypeBindingInputForKind(kind, stmt_idx));
 }
 
 fn typeBindingOriginalRegion(self: *Self, binding: Scope.TypeBinding) Region {
@@ -2773,26 +2767,6 @@ fn adoptPlaceholderTypeAlias(
             typeBindingInputFromBinding(binding_copy),
         );
         return;
-    }
-}
-
-fn refreshTypeBindingKindForStatement(
-    self: *Self,
-    stmt_idx: Statement.Idx,
-    kind: AST.TypeDeclKind,
-) void {
-    const desired = localTypeBindingForKind(kind, stmt_idx);
-    for (self.scopes.items) |*scope| {
-        var iter = scope.type_bindings.iterator();
-        while (iter.next()) |entry| {
-            if (typeBindingStatement(entry.value_ptr.*) != stmt_idx) continue;
-
-            entry.value_ptr.* = switch (entry.value_ptr.*) {
-                .associated_nominal => Scope.TypeBinding{ .associated_nominal = stmt_idx },
-                .external_nominal => entry.value_ptr.*,
-                .local_nominal, .local_alias, .local_where_alias => desired,
-            };
-        }
     }
 }
 
@@ -21325,10 +21299,12 @@ pub fn introduceType(
     region: Region,
 ) std.mem.Allocator.Error!void {
     const stmt = self.env.store.getStatement(type_decl_stmt);
-    const input = if (stmt == .s_alias_decl)
-        Scope.TypeBindingInput{ .local_alias = type_decl_stmt }
-    else
-        Scope.TypeBindingInput{ .local_nominal = type_decl_stmt };
+    const input: Scope.TypeBindingInput = switch (stmt) {
+        .s_alias_decl => .{ .local_alias = type_decl_stmt },
+        .s_nominal_decl => .{ .local_nominal = type_decl_stmt },
+        .s_where_alias_decl => .{ .local_where_alias = type_decl_stmt },
+        else => std.debug.panic("introduceType requires a type declaration statement", .{}),
+    };
 
     const decision = try Scope.introduceTypeBinding(
         self.env.gpa,
