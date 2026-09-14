@@ -7788,7 +7788,7 @@ test "Coordinator post-check executor completes repeated bounded batches and str
     try testPostCheckExecutor(.multi_threaded);
 }
 
-fn testPostCheckExecutor(mode: Mode) !void {
+fn testPostCheckExecutor(mode: Mode) (Allocator.Error || std.Thread.SpawnError || CoordinatorError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual })!void {
     if (is_freestanding) return error.SkipZigTest;
 
     var coord = try Coordinator.init(
