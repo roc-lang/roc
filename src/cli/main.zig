@@ -15982,6 +15982,7 @@ fn finishPostCheckLowering(
         reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+        reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
 }
 
@@ -16023,6 +16024,7 @@ fn recordPostCheckLowering(
         reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+        reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
 }
 
@@ -16146,6 +16148,25 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]p
     };
 }
 
+fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetrics) [14]progress.Counter {
+    return .{
+        .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
+        .{ .name = "Tasks committed", .count = parallel.tasks_committed },
+        .{ .name = "Parallel task waves", .count = parallel.task_waves },
+        .{ .name = "Lowering lanes initialized", .count = parallel.workspace_initializations },
+        .{ .name = "Tasks reusing a lowering lane", .count = parallel.workspace_reuses },
+        .{ .name = "Worker string entries committed", .count = parallel.worker_string_entries_committed },
+        .{ .name = "Worker inline scopes committed", .count = parallel.worker_inline_scopes_committed },
+        .{ .name = "Worker capturing tasks committed", .count = parallel.worker_capturing_tasks_committed },
+        .{ .name = "Worker return-reuse tasks committed", .count = parallel.worker_return_reuse_tasks_committed },
+        .{ .name = "Worker erased tasks committed", .count = parallel.worker_erased_tasks_committed },
+        .{ .name = "Worker indirect-call tasks committed", .count = parallel.worker_indirect_call_tasks_committed },
+        .{ .name = "Worker match tasks committed", .count = parallel.worker_match_tasks_committed },
+        .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
+        .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
+    };
+}
+
 fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) [13]progress.Counter {
     return .{
         .{ .name = "Aggregate worker work (ns)", .count = parallel.worker_work_ns },
@@ -16243,6 +16264,49 @@ test "post-check Boxy timing uses a strategy-specific breakdown" {
     }));
 }
 
+test "post-check diagnostics preserve labeled Solved-LIR counts" {
+    const rows = solvedLirParallelCounters(.{
+        .tasks_submitted = 1,
+        .tasks_committed = 2,
+        .task_waves = 3,
+        .workspace_initializations = 4,
+        .workspace_reuses = 5,
+        .worker_string_entries_committed = 6,
+        .worker_inline_scopes_committed = 7,
+        .worker_capturing_tasks_committed = 8,
+        .worker_return_reuse_tasks_committed = 9,
+        .worker_erased_tasks_committed = 10,
+        .worker_indirect_call_tasks_committed = 11,
+        .worker_match_tasks_committed = 12,
+        .worker_literal_tasks_committed = 13,
+        .worker_loop_tasks_committed = 14,
+    });
+    const names = [_][]const u8{
+        "Tasks submitted",
+        "Tasks committed",
+        "Parallel task waves",
+        "Lowering lanes initialized",
+        "Tasks reusing a lowering lane",
+        "Worker string entries committed",
+        "Worker inline scopes committed",
+        "Worker capturing tasks committed",
+        "Worker return-reuse tasks committed",
+        "Worker erased tasks committed",
+        "Worker indirect-call tasks committed",
+        "Worker match tasks committed",
+        "Worker literal tasks committed",
+        "Worker loop tasks committed",
+    };
+    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.SolvedLirParallelMetrics).len, rows.len);
+    for (rows, names, 1..) |row, name, count| {
+        try std.testing.expectEqualStrings(name, row.name);
+        try std.testing.expectEqual(@as(u64, @intCast(count)), row.count);
+    }
+    for (solvedLirParallelCounters(.{})) |row| {
+        try std.testing.expectEqual(@as(u64, 0), row.count);
+    }
+}
+
 test "post-check diagnostics preserve labeled Monotype counts" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
     diagnostics.specialization.template_requests = 101;
@@ -16252,6 +16316,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.eager_iterator_template_bodies_lowered = 304;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.nested_closures_prepared = 302;
 
@@ -16274,10 +16339,12 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[3].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
     try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[12].name);
-    try std.testing.expectEqual(@as(u64, 305), body[12].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[21].name);
-    try std.testing.expectEqual(@as(u64, 302), body[21].count);
+    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
+    try std.testing.expectEqual(@as(u64, 304), body[12].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
+    try std.testing.expectEqual(@as(u64, 305), body[13].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
+    try std.testing.expectEqual(@as(u64, 302), body[22].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
@@ -16294,14 +16361,14 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 402), parallel[1].count);
     try std.testing.expectEqualStrings("Root tasks submitted", parallel[2].name);
     try std.testing.expectEqual(@as(u64, 403), parallel[2].count);
-    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[8].name);
-    try std.testing.expectEqual(@as(u64, 404), parallel[8].count);
-    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[10].name);
-    try std.testing.expectEqual(@as(u64, 8), parallel[10].count);
-    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[11].name);
-    try std.testing.expectEqual(@as(u64, 4), parallel[11].count);
-    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[12].name);
-    try std.testing.expectEqual(@as(u64, 405), parallel[12].count);
+    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[6].name);
+    try std.testing.expectEqual(@as(u64, 404), parallel[6].count);
+    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[8].name);
+    try std.testing.expectEqual(@as(u64, 8), parallel[8].count);
+    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[9].name);
+    try std.testing.expectEqual(@as(u64, 4), parallel[9].count);
+    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[10].name);
+    try std.testing.expectEqual(@as(u64, 405), parallel[10].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
