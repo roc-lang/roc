@@ -169,6 +169,8 @@ pub const LirLoweringOptions = struct {
     /// Number of coordinator workers available to post-check lowering.
     /// The default retains the harness's existing single-threaded behavior.
     specialization_workers: usize = 1,
+    /// Controlled executors exercise scheduling without wall-clock assumptions.
+    post_check_executor_override: ?base.post_check_task_executor.Executor = null,
     /// Add a second platform-required procedure so root lowering has a parallel
     /// batch rather than only the ordinary single-entrypoint workload.
     parallel_procedure_root_fixture: bool = false,
@@ -386,8 +388,8 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
         solved_lir_task_waves: u64,
         monotype_task_waves: u64,
     }{
-        .{ .specialization_workers = 2, .solved_lir_task_waves = 7, .monotype_task_waves = 5 },
-        .{ .specialization_workers = 4, .solved_lir_task_waves = 4, .monotype_task_waves = 4 },
+        .{ .specialization_workers = 2, .solved_lir_task_waves = 7, .monotype_task_waves = 4 },
+        .{ .specialization_workers = 4, .solved_lir_task_waves = 4, .monotype_task_waves = 3 },
     }) |case| {
         for ([_]bool{ false, true }) |reverse_post_check_completions| {
             const candidate = try gpa.alloc(u8, cap);
@@ -427,8 +429,8 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
                 parallel.specialization_tasks_committed,
             );
             try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_discarded_ready);
-            // Ten specializations complete in two specialization waves after
-            // the fixed root waves, proving each run can exceed lane count.
+            // Ten specializations drain in one stream after the fixed root
+            // batches, independently of available lane count.
             try std.testing.expectEqual(case.monotype_task_waves, parallel.task_waves);
             try std.testing.expect(parallel.within_lowering_lane_reuse_tasks > 0);
             try std.testing.expect(parallel.peak_specialization_jobs_pending > 0);
@@ -783,7 +785,7 @@ fn lowerAppPathToLir(
         }
     else
         undefined;
-    const post_check_executor = if (coordinator_executor) |executor|
+    const post_check_executor = if (opts.post_check_executor_override) |executor| executor else if (coordinator_executor) |executor|
         if (opts.reverse_post_check_completions) reverse_executor.executor() else executor
     else
         null;
