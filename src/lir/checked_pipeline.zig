@@ -5,6 +5,7 @@
 //! It returns LIR or resource failure.
 
 const std = @import("std");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const base = @import("base");
 const check = @import("check");
@@ -1433,7 +1434,24 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         return switch (info.env.store.getPattern(def.pattern)) {
             .assign => |assign| info.env.getIdent(assign.ident),
             .var_assign => |assign| info.env.getIdent(assign.ident),
-            else => "?pat",
+            .as,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            => "?pat",
         };
     }
 
@@ -1483,7 +1501,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
     }
 
     fn checkedTypeHasVariable(allocator: Allocator, types: checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!bool {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
         defer visited.deinit();
         var stack = std.ArrayList(checked.CheckedTypeId).empty;
         defer stack.deinit(allocator);
@@ -1524,7 +1542,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
 
     fn requestShape(allocator: Allocator, types: MonoType.Store.View, root: MonoType.TypeId) Allocator.Error!RequestShape {
         var shape: RequestShape = .{};
-        var visited = std.AutoHashMap(MonoType.TypeId, void).init(allocator);
+        var visited = collections.DenseMap(MonoType.TypeId, void).init(allocator);
         defer visited.deinit();
         var stack = std.ArrayList(MonoType.TypeId).empty;
         defer stack.deinit(allocator);
@@ -1533,7 +1551,16 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                 try stack.appendSlice(allocator, types.span(func.args));
                 try stack.append(allocator, func.ret);
             },
-            else => try stack.append(allocator, root),
+            .primitive,
+            .zst,
+            .erased,
+            .named,
+            .record,
+            .tuple,
+            .tag_union,
+            .list,
+            .box,
+            => try stack.append(allocator, root),
         }
         while (stack.pop()) |ty| {
             const gop = try visited.getOrPut(ty);
