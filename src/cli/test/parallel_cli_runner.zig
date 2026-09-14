@@ -5722,8 +5722,8 @@ fn customNativeBuildArtifactRoundTrip(
 /// module's closed exports as a pack program and write one object and one
 /// manifest per module next to the output (`writePackObjects` in
 /// `src/cli/main.zig`). Two builds must write identical pack files, the
-/// Builtin pack must have roots, and with the artifact round trip enabled
-/// every pack object must assemble from its own artifacts.
+/// platform and app packs must have roots, and with the artifact round trip
+/// enabled every pack object must assemble from its own artifacts.
 fn customNativeBuildPackObjects(
     io: std.Io,
     allocator: Allocator,
