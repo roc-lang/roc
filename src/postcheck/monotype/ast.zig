@@ -2418,11 +2418,15 @@ test "monotype ast declarations are referenced" {
 
 test "restored constant blob views share storage across IR ownership transfers" {
     const gpa = std.testing.allocator;
+    var const_store = check.ConstStore.ConstStore.init(gpa);
+    defer const_store.deinit();
+    const data = try const_store.addBlobData("abcdefgh");
+
     var program = ProgramBuilder.init(gpa);
     var program_alive = true;
     defer if (program_alive) program.deinit();
-    const a = try program.addConstBlobView(@splat(0), @enumFromInt(0), "abcdefgh", 0, 4);
-    const b = try program.addConstBlobView(@splat(0), @enumFromInt(0), "abcdefgh", 2, 6);
+    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh", 0, 4);
+    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh", 2, 6);
     const first = program.string_literals.get(@intFromEnum(a));
     const second = program.string_literals.get(@intFromEnum(b));
     try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);

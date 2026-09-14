@@ -784,7 +784,7 @@ fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!us
     // satisfy the code-size assertion. This fixture has 8-byte, all-zero items.
     var found_list = false;
     for (exports) |data_export| {
-        if (data_export.value_id != @as(lir.LIR.StaticDataId, @enumFromInt(0))) continue;
+        if (data_export.value_id == null) continue;
         const bytes = data_export.bytes[data_export.symbol_offset..];
         try std.testing.expectEqual(@as(u64, count), std.mem.readInt(u64, bytes[8..16], .little));
         try std.testing.expectEqual(@as(usize, 1), data_export.relocations.len);
