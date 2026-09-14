@@ -228,9 +228,17 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// An immutable root-slot read. The initializer supplies representation and
+/// lambda-set evidence; it is never evaluated by the read itself.
+pub const ComptimeValue = struct {
+    root: Common.ComptimeValueRoot,
+    initializer: ExprId,
+};
+
 /// A restored compile-time value that may lower to static data once the final
 /// LIR const plan and target layout are known.
 pub const StaticDataCandidate = struct {
+    storage: Common.StaticDataStorage,
     static_data: Common.StaticDataId,
     runtime_expr: ExprId,
 };
@@ -254,6 +262,9 @@ pub const ExprData = union(enum) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    /// Explicit run/omit consumer input retained through lambda solving.
+    inline_expects_enabled: void,
+    comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),

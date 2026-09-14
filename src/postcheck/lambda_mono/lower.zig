@@ -630,8 +630,14 @@ const Lowerer = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
             .bytes_lit => |value| .{ .bytes_lit = value },
+            .inline_expects_enabled => .{ .inline_expects_enabled = {} },
+            .comptime_value => |value| .{ .comptime_value = .{
+                .root = value.root,
+                .initializer = try self.lowerExpr(value.initializer),
+            } },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
+                .storage = candidate.storage,
                 .runtime_expr = try self.lowerExpr(candidate.runtime_expr),
             } },
             .typed_boundary => |boundary| .{ .typed_boundary = .{

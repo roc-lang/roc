@@ -44,6 +44,7 @@ const RuntimeState = struct {
     },
     shm: ?SharedMemoryAllocator,
     view: lir.LirImage.ProgramView,
+    static_data: eval.InterpreterStaticData,
 };
 
 const ShimError = error{
@@ -79,12 +80,15 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(shm.base_ptr + header_offset));
     // The shim interprets the image with native memory layout, so it resolves
     // the width-independent image for the native pointer width.
-    const view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, TargetUsize.native, gpa);
+    var view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, TargetUsize.native, gpa);
+    errdefer view.deinit();
+    const static_data = try eval.InterpreterStaticData.init(gpa, view.static_data, view.static_data_value_count);
 
     return .{
         .source = .coordination,
         .shm = shm,
         .view = view,
+        .static_data = static_data,
     };
 }
 
@@ -161,16 +165,17 @@ fn evaluateEntrypoint(
     arg_ptr: ?*anyopaque,
 ) ShimError!void {
     const state = try ensureRuntimeState(ops);
-    try evaluateEntrypointInView(&state.view, entry_idx, ops, ret_ptr, arg_ptr);
+    try evaluateEntrypointInState(state, entry_idx, ops, ret_ptr, arg_ptr);
 }
 
-fn evaluateEntrypointInView(
-    view: *const lir.LirImage.ProgramView,
+fn evaluateEntrypointInState(
+    state: *RuntimeState,
     entry_idx: u32,
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) ShimError!void {
+    const view = &state.view;
     const entrypoint = entrypointForOrdinal(view, entry_idx) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
@@ -201,6 +206,8 @@ fn evaluateEntrypointInView(
     retained.enter();
     defer retained.leave();
     const interpreter = &retained.interpreter;
+    // RuntimeState owns this image for every retained callback lifetime.
+    state.static_data.install(interpreter);
 
     const proc = view.store.getProcSpec(entrypoint.root_proc);
     _ = interpreter.eval(.{
@@ -257,10 +264,17 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
 
     if (runtime_state_initialized.load(.monotonic)) return requireEmbeddedRuntimeState(base, image_len, ops);
 
+    var view = viewEmbeddedLirImage(image_base, image_len, ops) catch return error.ImageUnavailable;
+    errdefer view.deinit();
+    const static_data = eval.InterpreterStaticData.init(allocator(), view.static_data, view.static_data_value_count) catch {
+        ops.crash("LIR shim could not allocate the immutable value image");
+        return error.OutOfMemory;
+    };
     runtime_state = .{
         .source = .{ .embedded = .{ .base = base, .len = image_len } },
         .shm = null,
-        .view = viewEmbeddedLirImage(image_base, image_len, ops) catch return error.ImageUnavailable,
+        .view = view,
+        .static_data = static_data,
     };
     runtime_state_initialized.store(true, .release);
     return &runtime_state;
@@ -310,7 +324,7 @@ fn shimEntrypointFromImage(
         => return,
     };
 
-    evaluateEntrypointInView(&state.view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
+    evaluateEntrypointInState(state, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,

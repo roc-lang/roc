@@ -37,6 +37,7 @@ pub const RangeProve = @import("range_prove.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
+pub const LiteralBackings = @import("literal_backings.zig");
 pub const ReachableProcs = @import("reachable_procs.zig");
 /// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");
@@ -67,6 +68,8 @@ test "LIR image tests" {
 }
 
 pub const ImmortalLocals = @import("immortal_locals.zig");
+/// Final immutable failure-image guards and explicit completion.
+pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -162,6 +165,7 @@ test "lir tests" {
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
     std.testing.refAllDecls(ScalarizeJoins);
+    std.testing.refAllDecls(ComptimeValueGuards);
     std.testing.refAllDecls(RangeProve);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(CheckedArithmetic);
