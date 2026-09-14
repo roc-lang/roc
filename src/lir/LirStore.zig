@@ -63,7 +63,7 @@ pub const BodyPrefix = struct {
     patterns: u32,
     pattern_ids: u32,
     inline_scopes: u32,
-    strings: u32,
+    string_bytes: u32,
     boxy_names: u32,
     proc_specs: u32,
     proc_locs: u32,
@@ -96,6 +96,8 @@ pub const BodyRelocation = struct {
     erased_call_arg_plans: u32,
     patterns: u32,
     pattern_ids: u32,
+    inline_scopes: u32,
+    string_bytes: u32,
 
     pub fn local(self: BodyRelocation, prefix: BodyPrefix, id: LocalId) LocalId {
         return relocateBodyValue(LocalId, id, prefix, self);
@@ -119,8 +121,8 @@ pub const AppendedBody = struct {
 
 /// Failures while validating or appending a private body suffix.
 pub const AppendBodyError = Allocator.Error || error{
-    /// String, Boxy name, or inline-scope interning changed after the frozen prefix.
-    /// The coordinator may retry this body through serial lowering.
+    /// A shard attempted to publish coordinator-owned procedure, source-file,
+    /// or Boxy-name metadata.
     UnsupportedShardMetadata,
     InvalidBodyPrefix,
 };
@@ -132,9 +134,31 @@ fn ownStringEntryCount(self: *const Self) u32 {
     return count;
 }
 
-fn stringEntryCount(self: *const Self) u32 {
-    if (self.body_coordinator) |coordinator| return coordinator.stringEntryCount();
+/// Number of string entries physically owned by this store, excluding a
+/// coordinator prefix borrowed by a body worker.
+pub fn bodyOwnedStringCount(self: *const Self) u32 {
     return self.ownStringEntryCount();
+}
+
+fn ownStringByteCount(self: *const Self) u32 {
+    return self.strings.byteCount();
+}
+
+fn stringByteCount(self: *const Self) u32 {
+    if (self.body_coordinator != null) {
+        return self.body_prefix.string_bytes + self.ownStringByteCount();
+    }
+    return self.ownStringByteCount();
+}
+
+fn stringEntryCountFrom(self: *const Self, encoded_start: u32) ?usize {
+    if (!self.strings.isEntryBoundary(encoded_start)) return null;
+    var count: usize = 0;
+    var iterator = self.strings.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.encoded_start >= encoded_start) count += 1;
+    }
+    return count;
 }
 
 /// Captures the frozen prefix before a worker starts lowering a body.
@@ -154,7 +178,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .patterns = @intCast(self.patterns.len()),
         .pattern_ids = @intCast(self.pattern_ids.len()),
         .inline_scopes = @intCast(self.inline_scopes.len()),
-        .strings = self.stringEntryCount(),
+        .string_bytes = self.stringByteCount(),
         .boxy_names = self.boxyNameCount(),
         .proc_specs = @intCast(self.proc_specs.len()),
         .proc_locs = @intCast(self.proc_locs.len()),
@@ -172,7 +196,7 @@ pub fn cloneForBodyShard(self: *const Self, allocator: Allocator) Allocator.Erro
     var result = Self.init(allocator);
     result.body_coordinator = self;
     result.body_prefix = self.captureBodyPrefix();
-    result.strings_insertable = false;
+    result.strings_insertable = true;
     result.next_synthetic_symbol = self.next_synthetic_symbol;
     result.current_loc = self.current_loc;
     result.current_region = self.current_region;
@@ -184,9 +208,7 @@ pub fn cloneForBodyShard(self: *const Self, allocator: Allocator) Allocator.Erro
 pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!BodyShard {
     if (self.body_coordinator != null) {
         if (!std.meta.eql(prefix, self.body_prefix)) return error.InvalidBodyPrefix;
-        if (self.inline_scopes.len() != 0 or
-            self.ownStringEntryCount() != 0 or
-            self.boxy_names.count() != 0 or
+        if (self.boxy_names.count() != 0 or
             self.proc_specs.len() != 0 or
             self.proc_locs.len() != 0 or
             self.proc_debug_names.len() != 0 or
@@ -212,7 +234,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.patterns > self.patterns.len() or
         prefix.pattern_ids > self.pattern_ids.len() or
         prefix.inline_scopes > self.inline_scopes.len() or
-        prefix.strings > self.stringEntryCount() or
+        prefix.string_bytes > self.stringByteCount() or
         prefix.boxy_names > self.boxyNameCount() or
         prefix.proc_specs > self.proc_specs.len() or
         prefix.proc_locs > self.proc_locs.len() or
@@ -224,9 +246,10 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
     {
         return error.InvalidBodyPrefix;
     }
-    if (prefix.inline_scopes != self.inline_scopes.len() or
-        prefix.strings != self.stringEntryCount() or
-        prefix.boxy_names != self.boxyNameCount() or
+    if (self.body_coordinator == null and !self.strings.isEntryBoundary(prefix.string_bytes)) {
+        return error.InvalidBodyPrefix;
+    }
+    if (prefix.boxy_names != self.boxyNameCount() or
         prefix.proc_specs != self.proc_specs.len() or
         prefix.proc_locs != self.proc_locs.len() or
         prefix.proc_debug_names != self.proc_debug_names.len() or
@@ -248,6 +271,14 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     if (T == LocalId) return @enumFromInt(movedIndex(@intFromEnum(value), prefix.locals, bases.locals));
     if (T == CFStmtId) return @enumFromInt(movedIndex(@intFromEnum(value), prefix.cf_stmts, bases.cf_stmts));
     if (T == ErasedCallArgsPlanId) return @enumFromInt(movedIndex(@intFromEnum(value), prefix.erased_call_arg_plans, bases.erased_call_arg_plans));
+    if (T == base.StringLiteral.Idx) {
+        if (value == base.StringLiteral.Idx.none) return value;
+        return @enumFromInt(movedIndex(@intFromEnum(value), prefix.string_bytes, bases.string_bytes));
+    }
+    if (T == InlineScopeId) {
+        if (value == InlineScopeId.none) return value;
+        return @enumFromInt(movedIndex(@intFromEnum(value), prefix.inline_scopes, bases.inline_scopes));
+    }
     if (T == LirPatternId) {
         if (value == LirPatternId.none) return value;
         return @enumFromInt(movedIndex(@intFromEnum(value), prefix.patterns, bases.patterns));
@@ -328,12 +359,28 @@ pub fn appendBodyShard(
         .erased_call_arg_plans = @intCast(self.erased_call_arg_plans.len()),
         .patterns = @intCast(self.patterns.len()),
         .pattern_ids = @intCast(self.pattern_ids.len()),
+        .inline_scopes = @intCast(self.inline_scopes.len()),
+        .string_bytes = self.ownStringByteCount(),
     };
     const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
     const local_len = source.locals.len() - source_prefix.locals;
+    const source_string_bytes = source.strings.encodedBytesFrom(source_prefix.string_bytes);
+    const source_string_entries = source.stringEntryCountFrom(source_prefix.string_bytes) orelse
+        return error.InvalidBodyPrefix;
+    if (source_string_bytes.len > std.math.maxInt(u32) - bases.string_bytes) {
+        return error.OutOfMemory;
+    }
 
     // Reserve every destination before the first append. Parallel metadata
     // arrays are reserved and appended alongside their owner arrays.
+    if (source_string_entries != 0) {
+        try self.strings.ensureUnusedEncodedCapacity(self.allocator, source_string_bytes.len);
+        try self.string_builder.ensureAdditionalCapacity(
+            &self.strings,
+            self.allocator,
+            source_string_entries,
+        );
+    }
     try self.cf_stmts.ensureUnusedCapacity(self.allocator, stmt_len);
     try self.cf_stmt_locs.ensureUnusedCapacity(self.allocator, stmt_len);
     try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, stmt_len);
@@ -350,7 +397,23 @@ pub fn appendBodyShard(
     try self.erased_call_arg_plans.ensureUnusedCapacity(self.allocator, source.erased_call_arg_plans.len() - source_prefix.erased_call_arg_plans);
     try self.patterns.ensureUnusedCapacity(self.allocator, source.patterns.len() - source_prefix.patterns);
     try self.pattern_ids.ensureUnusedCapacity(self.allocator, source.pattern_ids.len() - source_prefix.pattern_ids);
+    try self.inline_scopes.ensureUnusedCapacity(self.allocator, source.inline_scopes.len() - source_prefix.inline_scopes);
 
+    self.strings.appendEncodedAssumeCapacity(source_string_bytes);
+    var source_strings = source.strings.iterator();
+    while (source_strings.next()) |entry| {
+        if (entry.encoded_start < source_prefix.string_bytes) continue;
+        const destination_id: base.StringLiteral.Idx = @enumFromInt(
+            bases.string_bytes + @intFromEnum(entry.idx) - source_prefix.string_bytes,
+        );
+        self.string_builder.registerExistingAssumeCapacity(&self.strings, destination_id);
+    }
+    for (source.inline_scopes.unsafeRawItemsForView()[source_prefix.inline_scopes..]) |item| {
+        try self.inline_scopes.append(
+            self.allocator,
+            relocateBodyValue(InlineScope, item, prefix, bases),
+        );
+    }
     const local_ids = source.local_ids.unsafeRawItemsForView();
     for (local_ids[source_prefix.local_ids..]) |item| try self.local_ids.append(self.allocator, relocateBodyValue(LocalId, item, prefix, bases));
     try self.u64s.appendSlice(self.allocator, source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
@@ -359,7 +422,20 @@ pub fn appendBodyShard(
     for (source.pattern_ids.unsafeRawItemsForView()[source_prefix.pattern_ids..]) |item| try self.pattern_ids.append(self.allocator, relocateBodyValue(LirPatternId, item, prefix, bases));
     for (source.patterns.unsafeRawItemsForView()[source_prefix.patterns..]) |item| try self.patterns.append(self.allocator, relocateBodyValue(LirPattern, item, prefix, bases));
     for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| try self.locals.append(self.allocator, relocateBodyValue(Local, item, prefix, bases));
-    try self.local_names.appendSlice(self.allocator, source.local_names.unsafeRawItemsForView()[source_prefix.locals..]);
+    for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
+        try self.local_names.append(
+            self.allocator,
+            if (name == no_local_name)
+                no_local_name
+            else
+                @intFromEnum(relocateBodyValue(
+                    base.StringLiteral.Idx,
+                    @as(base.StringLiteral.Idx, @enumFromInt(name)),
+                    prefix,
+                    bases,
+                )),
+        );
+    }
     for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| try self.cf_switch_branches.append(self.allocator, relocateBodyValue(CFSwitchBranch, item, prefix, bases));
     for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| try self.str_match_steps.append(self.allocator, relocateBodyValue(StrMatchStep, item, prefix, bases));
     for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| try self.str_match_arms.append(self.allocator, relocateBodyValue(StrMatchArm, item, prefix, bases));
@@ -367,7 +443,12 @@ pub fn appendBodyShard(
     for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| try self.cf_stmts.append(self.allocator, relocateBodyValue(CFStmt, item, prefix, bases));
     try self.cf_stmt_locs.appendSlice(self.allocator, source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
     try self.cf_stmt_regions.appendSlice(self.allocator, source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
-    try self.cf_stmt_inline_scopes.appendSlice(self.allocator, source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    for (source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |scope| {
+        try self.cf_stmt_inline_scopes.append(
+            self.allocator,
+            relocateBodyValue(InlineScopeId, scope, prefix, bases),
+        );
+    }
 
     return .{
         .relocation = bases,
@@ -401,6 +482,8 @@ strings: base.StringLiteral.Store,
 /// Boxy semantic names and their transient insertion index.
 boxy_names: @import("BoxyNames.zig") = .{},
 string_builder: base.StringLiteral.BuilderState,
+/// Retained in the serialized store layout; body shards now keep it enabled
+/// because their strings are relocated during ordered commit.
 strings_insertable: bool,
 allocator: Allocator,
 next_synthetic_symbol: u64,
@@ -529,7 +612,12 @@ pub const no_local_name: u32 = std.math.maxInt(u32);
 pub fn setLocalName(self: *Self, id: LocalId, name: []const u8) Allocator.Error!void {
     if (name.len == 0) return;
     const idx = try self.insertString(name);
-    self.local_names.set(@intFromEnum(id), @intFromEnum(idx));
+    const raw = @intFromEnum(id);
+    const local_index = if (self.body_coordinator != null)
+        raw - self.body_prefix.locals
+    else
+        raw;
+    self.local_names.set(local_index, @intFromEnum(idx));
 }
 
 /// Source-level name of a local, or null for compiler-generated temporaries.
@@ -642,20 +730,29 @@ pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
 
 /// Retrieve one virtual source frame.
 pub fn inlineScope(self: *const Self, id: InlineScopeId) InlineScope {
-    if (self.body_coordinator) |coordinator| return coordinator.inlineScope(id);
-    return self.inline_scopes.get(@intFromEnum(id));
+    const index = @intFromEnum(id);
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.inline_scopes) return coordinator.inlineScope(id);
+        return self.inline_scopes.get(index - self.body_prefix.inline_scopes);
+    }
+    return self.inline_scopes.get(index);
 }
 
 /// Number of virtual source frames.
 pub fn inlineScopeCount(self: *const Self) usize {
-    if (self.body_coordinator) |coordinator| return coordinator.inlineScopeCount();
+    return self.inline_scopes.len() + if (self.body_coordinator != null) self.body_prefix.inline_scopes else 0;
+}
+
+/// Number of inline scopes physically owned by this store.
+pub fn bodyOwnedInlineScopeCount(self: *const Self) usize {
     return self.inline_scopes.len();
 }
 
 /// Intern one virtual source frame and return its identifier.
 pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineScopeId {
-    self.assertBodyMetadataImmutable();
-    const id: InlineScopeId = @enumFromInt(@as(u32, @intCast(self.inline_scopes.len())));
+    const id: InlineScopeId = @enumFromInt(@as(u32, @intCast(
+        self.inline_scopes.len() + if (self.body_coordinator != null) self.body_prefix.inline_scopes else 0,
+    )));
     try self.inline_scopes.append(self.allocator, scope);
     return id;
 }
@@ -733,7 +830,7 @@ fn boxyNameCount(self: *const Self) u32 {
 
 /// Assigns a Boxy identity without inserting bytes into the literal store.
 pub fn insertBoxyName(self: *Self, text: []const u8) Allocator.Error!lir_defs.BoxyNameId {
-    self.assertStringsInsertable();
+    self.assertBodyMetadataImmutable();
     return self.boxy_names.insert(self.allocator, text);
 }
 
@@ -751,7 +848,18 @@ pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLi
 /// Interns string backing bytes with the requested minimum alignment.
 pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Allocator.Error!base.StringLiteral.Idx {
     self.assertStringsInsertable();
-    return self.string_builder.insertAligned(&self.strings, self.allocator, text, alignment);
+    const local = try self.string_builder.insertAligned(&self.strings, self.allocator, text, alignment);
+    if (self.body_coordinator == null) return local;
+    return @enumFromInt(std.math.add(
+        u32,
+        self.body_prefix.string_bytes,
+        @intFromEnum(local),
+    ) catch {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LirStore invariant violated: worker string identity overflow", .{});
+        }
+        unreachable;
+    });
 }
 
 /// Interns string backing bytes and returns a literal view into them.
@@ -791,7 +899,11 @@ pub fn insertStringViewAligned(
 
 /// Returns the text for an interned string literal.
 pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
-    if (self.body_coordinator) |coordinator| return coordinator.getString(idx);
+    const raw = @intFromEnum(idx);
+    if (self.body_coordinator) |coordinator| {
+        if (raw < self.body_prefix.string_bytes) return coordinator.getString(idx);
+        return self.strings.get(@enumFromInt(raw - self.body_prefix.string_bytes));
+    }
     return self.strings.get(idx);
 }
 
@@ -816,7 +928,6 @@ pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) 
 
 fn assertStringsInsertable(self: *const Self) void {
     if (self.strings_insertable) return;
-
     if (comptime builtin.mode == .Debug) {
         std.debug.panic("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
     }
@@ -1322,10 +1433,10 @@ test "body shard relocates nonzero local and body suffixes" {
     _ = try coordinator.addLocalSpan(&.{global});
     const global_pattern = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
     _ = try coordinator.addPatternSpan(&.{global_pattern});
-    const body_name = try coordinator.insertString("body_local");
+    const coordinator_name = try coordinator.insertString("coordinator");
     const body_inline_scope = try coordinator.addInlineScope(.{
         .source_symbol = Symbol.fromRaw(123),
-        .source_name = body_name,
+        .source_name = coordinator_name,
         .source_loc = .{ .file = 1, .line = 2, .column = 3 },
         .call_site = .{ .file = 4, .line = 5, .column = 6 },
         .parent = .none,
@@ -1338,7 +1449,15 @@ test "body shard relocates nonzero local and body suffixes" {
     try std.testing.expectEqual(@as(u32, 1), prefix.locals);
 
     const body_local = try worker.addLocal(.{ .layout_idx = .zst });
-    worker.local_names.set(@intFromEnum(body_local) - prefix.locals, @intFromEnum(body_name));
+    try worker.setLocalName(body_local, "body_local");
+    const body_name: base.StringLiteral.Idx = @enumFromInt(worker.getLocalNameRaw(body_local));
+    const worker_inline_scope = try worker.addInlineScope(.{
+        .source_symbol = Symbol.fromRaw(456),
+        .source_name = body_name,
+        .source_loc = .{ .file = 2, .line = 3, .column = 4 },
+        .call_site = .{ .file = 5, .line = 6, .column = 7 },
+        .parent = body_inline_scope,
+    });
     const frame = try worker.addLocalSpan(&.{ body_local, global });
     const masks = try worker.addU64Span(&.{9});
     const offsets = try worker.addU32Span(&.{ 0, 8 });
@@ -1351,12 +1470,12 @@ test "body shard relocates nonzero local and body suffixes" {
     const body_region = base.Region.from_raw_offsets(10, 20);
     worker.current_loc = body_loc;
     worker.current_region = body_region;
-    worker.current_inline_scope = body_inline_scope;
+    worker.current_inline_scope = worker_inline_scope;
     const ret = try worker.addCFStmt(.{ .ret = .{ .value = body_local } });
     const branches = try worker.addCFSwitchBranches(&.{.{ .value = 1, .body = ret }});
     const steps = try worker.addStrMatchSteps(&.{.{
         .capture = .{ .view = body_local },
-        .delimiter = .{ .backing = .none, .offset = 0, .len = 0 },
+        .delimiter = .{ .backing = body_name, .offset = 0, .len = 4 },
     }});
     const arms = try worker.addStrMatchArms(&.{.{
         .prefix = .{ .backing = .none, .offset = 0, .len = 0 },
@@ -1370,13 +1489,14 @@ test "body shard relocates nonzero local and body suffixes" {
         .body = ret,
     }});
     const child_pattern = try worker.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
+    const string_pattern = try worker.addPattern(.{ .str_literal = body_name });
     const pattern_args = try worker.addPatternSpan(&.{child_pattern});
     const parent_pattern = try worker.addPattern(.{ .tag = .{
         .discriminant = 1,
         .union_layout = .zst,
         .args = pattern_args,
     } });
-    const pattern_ids = try worker.addPatternSpan(&.{ parent_pattern, child_pattern });
+    const pattern_ids = try worker.addPatternSpan(&.{ parent_pattern, child_pattern, string_pattern });
 
     const shard = try worker.captureBodyShard(prefix);
     // Give every destination body space a nonzero base.
@@ -1399,6 +1519,14 @@ test "body shard relocates nonzero local and body suffixes" {
     _ = try coordinator.addJoinPointSpan(&.{.{ .id = @enumFromInt(99), .params = .empty(), .body = destination_stmt }});
     const destination_pattern = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
     _ = try coordinator.addPatternSpan(&.{destination_pattern});
+    const destination_name = try coordinator.insertString("destination");
+    _ = try coordinator.addInlineScope(.{
+        .source_symbol = Symbol.fromRaw(789),
+        .source_name = destination_name,
+        .source_loc = .{ .file = 8, .line = 9, .column = 10 },
+        .call_site = .{ .file = 11, .line = 12, .column = 13 },
+        .parent = body_inline_scope,
+    });
 
     const appended = try coordinator.appendBodyShard(shard, ret, frame);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(appended.root.?));
@@ -1406,11 +1534,14 @@ test "body shard relocates nonzero local and body suffixes" {
     const relocated_ret = coordinator.getCFStmt(appended.root.?);
     const relocated_body_local = relocated_ret.ret.value;
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(relocated_body_local));
-    try std.testing.expectEqual(@intFromEnum(body_name), coordinator.getLocalNameRaw(relocated_body_local));
     try std.testing.expectEqualStrings("body_local", coordinator.localName(relocated_body_local).?);
     try std.testing.expectEqual(body_loc, coordinator.stmtLoc(appended.root.?));
     try std.testing.expectEqual(body_region, coordinator.stmtRegion(appended.root.?));
-    try std.testing.expectEqual(body_inline_scope, coordinator.stmtInlineScope(appended.root.?));
+    const relocated_inline_scope = coordinator.stmtInlineScope(appended.root.?);
+    try std.testing.expect(relocated_inline_scope != worker_inline_scope);
+    const relocated_scope = coordinator.inlineScope(relocated_inline_scope);
+    try std.testing.expectEqual(body_inline_scope, relocated_scope.parent);
+    try std.testing.expectEqualStrings("body_local", coordinator.getString(relocated_scope.source_name));
     const relocated_frame = coordinator.getLocalSpan(appended.frame_locals);
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(relocated_frame.at(0)));
     try std.testing.expectEqual(global, relocated_frame.at(1));
@@ -1419,6 +1550,7 @@ test "body shard relocates nonzero local and body suffixes" {
     try std.testing.expectEqual(appended.root.?, relocated_branch.body);
     const relocated_step = coordinator.getStrMatchSteps(.{ .start = appended.relocation.str_match_steps, .len = steps.len }).at(0);
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(relocated_step.capture.view));
+    try std.testing.expectEqualStrings("body", coordinator.getStringLiteral(relocated_step.delimiter));
     const relocated_arm = coordinator.getStrMatchArms(.{ .start = appended.relocation.str_match_arms, .len = arms.len }).at(0);
     try std.testing.expectEqual(appended.relocation.str_match_steps, relocated_arm.steps.start);
     try std.testing.expectEqual(appended.root.?, relocated_arm.on_match);
@@ -1437,6 +1569,10 @@ test "body shard relocates nonzero local and body suffixes" {
     const relocated_pattern_ids = coordinator.getPatternSpan(.{ .start = appended.relocation.pattern_ids + 1, .len = pattern_ids.len });
     try std.testing.expectEqual(@as(u32, 3), @intFromEnum(relocated_pattern_ids.at(0)));
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(relocated_pattern_ids.at(1)));
+    try std.testing.expectEqualStrings(
+        "body_local",
+        coordinator.getString(coordinator.getPattern(relocated_pattern_ids.at(2)).str_literal),
+    );
     const relocated_parent = coordinator.getPattern(relocated_pattern_ids.at(0)).tag;
     try std.testing.expectEqual(appended.relocation.pattern_ids, relocated_parent.args.start);
     try std.testing.expectEqual(relocated_pattern_ids.at(1), coordinator.getPatternSpan(relocated_parent.args).at(0));
@@ -1457,6 +1593,16 @@ test "body shard append preserves destination on every reserve-stage allocation 
             const u64s = [_]u64{7} ** 9;
             const u32s = [_]u32{11} ** 9;
             const steps = [_]StrMatchStep{.{ .capture = .discard, .delimiter = .{ .backing = .none, .offset = 0, .len = 0 } }} ** 9;
+            const source_name = try source.insertString("source shard metadata");
+            for (0..9) |index| {
+                _ = try source.addInlineScope(.{
+                    .source_symbol = Symbol.fromRaw(index),
+                    .source_name = source_name,
+                    .source_loc = base.SourceLoc.none,
+                    .call_site = base.SourceLoc.none,
+                    .parent = .none,
+                });
+            }
 
             var local_ids: [locals.len]LocalId = undefined;
             for (locals, 0..) |local, index| local_ids[index] = try source.addLocal(local);
@@ -1509,6 +1655,16 @@ test "body shard append preserves destination on every reserve-stage allocation 
                 .params = .empty(),
                 .body = destination_stmt,
             }});
+            const destination_name = try destination.insertString("destination metadata");
+            _ = try destination.addInlineScope(.{
+                .source_symbol = Symbol.fromRaw(99),
+                .source_name = destination_name,
+                .source_loc = base.SourceLoc.none,
+                .call_site = base.SourceLoc.none,
+                .parent = .none,
+            });
+            const destination_string_bytes = destination.ownStringByteCount();
+            const destination_inline_scopes = destination.inline_scopes.len();
 
             const shard = source.captureBodyShard(source_prefix) catch unreachable;
             var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
@@ -1534,6 +1690,8 @@ test "body shard append preserves destination on every reserve-stage allocation 
                 try std.testing.expectEqual(@as(usize, 1), destination.erased_call_arg_plans.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.patterns.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.pattern_ids.len());
+                try std.testing.expectEqual(destination_string_bytes, destination.ownStringByteCount());
+                try std.testing.expectEqual(destination_inline_scopes, destination.inline_scopes.len());
                 try std.testing.expectEqual(@as(u64, 2), destination.cf_switch_branches.get(0).value);
                 try std.testing.expectEqual(@as(u64, 3), destination.u64s.get(0));
                 try std.testing.expectEqual(@as(u32, 5), destination.u32s.get(0));
@@ -1679,7 +1837,7 @@ pub fn procNeedsStackProbe(self: *const Self, layouts: *const layout.Store, proc
     return false;
 }
 
-test "body shards borrow Boxy identities and reject added name metadata" {
+test "body shards borrow Boxy identities and reject added Boxy metadata" {
     const allocator = std.testing.allocator;
     var coordinator = Self.init(allocator);
     defer coordinator.deinit();

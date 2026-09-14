@@ -354,7 +354,6 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
         .task_waves = 11,
         .tasks_submitted = 22,
         .tasks_committed = 33,
-        .tasks_retried_serial = 44,
     };
     var serial_timing: lir.CheckedPipeline.TimingSnapshot = .{};
     try runToLir(prepared_finite_capture_free_direct_call_fixture, &reference_writer, .{
@@ -366,7 +365,6 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.task_waves);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_committed);
-    try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_initializations);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_reuses);
     const serial_parallel = serial_timing.monotype_parallel;
@@ -403,7 +401,6 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
             try std.testing.expectEqual(case.solved_lir_task_waves, metrics.task_waves);
             try std.testing.expectEqual(@as(u64, 14), metrics.tasks_submitted);
             try std.testing.expectEqual(@as(u64, 14), metrics.tasks_committed);
-            try std.testing.expectEqual(@as(u64, 0), metrics.tasks_retried_serial);
             try std.testing.expectEqual(
                 metrics.tasks_submitted,
                 metrics.workspace_initializations + metrics.workspace_reuses,
@@ -437,6 +434,45 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
                 parallel.peak_specialization_shards_retained <=
                     parallel.peak_specialization_jobs_pending,
             );
+        }
+    }
+}
+
+/// Assert that worker-created string and inline-scope metadata commits in
+/// deterministic order without replaying a Solved-LIR body serially.
+pub fn expectSolvedLirWorkerMetadataParallelismDeterministicLir() LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(prepared_finite_capture_free_direct_call_fixture, &reference_writer, .{
+        .specialization_workers = 1,
+        .prepared_direct_call_root_fixture = true,
+        .inline_mode = .wrappers,
+        .proc_debug_names = true,
+    }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for ([_]bool{ false, true }) |reverse_post_check_completions| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            try runToLir(prepared_finite_capture_free_direct_call_fixture, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .prepared_direct_call_root_fixture = true,
+                .inline_mode = .wrappers,
+                .proc_debug_names = true,
+                .reverse_post_check_completions = reverse_post_check_completions,
+                .solved_lir_parallel_metrics_out = &metrics,
+            }, null);
+
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            try std.testing.expect(metrics.tasks_submitted > 0);
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.worker_string_entries_committed > 0);
+            try std.testing.expect(metrics.worker_inline_scopes_committed > 0);
         }
     }
 }
@@ -508,7 +544,7 @@ fn expectPostCheckParallelismDeterministicLir(
                 try std.testing.expect(solved_lir_parallel.tasks_committed > 0);
                 try std.testing.expectEqual(
                     solved_lir_parallel.tasks_submitted,
-                    solved_lir_parallel.tasks_committed + solved_lir_parallel.tasks_retried_serial,
+                    solved_lir_parallel.tasks_committed,
                 );
             }
         }

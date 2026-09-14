@@ -6,12 +6,14 @@ const harness = @import("lower_to_lir_harness.zig");
 const expectLowersToLirWithOptions = harness.expectLowersToLirWithOptions;
 const expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir =
     harness.expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir;
+const expectSolvedLirWorkerMetadataParallelismDeterministicLir =
+    harness.expectSolvedLirWorkerMetadataParallelismDeterministicLir;
 const expectSpecializationParallelismDeterministicLir = harness.expectSpecializationParallelismDeterministicLir;
 const expectEagerIteratorSpecializationParallelismDeterministicLir =
     harness.expectEagerIteratorSpecializationParallelismDeterministicLir;
 const expectProcedureRootParallelismDeterministicLir = harness.expectProcedureRootParallelismDeterministicLir;
 
-test "solved-LIR parallel metrics reset and report retry-free batch accounting" {
+test "solved-LIR parallel metrics reset and report exact batch accounting" {
     const app_body =
         \\main! = |_args| Ok({})
     ;
@@ -19,7 +21,6 @@ test "solved-LIR parallel metrics reset and report retry-free batch accounting" 
         .task_waves = 11,
         .tasks_submitted = 22,
         .tasks_committed = 33,
-        .tasks_retried_serial = 44,
     };
 
     try expectLowersToLirWithOptions(app_body, .{
@@ -29,7 +30,6 @@ test "solved-LIR parallel metrics reset and report retry-free batch accounting" 
     try std.testing.expectEqual(@as(u64, 0), metrics.task_waves);
     try std.testing.expectEqual(@as(u64, 0), metrics.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 0), metrics.tasks_committed);
-    try std.testing.expectEqual(@as(u64, 0), metrics.tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 0), metrics.workspace_initializations);
     try std.testing.expectEqual(@as(u64, 0), metrics.workspace_reuses);
 
@@ -41,7 +41,6 @@ test "solved-LIR parallel metrics reset and report retry-free batch accounting" 
     try std.testing.expect(metrics.task_waves > 0);
     try std.testing.expect(metrics.tasks_submitted > 0);
     try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
-    try std.testing.expectEqual(@as(u64, 0), metrics.tasks_retried_serial);
     try std.testing.expectEqual(
         metrics.tasks_submitted,
         metrics.workspace_initializations + metrics.workspace_reuses,
@@ -54,7 +53,6 @@ test "solved-LIR parallel metrics reset and report retry-free batch accounting" 
     try std.testing.expectEqual(@as(u64, 0), metrics.task_waves);
     try std.testing.expectEqual(@as(u64, 0), metrics.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 0), metrics.tasks_committed);
-    try std.testing.expectEqual(@as(u64, 0), metrics.tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 0), metrics.workspace_initializations);
     try std.testing.expectEqual(@as(u64, 0), metrics.workspace_reuses);
 }
@@ -88,6 +86,10 @@ test "multiple ordinary specialization epochs lower deterministically in paralle
 
 test "prepared finite capture-free direct calls lower in deterministic discovery waves" {
     try expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir();
+}
+
+test "Solved-LIR worker metadata relocates deterministically" {
+    try expectSolvedLirWorkerMetadataParallelismDeterministicLir();
 }
 
 test "iterator-producing callees complete in worker-owned specialization drafts" {

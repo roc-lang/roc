@@ -159,15 +159,16 @@ pub const Options = struct {
 /// Scheduling outcomes for solved-LIR body shards. These counts deliberately
 /// exclude elapsed time so tests and diagnostics do not depend on OS scheduling.
 /// Serial lowering leaves every field zero. After a successful parallel run,
-/// `tasks_submitted == tasks_committed + tasks_retried_serial` and
+/// `tasks_submitted == tasks_committed` and
 /// `tasks_submitted == workspace_initializations + workspace_reuses`.
 pub const ParallelMetrics = struct {
     task_waves: u64 = 0,
     tasks_submitted: u64 = 0,
     tasks_committed: u64 = 0,
-    tasks_retried_serial: u64 = 0,
     workspace_initializations: u64 = 0,
     workspace_reuses: u64 = 0,
+    worker_string_entries_committed: u64 = 0,
+    worker_inline_scopes_committed: u64 = 0,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -348,11 +349,6 @@ const LoweredFnBody = struct {
     tail_calls: ?LIR.TailCalls,
 };
 
-const PendingLocalName = struct {
-    local: LIR.LocalId,
-    lifted_local: Lifted.LocalId,
-};
-
 const CompletedFnBodyShard = struct {
     allocator: std.mem.Allocator,
     worker_id: usize,
@@ -366,10 +362,8 @@ const CompletedFnBodyShard = struct {
     tail_calls: ?LIR.TailCalls,
     discovered_fns: []Type.FnId,
     folded_map_matches: []Lifted.Program.FoldedMatch,
-    local_names: []PendingLocalName,
 
     fn deinit(self: *CompletedFnBodyShard) void {
-        self.allocator.free(self.local_names);
         self.allocator.free(self.folded_map_matches);
         self.allocator.free(self.discovered_fns);
         self.store.deinit();
@@ -383,7 +377,6 @@ const FnBodyTaskContext = struct {
     shard: ?CompletedFnBodyShard = null,
     workspace_initialized: bool = false,
     workspace_reused: bool = false,
-    retry_serial: bool = false,
     failed: bool = false,
     completed: bool = false,
 };
@@ -515,8 +508,7 @@ const Lowerer = struct {
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
-    /// Source-level names recorded by body workers for coordinator interning.
-    worker_local_names: std.ArrayList(PendingLocalName),
+    /// Source functions indexed by their stage-stable symbols.
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     /// Lowered capture record of every capture span seen so far. A capture
     /// record depends only on its captures, so one record serves every
@@ -589,7 +581,6 @@ const Lowerer = struct {
     /// Worker callbacks borrow the coordinator's frozen identity tables while
     /// owning procedure-local scratch and LIR body storage.
     worker_callback: bool = false,
-    worker_requires_serial_retry: bool = false,
     worker_discovered_fns: std.ArrayList(Type.FnId),
     /// Persistent scratch is indexed by executor lane, whose callbacks are
     /// exclusive. Escaping body shards never borrow storage from these entries.
@@ -750,7 +741,6 @@ const Lowerer = struct {
             .parallel_metrics = options.parallel_metrics,
             .root_requests = .{ .test_plan_metadata = options.test_plan_metadata },
             .folded_map_matches = .empty,
-            .worker_local_names = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
@@ -801,7 +791,6 @@ const Lowerer = struct {
     fn deinit(self: *Lowerer) void {
         self.deinitWorkerWorkspaces();
         self.worker_discovered_fns.deinit(self.allocator);
-        self.worker_local_names.deinit(self.allocator);
         self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
@@ -855,7 +844,6 @@ const Lowerer = struct {
         };
         self.deinitWorkerWorkspaces();
         self.worker_discovered_fns.deinit(self.allocator);
-        self.worker_local_names.deinit(self.allocator);
         self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
@@ -922,7 +910,6 @@ const Lowerer = struct {
         self.erased_owner_states = .empty;
         self.erased_call_owner_uses = .empty;
         self.folded_map_matches = .empty;
-        self.worker_local_names = .empty;
         self.worker_discovered_fns = .empty;
         return output;
     }
@@ -991,7 +978,6 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.InlineScopeId {
         if (source == Lifted.InlineScopeId.none) return outer;
         if (outer == LIR.InlineScopeId.none) return lirInlineScopeId(source);
-        if (self.worker_callback) return self.requireSerialWorkerRetry();
 
         const key = InlineScopeRebaseKey{ .source = source, .outer = outer };
         if (self.inline_scope_rebases.get(key)) |existing| return existing;
@@ -1014,7 +1000,6 @@ const Lowerer = struct {
         source_fn: Lifted.Fn,
         body_expr: Lifted.ExprId,
     ) Common.LowerError!LIR.InlineScopeId {
-        if (self.worker_callback) return self.requireSerialWorkerRetry();
         return try self.result.store.addInlineScope(.{
             .source_symbol = lirSymbol(source_fn.symbol),
             .source_name = try self.lowerInlineScopeSourceName(source_fn.symbol),
@@ -1073,13 +1058,12 @@ const Lowerer = struct {
         worker.result.store = store;
         worker.inline_scope_rebases = workspace.inline_scope_rebases;
         worker.folded_map_matches = .empty;
-        worker.worker_local_names = .empty;
         worker.captures = workspace.captures;
         worker.local_map = workspace.local_map;
         worker.typed_local_map = workspace.typed_local_map;
         worker.local_types = workspace.local_types;
         // The worker gate rejects compile-time sites. Existing entries are
-        // immutable lookups; a miss requests serial retry before mutation.
+        // immutable lookups, and coordinator preflight makes every read total.
         worker.comptime_site_map = coordinator.comptime_site_map;
         worker.next_join_point = 0;
         worker.loop_stack = workspace.loop_stack;
@@ -1099,14 +1083,12 @@ const Lowerer = struct {
         worker.erased_call_owner_uses = workspace.erased_call_owner_uses;
         worker.debug_materialized_out = null;
         worker.worker_callback = true;
-        worker.worker_requires_serial_retry = false;
         worker.worker_discovered_fns = .empty;
         return worker;
     }
 
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
         self.worker_discovered_fns.deinit(self.allocator);
-        self.worker_local_names.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
         self.inline_scope_rebases.clearRetainingCapacity();
         self.captures.clearRetainingCapacity();
@@ -1157,28 +1139,15 @@ const Lowerer = struct {
 
         const prefix = worker.result.store.captureBodyPrefix();
         const fn_index = @intFromEnum(context.fn_id);
-        const proc = worker.fn_entries.items[fn_index].proc orelse {
-            context.retry_serial = true;
-            return context;
-        };
+        const proc = worker.fn_entries.items[fn_index].proc orelse
+            Common.invariant("prepared Solved-LIR worker function had no procedure identity");
         const lowered = worker.lowerFnSpec(context.fn_id, worker.fn_specs.items[fn_index]) catch {
-            if (worker.worker_requires_serial_retry) {
-                worker.worker_requires_serial_retry = false;
-                context.retry_serial = true;
-            } else {
-                context.failed = true;
-            }
+            context.failed = true;
             return context;
         };
-        if (worker.worker_requires_serial_retry) {
-            Common.invariant("Solved-LIR worker serial retry escaped body lowering");
-        }
 
         _ = worker.result.store.captureBodyShard(prefix) catch |err| switch (err) {
-            error.UnsupportedShardMetadata => {
-                context.retry_serial = true;
-                return context;
-            },
+            error.UnsupportedShardMetadata => Common.invariant("prepared Solved-LIR worker emitted coordinator-owned metadata"),
             error.InvalidBodyPrefix => Common.invariant("Solved-LIR worker body prefix became invalid"),
             error.OutOfMemory => {
                 context.failed = true;
@@ -1197,13 +1166,6 @@ const Lowerer = struct {
             context.failed = true;
             return context;
         };
-        const local_names = worker.worker_local_names.toOwnedSlice(executor_worker.allocator) catch {
-            executor_worker.allocator.free(folded_map_matches);
-            executor_worker.allocator.free(discovered_fns);
-            context.failed = true;
-            return context;
-        };
-
         const store = worker.result.store;
         worker.result.store = undefined;
         store_owned_by_worker = false;
@@ -1220,7 +1182,6 @@ const Lowerer = struct {
             .tail_calls = body.tail_calls,
             .discovered_fns = discovered_fns,
             .folded_map_matches = folded_map_matches,
-            .local_names = local_names,
         };
         return context;
     }
@@ -1393,24 +1354,8 @@ const Lowerer = struct {
             }
         }
 
-        var retry_batch_serially = false;
         for (contexts) |context| {
             if (context.failed) return error.OutOfMemory;
-            retry_batch_serially = retry_batch_serially or context.retry_serial;
-        }
-        if (retry_batch_serially) {
-            // Every shard captured the same frozen coordinator prefix. Mixing a
-            // serial retry with shard commits would invalidate later prefixes
-            // and change reachability order, so discard the complete speculative
-            // wave and replay it serially in submission order.
-            if (self.parallel_metrics) |metrics| {
-                metrics.tasks_retried_serial = metrics.tasks_retried_serial +| @as(u64, @intCast(contexts.len));
-            }
-            for (contexts) |context| {
-                const fn_index = @intFromEnum(context.fn_id);
-                _ = try self.lowerFnSpec(context.fn_id, self.fn_specs.items[fn_index]);
-            }
-            return;
         }
 
         for (contexts) |*context| {
@@ -1518,20 +1463,24 @@ const Lowerer = struct {
                 };
                 const callee_fn = self.solved.lifted.getFn(callee);
                 if (self.solved.lifted.typedLocalSpan(callee_fn.captures).len != 0) break :blk false;
-                if (!call.is_cold and self.inline_plan.bodyForFn(callee) != null) break :blk false;
+                if (!call.is_cold) {
+                    if (self.inline_plan.bodyForFn(callee)) |inline_body| {
+                        if (!self.isWorkerBodyExpr(inline_body, next_depth)) break :blk false;
+                    }
+                }
                 for (view.exprSpan(call.args)) |arg| {
                     if (!self.isWorkerBodyExpr(arg, next_depth)) break :blk false;
                 }
                 break :blk true;
             },
-            .str_lit,
-            .bytes_lit,
             .static_data_candidate,
             .lambda,
             .def_ref,
             .fn_def,
             .fn_ref,
             .call_value,
+            .str_lit,
+            .bytes_lit,
             .low_level,
             .structural_eq,
             .structural_hash,
@@ -1578,6 +1527,8 @@ const Lowerer = struct {
     ) Common.LowerError!void {
         if (depth >= 256) Common.invariant("worker body preparation exceeded its certified depth");
         const next_depth = depth + 1;
+        const expr_ty = try self.lowerExprTy(expr_id);
+        _ = try self.layoutOfType(expr_ty);
         const data = self.solved.lifted.getExpr(expr_id).data;
         const view = self.solved.lifted.view();
         switch (data) {
@@ -1630,6 +1581,11 @@ const Lowerer = struct {
                 };
                 const callee_fn_id = try self.ensureOwnFnSpec(callee, .finite);
                 _ = try self.procPlaceholder(callee_fn_id);
+                if (!call.is_cold) {
+                    if (self.inline_plan.bodyForFn(callee)) |inline_body| {
+                        try self.prepareWorkerBodyCalls(inline_body, next_depth);
+                    }
+                }
                 for (view.exprSpan(call.args)) |arg| {
                     try self.prepareWorkerBodyCalls(arg, next_depth);
                 }
@@ -1643,14 +1599,14 @@ const Lowerer = struct {
             .dec_lit,
             .uninitialized,
             => {},
-            .str_lit,
-            .bytes_lit,
             .static_data_candidate,
             .lambda,
             .def_ref,
             .fn_def,
             .fn_ref,
             .call_value,
+            .str_lit,
+            .bytes_lit,
             .low_level,
             .structural_eq,
             .structural_hash,
@@ -1689,6 +1645,10 @@ const Lowerer = struct {
 
     fn commitFnBodyShard(self: *Lowerer, shard: *CompletedFnBodyShard) Common.LowerError!void {
         const body_local_count = shard.store.locals.len();
+        if (self.parallel_metrics) |metrics| {
+            metrics.worker_string_entries_committed +|= shard.store.bodyOwnedStringCount();
+            metrics.worker_inline_scopes_committed +|= shard.store.bodyOwnedInlineScopeCount();
+        }
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
         const appended = self.result.store.appendBodyShard(
             .{ .store = &shard.store, .prefix = shard.prefix },
@@ -1699,12 +1659,6 @@ const Lowerer = struct {
             error.UnsupportedShardMetadata => Common.invariant("validated Solved-LIR body shard gained unsupported metadata"),
             error.InvalidBodyPrefix => Common.invariant("validated Solved-LIR body shard lost its frozen prefix"),
         };
-        for (shard.local_names) |pending| {
-            try self.setLocalName(
-                appended.relocation.local(shard.prefix, pending.local),
-                pending.lifted_local,
-            );
-        }
         for (0..body_local_count) |_| {
             self.erased_owner_states.appendAssumeCapacity(.pending);
         }
@@ -2002,7 +1956,8 @@ const Lowerer = struct {
             .return_reuse = return_reuse,
         };
         if (self.worker_callback) {
-            return self.fn_spec_map.get(spec) orelse return self.requireSerialWorkerRetry();
+            return self.fn_spec_map.get(spec) orelse
+                self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared function specialization");
         }
 
         const result = try self.fn_spec_map.getOrPut(spec);
@@ -2052,7 +2007,7 @@ const Lowerer = struct {
         if (index >= self.fn_entries.items.len) Common.invariant("direct LIR reachability referenced a missing function spec");
         if (self.worker_callback) {
             const proc = self.fn_entries.items[index].proc orelse
-                return self.requireSerialWorkerRetry();
+                self.missingWorkerPreparation("Solved-LIR worker reached a function without a prepared procedure");
             try self.noteWorkerDiscoveredFn(fn_id);
             return proc;
         }
@@ -2069,7 +2024,7 @@ const Lowerer = struct {
         if (self.fn_entries.items[index].proc) |existing| return existing;
         if (self.worker_callback) {
             try self.noteWorkerDiscoveredFn(fn_id);
-            return self.requireSerialWorkerRetry();
+            self.missingWorkerPreparation("Solved-LIR worker requested an unprepared procedure placeholder");
         }
         return try self.finalizeFnProc(fn_id);
     }
@@ -2082,10 +2037,9 @@ const Lowerer = struct {
         try self.worker_discovered_fns.append(self.allocator, fn_id);
     }
 
-    fn requireSerialWorkerRetry(self: *Lowerer) error{OutOfMemory} {
-        if (!self.worker_callback) Common.invariant("coordinator requested a worker-only serial retry");
-        self.worker_requires_serial_retry = true;
-        return error.OutOfMemory;
+    fn missingWorkerPreparation(self: *const Lowerer, comptime message: []const u8) noreturn {
+        if (!self.worker_callback) Common.invariant("coordinator reported missing worker preparation");
+        Common.invariant(message);
     }
 
     fn finalizeFnProc(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
@@ -2460,7 +2414,9 @@ const Lowerer = struct {
 
     fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Common.LowerError!Type.TypeId {
         if (self.capture_types.get(captures)) |existing| return existing;
-        if (self.worker_callback) return self.requireSerialWorkerRetry();
+        if (self.worker_callback) {
+            self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared capture record type");
+        }
 
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
@@ -2518,7 +2474,9 @@ const Lowerer = struct {
     fn lowerType(self: *Lowerer, solved_ty: SolvedType.TypeVarId) Common.LowerError!Type.TypeId {
         const root = self.solved.types.root(solved_ty);
         if (self.type_map.get(root)) |cached| return cached;
-        if (self.worker_callback) return self.requireSerialWorkerRetry();
+        if (self.worker_callback) {
+            self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared type");
+        }
 
         const content = self.solved.types.get(root);
         if (content == .func) {
@@ -2730,7 +2688,9 @@ const Lowerer = struct {
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
         const index = @intFromEnum(site);
         if (self.comptime_site_map[index]) |existing| return existing;
-        if (self.worker_callback) return self.requireSerialWorkerRetry();
+        if (self.worker_callback) {
+            self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time site");
+        }
         const proc = self.current_proc orelse Common.invariant("compile-time site reached direct LIR lowering outside a proc");
         const source = self.solved.lifted.comptimeSite(site);
         const lowered = try self.result.addComptimeSite(switch (source.kind) {
@@ -2872,7 +2832,8 @@ const Lowerer = struct {
             .layout_idx = layout_idx,
         };
         if (self.worker_callback) {
-            return self.static_initializer_map.get(request) orelse return self.requireSerialWorkerRetry();
+            return self.static_initializer_map.get(request) orelse
+                self.missingWorkerPreparation("Solved-LIR worker referenced unprepared static data");
         }
         const gop = try self.static_initializer_map.getOrPut(request);
         if (gop.found_existing) return gop.value_ptr.*;
@@ -9033,15 +8994,6 @@ const Lowerer = struct {
 
     fn setLocalName(self: *Lowerer, lir_local: LIR.LocalId, lifted_local: Lifted.LocalId) Common.LowerError!void {
         const name = self.solved.lifted.localName(lifted_local);
-        if (self.worker_callback) {
-            if (name.len != 0) {
-                try self.worker_local_names.append(self.allocator, .{
-                    .local = lir_local,
-                    .lifted_local = lifted_local,
-                });
-            }
-            return;
-        }
         try self.result.store.setLocalName(lir_local, name);
     }
 
@@ -10143,7 +10095,9 @@ const Lowerer = struct {
 
     fn boxedRecursiveSlotTypeOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!Type.TypeId {
         if (self.recursive_slot_types.get(ty)) |existing| return existing;
-        if (self.worker_callback) return self.requireSerialWorkerRetry();
+        if (self.worker_callback) {
+            self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared recursive slot type");
+        }
         const slot_ty = try self.types.add(.{ .box = ty });
         try self.recursive_slot_types.put(ty, slot_ty);
         return slot_ty;
@@ -10500,7 +10454,9 @@ const Lowerer = struct {
 
     fn layoutOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!layout.Idx {
         if (self.knownLayoutForType(ty)) |existing| return existing;
-        if (self.worker_callback) return self.requireSerialWorkerRetry();
+        if (self.worker_callback) {
+            self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared layout");
+        }
         if (try self.knownLayoutForEquivalentNamedType(ty)) |existing| {
             try self.rememberLayoutForType(ty, existing.layout_idx);
             try self.layout_owner_types.put(ty, existing.ty);
