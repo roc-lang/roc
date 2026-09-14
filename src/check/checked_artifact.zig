@@ -135,6 +135,7 @@ pub const ModuleEnvStorage = union(enum) {
                 env_alloc.destroy(module_env);
             },
             .static_builtin => |module_env| {
+                module_env.common.idents.deinitTextRanks();
                 module_env.gpa.destroy(module_env);
             },
             .cached_buffer => |cached| {
@@ -4602,7 +4603,7 @@ pub const CheckedTypeStore = struct {
         errdefer source_schemes.deinit();
         var scheme_writer = canonical_type_keys.SchemeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
         defer scheme_writer.deinit();
-        var active = CheckedSourceTypeRoots.init(allocator);
+        var active = try CheckedSourceTypeRoots.init(allocator, module);
         defer active.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
         defer local_type_declarations.deinit();
@@ -7458,6 +7459,12 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
     hasher: TypeDigestHasher,
+    field_rank_scratch: base.TextRankCache,
+    tag_rank_scratch: base.TextRankCache,
+    field_ranks: []const u32 = &.{},
+    tag_ranks: []const u32 = &.{},
+    field_sort_scratch: std.ArrayList(RecordFieldForKey) = .empty,
+    tag_sort_scratch: std.ArrayList(TagForKey) = .empty,
     active: collections.DenseMap(CheckedTypeId, u32),
     identity_variables: collections.DenseMap(CheckedTypeId, u32),
 
@@ -7486,12 +7493,18 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             .formals = formals,
             .actuals = actuals,
             .hasher = TypeDigestHasher.init(),
+            .field_rank_scratch = base.TextRankCache.init(allocator),
+            .tag_rank_scratch = base.TextRankCache.init(allocator),
             .active = collections.DenseMap(CheckedTypeId, u32).init(allocator),
             .identity_variables = collections.DenseMap(CheckedTypeId, u32).init(allocator),
         };
     }
 
     fn deinit(self: *SubstitutedCheckedTypeKeyBuilder) void {
+        self.field_sort_scratch.deinit(self.allocator);
+        self.tag_sort_scratch.deinit(self.allocator);
+        self.field_rank_scratch.deinit();
+        self.tag_rank_scratch.deinit();
         self.identity_variables.deinit();
         self.active.deinit();
     }
@@ -7708,7 +7721,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             }
         }
 
-        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        if (fields.items.len > 1) {
+            self.field_ranks = try self.names.recordFieldLabelTextRanks(&self.field_rank_scratch);
+            try base.TextRankCache.sortByRank(RecordFieldForKey, fields.items, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
+        }
         self.writeU32(@intCast(fields.items.len));
         for (fields.items, 0..) |field, index| {
             if (index > 0 and self.names.recordFieldLabelTextEql(fields.items[index - 1].name, field.name)) {
@@ -7772,7 +7788,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             }
         }
 
-        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        if (fields.items.len > 1) {
+            self.field_ranks = try self.names.recordFieldLabelTextRanks(&self.field_rank_scratch);
+            try base.TextRankCache.sortByRank(RecordFieldForKey, fields.items, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
+        }
         if (tail == null and fields.items.len == 0) {
             self.writeTag("empty_record");
             return;
@@ -7863,7 +7882,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             }
         }
 
-        std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
+        if (tags.items.len > 1) {
+            self.tag_ranks = try self.names.tagLabelTextRanks(&self.tag_rank_scratch);
+            try base.TextRankCache.sortByRank(TagForKey, tags.items, &self.tag_sort_scratch, self.allocator, self, tagForKeyRank);
+        }
         if (tail == null and tags.items.len == 0) {
             self.writeTag("[]");
             return;
@@ -7914,12 +7936,12 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         );
     }
 
-    fn recordFieldForKeyLessThan(self: *SubstitutedCheckedTypeKeyBuilder, lhs: RecordFieldForKey, rhs: RecordFieldForKey) bool {
-        return self.names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
+    fn recordFieldForKeyRank(self: *SubstitutedCheckedTypeKeyBuilder, field: RecordFieldForKey) u32 {
+        return self.field_ranks[@intFromEnum(field.name)];
     }
 
-    fn tagForKeyLessThan(self: *SubstitutedCheckedTypeKeyBuilder, lhs: TagForKey, rhs: TagForKey) bool {
-        return self.names.tagLabelTextLessThan(lhs.name, rhs.name);
+    fn tagForKeyRank(self: *SubstitutedCheckedTypeKeyBuilder, tag: TagForKey) u32 {
+        return self.tag_ranks[@intFromEnum(tag.name)];
     }
 
     fn writeConstraints(
@@ -7930,7 +7952,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         for (constraints) |constraint| {
             self.writeBytes(self.names.methodNameText(constraint.fn_name));
             try self.writeType(constraint.fn_ty);
-            self.writeTag(@tagName(constraint.origin));
+            self.writeBytes(@tagName(constraint.origin));
             self.writeBool(constraint.binopNegated());
             const maybe_num_literal = constraint.numeralInfo();
             self.writeBool(maybe_num_literal != null);
@@ -7959,8 +7981,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         }
     }
 
-    fn writeTag(self: *SubstitutedCheckedTypeKeyBuilder, tag: []const u8) void {
-        self.writeBytes(tag);
+    fn writeTag(self: *SubstitutedCheckedTypeKeyBuilder, comptime tag: []const u8) void {
+        self.hasher.updateTag(tag);
     }
 
     fn writeBytes(self: *SubstitutedCheckedTypeKeyBuilder, bytes: []const u8) void {
@@ -8267,16 +8289,6 @@ const SourceTypeGraphFacts = struct {
 const SourceTypeGraphFactsContext = struct {
     module: TypedCIR.Module,
 
-    pub fn activeDepth(_: *@This()) u32 {
-        // The traversal's back-edge depth is immaterial for these two facts;
-        // only the existence of a back edge matters.
-        return 0;
-    }
-
-    pub fn backEdgeFact(_: *@This(), _: u32) SourceTypeGraphFacts {
-        return .{ .contains_cycle = true };
-    }
-
     fn mergeVar(self: *@This(), traversal: anytype, facts: *SourceTypeGraphFacts, var_: Var) Allocator.Error!void {
         facts.merge(try traversal.visit(self.module.typeStoreConst().resolveVar(var_).var_));
     }
@@ -8347,51 +8359,83 @@ const SourceTypeGraphFactsContext = struct {
 };
 
 const SourceTypeGraphAnalysis = struct {
-    active: std.AutoHashMap(Var, u32),
-    completed: std.AutoHashMap(Var, SourceTypeGraphFacts),
+    /// Publication consumes an immutable source store. Its exact variable
+    /// domain can therefore own one compact state column for the whole walk.
+    const State = packed struct(u8) {
+        status: enum(u2) { unseen, active, complete } = .unseen,
+        contains_identity_variables: bool = false,
+        contains_cycle: bool = false,
+        reserved: u4 = 0,
+    };
 
-    fn init(allocator: Allocator) SourceTypeGraphAnalysis {
-        return .{
-            .active = std.AutoHashMap(Var, u32).init(allocator),
-            .completed = std.AutoHashMap(Var, SourceTypeGraphFacts).init(allocator),
-        };
+    allocator: Allocator,
+    states: []State,
+
+    fn init(allocator: Allocator, variable_count: usize) Allocator.Error!SourceTypeGraphAnalysis {
+        const states = try allocator.alloc(State, variable_count);
+        @memset(states, .{});
+        return .{ .allocator = allocator, .states = states };
     }
 
     fn deinit(self: *SourceTypeGraphAnalysis) void {
-        self.completed.deinit();
-        self.active.deinit();
+        self.allocator.free(self.states);
     }
+
+    const Traversal = struct {
+        states: []State,
+        context: SourceTypeGraphFactsContext,
+
+        pub fn visit(self: *@This(), root: Var) Allocator.Error!SourceTypeGraphFacts {
+            const state = &self.states[@intFromEnum(root)];
+            switch (state.status) {
+                .active => return .{ .contains_cycle = true },
+                .complete => return .{
+                    .contains_identity_variables = state.contains_identity_variables,
+                    .contains_cycle = state.contains_cycle,
+                },
+                .unseen => {},
+            }
+            state.* = .{ .status = .active };
+            errdefer state.* = .{};
+            const facts = try self.context.visit(self, root);
+            state.* = .{
+                .status = .complete,
+                .contains_identity_variables = facts.contains_identity_variables,
+                .contains_cycle = facts.contains_cycle,
+            };
+            return facts;
+        }
+    };
 
     fn analyze(
         self: *SourceTypeGraphAnalysis,
         module: TypedCIR.Module,
         var_: Var,
     ) Allocator.Error!SourceTypeGraphFacts {
-        std.debug.assert(self.active.count() == 0);
-        var context = SourceTypeGraphFactsContext{ .module = module };
-        var traversal = checked_traverse.MemoizedFactTraversal(Var, SourceTypeGraphFacts, SourceTypeGraphFactsContext).init(
-            &self.active,
-            &self.completed,
-            &context,
-        );
-        const facts = try traversal.visit(module.typeStoreConst().resolveVar(var_).var_);
-        std.debug.assert(self.active.count() == 0);
-        return facts;
+        std.debug.assert(self.states.len == module.typeStoreConst().len());
+        var traversal = Traversal{
+            .states = self.states,
+            .context = .{ .module = module },
+        };
+        return traversal.visit(module.typeStoreConst().resolveVar(var_).var_);
     }
 };
 
 const CheckedSourceTypeRoots = struct {
     roots: std.AutoHashMap(Var, CheckedTypeId),
     graph_analysis: SourceTypeGraphAnalysis,
+    key_writer: canonical_type_keys.TypeWriter,
 
-    fn init(allocator: Allocator) CheckedSourceTypeRoots {
+    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
         return .{
             .roots = std.AutoHashMap(Var, CheckedTypeId).init(allocator),
-            .graph_analysis = SourceTypeGraphAnalysis.init(allocator),
+            .graph_analysis = try SourceTypeGraphAnalysis.init(allocator, @intCast(module.typeStoreConst().len())),
+            .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
         };
     }
 
     fn deinit(self: *CheckedSourceTypeRoots) void {
+        self.key_writer.deinit();
         self.graph_analysis.deinit();
         self.roots.deinit();
     }
@@ -8452,12 +8496,7 @@ fn appendCheckedTypeRootWithRowDefault(
             return id;
         }
 
-        const key_info = try canonical_type_keys.fromVarInfo(
-            allocator,
-            module.typeStoreConst(),
-            module.moduleEnvConst(),
-            resolved_var,
-        );
+        const key_info = try active.key_writer.fromVar(resolved_var);
         const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.roots.items.len)));
         const root = CheckedTypeRoot{
             .id = id,
@@ -8512,12 +8551,7 @@ fn appendCheckedTypeRootWithRowDefault(
             return existing;
         }
 
-        const key_info = try canonical_type_keys.fromVarInfo(
-            allocator,
-            module.typeStoreConst(),
-            module.moduleEnvConst(),
-            resolved_var,
-        );
+        const key_info = try active.key_writer.fromVar(resolved_var);
         std.debug.assert(!key_info.contains_identity_variables);
         if (store.rootForKey(key_info.key)) |existing| {
             deinitCheckedTypePayloadBuild(allocator, &build_payload);
@@ -8546,12 +8580,7 @@ fn appendCheckedTypeRootWithRowDefault(
         return id;
     }
 
-    const key_info = try canonical_type_keys.fromVarInfo(
-        allocator,
-        module.typeStoreConst(),
-        module.moduleEnvConst(),
-        resolved_var,
-    );
+    const key_info = try active.key_writer.fromVar(resolved_var);
     if (!key_info.contains_identity_variables) {
         if (store.rootForKey(key_info.key)) |id| {
             applyCheckedTypeRowDefault(store, id, row_default);
@@ -9468,7 +9497,7 @@ test "optional record fields publish through solver-side record copy" {
     defer names.deinit();
     var store = CheckedTypeStore{};
     defer store.deinit(allocator);
-    var active = CheckedSourceTypeRoots.init(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
     defer active.deinit();
     const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
 
@@ -9603,7 +9632,7 @@ test "poisoned record field presence preserves its value type and canonical key"
     defer names.deinit();
     var store = CheckedTypeStore{};
     defer store.deinit(allocator);
-    var active = CheckedSourceTypeRoots.init(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
     defer active.deinit();
     const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
 
@@ -9660,7 +9689,7 @@ test "optional record fields publish through the declaration annotation path" {
     defer names.deinit();
     var store = CheckedTypeStore{};
     defer store.deinit(allocator);
-    var active = CheckedSourceTypeRoots.init(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
     defer active.deinit();
     const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
@@ -9721,7 +9750,7 @@ test "checked row defaults apply only to unconstrained type variables" {
 
 fn withEmptyTagCheckedOutputForTest(
     allocator: Allocator,
-    comptime inspect: fn (TypedCIR.Module, *canonical.CanonicalNameStore, CheckedImportViews, *CheckedTypeStore, *CheckedSourceTypeRoots, *types.Store, Var) EmptyTagCheckedOutputTestError!void,
+    comptime inspect: fn (TypedCIR.Module, *canonical.CanonicalNameStore, CheckedImportViews, *CheckedTypeStore, *types.Store, Var) EmptyTagCheckedOutputTestError!void,
 ) EmptyTagCheckedOutputTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
 
@@ -9740,8 +9769,6 @@ fn withEmptyTagCheckedOutputForTest(
     defer names.deinit();
     var store = CheckedTypeStore{};
     defer store.deinit(allocator);
-    var active = CheckedSourceTypeRoots.init(allocator);
-    defer active.deinit();
 
     const mutable_types = &test_env.module_env.types;
     const explicit_empty = try mutable_types.freshFromContent(.{ .structure = .empty_tag_union });
@@ -9749,18 +9776,20 @@ fn withEmptyTagCheckedOutputForTest(
         .current_owner = testCheckedModuleKey(1),
         .direct = &.{},
         .available = &.{},
-    }, &store, &active, mutable_types, explicit_empty);
+    }, &store, mutable_types, explicit_empty);
 }
 
 test "checked output preserves shared defaulted empty-tag identity" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, active: *CheckedSourceTypeRoots, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
             const identity = try type_store.fresh();
             try type_store.setVarToEmptyTagUnionDefault(identity);
             const alias = try type_store.freshRedirect(identity);
-            const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, identity);
-            const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, alias);
+            var active = try CheckedSourceTypeRoots.init(allocator, module);
+            defer active.deinit();
+            const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, identity);
+            const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, alias);
             try std.testing.expectEqual(first, second);
             const first_payload = store.payload(first);
             if (first_payload != .flex) return error.ExpectedFlexIdentity;
@@ -9773,13 +9802,15 @@ test "checked output preserves shared defaulted empty-tag identity" {
 test "checked output preserves distinct defaulted empty-tag identities" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, active: *CheckedSourceTypeRoots, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
             const first_identity = try type_store.fresh();
             const second_identity = try type_store.fresh();
             try type_store.setVarToEmptyTagUnionDefault(first_identity);
             try type_store.setVarToEmptyTagUnionDefault(second_identity);
-            const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, first_identity);
-            const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, second_identity);
+            var active = try CheckedSourceTypeRoots.init(allocator, module);
+            defer active.deinit();
+            const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, first_identity);
+            const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, second_identity);
             try std.testing.expect(first != second);
             for ([_]CheckedTypeId{ first, second }) |root| {
                 const payload = store.payload(root);
@@ -9794,8 +9825,10 @@ test "checked output preserves distinct defaulted empty-tag identities" {
 test "checked output keeps proven closed empty tag union explicit" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, active: *CheckedSourceTypeRoots, _: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
-            const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, explicit_empty);
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, _: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
+            var active = try CheckedSourceTypeRoots.init(allocator, module);
+            defer active.deinit();
+            const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, explicit_empty);
             try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payload(root));
         }
     }.inspect);
@@ -9804,9 +9837,11 @@ test "checked output keeps proven closed empty tag union explicit" {
 test "checked output keeps redirected proven empty tag union explicit" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, active: *CheckedSourceTypeRoots, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
             const redirected = try type_store.freshRedirect(explicit_empty);
-            const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, redirected);
+            var active = try CheckedSourceTypeRoots.init(allocator, module);
+            defer active.deinit();
+            const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, redirected);
             try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payload(root));
         }
     }.inspect);
@@ -9815,7 +9850,7 @@ test "checked output keeps redirected proven empty tag union explicit" {
 test "checked output structurally interns independent closed function graphs" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, active: *CheckedSourceTypeRoots, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
             const first_arg = try type_store.freshFromContent(.{ .structure = .empty_record });
             const first_ret = try type_store.freshFromContent(.{ .structure = .empty_tag_union });
             const first_fn = try type_store.freshFromContent(try type_store.mkFuncPure(&.{first_arg}, first_ret));
@@ -9824,9 +9859,11 @@ test "checked output structurally interns independent closed function graphs" {
             const second_ret = try type_store.freshFromContent(.{ .structure = .empty_tag_union });
             const second_fn = try type_store.freshFromContent(try type_store.mkFuncPure(&.{second_arg}, second_ret));
 
-            const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, first_fn);
+            var active = try CheckedSourceTypeRoots.init(allocator, module);
+            defer active.deinit();
+            const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, first_fn);
             const root_count_after_first = store.roots.items.len;
-            const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, second_fn);
+            const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, second_fn);
 
             try std.testing.expectEqual(first, second);
             try std.testing.expectEqual(root_count_after_first, store.roots.items.len);
@@ -9866,12 +9903,14 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
 test "checked output retains defaulted identity inside parent function digest" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, active: *CheckedSourceTypeRoots, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
             const identity = try type_store.fresh();
             try type_store.setVarToEmptyTagUnionDefault(identity);
             const function_content = try type_store.mkFuncPure(&.{identity}, identity);
             const function_var = try type_store.freshFromContent(function_content);
-            const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, function_var);
+            var active = try CheckedSourceTypeRoots.init(allocator, module);
+            defer active.deinit();
+            const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, function_var);
             const root_payload = store.payload(root);
             if (root_payload != .function) return error.ExpectedFunctionPayload;
             const function = root_payload.function;
@@ -16190,6 +16229,8 @@ pub const ResolvedValueRefTable = struct {
         synthetic_expr_origins: []const SyntheticExprOriginRecord,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
+        var key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
+        defer key_writer.deinit();
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
         var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
@@ -16239,12 +16280,7 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_type_key = try canonical_type_keys.fromVar(
-                allocator,
-                module.typeStoreConst(),
-                module.moduleEnvConst(),
-                module.exprType(expr_idx),
-            );
+            const checked_type_key = (try key_writer.fromVar(module.exprType(expr_idx))).key;
             const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type root was not published", .{});
@@ -17794,6 +17830,8 @@ const EvidencePass = struct {
     /// One complete schema per checker-authored owner. Aliases and local
     /// scopes borrow both its enumeration and its published pool ranges.
     schemas_by_root: collections.DenseMap(Var, SchemeSchema),
+    /// Reuse traversal capacity while giving each schema fresh identity slots.
+    identity_writer: canonical_type_keys.TypeWriter,
     /// Value-use record index by source node, including explicit shared uses.
     value_use_by_node: std.AutoHashMap(u32, u32),
     /// dispatch_target record index by the discharged edge's raw fn var.
@@ -17901,6 +17939,7 @@ const EvidencePass = struct {
             .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
             .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
             .schemas_by_root = collections.DenseMap(Var, SchemeSchema).init(allocator),
+            .identity_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
             .generated_codec_by_source = std.AutoHashMap(u64, static_dispatch.GeneratedCodecDerivationId).init(allocator),
             .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
@@ -17930,6 +17969,7 @@ const EvidencePass = struct {
         var schemas = self.schemas_by_root.valueIterator();
         while (schemas.next()) |schema| self.allocator.free(schema.identity_vars);
         self.schemas_by_root.deinit();
+        self.identity_writer.deinit();
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
         self.generated_codec_by_source.deinit();
@@ -18691,7 +18731,7 @@ const EvidencePass = struct {
         try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
         for (params.items) |*param| param.path = try arena.dupe(static_dispatch.EvidencePathStep, param.path);
-        const identity_vars = try canonical_type_keys.identityVarsFromScheme(self.allocator, self.types, env, root, relation_roots.items);
+        const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
         const schema = SchemeSchema{
             .params = try arena.dupe(EvidenceParam, params.items),
@@ -22390,6 +22430,8 @@ pub const PlatformRequiredDeclarationTable = struct {
         const required_types = module_env.requires_types.items.items;
         const declarations = try allocator.alloc(PlatformRequiredDeclaration, required_types.len);
         errdefer allocator.free(declarations);
+        var scheme_writer = canonical_type_keys.SchemeWriter.init(allocator, &module_env.types, module_env);
+        defer scheme_writer.deinit();
 
         for (required_types, 0..) |required_type, i| {
             declarations[i] = .{
@@ -22397,12 +22439,7 @@ pub const PlatformRequiredDeclarationTable = struct {
                 .module_idx = module_idx,
                 .requires_idx = @intCast(i),
                 .platform_name = try names.internExportIdent(module_env.getIdentStoreConst(), required_type.ident),
-                .declared_source_ty = try canonical_type_keys.schemeFromVar(
-                    allocator,
-                    &module_env.types,
-                    module_env,
-                    ModuleEnv.varFrom(required_type.type_anno),
-                ),
+                .declared_source_ty = try scheme_writer.fromVar(ModuleEnv.varFrom(required_type.type_anno)),
                 .type_anno = required_type.type_anno,
                 .for_clause_aliases_hash = hashRequiredTypeForClauseAliases(module_env, required_type),
             };
@@ -23006,7 +23043,7 @@ fn platformRequirementSolutionTableFromInputs(
         .direct = imports,
         .available = available,
     };
-    var active = CheckedSourceTypeRoots.init(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
     defer active.deinit();
 
     var solutions = std.ArrayList(PlatformRequirementSolution).empty;
@@ -24624,6 +24661,8 @@ pub fn buildPlatformAppRelation(
         declaration_table.identityHash(&declaration_names),
     );
     const relation_key = PlatformAppRelationKey.compute(app_artifact.key, requirement_context);
+    var key_writer = canonical_type_keys.TypeWriter.init(allocator, &platform_module_env.types, platform_module_env);
+    defer key_writer.deinit();
 
     for (declarations) |declaration| {
         // The checker records successful solutions as exact app value/type
@@ -24634,12 +24673,7 @@ pub fn buildPlatformAppRelation(
             continue;
         };
 
-        const requested_source_ty = try canonical_type_keys.fromVar(
-            allocator,
-            &platform_module_env.types,
-            platform_module_env,
-            ModuleEnv.varFrom(declaration.type_anno),
-        );
+        const requested_source_ty = (try key_writer.fromVar(ModuleEnv.varFrom(declaration.type_anno))).key;
         const app_value_ref = TopLevelValueRef{
             .artifact = app_artifact.key,
             .pattern = solution.pattern,
@@ -25080,16 +25114,13 @@ fn publishRequiresMetadata(
     const source = module.requiresTypes();
     const requires = try allocator.alloc(RequiresEntry, source.len);
     errdefer allocator.free(requires);
+    var scheme_writer = canonical_type_keys.SchemeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
+    defer scheme_writer.deinit();
 
     for (source, 0..) |entry, i| {
         requires[i] = .{
             .platform_name = try names.internExportIdent(module.identStoreConst(), entry.ident),
-            .declared_source_ty = try canonical_type_keys.schemeFromVar(
-                allocator,
-                module.typeStoreConst(),
-                module.moduleEnvConst(),
-                ModuleEnv.varFrom(entry.type_anno),
-            ),
+            .declared_source_ty = try scheme_writer.fromVar(ModuleEnv.varFrom(entry.type_anno)),
         };
     }
 
