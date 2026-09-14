@@ -7764,10 +7764,35 @@ function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.
-Each executor lane owns a private cumulative type/name domain; after a frozen
-batch completes, the coordinator absorbs each immutable suffix and assigns
-program identities strictly in request order. This keeps global identity
-independent of worker scheduling without locking coordinator state. Root kinds
+Each executor lane owns a private cumulative type/name domain. Ordinary bodies
+stream through a bounded executor session: the coordinator accepts completed
+shards strictly in request order and immediately makes discovered requests
+available to free lanes. Running and completed-but-unaccepted tasks share the
+same bounded window. Each immutable lane suffix is absorbed even when its body
+is discarded after an earlier serial claim, preserving cumulative lane ids.
+All accepted tasks are joined before releasing their contexts, including on OOM.
+
+Workers never borrow the mutable coordinator Program. Their captured input
+contains only committed types, canonical names, imported-function references,
+and constant-function evidence. Each job also carries its own immutable
+reservation signature for recursive references. Mutable reservation rows and
+final syntax remain exclusively coordinator-owned contiguous arrays. Publication copies each newly committed
+input suffix once and grows contiguous backing geometrically, retaining older
+backings for readers. This bounds publication storage and copying linearly in
+the largest input prefix without changing downstream IR access. Each task has
+its own lengths and sealed construction state; reads above its boundary are
+invariant violations. A lane retains a stable input-store identity so cumulative
+relocation maps remain valid as its next captured prefix advances.
+
+Cross-job interface summaries publish through an append-only exact-key hash
+index with atomic links. Fully initialized entries become visible with release
+publication; workers acquire links and filter by their captured entry boundary,
+which matches the type/name snapshot. Patricia branches preserve all prior
+keys when splitting; full keys and existing exact evidence/type comparisons
+resolve collisions. Entries and their evidence remain alive until workers have
+joined. This keeps memo reuse concurrent without exposing mutable hash-table
+storage or making completion order semantic. Global identities are still
+assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.
 
@@ -7775,8 +7800,9 @@ Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
 commit. Aggregate worker work is the sum of executor callback intervals and can
 exceed wall time when callbacks overlap; it is diagnostic work, not another
-sequential phase. Coordinator post-batch work separately measures validation,
-serial fallback, discard, and ordered commit after each executor barrier. Task,
+sequential phase. Coordinator work separately measures validation, serial retry,
+discard, and ordered commit. `task_waves` counts root batches and specialization streaming
+sessions, not individual dependency waits within a stream. Task,
 lane, retry, and discard counts explain the relationship without using
 scheduling-dependent values for compiler behavior.
 

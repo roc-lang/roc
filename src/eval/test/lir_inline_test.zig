@@ -2395,6 +2395,35 @@ test "interface summaries relocate across bodies and executor lanes" {
     const Executor = struct {
         allocator: Allocator,
         next_lane: usize,
+        pending: [2]TaskExecutor.Completion = undefined,
+        count: usize = 0,
+        open: bool = false,
+
+        fn begin(context: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            std.debug.assert(!self.open and self.count == 0);
+            self.open = true;
+        }
+
+        fn submit(context: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            std.debug.assert(self.open and self.count < self.pending.len);
+            try run(context, &.{task}, self.pending[self.count..][0..1]);
+            self.count += 1;
+        }
+
+        fn waitOne(context: *anyopaque) TaskExecutor.Completion {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            std.debug.assert(self.open and self.count > 0);
+            self.count -= 1;
+            return self.pending[self.count];
+        }
+
+        fn end(context: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            std.debug.assert(self.open and self.count == 0);
+            self.open = false;
+        }
 
         fn run(context: *anyopaque, tasks: []const TaskExecutor.Task, completions: []TaskExecutor.Completion) Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(context));
@@ -2414,7 +2443,12 @@ test "interface summaries relocate across bodies and executor lanes" {
         }
 
         fn executor(self: *@This()) TaskExecutor.Executor {
-            return .{ .context = self, .worker_count = 2, .runFn = run };
+            return .{ .context = self, .worker_count = 2, .runFn = run, .streaming = .{
+                .beginFn = begin,
+                .submitFn = submit,
+                .waitOneFn = waitOne,
+                .endFn = end,
+            } };
         }
     };
     const source =

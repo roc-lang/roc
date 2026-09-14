@@ -14,6 +14,7 @@ const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
 const solve = @import("solve.zig");
 const serialize = @import("serialize.zig");
+const PublishedInputs = @import("published_inputs.zig");
 
 const InstGraph = solve.InstGraph;
 const InstNode = solve.InstNode;
@@ -294,7 +295,7 @@ pub const ParallelMetricsSnapshot = struct {
     /// callback and can therefore exceed wall time.
     worker_work_ns: u64 = 0,
     /// Sum of validation, serial retry, discard, and ordered commit intervals
-    /// after executor barriers.
+    /// during root-batch acceptance and specialization streaming.
     coordinator_post_batch_work_ns: u64 = 0,
     root_tasks_submitted: u64 = 0,
     root_tasks_committed: u64 = 0,
@@ -303,6 +304,7 @@ pub const ParallelMetricsSnapshot = struct {
     specialization_tasks_committed: u64 = 0,
     specialization_tasks_retried_serial: u64 = 0,
     specialization_tasks_discarded_ready: u64 = 0,
+    /// Root batches plus ordinary-specialization streaming sessions.
     task_waves: u64 = 0,
     /// Largest executor width represented by any aggregated lowering.
     peak_worker_lanes_available: u64 = 0,
@@ -2352,11 +2354,10 @@ const TemplateReservation = struct {
 /// reserves the identity and queues the body for the scheduler's wave drain.
 const TemplateBodyScheduling = enum { immediate, queued };
 
-/// Keep more ready jobs in each executor run than there are worker lanes.
-/// Dynamic lane reuse smooths procedure-size skew and amortizes each frozen
-/// coordinator barrier without changing dispatch-order commit. Four bounds
-/// the completed shards retained until each batch reaches its commit barrier.
+/// Bound running plus completed-but-unaccepted jobs. Extra slots let free
+/// lanes continue working when an earlier dispatch delays ordered acceptance.
 const parallel_spec_jobs_per_lane: usize = 4;
+const PublishedSummaries = PublishedInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
 
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
@@ -2571,6 +2572,9 @@ pub const SpecJobWorkerState = struct {
     allocator: Allocator,
     workspace: SpecJobWorkspace,
     builder: ?*Builder = null,
+    /// Stable-address lane view of the captured worker read set.
+    /// It borrows publication storage and contains no coordinator output rows.
+    input_program: ?*Ast.Program = null,
     tasks_started: u64 = 0,
     counters: SpecializationCounters = .{},
     diagnostics: Diagnostics = .{},
@@ -2589,6 +2593,7 @@ pub const SpecJobWorkerState = struct {
             self.allocator.destroy(builder);
         }
         self.workspace.deinit();
+        if (self.input_program) |program| self.allocator.destroy(program);
         self.* = undefined;
     }
 };
@@ -2707,14 +2712,15 @@ const CompletedProcedureRootShard = struct {
     }
 };
 
-/// Immutable coordinator input shared by one frozen ordinary-specialization batch.
+/// Captured immutable input for a root batch or one streaming specialization.
 const SpecJobWorkerInputs = struct {
     modules: Common.CheckedModules,
-    program: *Ast.Program,
+    snapshot: *const PublishedInputs.Snapshot,
     proc_debug_names: bool,
     specialization_cache: SpecializationCacheControl,
     loaded_specialization_shards: []const LoadedSpecializationShard,
-    interface_summaries: *const InterfaceSummaryCache,
+    interface_summaries: *const PublishedSummaries,
+    interface_summary_end: usize,
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
@@ -2735,7 +2741,8 @@ const PreparedSpecJob = struct {
 
 /// Caller-owned task storage. Executor callbacks write only their own element.
 const SpecJobTaskContext = struct {
-    inputs: *const SpecJobWorkerInputs,
+    inputs: SpecJobWorkerInputs,
+    snapshot: PublishedInputs.Snapshot,
     workers: []?SpecJobWorkerState,
     prepared: PreparedSpecJob,
     shard: ?CompletedSpecJobShard = null,
@@ -2745,19 +2752,12 @@ const SpecJobTaskContext = struct {
     worker_work_ns: u64 = 0,
 };
 
-/// Reusable caller-owned scheduler storage. Executor runs are synchronous, so
-/// no callback retains these task descriptors after a batch completes.
+/// Fixed ring of caller-owned task contexts, retained through ordered acceptance.
 const SpecJobTaskBuffers = struct {
-    prepared: []PreparedSpecJob = &.{},
     contexts: []SpecJobTaskContext = &.{},
-    tasks: []base.post_check_task_executor.Task = &.{},
-    completions: []base.post_check_task_executor.Completion = &.{},
 
     fn deinit(self: *SpecJobTaskBuffers, allocator: Allocator) void {
-        if (self.completions.len != 0) allocator.free(self.completions);
-        if (self.tasks.len != 0) allocator.free(self.tasks);
-        if (self.contexts.len != 0) allocator.free(self.contexts);
-        if (self.prepared.len != 0) allocator.free(self.prepared);
+        allocator.free(self.contexts);
         self.* = .{};
     }
 };
@@ -3114,8 +3114,11 @@ const Builder = struct {
     spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
     spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
     spec_job_task_buffers: SpecJobTaskBuffers = .{},
+    published_inputs: PublishedInputs.ProgramInputs = .{},
+    published_summaries: ?PublishedSummaries = null,
     interface_summaries: InterfaceSummaryCache,
-    coordinator_interface_summaries: ?*const InterfaceSummaryCache = null,
+    coordinator_interface_summaries: ?*const PublishedSummaries = null,
+    coordinator_interface_summary_end: usize = 0,
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
@@ -3263,14 +3266,17 @@ const Builder = struct {
         worker: *SpecJobWorkerState,
         inputs: *const SpecJobWorkerInputs,
     ) Allocator.Error!*Builder {
+        if (worker.input_program == null) worker.input_program = try worker.allocator.create(Ast.Program);
+        worker.input_program.?.* = inputs.snapshot.workerProgram(worker.allocator);
         if (worker.builder) |builder| {
             builder.coordinator_interface_summaries = inputs.interface_summaries;
+            builder.coordinator_interface_summary_end = inputs.interface_summary_end;
             return builder;
         }
 
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
-        builder.* = Builder.init(worker.allocator, inputs.modules, inputs.program, .{
+        builder.* = Builder.init(worker.allocator, inputs.modules, worker.input_program.?, .{
             .proc_debug_names = inputs.proc_debug_names,
             .specialization_cache = inputs.specialization_cache,
             .loaded_specialization_shards = inputs.loaded_specialization_shards,
@@ -3287,6 +3293,7 @@ const Builder = struct {
         builder.current_loc = inputs.current_loc;
         builder.current_region = inputs.current_region;
         builder.coordinator_interface_summaries = inputs.interface_summaries;
+        builder.coordinator_interface_summary_end = inputs.interface_summary_end;
         worker.builder = builder;
         return builder;
     }
@@ -3381,6 +3388,8 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
+        if (self.published_summaries) |*published| published.deinit();
+        self.published_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
@@ -3909,6 +3918,15 @@ const Builder = struct {
         }
     }
 
+    fn publishSpecJobInputs(self: *Builder) Allocator.Error!PublishedInputs.Snapshot {
+        if (self.published_summaries == null) self.published_summaries = PublishedSummaries.init(self.allocator);
+        const summaries = &self.published_summaries.?;
+        for (self.interface_summaries.entries.items[summaries.count..]) |entry| {
+            try summaries.insert(entry.address, entry);
+        }
+        return self.published_inputs.publish(self.allocator, self.program);
+    }
+
     /// Run a frozen root batch to completion before committing its first root,
     /// so callbacks can never overlap coordinator mutation.
     fn lowerProcedureRootBatch(
@@ -3923,13 +3941,15 @@ const Builder = struct {
         defer self.allocator.free(tasks);
         const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, requests.len);
         defer self.allocator.free(completions);
+        const snapshot = try self.publishSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
             .modules = self.modules,
-            .program = self.program,
+            .snapshot = &snapshot,
             .proc_debug_names = self.proc_debug_names,
             .specialization_cache = self.specialization_cache,
             .loaded_specialization_shards = self.loaded_specialization_shards,
-            .interface_summaries = &self.interface_summaries,
+            .interface_summaries = &self.published_summaries.?,
+            .interface_summary_end = self.published_summaries.?.count,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -5113,197 +5133,181 @@ const Builder = struct {
     /// drains. Bodies executed here may enqueue further requests; those join
     /// the same FIFO and are reached by this same loop, in enqueue order.
     fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
-        const executor = self.post_check_executor orelse {
-            return self.drainPendingSpecJobsSerial();
-        };
-        if (executor.worker_count <= 1) {
-            return self.drainPendingSpecJobsSerial();
+        const executor = self.post_check_executor orelse return self.drainPendingSpecJobsSerial();
+        if (executor.worker_count <= 1) return self.drainPendingSpecJobsSerial();
+        if (self.pending_spec_jobs_head == self.pending_spec_jobs.items.len) {
+            self.pending_spec_jobs.clearRetainingCapacity();
+            self.pending_spec_jobs_head = 0;
+            self.requirePendingSpecJobsDrained();
+            return;
         }
 
         try self.ensureParallelSpecJobState(executor.worker_count);
-        const batch_capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
-        const buffers = try self.ensureSpecJobTaskBuffers(batch_capacity);
-        const prepared = buffers.prepared;
+        const capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
+        const buffers = try self.ensureSpecJobTaskBuffers(capacity);
         const contexts = buffers.contexts;
-        const tasks = buffers.tasks;
-        const completions = buffers.completions;
-
-        const inputs = SpecJobWorkerInputs{
-            .modules = self.modules,
-            .program = self.program,
-            .proc_debug_names = self.proc_debug_names,
-            .specialization_cache = self.specialization_cache,
-            .loaded_specialization_shards = self.loaded_specialization_shards,
-            .interface_summaries = &self.interface_summaries,
-            .collect_counters = self.counters != null,
-            .collect_diagnostics = self.diagnostics != null,
-            .inline_expects = self.inline_expects,
-            .static_data_literals = self.static_data_literals,
-            .target_usize = self.target_usize,
-            .hosted_catalog = self.hosted_catalog,
-            .current_loc = self.current_loc,
-            .current_region = self.current_region,
-            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
-        };
-
-        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
-            const frontier = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
-            self.requireNextSpecAcceptance(frontier.dispatch_index);
-            if (self.spec_store.recordStatus(frontier.spec) == .ready) {
-                self.pending_spec_jobs_head += 1;
-                try self.executePendingSpecJob(frontier);
-                continue;
+        const session = executor.begin();
+        defer session.end();
+        var submitted: usize = 0;
+        var accepted: usize = 0;
+        var running: usize = 0;
+        // Slots and snapshots outlive every accepted task even on OOM. Completed
+        // shards own their epochs independently of the reusable worker workspace.
+        defer {
+            while (running > 0) : (running -= 1) {
+                const completion = session.waitOne();
+                self.receiveSpecJobCompletion(contexts, completion, accepted, submitted);
             }
-
-            const frontier_view = self.moduleForDigest(names.procTemplateModuleDigest(frontier.template_ref));
-            const frontier_template = frontier_view.templates.get(frontier.template_ref.template);
-            if (frontier_template.target == .hosted) {
-                self.pending_spec_jobs_head += 1;
-                try self.executePendingSpecJob(frontier);
-                continue;
+            while (accepted < submitted) : (accepted += 1) {
+                const context = &contexts[accepted % capacity];
+                if (context.shard) |*shard| shard.deinit();
+                context.shard = null;
             }
-
-            var batch_len: usize = 0;
-            while (batch_len < batch_capacity and
+        }
+        if (self.timing) |timing| {
+            timing.parallel.task_waves +%= 1;
+            timing.parallel.peak_worker_lanes_available = @max(timing.parallel.peak_worker_lanes_available, @as(u64, @intCast(executor.worker_count)));
+        }
+        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len or accepted < submitted) {
+            if (running < executor.worker_count and submitted - accepted < capacity and
                 self.pending_spec_jobs_head < self.pending_spec_jobs.items.len)
             {
                 const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
-                const expected_dispatch = self.next_spec_accept_index + batch_len;
-                if (job.dispatch_index != expected_dispatch) {
-                    Common.compilerBug("Monotype specialization batch was not contiguous in dispatch order");
+                if (job.dispatch_index != self.next_spec_accept_index + submitted - accepted) {
+                    Common.compilerBug("Monotype streaming dispatch was not contiguous");
                 }
-                if (self.spec_store.recordStatus(job.spec) != .reserved) break;
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
                 const template = view.templates.get(job.template_ref.template);
-                if (template.target == .hosted) break;
-
-                prepared[batch_len] = .{
-                    .job = job,
-                    .view = view,
-                    .method_scope = self.moduleForId(job.method_scope),
-                    .template = template,
-                };
-                self.pending_spec_jobs_head += 1;
-                batch_len += 1;
-            }
-            if (batch_len == 0) {
-                Common.compilerBug("parallel Monotype specialization drain made no progress");
-            }
-
-            for (0..batch_len) |index| {
-                contexts[index] = .{
-                    .inputs = &inputs,
-                    .workers = self.spec_job_parallel_workers,
-                    .prepared = prepared[index],
-                };
-                tasks[index] = .{
-                    .id = index,
-                    .context = &contexts[index],
-                    .run = runSpecJobTask,
-                };
-            }
-
-            var initialized_contexts = batch_len;
-            defer {
-                for (contexts[0..initialized_contexts]) |*context| {
-                    if (context.shard) |*shard| shard.deinit();
-                    context.shard = null;
-                }
-            }
-            if (self.timing) |timing| {
-                timing.parallel.specialization_tasks_submitted +%= @intCast(batch_len);
-                timing.parallel.task_waves +%= 1;
-                timing.parallel.peak_worker_lanes_available = @max(
-                    timing.parallel.peak_worker_lanes_available,
-                    @as(u64, @intCast(executor.worker_count)),
-                );
-            }
-            var run_error: ?Allocator.Error = null;
-            {
-                var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
-                defer wait_timing_scope.end();
-                executor.run(tasks[0..batch_len], completions[0..batch_len]) catch |err| {
-                    run_error = err;
-                };
-            }
-            self.recordParallelWorkerWork(contexts[0..batch_len]);
-            if (run_error) |err| return err;
-
-            var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
-            defer commit_timing_scope.end();
-            for (completions[0..batch_len]) |completion| {
-                if (completion.id >= batch_len) {
-                    Common.compilerBug("post-check executor returned an unknown specialization task");
-                }
-                const context = &contexts[completion.id];
-                if (context.completed) {
-                    Common.compilerBug("post-check executor completed a specialization task more than once");
-                }
-                if (completion.value != @as(?*anyopaque, @ptrCast(context))) {
-                    Common.compilerBug("post-check executor returned the wrong specialization task context");
-                }
-                context.completed = true;
-                if (context.shard) |*shard| {
-                    if (@intFromEnum(shard.worker_id) != completion.worker_id) {
-                        Common.compilerBug("post-check executor changed specialization worker ownership");
+                if (self.spec_store.recordStatus(job.spec) == .ready or template.target == .hosted) {
+                    // Coordinator-only entries still wait their exact acceptance
+                    // turn, but need not wait for any later worker task.
+                    if (accepted == submitted) {
+                        self.pending_spec_jobs_head += 1;
+                        try self.executePendingSpecJob(job);
+                        continue;
                     }
-                }
-            }
-            for (contexts[0..batch_len]) |*context| {
-                if (!context.completed) {
-                    Common.compilerBug("post-check executor omitted a specialization completion");
-                }
-                if (context.failed) return error.OutOfMemory;
-                if (context.retry_serial) {
-                    if (context.shard != null) {
-                        Common.compilerBug("serial specialization retry retained a worker shard");
-                    }
-                    if (self.timing) |timing| timing.parallel.specialization_tasks_retried_serial +%= 1;
-                    try self.executePendingSpecJob(context.prepared.job);
+                } else {
+                    const slot = submitted % capacity;
+                    const context = &contexts[slot];
+                    const snapshot = try self.publishSpecJobInputs();
+                    context.* = .{
+                        .snapshot = snapshot,
+                        .inputs = .{
+                            .modules = self.modules,
+                            .snapshot = &context.snapshot,
+                            .proc_debug_names = self.proc_debug_names,
+                            .specialization_cache = self.specialization_cache,
+                            .loaded_specialization_shards = self.loaded_specialization_shards,
+                            .interface_summaries = &self.published_summaries.?,
+                            .interface_summary_end = self.published_summaries.?.count,
+                            .collect_counters = self.counters != null,
+                            .collect_diagnostics = self.diagnostics != null,
+                            .inline_expects = self.inline_expects,
+                            .static_data_literals = self.static_data_literals,
+                            .target_usize = self.target_usize,
+                            .hosted_catalog = self.hosted_catalog,
+                            .current_loc = self.current_loc,
+                            .current_region = self.current_region,
+                            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
+                        },
+                        .workers = self.spec_job_parallel_workers,
+                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
+                    };
+                    try session.submit(.{ .id = slot, .context = context, .run = runSpecJobTask });
+                    self.pending_spec_jobs_head += 1;
+                    submitted += 1;
+                    running += 1;
+                    if (self.timing) |timing| timing.parallel.specialization_tasks_submitted +%= 1;
                     continue;
                 }
-                switch (self.spec_store.recordStatus(context.prepared.job.spec)) {
-                    .ready => {
-                        // A preceding serial retry may have claimed this queued
-                        // reservation immediately. Accept the ready entry and
-                        // discard its independently lowered body. The worker's
-                        // cumulative type/name suffix must still be absorbed so
-                        // later epochs from that worker retain exact ids.
-                        if (context.shard) |*shard| {
-                            const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
-                            try commit_domain.absorb(&shard.store_epoch);
-                            shard.store_epoch_absorbed = true;
-                            var committed_types = CommittedGraphTypes.relocatedStore(
-                                &commit_domain.types,
-                                &commit_domain.name_store,
-                                &self.program.types,
-                                &self.program.names,
-                                commit_domain.committedTypeRelocation(self.program),
-                            );
-                            try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
-                            shard.deinit();
-                            if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
-                        }
-                        context.shard = null;
-                        try self.executePendingSpecJob(context.prepared.job);
-                        continue;
-                    },
-                    .reserved => {},
-                    .lowering => Common.invariant("parallel Monotype specialization was already lowering at commit"),
-                }
-                self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
-                self.spec_store.markLowering(context.prepared.job.spec);
-                const shard = &context.shard.?;
-                try self.commitCompletedSpecJobShard(shard);
-                if (self.timing) |timing| timing.parallel.specialization_tasks_committed +%= 1;
-                shard.deinit();
-                context.shard = null;
             }
-            initialized_contexts = 0;
+            // Accept one deterministic entry, then give free lanes the newly
+            // discovered work before accepting another buffered successor.
+            if (accepted < submitted and contexts[accepted % capacity].completed) {
+                const context = &contexts[accepted % capacity];
+                var commit_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+                defer commit_scope.end();
+                try self.acceptCompletedSpecJob(context);
+                accepted += 1;
+                continue;
+            }
+            if (running == 0) Common.compilerBug("Monotype streaming drain made no progress");
+            const completion = blk: {
+                var wait_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+                defer wait_scope.end();
+                break :blk session.waitOne();
+            };
+            running -= 1;
+            self.receiveSpecJobCompletion(contexts, completion, accepted, submitted);
         }
         self.pending_spec_jobs.clearRetainingCapacity();
         self.pending_spec_jobs_head = 0;
         self.requirePendingSpecJobsDrained();
+    }
+
+    fn receiveSpecJobCompletion(self: *Builder, contexts: []SpecJobTaskContext, completion: base.post_check_task_executor.Completion, accepted: usize, submitted: usize) void {
+        var scope = ParallelCoordinatorTimingScope.begin(self.timing);
+        defer scope.end();
+        if (completion.id >= contexts.len) Common.compilerBug("post-check executor returned an unknown specialization task");
+        const offset = (completion.id + contexts.len - accepted % contexts.len) % contexts.len;
+        if (offset >= submitted - accepted) Common.compilerBug("post-check executor completed an inactive specialization slot");
+        const context = &contexts[completion.id];
+        if (context.completed or completion.value != @as(?*anyopaque, @ptrCast(context))) {
+            Common.compilerBug("post-check executor returned an invalid specialization completion");
+        }
+        context.completed = true;
+        if (context.shard) |*shard| {
+            if (@intFromEnum(shard.worker_id) != completion.worker_id) Common.compilerBug("post-check executor changed specialization worker ownership");
+        }
+        self.recordParallelWorkerWork(contexts[completion.id..][0..1]);
+    }
+
+    fn acceptCompletedSpecJob(self: *Builder, context: *SpecJobTaskContext) Allocator.Error!void {
+        if (context.failed) return error.OutOfMemory;
+        if (context.retry_serial) {
+            if (context.shard != null) {
+                Common.compilerBug("serial specialization retry retained a worker shard");
+            }
+            if (self.timing) |timing| timing.parallel.specialization_tasks_retried_serial +%= 1;
+            try self.executePendingSpecJob(context.prepared.job);
+            return;
+        }
+        switch (self.spec_store.recordStatus(context.prepared.job.spec)) {
+            .ready => {
+                // A preceding serial retry may have claimed this queued
+                // reservation immediately. Accept the ready entry and
+                // discard its independently lowered body. The worker's
+                // cumulative type/name suffix must still be absorbed so
+                // later epochs from that worker retain exact ids.
+                if (context.shard) |*shard| {
+                    const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
+                    try commit_domain.absorb(&shard.store_epoch);
+                    shard.store_epoch_absorbed = true;
+                    var committed_types = CommittedGraphTypes.relocatedStore(
+                        &commit_domain.types,
+                        &commit_domain.name_store,
+                        &self.program.types,
+                        &self.program.names,
+                        commit_domain.committedTypeRelocation(self.program),
+                    );
+                    try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
+                    shard.deinit();
+                    if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
+                }
+                context.shard = null;
+                try self.executePendingSpecJob(context.prepared.job);
+                return;
+            },
+            .reserved => {},
+            .lowering => Common.invariant("parallel Monotype specialization was already lowering at commit"),
+        }
+        self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
+        self.spec_store.markLowering(context.prepared.job.spec);
+        const shard = &context.shard.?;
+        try self.commitCompletedSpecJobShard(shard);
+        if (self.timing) |timing| timing.parallel.specialization_tasks_committed +%= 1;
+        shard.deinit();
+        context.shard = null;
     }
 
     fn drainPendingSpecJobsSerial(self: *Builder) Allocator.Error!void {
@@ -5343,7 +5347,7 @@ const Builder = struct {
         if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
-        const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
+        const builder = Builder.ensureSpecJobWorkerBuilder(worker, &context.inputs) catch {
             context.failed = true;
             return context;
         };
@@ -5574,35 +5578,13 @@ const Builder = struct {
         self.spec_job_parallel_commit_domains = domains;
     }
 
-    fn ensureSpecJobTaskBuffers(
-        self: *Builder,
-        batch_capacity: usize,
-    ) Allocator.Error!*SpecJobTaskBuffers {
+    fn ensureSpecJobTaskBuffers(self: *Builder, capacity: usize) Allocator.Error!*SpecJobTaskBuffers {
         const buffers = &self.spec_job_task_buffers;
-        if (buffers.prepared.len != 0) {
-            if (buffers.prepared.len != batch_capacity or
-                buffers.contexts.len != batch_capacity or
-                buffers.tasks.len != batch_capacity or
-                buffers.completions.len != batch_capacity)
-            {
-                Common.compilerBug("Monotype specialization task buffer capacity changed");
-            }
-            return buffers;
+        if (buffers.contexts.len == 0) {
+            buffers.contexts = try self.allocator.alloc(SpecJobTaskContext, capacity);
+        } else if (buffers.contexts.len != capacity) {
+            Common.compilerBug("Monotype specialization task buffer capacity changed");
         }
-        if (buffers.contexts.len != 0 or
-            buffers.tasks.len != 0 or
-            buffers.completions.len != 0)
-        {
-            Common.compilerBug("Monotype specialization task buffers were only partially initialized");
-        }
-
-        var initialized: SpecJobTaskBuffers = .{};
-        errdefer initialized.deinit(self.allocator);
-        initialized.prepared = try self.allocator.alloc(PreparedSpecJob, batch_capacity);
-        initialized.contexts = try self.allocator.alloc(SpecJobTaskContext, batch_capacity);
-        initialized.tasks = try self.allocator.alloc(base.post_check_task_executor.Task, batch_capacity);
-        initialized.completions = try self.allocator.alloc(base.post_check_task_executor.Completion, batch_capacity);
-        buffers.* = initialized;
         return buffers;
     }
 
@@ -5925,6 +5907,7 @@ const Builder = struct {
             .initial_request_arg_classes = try graph.snapshotFunctionArgumentClasses(root_node),
             .codec_contract = draft_codec_contract,
             .fn_id = reservation.fn_id,
+            .reserved_fn_ty = fn_template.mono_fn_ty,
             .signature_relation = signature_relation,
         };
         const root_owner = try body_draft.enterOwner(.{ .reserved_fn = reservation.fn_id });
@@ -12664,6 +12647,9 @@ const ActiveTemplateRoot = struct {
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     codec_contract: ?DraftCodecContractContext,
     fn_id: Ast.FnId,
+    /// Immutable reservation signature supplied by the job. Workers never
+    /// read the coordinator's mutable function row for recursive references.
+    reserved_fn_ty: Type.TypeId,
     signature_relation: Ast.SignatureRelation,
 };
 
@@ -17066,7 +17052,15 @@ const BodyContext = struct {
     /// Crossing from a committed function signature into the active graph is
     /// centralized here so a private graph can import it at this boundary.
     fn programFnSourceTypeNode(self: *BodyContext, final_fn: Ast.FnId) Allocator.Error!NodeId {
-        const ty = try self.importProgramType(self.builder.program.fnSource(final_fn).mono_fn_ty);
+        const source_ty = if (self.builder.spec_job_parallel_callback) blk: {
+            const root = self.builder.active_template_root orelse
+                Common.invariant("worker final function reference had no reserved root");
+            if (root.fn_id != final_fn) {
+                Common.invariant("worker final function reference escaped its reserved root");
+            }
+            break :blk root.reserved_fn_ty;
+        } else self.builder.program.fnSource(final_fn).mono_fn_ty;
+        const ty = try self.importProgramType(source_ty);
         return self.activeNodeFromType(ty);
     }
 
@@ -20967,7 +20961,24 @@ const BodyContext = struct {
                 try self.typeStore().typeEql(self.nameStore(), entry.provisional_ty, provisional_ty))
                 return .{ .ty = entry.summary_ty, .coordinator = false };
         };
-        const coordinator = self.builder.coordinator_interface_summaries orelse &self.builder.interface_summaries;
+        if (self.builder.coordinator_interface_summaries) |published| {
+            var candidates = published.get(address, self.builder.coordinator_interface_summary_end);
+            while (candidates.next()) |entry| {
+                if (!storedConstFnEvidenceEql(entry.evidence, evidence)) continue;
+                const request = try self.importProgramType(entry.provisional_ty);
+                if (!try self.typeStore().typeEql(self.nameStore(), request, provisional_ty)) continue;
+                const summary = try self.importProgramType(entry.summary_ty);
+                try local.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = evidence,
+                    .provisional_ty = request,
+                    .summary_ty = summary,
+                });
+                return .{ .ty = summary, .coordinator = true };
+            }
+            return null;
+        }
+        const coordinator = &self.builder.interface_summaries;
         if (coordinator == local) return null;
         if (coordinator.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = coordinator.entries.items[index];
