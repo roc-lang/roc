@@ -60025,8 +60025,8 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
 
             const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
             try checked_types.fillSyntheticTypeRoot(std.testing.allocator, alias, .{ .alias = .{
-                .name = @enumFromInt(0),
-                .origin_module = @enumFromInt(0),
+                .name = try name_store.internTypeName("Alias"),
+                .origin_module = try name_store.internModuleIdentity(&([_]u8{0} ** 32)),
                 .owner_module = .{},
                 .backing = function,
                 .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{variable}),
@@ -60084,10 +60084,15 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     defer checked_types.deinit(gpa);
     const open = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
     const closed = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    // This test exercises only scope allocation and checked-node lookup.
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.diagnostics = null;
+    builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
     ctx.graph = graph;
     ctx.view.types = checked_types.view();
-    ctx.instantiation = TypeInstantiationContext.init(gpa, @enumFromInt(0), @splat(0));
+    ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
     defer ctx.instantiation.deinit();
     var outer = InstantiationNodeMap.init(gpa);
     defer outer.deinit();
