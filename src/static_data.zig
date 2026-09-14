@@ -22,8 +22,8 @@ pub const StaticDataExport = lir.Program.StaticDataExport;
 pub const StaticDataRelocation = lir.Program.StaticDataRelocation;
 
 /// Deterministic cross-object symbol for an atomic generated RC helper.
-pub fn atomicRcHelperSymbolName(allocator: Allocator, helper: layout.RcHelperKey) Allocator.Error![]u8 {
-    return try std.fmt.allocPrint(allocator, "roc__rc_helper_{x}", .{helper.encode()});
+pub fn atomicRcHelperSymbolName(allocator: Allocator, layouts: *const layout.Store, helper: layout.RcHelperKey) Allocator.Error![]u8 {
+    return try layout.rc_helper.symbolName(allocator, layouts, helper, .atomic);
 }
 
 /// Collect the distinct explicit RC-helper requirements in a static-data graph.
@@ -1286,7 +1286,7 @@ const StaticDataBuilder = struct {
                 },
                 .rc_helper => |helper| {
                     const cached_name = self.helper_names.get(helper);
-                    const name = cached_name orelse try atomicRcHelperSymbolName(self.allocator, helper);
+                    const name = cached_name orelse try atomicRcHelperSymbolName(self.allocator, &self.lowered.lir_result.layouts, helper);
                     errdefer if (cached_name == null) self.allocator.free(name);
                     if (cached_name == null) try self.helper_names.put(helper, name);
                     dest.* = .{

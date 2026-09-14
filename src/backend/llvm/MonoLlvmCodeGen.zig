@@ -11168,17 +11168,18 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const is_static_data_helper = self.proc_symbol_mode == .lir_symbol and
             self.staticDataRequiresRcHelper(helper_key, atomicity);
-        const fn_name = if (is_static_data_helper)
-            builder.strtabStringFmt("{s}roc__rc_helper_{x}", .{ self.static_symbol_prefix, cache_key }) catch return error.OutOfMemory
-        else
-            builder.strtabStringFmt("roc_llvm_rc_{s}_{d}{s}", .{
-                @tagName(helper_key.op),
-                @intFromEnum(helper_key.layout_idx),
-                switch (atomicity) {
-                    .atomic => "",
-                    .single_thread => "_single_thread",
-                },
-            }) catch return error.OutOfMemory;
+        const fn_name = if (is_static_data_helper) blk: {
+            const symbol = layout.rc_helper.symbolName(self.allocator, self.layout_store.?, helper_key, .atomic) catch return error.OutOfMemory;
+            defer self.allocator.free(symbol);
+            break :blk builder.strtabStringFmt("{s}{s}", .{ self.static_symbol_prefix, symbol }) catch return error.OutOfMemory;
+        } else builder.strtabStringFmt("roc_llvm_rc_{s}_{d}{s}", .{
+            @tagName(helper_key.op),
+            @intFromEnum(helper_key.layout_idx),
+            switch (atomicity) {
+                .atomic => "",
+                .single_thread => "_single_thread",
+            },
+        }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         func.setLinkage(if (is_static_data_helper) .external else .internal, builder);
         if (is_static_data_helper and self.target.os.tag == .windows) {

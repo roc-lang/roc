@@ -6451,7 +6451,7 @@ fn writeDevRunImageToSharedMemory(
                 unreachable;
             };
             code_symbols[initialized_code_symbols] = .{
-                .name = try backend.atomicRcHelperSymbolName(ctx.gpa, helper_key),
+                .name = try backend.atomicRcHelperSymbolName(ctx.gpa, layouts, helper_key),
                 .code_offset = code_offset,
             };
             initialized_code_symbols += 1;
