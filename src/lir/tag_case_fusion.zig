@@ -11,6 +11,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("lir_core");
+const collections = @import("collections");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
 
@@ -243,7 +244,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
     defer scope.deinit(allocator);
     var successors = std.ArrayList(LIR.CFStmtId).empty;
     defer successors.deinit(allocator);
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
     try work.append(allocator, .{ .stmt = store.getProcSpec(proc).body orelse return, .depth = 0 });
     while (work.pop()) |item| {
