@@ -2743,8 +2743,7 @@ const FinalBodyOutputCounts = struct {
     }
 };
 
-fn localFnIdFromSlot(slot: Ast.FnSlot, comptime message: []const u8) Ast.FnId {
-    _ = message;
+fn localFnIdFromSlot(slot: Ast.FnSlot) Ast.FnId {
     return switch (slot) {
         .local => |fn_id| fn_id,
     };
@@ -7864,10 +7863,7 @@ const Builder = struct {
     }
 
     fn lowerFnTemplateDef(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
-        return localFnIdFromSlot(
-            try self.lowerFnTemplateCallTarget(method_scope, fn_template, evidence),
-            "Monotype function value lowering requires a local function definition",
-        );
+        return localFnIdFromSlot(try self.lowerFnTemplateCallTarget(method_scope, fn_template, evidence));
     }
 
     fn lowerRestoredConstFnTemplate(
