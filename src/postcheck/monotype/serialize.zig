@@ -28,6 +28,8 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 23: packed list literals carry fixed-product encodings as well as
+/// scalar encodings.
 /// Version 22: shared compile-time value reads and inline-expect consumer inputs.
 /// Version 21: type and evidence digests are SHA-256 again (32 bytes, computed
 /// with the CPU's SHA-256 instructions), changing every serialized digest byte
@@ -57,7 +59,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// content hash of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 22;
+pub const FORMAT_VERSION: u32 = 23;
 
 const SECTION_COUNT = 43;
 

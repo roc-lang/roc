@@ -683,6 +683,131 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 }
 
+// https://github.com/roc-lang/roc/issues/11376
+// Growing a folded list of records should grow static data, not executable IR.
+test "issue 11376: folded record List.repeat does not grow LIR per element" {
+    const small = try repeatedRecordListLirSize(4);
+    const larger = try repeatedRecordListLirSize(16);
+    try std.testing.expectEqual(small, larger);
+}
+
+fn repeatedRecordListLirSize(comptime count: usize) !usize {
+    const gpa = std.testing.allocator;
+    const source = std.fmt.comptimePrint(
+        \\app [main!] {{ pf: platform "./.roc_echo_platform/main.roc" }}
+        \\import pf.Echo
+        \\seqs = List.repeat({{ litrunlen_and_length: 0.U32, offset: 0.U16, offset_slot: 0.U16 }}, {d})
+        \\main! = |args| {{
+        \\    Echo.line!(Str.inspect(List.get(seqs, List.len(args))))
+        \\    Ok({{}})
+        \\}}
+    , .{count});
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = source,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{
+            .target_usize = base.target.TargetUsize.u64,
+        },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
+    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
+    try expectStaticDataLiteralPresent(&lowered.lir_result);
+
+    const exports = try static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &lowered,
+        .x64linux,
+        .{ .include_provided_exports = true },
+    );
+    defer static_data_exports.deinitStaticData(gpa, exports);
+
+    // Pin the actual data as well, so dropping or truncating the list cannot
+    // satisfy the code-size assertion. This fixture has 8-byte, all-zero items.
+    var found_list = false;
+    for (exports) |data_export| {
+        if (data_export.value_id != @as(lir.LIR.StaticDataId, @enumFromInt(0))) continue;
+        const bytes = data_export.bytes[data_export.symbol_offset..];
+        try std.testing.expectEqual(@as(u64, count), std.mem.readInt(u64, bytes[8..16], .little));
+        try std.testing.expectEqual(@as(usize, 1), data_export.relocations.len);
+        const relocation = data_export.relocations[0];
+        try std.testing.expectEqual(@as(u64, data_export.symbol_offset), relocation.offset);
+        const backing = exports[@intFromEnum(relocation.target.data_symbol)];
+        const offset: usize = @intCast(@as(i64, backing.symbol_offset) + relocation.addend);
+        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** (count * 8)), backing.bytes[offset..][0 .. count * 8]);
+        found_list = true;
+    }
+    try std.testing.expect(found_list);
+
+    // Include initializer procedures: moving per-element code out of the runtime
+    // entrypoint still makes the compiler process it (the regression in #11376).
+    var statement_count: usize = 0;
+    for (lowered.lir_result.store.getProcSpecs()) |proc| {
+        const body = proc.body orelse continue;
+        var statements = try lir.BodyClone.ReachableStmts.init(&lowered.lir_result.store, body);
+        defer statements.deinit();
+        while (try statements.next()) |_| statement_count += 1;
+    }
+    return statement_count;
+}
+
 test "callable binding with alias annotation is const-evaluated" {
     // Regression test: a function-typed top-level def whose annotation
     // mentions a type alias (here `MyErr`) must still be scheduled for
@@ -2486,4 +2611,31 @@ test "issue 9733: nested expect statements remain inline" {
         @as(usize, 1),
         countCompileTimeRootKind(app_artifact, .expect),
     );
+}
+
+test "issue 11376: packed products stay compact in both lowering strategies" {
+    const harness = @import("lower_to_lir_harness.zig");
+    const Inspector = struct {
+        var count: usize = 0;
+        fn inspect(store: *const lir.LirStore, _: *const @import("layout").Store) harness.LowerToLirHarnessError!void {
+            count = store.cfStmtCount();
+        }
+    };
+    inline for (.{ base.SpecializationStrategy.lss, base.SpecializationStrategy.boxy }) |strategy| {
+        inline for (.{ base.target.TargetUsize.u32, base.target.TargetUsize.u64 }) |target| {
+            var small: usize = 0;
+            inline for (.{ 4, 16 }) |count| {
+                const source = std.fmt.comptimePrint(
+                    \\Pair := {{ a: U8, z: U64 }}
+                    \\xs = List.repeat({{ a: 3.U8, b: (17.U16, 2.5.F32), c: Pair.{{a: 9, z: 42}} }}, {d})
+                    \\main! = |args| {{
+                    \\    echo!(Str.inspect(List.get(xs, args.len())))
+                    \\    Ok({{}})
+                    \\}}
+                , .{count});
+                try harness.expectLirInspectionWithOptions(source, .{ .specialization_strategy = strategy, .target_usize = target, .include_internal_static_data = true }, Inspector.inspect);
+                if (count == 4) small = Inspector.count else try std.testing.expectEqual(small, Inspector.count);
+            }
+        }
+    }
 }

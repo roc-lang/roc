@@ -10530,3 +10530,53 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
     defer allocator.free(output);
     try std.testing.expectEqualStrings("[120, 121, 122]", output);
 }
+
+test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Pair := { a: U8, z: U64 }
+        \\xs = List.repeat(Pair.{ a: 3, z: 42 }, 2)
+        \\identity : a -> a
+        \\identity = |x| x
+        \\main : U64 -> U64
+        \\main = |i| {
+        \\    ys = identity(xs).set(i, Pair.{ a: 9, z: 77 }) ?? []
+        \\    x = xs.get(i) ?? Pair.{ a: 0, z: 0 }
+        \\    y = ys.get(i) ?? Pair.{ a: 0, z: 0 }
+        \\    x.a.to_u64() + x.z + y.a.to_u64() + y.z
+        \\}
+    ;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var found_packed = false;
+        for (result.store.getCFStmts()) |stmt| {
+            if (stmt == .assign_literal and stmt.assign_literal.value == .bytes_literal) {
+                if (stmt.assign_literal.value.bytes_literal.len == 2) found_packed = true;
+            }
+        }
+        try std.testing.expect(found_packed);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                runtime_env.get_ops(),
+                .preserve,
+            );
+            defer interpreter.deinit();
+            var index: u64 = 1;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&index),
+            });
+            try std.testing.expectEqual(@as(u64, 131), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}

@@ -7679,7 +7679,7 @@ const Builder = struct {
             => true,
             .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
             .list => |list| switch (list) {
-                .scalar_bytes => true,
+                .packed_bytes => true,
                 .nodes => |children| blk: {
                     for (children) |child| {
                         if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
@@ -7718,7 +7718,7 @@ const Builder = struct {
             .fn_value => bare_fn == .allow,
             .list => |list| switch (list) {
                 .nodes => |items| items.len != 0,
-                .scalar_bytes => |scalar_bytes| scalar_bytes.len != 0,
+                .packed_bytes => |packed_list| packed_list.len != 0,
             },
             .box => true,
             .tuple,
@@ -13954,6 +13954,7 @@ const DraftComptimeSite = struct {
 
 const DraftStringLiteral = struct {
     backing: DraftSpan(u8),
+    const_blob: ?Ast.ConstBlobView = null,
     offset: u32,
     len: u32,
 };
@@ -13969,7 +13970,8 @@ const DraftSourceFile = struct {
 const DraftPackedListLiteral = struct {
     literal: DraftStringLiteralId,
     len: u32,
-    element: check.ConstStore.ConstPackedScalar,
+    element: ?check.ConstStore.ConstPackedScalar,
+    product_width: u32 = 0,
 };
 
 const DraftOwner = union(enum(u8)) {
@@ -15282,7 +15284,10 @@ const BodyDraftStore = struct {
 
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
-            const id = try program.addStringView(self.stringBytes(literal.backing), literal.offset, literal.len);
+            const id = if (literal.const_blob) |blob|
+                try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes, literal.offset, literal.len)
+            else
+                try program.addStringView(self.stringBytes(literal.backing), literal.offset, literal.len);
             if (@intFromEnum(id) != ids.core(.string_literals, @intCast(index), ids.string_literal_start)) {
                 Common.invariant("Monotype body draft string literal id did not append contiguously");
             }
@@ -15864,6 +15869,7 @@ const BodyDraftStore = struct {
                 .literal = ids.stringLiteral(literal.literal),
                 .len = literal.len,
                 .element = literal.element,
+                .product_width = literal.product_width,
             } },
             .inline_expects_enabled => .{ .inline_expects_enabled = {} },
             .comptime_value => |value| .{ .comptime_value = .{
@@ -18497,6 +18503,12 @@ const BodyContext = struct {
 
     fn addStringLiteral(self: *BodyContext, text: []const u8) Allocator.Error!DraftStringLiteralId {
         return try self.draft.addStringLiteral(text);
+    }
+
+    fn addConstBlobView(self: *BodyContext, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) Allocator.Error!DraftStringLiteralId {
+        const id: DraftStringLiteralId = @enumFromInt(@as(u32, @intCast(self.draft.string_literals.items.len)));
+        try self.draft.string_literals.append(self.allocator, .{ .backing = .empty(), .const_blob = .{ .module_bytes = module_bytes, .data = data, .bytes = bytes }, .offset = offset, .len = len });
+        return id;
     }
 
     fn addStringView(
@@ -34551,14 +34563,17 @@ const BodyContext = struct {
                 items,
                 static_data_const_locator,
             ) },
-            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
-                .literal = try self.addStringView(
-                    store_view.const_store.blobData(scalar_bytes.bytes.data),
-                    scalar_bytes.bytes.offset,
-                    scalar_bytes.bytes.len,
+            .packed_bytes => |packed_list| .{ .bytes_lit = .{
+                .literal = try self.addConstBlobView(
+                    store_view.key.bytes,
+                    packed_list.bytes.data,
+                    store_view.const_store.blobData(packed_list.bytes.data),
+                    packed_list.bytes.offset,
+                    packed_list.bytes.len,
                 ),
-                .len = scalar_bytes.len,
-                .element = scalar_bytes.element,
+                .len = packed_list.len,
+                .element = packed_list.element,
+                .product_width = packed_list.product_width,
             } },
         };
     }
@@ -57549,7 +57564,7 @@ fn constRestoreData(
     };
 }
 
-/// Restore a stored list, which is either restored nodes or packed scalar bytes.
+/// Restore a stored list, which is either restored nodes or packed product bytes.
 fn constRestoreListData(
     restorer: anytype,
     store_view: ModuleView,
@@ -57560,14 +57575,17 @@ fn constRestoreListData(
 ) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
     return switch (list) {
         .nodes => |items| .{ .list = try constRestoreList(restorer, store_view, type_view, ty, items, static_data_const_locator) },
-        .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
-            .literal = try restorer.constEmit().addStringView(
-                store_view.const_store.blobData(scalar_bytes.bytes.data),
-                scalar_bytes.bytes.offset,
-                scalar_bytes.bytes.len,
+        .packed_bytes => |packed_list| .{ .bytes_lit = .{
+            .literal = try restorer.constEmit().addConstBlobView(
+                store_view.key.bytes,
+                packed_list.bytes.data,
+                store_view.const_store.blobData(packed_list.bytes.data),
+                packed_list.bytes.offset,
+                packed_list.bytes.len,
             ),
-            .len = scalar_bytes.len,
-            .element = scalar_bytes.element,
+            .len = packed_list.len,
+            .element = packed_list.element,
+            .product_width = packed_list.product_width,
         } },
     };
 }

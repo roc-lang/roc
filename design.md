@@ -5253,12 +5253,24 @@ have zero runtime list allocation in a size cart even though the eval allocation
 harness, which does not perform final constant hoisting, observes one base-list
 allocation.
 
-Strings and flat scalar lists use one shared content-interned blob store.
+Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
 `List(U8)` therefore has the same constant-storage cost as a `Str` containing
 the same bytes, and equal string/list contents reuse one blob. A packed list
-view records its scalar encoding and item count separately from its byte
-view. Lists whose items contain pointers or structured values remain
-explicit child-node lists so their graph edges and sharing stay visible.
+view records its scalar encoding or fixed-product width and item count separately
+from its byte view. Fixed products are records, tuples, and nominal wrappers
+composed entirely of scalars and zero-sized products. Their existing checked
+types define canonical field order; bytes concatenate scalar leaves in that
+order without host padding. Lists containing other value shapes retain explicit
+child nodes so their graph edges and sharing stay visible.
+
+Constant writing and target lowering compile a field-copy plan once per explicit
+representation. Plans use committed layout field indexes and offsets, preserve
+canonical scalar bits, and initialize target padding. Compatible contiguous
+regions use bulk copies. Packed data remains a literal through specialization;
+list length must not create per-element executable IR, including in static
+initializers. Literal backings are shared by explicit owner-relative identity
+through IR stages. Boxy consumes its committed representation and descriptor
+plans, including any required storage adaptation, without unrolling the list.
 
 When packed list views reach LIR, the shared literal backing records the maximum
 alignment required by every view. Each view offset must also satisfy its own

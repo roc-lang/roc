@@ -1200,7 +1200,18 @@ const GeneratedEvidenceDescKind = enum {
     field_names_list,
 };
 
+const PackedLiteralKey = struct {
+    module: [32]u8,
+    data: check.ConstStore.ConstBlobDataId,
+    offset: u32,
+    byte_len: u32,
+    len: u32,
+    element: layout.Idx,
+};
+
 const ProcedureBuilder = struct {
+    packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
+    packed_literals: std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral),
     allocator: Allocator,
     modules: Common.CheckedModules,
     plan: *const Plan.ProgramPlan,
@@ -1290,10 +1301,16 @@ const ProcedureBuilder = struct {
             .pending_direct_call_descriptor_abis = .empty,
             .descriptor_read_steps = .empty,
             .source_file_ids = .empty,
+            .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
+            .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
         };
     }
 
     fn deinit(self: *ProcedureBuilder) void {
+        var plans = self.packed_plans.valueIterator();
+        while (plans.next()) |plan| plan.deinit();
+        self.packed_plans.deinit();
+        self.packed_literals.deinit();
         self.source_file_ids.deinit(self.allocator);
         self.descriptor_read_steps.deinit(self.allocator);
         self.pending_direct_call_descriptor_abis.deinit(self.allocator);
@@ -15042,6 +15059,92 @@ const ProcBodyBuilder = struct {
         );
     }
 
+    fn packedListLiteral(self: *ProcBodyBuilder, module: ProcedureModuleView, data: check.ConstStore.ConstPackedList, elem: layout.Idx) Allocator.Error!LIR.ListLiteral {
+        const key = PackedLiteralKey{ .module = module.key.bytes, .data = data.bytes.data, .offset = data.bytes.offset, .byte_len = data.bytes.len, .len = data.len, .element = elem };
+        if (self.parent.packed_literals.get(key)) |literal| return literal;
+        const gpa = self.parent.allocator;
+        if (!self.parent.packed_plans.contains(elem)) {
+            var plan = try lir_core.PackedData.Plan.init(gpa, &self.parent.result.layouts, elem);
+            errdefer plan.deinit();
+            try self.parent.packed_plans.put(elem, plan);
+        }
+        const plan = self.parent.packed_plans.getPtr(elem).?;
+        if (plan.packed_width != data.byteWidth()) boxyLowerInvariant("packed constant width differed from producer representation");
+        const bytes = module.const_store.blobBytes(data.bytes);
+        var converted: ?[]u8 = null;
+        defer if (converted) |owned| gpa.free(owned);
+        const target_bytes = if (plan.isIdentity()) bytes else blk: {
+            const out = try gpa.alloc(u8, @as(usize, data.len) * plan.memory_width);
+            converted = out;
+            plan.decode(out, bytes, data.len);
+            break :blk out;
+        };
+        const alignment: u32 = @intCast(@max(self.parent.result.layouts.getLayout(elem).alignment(self.parent.options.target_usize).toByteUnits(), 1));
+        const literal = LIR.ListLiteral{ .bytes = try self.parent.result.store.insertStringViewAligned(target_bytes, 0, @intCast(target_bytes.len), alignment), .len = data.len };
+        try self.parent.packed_literals.put(key, literal);
+        return literal;
+    }
+
+    /// A packed source stays one literal. Storage adaptations execute one typed
+    /// loop body, with explicit descriptors and ordinary ARC-visible moves.
+    fn restorePackedListInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        module: ProcedureModuleView,
+        data: check.ConstStore.ConstPackedList,
+        list_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        target_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
+        const target_layout = self.localListElemLayout(target);
+        try self.bindConstructedTargetDescriptor(target, list_rep);
+        const after = try self.prependConstructedDescriptorRebindForRep(list_rep, next);
+        if (data.len == 0) return try self.assignList(target, &.{}, after);
+        const literal = try self.packedListLiteral(module, data, source_layout);
+        if (source_layout == target_layout and self.representationBoundaryIsDirect(target_rep, source_rep)) {
+            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .bytes_literal = literal }, .next = after } });
+        }
+        const list_layout = self.parent.result.store.getLocal(target).layout_idx;
+        const source_list_layout = try self.parent.result.layouts.insertLayout(layout.Layout.list(source_layout));
+        const source = try self.addFrameLocal(source_list_layout);
+        const index = try self.addFrameLocal(.u64);
+        const acc = try self.addFrameLocal(list_layout);
+        const initial = try self.addFrameLocal(list_layout);
+        const next_acc = try self.addFrameLocal(list_layout);
+        if (self.parent.result.store.getLocal(target).boxy_desc) |desc| {
+            for ([_]LIR.LocalId{ acc, initial, next_acc }) |local| self.parent.result.store.setLocalBoxyDesc(local, desc);
+        }
+        const len = try self.addFrameLocal(.u64);
+        const zero = try self.addFrameLocal(.u64);
+        const one = try self.addFrameLocal(.u64);
+        const next_index = try self.addFrameLocal(.u64);
+        const done = try self.addFrameLocal(.bool);
+        const item = try self.addFrameLocalForRep(source_rep);
+        const stored = try self.addFrameLocal(target_layout);
+        const join_id = self.freshJoinPointId();
+        var step = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        step = try self.setLocalInitializeJoinParam(acc, next_acc, step);
+        step = try self.setLocalInitializeJoinParam(index, next_index, step);
+        step = try self.assignListAppendMovingElement(next_acc, acc, stored, step);
+        step = try self.assignRepresentationBoundary(stored, item, target_rep, source_rep, step);
+        if (!self.isZstLocal(item)) step = try self.assignBinaryLowLevel(item, .list_get_unsafe, source, index, step);
+        step = try self.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, step);
+        const finish = try self.assignLocal(target, acc, after);
+        const choose = try self.boolSwitchNoContinuation(done, finish, step);
+        const body = try self.assignBinaryLowLevel(done, .num_is_eq, index, len, choose);
+        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        initial_jump = try self.setLocalInitializeJoinParam(acc, initial, initial_jump);
+        initial_jump = try self.setLocalInitializeJoinParam(index, zero, initial_jump);
+        initial_jump = try self.assignUnaryLowLevel(initial, .list_with_capacity, len, initial_jump);
+        initial_jump = try self.assignU64Literal(len, data.len, initial_jump);
+        initial_jump = try self.assignU64Literal(one, 1, initial_jump);
+        initial_jump = try self.assignU64Literal(zero, 0, initial_jump);
+        initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{ .target = source, .value = .{ .bytes_literal = literal }, .next = initial_jump } });
+        return try self.parent.result.store.addCFStmt(.{ .join = .{ .id = join_id, .params = try self.joinParamSpan(&.{ index, acc }), .body = body, .remainder = initial_jump } });
+    }
+
     fn restoreStoredConstListInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -15057,9 +15160,10 @@ const ProcBodyBuilder = struct {
         };
         const elem_rep = self.repQuery().requiredSingleChild(rep_id, .list_elem).rep;
         const elem_layout = self.localListElemLayout(target);
+        if (list == .packed_bytes) return try self.restorePackedListInto(target, store_module, list.packed_bytes, rep_id, elem_rep, elem_rep, next);
         const list_len: usize = switch (list) {
             .nodes => |items| items.len,
-            .scalar_bytes => |packed_list| packed_list.len,
+            .packed_bytes => |packed_list| packed_list.len,
         };
         const elems = try self.parent.allocator.alloc(LIR.LocalId, list_len);
         defer self.parent.allocator.free(elems);
@@ -15081,16 +15185,7 @@ const ProcBodyBuilder = struct {
                     );
                 }
             },
-            .scalar_bytes => |packed_list| {
-                const bytes = store_module.const_store.blobBytes(packed_list.bytes);
-                const width: usize = packed_list.element.byteWidth();
-                var index: usize = packed_list.len;
-                while (index > 0) {
-                    index -= 1;
-                    const scalar = packedConstListElementScalar(packed_list.element, bytes[index * width ..][0..width]);
-                    continuation = try self.assignConstScalar(elems[index], scalar, continuation);
-                }
-            },
+            .packed_bytes => unreachable,
         }
         return continuation;
     }
@@ -15354,9 +15449,10 @@ const ProcBodyBuilder = struct {
         const source_elem_rep = self.repForModuleType(type_module, elem_ty);
         _ = try self.reserveDescriptorLocalForRep(target_elem_rep);
         const elem_layout = self.localListElemLayout(target);
+        if (list == .packed_bytes) return try self.restorePackedListInto(target, store_module, list.packed_bytes, list_rep, source_elem_rep, target_elem_rep, next);
         const list_len: usize = switch (list) {
             .nodes => |items| items.len,
-            .scalar_bytes => |packed_list| packed_list.len,
+            .packed_bytes => |packed_list| packed_list.len,
         };
         const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, list_len);
         defer self.parent.allocator.free(elem_locals);
@@ -15391,21 +15487,7 @@ const ProcBodyBuilder = struct {
                     }
                 }
             },
-            .scalar_bytes => |packed_list| {
-                const bytes = store_module.const_store.blobBytes(packed_list.bytes);
-                const width: usize = packed_list.element.byteWidth();
-                var index: usize = packed_list.len;
-                while (index > 0) {
-                    index -= 1;
-                    const scalar = packedConstListElementScalar(packed_list.element, bytes[index * width ..][0..width]);
-                    if (source_locals[index]) |source| {
-                        continuation = try self.prependConstListElementBox(elem_locals[index], source, source_elem_rep, continuation);
-                        continuation = try self.assignConstScalar(source, scalar, continuation);
-                    } else {
-                        continuation = try self.assignConstScalar(elem_locals[index], scalar, continuation);
-                    }
-                }
-            },
+            .packed_bytes => unreachable,
         }
         return continuation;
     }

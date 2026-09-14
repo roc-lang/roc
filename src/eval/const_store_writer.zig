@@ -1,6 +1,8 @@
 //! Store LIR interpreter results as checked constants.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const collections = @import("collections");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
@@ -60,6 +62,10 @@ pub const Writer = struct {
     visited_str_values: std.AutoHashMap(RuntimeValueAddress, void),
     str_backings: std.AutoHashMap(usize, StrBacking),
     erased_callable_resolver: ErasedCallableResolver,
+    product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
+    product_eligibility: collections.DenseMap(LirProgram.ConstPlanId, bool),
+
+    const ProductPlanKey = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx };
 
     pub fn init(
         allocator: Allocator,
@@ -74,6 +80,8 @@ pub const Writer = struct {
             .visited_str_values = std.AutoHashMap(RuntimeValueAddress, void).init(allocator),
             .str_backings = std.AutoHashMap(usize, StrBacking).init(allocator),
             .erased_callable_resolver = .{},
+            .product_plans = std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan).init(allocator),
+            .product_eligibility = collections.DenseMap(LirProgram.ConstPlanId, bool).init(allocator),
         };
     }
 
@@ -82,6 +90,10 @@ pub const Writer = struct {
     }
 
     pub fn deinit(self: *Writer) void {
+        var plans = self.product_plans.valueIterator();
+        while (plans.next()) |plan| if (plan.*) |*present| present.deinit();
+        self.product_plans.deinit();
+        self.product_eligibility.deinit();
         self.str_backings.deinit();
         self.visited_str_values.deinit();
         self.stored_values.deinit();
@@ -319,6 +331,11 @@ pub const Writer = struct {
             return try self.storePackedList(target_node, layout_value, roc_list);
         }
 
+        const elem_layout = if (layout_value.tag == .list_of_zst) layout.Idx.zst else layout_value.getIdx();
+        if (try self.productPlan(elem_plan, elem_layout)) |plan| {
+            return try self.storeProductList(target_node, plan, roc_list);
+        }
+
         const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, roc_list.len());
         // `nodes` is owned here for its whole lifetime: the store copies from it (it
         // never frees inputs), so free on every path—build failure, append failure,
@@ -327,7 +344,6 @@ pub const Writer = struct {
         if (layout_value.tag == .list_of_zst) {
             for (nodes) |*node| node.* = try self.storeValue(elem_plan, .zst, Value.zst);
         } else {
-            const elem_layout = layout_value.getIdx();
             const elem_size: usize = self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout));
             if (roc_list.bytes) |bytes| {
                 for (nodes, 0..) |*node, index| {
@@ -338,6 +354,60 @@ pub const Writer = struct {
             }
         }
         self.module.const_store.fill(target_node, .{ .list = .{ .nodes = nodes } });
+    }
+
+    fn planIsProduct(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!bool {
+        if (self.product_eligibility.get(id)) |result| return result;
+        // A cycle cannot be a fixed product. Recursive edges remain graph data.
+        try self.product_eligibility.put(id, false);
+        const result = switch (self.constPlan(id)) {
+            .scalar, .zst => true,
+            .named => |named| try self.planIsProduct(named.backing),
+            .record, .tuple => |children| blk: {
+                for (children) |child| if (!try self.planIsProduct(child)) break :blk false;
+                break :blk true;
+            },
+            .pending, .layout_only => unreachable,
+            .str, .list, .box, .tag_union, .fn_value, .erased_fn => false,
+        };
+        try self.product_eligibility.put(id, result);
+        return result;
+    }
+
+    fn productPlan(self: *Writer, id: LirProgram.ConstPlanId, idx: layout.Idx) Allocator.Error!?*const lir.PackedData.Plan {
+        const key = ProductPlanKey{ .plan = id, .layout_idx = idx };
+        if (self.product_plans.getPtr(key)) |entry| return if (entry.*) |*plan| plan else null;
+        const plan: ?lir.PackedData.Plan = if (try self.planIsProduct(id))
+            try lir.PackedData.Plan.init(self.allocator, &self.program.layouts, idx)
+        else
+            null;
+        errdefer if (plan) |value| {
+            var owned = value;
+            owned.deinit();
+        };
+        try self.product_plans.put(key, plan);
+        return if (self.product_plans.getPtr(key).?.*) |*value| value else null;
+    }
+
+    fn storeProductList(self: *Writer, node: checked.ConstNodeId, plan: *const lir.PackedData.Plan, list: *const RocList) Allocator.Error!void {
+        const byte_len = std.math.mul(usize, list.len(), plan.packed_width) catch unreachable;
+        const memory_len = std.math.mul(usize, list.len(), plan.memory_width) catch unreachable;
+        const memory = if (memory_len == 0) &.{} else list.bytes.?[0..memory_len];
+        var converted: ?[]u8 = null;
+        defer if (converted) |owned| self.allocator.free(owned);
+        const bytes = if (plan.isIdentity() and builtin.cpu.arch.endian() == .little) memory else blk: {
+            const out = try self.allocator.alloc(u8, byte_len);
+            converted = out;
+            plan.encode(out, memory, list.len(), builtin.cpu.arch.endian());
+            break :blk out;
+        };
+        const data = try self.module.const_store.addBlobData(bytes);
+        self.module.const_store.fill(node, .{ .list = .{ .packed_bytes = .{
+            .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed product bytes exceed ConstStore limit") },
+            .len = checkedU32(list.len(), "packed product length exceeds ConstStore limit"),
+            .element = null,
+            .product_width = plan.packed_width,
+        } } });
     }
 
     fn planIsScalar(self: *const Writer, plan_id: LirProgram.ConstPlanId) bool {
@@ -422,7 +492,7 @@ pub const Writer = struct {
         }
 
         const data = try self.module.const_store.addBlobData(bytes);
-        self.module.const_store.fill(target_node, .{ .list = .{ .scalar_bytes = .{
+        self.module.const_store.fill(target_node, .{ .list = .{ .packed_bytes = .{
             .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed list byte length exceeds ConstStore limit") },
             .len = checkedU32(roc_list.len(), "packed list length exceeds ConstStore limit"),
             .element = element,
@@ -746,6 +816,7 @@ pub const Writer = struct {
         if (layout_value.tag != .list and layout_value.tag != .list_of_zst) {
             writerInvariant("list const plan had non-list layout");
         }
+        if (try self.planIsProduct(elem_plan)) return;
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
         if (layout_value.tag == .list_of_zst) {
             for (0..roc_list.len()) |_| try self.collectStrBackings(elem_plan, .zst, Value.zst);
@@ -1299,14 +1370,14 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     try testing.expect(str_value == .str);
     const list_value = artifact.const_store.get(stored_list.const_node);
     try testing.expect(list_value == .list);
-    try testing.expect(list_value.list == .scalar_bytes);
-    const scalar_bytes = list_value.list.scalar_bytes;
+    try testing.expect(list_value.list == .packed_bytes);
+    const scalar_bytes = list_value.list.packed_bytes;
     try testing.expectEqual(@as(u32, 20 * 1024), scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u8, scalar_bytes.element);
     try testing.expectEqual(str_value.str.data, scalar_bytes.bytes.data);
     try testing.expectEqualSlices(u8, bytes, artifact.const_store.blobBytes(scalar_bytes.bytes));
 
-    const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.scalar_bytes;
+    const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.packed_bytes;
     try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u16, u16_scalar_bytes.element);
     try testing.expectEqual(str_value.str.data, u16_scalar_bytes.bytes.data);

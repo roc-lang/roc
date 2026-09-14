@@ -495,6 +495,15 @@ const NamedRepresentationKeyContext = struct {
     }
 };
 
+const PackedLiteralKey = struct {
+    owner: ?*Mono.SharedLiteralBacking,
+    literal: ?Mono.StringLiteralId,
+    offset: u32,
+    byte_len: u32,
+    element: layout.Idx,
+    len: u32,
+};
+
 const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
@@ -548,6 +557,8 @@ const Lowerer = struct {
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
+    packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
+    packed_literals: std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
     local_map: collections.DenseMap(Lifted.LocalId, LIR.LocalId),
@@ -780,6 +791,8 @@ const Lowerer = struct {
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .static_initializer_queue = .empty,
+            .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
+            .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
             .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
@@ -797,6 +810,62 @@ const Lowerer = struct {
             .worker_discovered_fns = .empty,
             .worker_workspaces = worker_workspaces,
         };
+    }
+
+    fn deinitPackedPlans(self: *Lowerer) void {
+        var plans = self.packed_plans.valueIterator();
+        while (plans.next()) |plan| plan.deinit();
+        self.packed_plans.deinit();
+        self.packed_literals.deinit();
+    }
+
+    fn packedListLiteral(self: *Lowerer, literal: Mono.PackedListLiteral, element: layout.Idx) Common.LowerError!LIR.ListLiteral {
+        const source = self.stringLiteral(literal.literal);
+        const key = PackedLiteralKey{
+            .owner = source.shared,
+            .literal = if (source.shared == null) literal.literal else null,
+            .offset = source.offset,
+            .byte_len = source.len,
+            .element = element,
+            .len = literal.len,
+        };
+        if (self.packed_literals.get(key)) |existing| return existing;
+        const size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(element));
+        var converted: ?[]u8 = null;
+        defer if (converted) |bytes| self.allocator.free(bytes);
+        var backing = source.backing;
+        var offset = source.offset;
+        var len = source.len;
+        if (literal.element == null) {
+            if (!self.packed_plans.contains(element)) {
+                var plan = try lir_core.PackedData.Plan.init(self.allocator, &self.result.layouts, element);
+                errdefer plan.deinit();
+                try self.packed_plans.put(element, plan);
+            }
+            const plan = self.packed_plans.getPtr(element).?;
+            if (plan.packed_width != literal.product_width) Common.invariant("packed product encoding disagreed with committed fields");
+            if (!plan.isIdentity()) {
+                const bytes = try self.allocator.alloc(u8, @as(usize, literal.len) * plan.memory_width);
+                converted = bytes;
+                plan.decode(bytes, source.text(), literal.len);
+                backing = bytes;
+                offset = 0;
+                len = @intCast(bytes.len);
+            }
+        }
+        if (@as(u64, literal.len) * size_align.size != len) Common.invariant("packed literal length disagreed with committed element layout");
+        const alignment: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
+        // A canonical view can be unaligned even when its target storage isn't.
+        if (offset % alignment != 0) {
+            backing = backing[offset..][0..len];
+            offset = 0;
+        }
+        const result = LIR.ListLiteral{
+            .bytes = try self.result.store.insertStringViewAligned(backing, offset, len, alignment),
+            .len = literal.len,
+        };
+        try self.packed_literals.put(key, result);
+        return result;
     }
 
     fn deinitWorkerWorkspaces(self: *Lowerer) void {
@@ -829,6 +898,7 @@ const Lowerer = struct {
         self.const_type_map.deinit();
         self.mono_const_type_map.deinit();
         self.callable_source_fn_map.deinit();
+        self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.comptime_value_map.deinit();
@@ -884,6 +954,7 @@ const Lowerer = struct {
         self.const_type_map.deinit();
         self.mono_const_type_map.deinit();
         self.callable_source_fn_map.deinit();
+        self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.comptime_value_map.deinit();
@@ -922,6 +993,8 @@ const Lowerer = struct {
         self.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(self.allocator);
         self.local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(self.allocator);
         self.static_initializer_queue = .empty;
+        self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
+        self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
@@ -3849,34 +3922,11 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
-            .bytes_lit => |literal| blk: {
-                const bytes_lit = self.stringLiteral(literal.literal);
-                const elem_layout = self.localListElemLayout(target);
-                const elem_size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(elem_layout));
-                const elem_size: u32 = elem_size_align.size;
-                const elem_alignment: u32 = @intCast(@max(elem_size_align.alignment.toByteUnits(), 1));
-                const expected_bytes = std.math.mul(u32, literal.len, elem_size) catch
-                    Common.invariant("packed list literal byte length overflowed");
-                if (expected_bytes != bytes_lit.len) {
-                    Common.invariant("packed list literal byte length did not match its element layout");
-                }
-                if (bytes_lit.offset % elem_alignment != 0) {
-                    Common.invariant("packed list literal view was not aligned for its element layout");
-                }
-                break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
-                    .target = target,
-                    .value = .{ .bytes_literal = .{
-                        .bytes = try self.result.store.insertStringViewAligned(
-                            bytes_lit.backing,
-                            bytes_lit.offset,
-                            bytes_lit.len,
-                            elem_alignment,
-                        ),
-                        .len = literal.len,
-                    } },
-                    .next = next,
-                } });
-            },
+            .bytes_lit => |literal| try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .bytes_literal = try self.packedListLiteral(literal, self.localListElemLayout(target)) },
+                .next = next,
+            } }),
             .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
             .uninitialized, .uninitialized_payload => next,
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, expr_ty, next),
@@ -11543,18 +11593,13 @@ fn cloneStringLiterals(allocator: std.mem.Allocator, source: []const Mono.String
     errdefer deinitStringLiterals(allocator, &cloned);
     try cloned.ensureTotalCapacity(allocator, source.len);
     for (source) |literal| {
-        const backing = try allocator.dupe(u8, literal.backing);
-        cloned.appendAssumeCapacity(.{
-            .backing = backing,
-            .offset = literal.offset,
-            .len = literal.len,
-        });
+        cloned.appendAssumeCapacity(try literal.clone(allocator));
     }
     return cloned;
 }
 
 fn deinitStringLiterals(allocator: std.mem.Allocator, literals: *std.ArrayList(Mono.StringLiteral)) void {
-    for (literals.items) |literal| allocator.free(literal.backing);
+    for (literals.items) |literal| literal.deinit(allocator);
     literals.deinit(allocator);
 }
 

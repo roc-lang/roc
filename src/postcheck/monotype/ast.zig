@@ -67,22 +67,73 @@ pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
+/// Checked-blob identity borrowed only while a body draft is being built.
+pub const ConstBlobView = struct {
+    module_bytes: [32]u8,
+    data: check.ConstStore.ConstBlobDataId,
+    bytes: []const u8,
+};
+
+/// Shared immutable storage for restored blobs. IR copies retain ownership;
+/// they never copy the payload or retain a pointer into a checked module.
+pub const SharedLiteralBacking = struct {
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    refs: std.atomic.Value(usize) = .init(1),
+
+    fn init(allocator: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!*SharedLiteralBacking {
+        const owned = try allocator.dupe(u8, bytes);
+        errdefer allocator.free(owned);
+        const self = try allocator.create(SharedLiteralBacking);
+        self.* = .{ .allocator = allocator, .bytes = owned };
+        return self;
+    }
+    /// Retain the immutable backing when another IR takes ownership.
+    pub fn retain(self: *SharedLiteralBacking) void {
+        _ = self.refs.fetchAdd(1, .monotonic);
+    }
+    /// Release ownership, freeing the backing after its final user.
+    pub fn release(self: *SharedLiteralBacking) void {
+        if (self.refs.fetchSub(1, .acq_rel) == 1) {
+            const allocator = self.allocator;
+            allocator.free(self.bytes);
+            allocator.destroy(self);
+        }
+    }
+};
+
+const ConstBlobKey = struct { module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId };
+
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {
     backing: []const u8,
+    shared: ?*SharedLiteralBacking = null,
     offset: u32,
     len: u32,
+
+    /// Release this literal's owned or shared backing.
+    pub fn deinit(self: StringLiteral, allocator: std.mem.Allocator) void {
+        if (self.shared) |owner| owner.release() else allocator.free(self.backing);
+    }
+
+    /// Copy literal metadata and retain shared constant payloads.
+    pub fn clone(self: StringLiteral, allocator: std.mem.Allocator) std.mem.Allocator.Error!StringLiteral {
+        var result = self;
+        if (self.shared) |owner| owner.retain() else result.backing = try allocator.dupe(u8, self.backing);
+        return result;
+    }
 
     pub fn text(self: StringLiteral) []const u8 {
         return self.backing[self.offset..][0..self.len];
     }
 };
 
-/// Readonly packed scalar-list data carried without one expression per item.
+/// Readonly packed list data carried without one expression per item.
 pub const PackedListLiteral = struct {
     literal: StringLiteralId,
     len: u32,
-    element: check.ConstStore.ConstPackedScalar,
+    element: ?check.ConstStore.ConstPackedScalar,
+    product_width: u32 = 0,
 };
 
 /// Slice descriptor over one of the program side arrays.
@@ -1466,6 +1517,7 @@ pub const ProgramBuilder = struct {
     branches: ProgramList(Branch, "branches"),
     if_branches: ProgramList(IfBranch, "if_branches"),
     string_literals: ProgramList(StringLiteral, "string_literals"),
+    const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
@@ -1617,7 +1669,10 @@ pub const ProgramBuilder = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
+        var backings = self.const_blob_backings.valueIterator();
+        while (backings.next()) |owner| owner.*.release();
+        self.const_blob_backings.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -1963,6 +2018,22 @@ pub const ProgramBuilder = struct {
 
     pub fn addStringLiteral(self: *ProgramBuilder, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
         return try self.addStringView(text, 0, @intCast(text.len));
+    }
+
+    /// Restore a view, copying each owner-relative checked blob at most once.
+    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+        const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
+        const owner = self.const_blob_backings.get(key) orelse blk: {
+            const created = try SharedLiteralBacking.init(self.allocator, bytes);
+            errdefer created.release();
+            try self.const_blob_backings.put(self.allocator, key, created);
+            break :blk created;
+        };
+        if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("constant blob view exceeded its backing");
+        const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.len())));
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = offset, .len = len });
+        owner.retain();
+        return id;
     }
 
     pub fn addStringView(self: *ProgramBuilder, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
@@ -2341,6 +2412,23 @@ pub const MonoProgramView = ProgramView;
 
 test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "restored constant blob views share storage across IR ownership transfers" {
+    const gpa = std.testing.allocator;
+    var program = ProgramBuilder.init(gpa);
+    var program_alive = true;
+    defer if (program_alive) program.deinit();
+    const a = try program.addConstBlobView(@splat(0), @enumFromInt(0), "abcdefgh", 0, 4);
+    const b = try program.addConstBlobView(@splat(0), @enumFromInt(0), "abcdefgh", 2, 6);
+    const first = program.string_literals.get(@intFromEnum(a));
+    const second = program.string_literals.get(@intFromEnum(b));
+    try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);
+    const cloned = try second.clone(gpa);
+    defer cloned.deinit(gpa);
+    program.deinit();
+    program_alive = false;
+    try std.testing.expectEqualStrings("cdefgh", cloned.text());
 }
 
 test "final Monotype capture identities preserve direct aliases" {

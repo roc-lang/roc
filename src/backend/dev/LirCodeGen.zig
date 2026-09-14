@@ -23933,7 +23933,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (bytes.len == 0) {
                 try self.codegen.emitLoadImm(ptr_reg, 0);
                 try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+                try self.codegen.emitLoadImm(ptr_reg, literal.len);
                 try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                try self.codegen.emitLoadImm(ptr_reg, @as(i64, literal.len) << 1);
                 try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
             } else {
                 switch (self.generation_mode) {

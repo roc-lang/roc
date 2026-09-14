@@ -639,7 +639,11 @@ const StaticInitializerMachine = struct {
         const result = try self.newValue(target_layout);
         const backing = self.store().getStringLiteralBacking(literal.bytes);
         const bytes = self.validateLiteralView(literal.bytes);
-        if (bytes.len == 0) return result;
+        if (bytes.len == 0) {
+            self.writeTargetWord(result.bytes, self.word_size, literal.len);
+            self.writeTargetWord(result.bytes, self.word_size * 2, builtins.list.RocList.encodeCapacityForWidth(literal.len));
+            return result;
+        }
 
         const allocation = try self.stringBacking(literal.bytes.backing);
         try result.relocations.append(self.allocator(), .{
