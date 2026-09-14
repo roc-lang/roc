@@ -516,15 +516,48 @@ coercion generator; or (e) per-use opening stays everywhere and the
 obligation reports a new problem when the implementation's row at a
 widened nested marker is closed, which needs the widened markers recorded
 per signature and the implementation's scheme inspected before the
-obligation unifies it. Decision: (e). Per-use opening stays at every
-output position of a where-method signature; the checker records, per
-signature, which markers a body use widened, and the obligation reports a
-new problem (declared in the Polarity section) when the resolved
-implementation's row at a widened nested marker is closed, before it
-unifies the implementation with the signature. Open implementations at
-nested positions keep working; closed ones are rejected at check time
-with the implementation named. The nested-position fixture asserts that
-rejection.
+obligation unifies it. Decision: **(d)** — reversed from (e) on 2026-09-14, see below. Per-use
+opening is restricted at GENERATION time to the positions the adapter can
+re-tag: the direct result row and a `Try`'s rows. Every other output
+position of a where-method signature stays closed as written, so a nested
+widening is an ordinary type mismatch at the body use, reported at the
+body use's own region. The set of opened positions grows with the coercion
+generator (§6). The nested-position fixture asserts that mismatch.
+
+**Why (e) was reversed (2026-09-14).** (e) rested on two premises that the
+code does not support:
+
+1. *"The obligation inspects the implementation's row at a widened nested
+   marker."* It cannot see markers at all. `instantiateTypeScheme`
+   (`Check.zig:6434-6454`) instantiates the enclosing scheme with
+   `.polarity_var_behavior = .close`, and `instantiate.zig:519,530` mints a
+   FRESH `empty_tag_union` var with no back-link to the pristine marker.
+   By the time the obligation runs it sees `[]`, not a marker.
+2. *"Each marker's position in the signature is known when it is minted."*
+   Nothing records position. The instantiator carries `current_polarity`
+   only (`instantiate.zig:290-296`); `OpenedMarkerExt` is `{ ext,
+   listed_tags }` (`instantiate.zig:364-367`).
+
+So (e) could not be marker-keyed; it would have to be path-keyed, which
+requires a structural path encoding, a NEW SERIALIZED `ModuleEnv` table
+(obligations fire cross-module — `where_clause_test.zig:304` is an existing
+green test of that shape), a cache bump to 75, probe-rollback and
+rehydration arms, and a new non-local invariant that structural paths stay
+stable across generalization, cross-module copy, the closing instantiation,
+and cache round-trip. Nothing else in the tree depends on path stability;
+every existing cross-phase identity is a Var, a node index, or a
+`TypeDigest`. Estimated 540-840 lines across 9-13 functions.
+
+That is the same shape as the reverted W6b stack — a serialized side table
+plus bookkeeping to keep an identity alive across phases — for a rule that
+would still be narrower than the adapter's own lowerability test (the
+checker has only `tagExtIsClosedEmpty`, "literally `[]` now";
+`row_default` does not exist until publication), i.e. two rules that can
+drift with no assertion tying them. (d) is ~20 lines in one function, needs
+no new problem kind, no serialization, no cache bump, and no cross-module
+transport, and its diagnostic is strictly better: an ordinary mismatch at
+the body use instead of "the implementation you resolved to has a closed
+row at a position you cannot see".
 
 Rule text (design.md, a new "Result-Row Widening Adapter" section beside
 Hosted Try Question Widening, which becomes its first instance; the
@@ -699,9 +732,12 @@ and `run-check-snapshots` run after W3, after W6b, and after W2b.
    (option 1 of the W2a review finding).
 2. (Decided 2026-09-03: artifact side, with the clone-origin record; see
    the W3 landing note.)
-3. (Decided 2026-09-03: (e).) Per-use opening everywhere; the obligation
-   rejects a closed implementation at a widened nested marker with a new
-   problem kind. See W6b "Nested positions".
+3. (Decided 2026-09-03: (e). **REVERSED 2026-09-14: (d)**, after recon
+   showed (e)'s two enabling premises are false — markers are closed to
+   `[]` before the obligation runs, and mint-time positions are not
+   recorded. Per-use opening is restricted at generation time to the
+   adapter-reachable positions; a nested widening is an ordinary mismatch
+   at the body use. See W6b "Nested positions" for the full rationale.)
 4. W6b mechanism: the adapter at the template boundary is my choice over
    the earlier draft's call-site wrap. If restructuring the hosted arm is
    judged too risky for this PR, the fallback is the call-site wrap with
@@ -730,14 +766,63 @@ described in full, with trailers):
 | `tsrzvryw` | W2a | landed, implemented + adversarially reviewed; callable-node grounding only |
 | `wwnsvqrn` | W3 | landed, implemented + reviewed twice; full `run-test-zig` 5039/5046 (7 skipped) and `run-check-snapshots` clean on its tree |
 | `vrpryvko` | W4 | landed, implemented + reviewed; tests and fixtures only |
-| working copy | W6a | implemented; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
+| `wrtzpoum` | design.md widening decision | landed |
+| `ktlykkxv` | W6a | landed; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
 
-Bookmark `jared/polarity` still points at the plan commit `wlzsxolu`;
-nothing after the original plan commit has been pushed. To publish: move
-the bookmark to the top (`jj bookmark set jared/polarity -r ktlykkxv`,
-`--allow-backwards` is not needed for a forward move) and `jj git push`
-— only at Jared's explicit direction. Then refresh the PR description
-(W7).
+Bookmark `jared/polarity` points at `ktlykkxv` (W6a) and is pushed.
+
+### 8.1.1 W6b restart (2026-09-14)
+
+A first W6b attempt ran from `ssvqsxro` through 23 WIP commits and was
+**reverted**: it grew `Check.zig` from 37,525 to 112,958 lines (+59,292 in
+one commit), added 42 side-table `SafeList` fields to `ModuleEnv`, and left
+the full checker gate red (1,257/1,383 pass, 6 fail, 120 crash) with W6b's
+actual deliverable — the result-row widening adapter — still unwritten.
+
+Cause, for the record: W6a's raw-witness validators were strict enough to
+reject PRE-EXISTING, unrelated checker state, and each rejection was
+answered by building more checker machinery instead of loosening the
+validator or deferring the case. Several detours (`Node` payload width,
+`SmallStringInterner` quadratic validation, `checkExpr` frame size) were
+defects that also exist on `main` and are not polarity.
+
+That stack is preserved at bookmark `jared/polarity-w6b-archive` and is not
+part of this PR. **Standing rule for the rest of this plan: fix polarity;
+do not fix pre-existing `main` defects. A pre-existing defect is reported,
+not repaired, and never worked around with new machinery.**
+
+### 8.1.2 W6b decisions taken at restart
+
+Recorded here rather than rediscovered later:
+
+- **Closed-result-row predicate.** The pre-step uses the
+  `CheckedTypePayload.variableSealsToRowDefault` rule (`.rigid => false`,
+  no constraints, no numeric default phase), NOT `checkedTypeIsClosedTagRow`
+  (which counts a rigid carrying an empty-tag-union default as closed). A
+  rigid result row is parametric — the caller supplies it — so the other
+  rule would mint adapters for polymorphic templates. This keeps W6b on the
+  same closure rule W3 and W6a share.
+- **The widening width is structurally non-recursive.** It applies to
+  exactly the result cell and a `Try`'s two type arguments, then drops back
+  to `.exact`. `relateMatchingRequestContainers` otherwise propagates one
+  `row_width` uniformly through `.func` argument and result positions
+  alike, and `RelationStamp` memoizes on `row_width`, so a mode that leaks
+  into an argument or a nested `List`/record/tuple/tag-payload position
+  would be a memoized silent wrong-representation bug. Arguments stay exact.
+- **Six relation sites, two panic sites.** The request relation is doubled
+  at every dispatch call site: `instantiateTargetFromPlanNode`,
+  `methodTargetNodeFromPlan`, and the four follow-up relations after each
+  `methodTargetNodeFromPlan` call. The twin panic `"opaque interface
+  relation widened a closed tag union"` (`relateOpaqueInterface`) is
+  reachable alongside `unifyTagRows`'s.
+- **Verification must be Debug.** `Common.invariant` compiles to
+  `unreachable` in release, so a release-mode run proves nothing about the
+  panic being gone.
+- **`lowerType` collapses rigids silently.** `lowerCheckedTypeVariable`
+  returns the empty tag union for a variable with no row default, so
+  deriving a `.roc` template's declared row from `lowerType` of the checked
+  root yields a silently wrong type. The declared row comes from the
+  request, guarded explicitly.
 
 ### 8.2 The working agreement Jared set (binding)
 
