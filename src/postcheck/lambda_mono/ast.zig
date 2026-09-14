@@ -173,10 +173,9 @@ pub const TryRecordSequence = struct {
 /// Direct call target after Lambda Mono lowering.
 pub const DirectCallTarget = union(enum(u8)) {
     local: FnId,
-    imported: Lifted.ImportedFnId,
 };
 
-/// Direct call to a known Lambda Mono function or loaded specialization shard.
+/// Direct call to a known Lambda Mono function.
 pub const DirectCall = struct {
     target: DirectCallTarget,
     args: Span(ExprId),

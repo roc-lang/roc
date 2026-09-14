@@ -28,14 +28,8 @@ pub fn ProgramSpanBorrow(comptime T: type, comptime field_name: []const u8) type
     return GuardedList.BorrowSpan(T, "monotype.Program." ++ field_name);
 }
 
-/// Monotype ids are local to the `ProgramView` or mapped shard that owns the
-/// corresponding side array. In particular, expression, pattern, statement,
-/// local, definition, function, string-literal, compile-time-site, and type ids
-/// must not be interpreted against another shard's arrays. Cross-shard function
-/// references are represented only by `FnSlot.imported`, whose `ImportedFnId`
-/// indexes an import table entry containing the target `ShardId` and local
-/// `FnId` inside that shard. Specialization records store local `FnId`s because
-/// a record belongs to exactly one shard.
+/// Monotype ids are local to the `ProgramView` that owns the corresponding side
+/// array and must not be interpreted against another program's arrays.
 /// Identifier for an expression in Monotype IR.
 pub const ExprId = enum(u32) { _ };
 /// Identifier for a pattern in Monotype IR.
@@ -48,10 +42,6 @@ pub const NestedDefId = enum(u32) { _ };
 pub const FnId = enum(u32) { _ };
 /// Identifier for a specialization record in a Monotype program.
 pub const SpecId = enum(u32) { _ };
-/// Identifier for a loaded specialization shard. Shard 0 is the current build.
-pub const ShardId = enum(u32) { local = 0, _ };
-/// Identifier for an imported function entry in a Monotype program view.
-pub const ImportedFnId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
 /// Identifier for a lexically scoped Monotype Lifted join point.
@@ -244,16 +234,9 @@ pub const Fn = struct {
     signature_relation: SignatureRelation = .independent_roots,
 };
 
-/// Function imported from another specialization shard.
-pub const ImportedFn = extern struct {
-    shard: ShardId,
-    fn_id: FnId,
-};
-
-/// Direct function slot in a Monotype program shard.
+/// Direct function slot in a Monotype program.
 pub const FnSlot = union(enum(u8)) {
     local: FnId,
-    imported: ImportedFnId,
 };
 
 /// Identifier for a hosted callable in durable specialization identities.
@@ -775,11 +758,6 @@ pub fn procCalleeForSlot(slot: FnSlot) ProcCallee {
     return .{ .func = slot };
 }
 
-/// Construct a direct call target for a function imported from a loaded shard.
-pub fn importedProcCallee(imported: ImportedFnId) ProcCallee {
-    return .{ .func = .{ .imported = imported } };
-}
-
 /// Direct call to a known function.
 pub const CallProc = struct {
     callee: ProcCallee,
@@ -1280,8 +1258,6 @@ pub const CallTargetVerifyError = enum {
     local_fn_type_not_function,
     local_fn_definition_arity_mismatch,
     local_call_arity_mismatch,
-    imported_fn_out_of_bounds,
-    imported_local_fn_out_of_bounds,
     lifted_fn_before_lifting,
 };
 
@@ -1302,13 +1278,11 @@ pub const CompletedTypeIdVerifyError = enum {
 
 /// Read-only Monotype program view.
 ///
-/// Today this view borrows the builder-owned arrays in `Program`. The durable
-/// specialization-cache form should expose the same shape from mapped sections.
+/// This view borrows the builder-owned arrays in `Program`.
 pub const ProgramView = struct {
     names: *const names.NameStore,
     types: Type.Store.View,
     specs: []const SpecRecord,
-    imported_fns: []const ImportedFn,
     fns: []const Fn,
     const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
     const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -1429,12 +1403,6 @@ pub const ProgramView = struct {
     }
 
     pub fn verifyCallTargets(self: ProgramView) ?CallTargetVerifyError {
-        for (self.imported_fns) |imported| {
-            if (imported.shard == .local and @intFromEnum(imported.fn_id) >= self.fns.len) {
-                return .imported_local_fn_out_of_bounds;
-            }
-        }
-
         for (self.defs) |def| {
             if (def.fn_id) |fn_id| {
                 if (self.verifyFnDefinition(fn_id, def.args)) |err| return err;
@@ -1457,9 +1425,6 @@ pub const ProgramView = struct {
                         const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
                         if (std.meta.activeTag(fn_ty) != .func) return .local_fn_type_not_function;
                         if (fn_ty.func.args.len != call.args.len) return .local_call_arity_mismatch;
-                    },
-                    .imported => |imported| {
-                        if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
                     },
                 },
                 .lifted => return .lifted_fn_before_lifting,
@@ -1491,7 +1456,6 @@ pub const ProgramBuilder = struct {
     next_symbol: u32,
     types: Type.Store,
     specs: ProgramList(SpecRecord, "specs"),
-    imported_fns: ProgramList(ImportedFn, "imported_fns"),
     fns: ProgramList(Fn, "fns"),
     const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
     const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
@@ -1552,7 +1516,6 @@ pub const ProgramBuilder = struct {
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .specs = .empty,
-            .imported_fns = .empty,
             .fns = .empty,
             .const_fn_evidence = .empty,
             .const_fn_evidence_frames = .empty,
@@ -1695,7 +1658,6 @@ pub const ProgramBuilder = struct {
         self.fns.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
-        self.imported_fns.deinit(self.allocator);
         self.specs.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -1745,16 +1707,6 @@ pub const ProgramBuilder = struct {
 
     pub fn fnsView(self: *const ProgramBuilder) []const Fn {
         return self.fns.unsafeRawItemsForView();
-    }
-
-    pub fn addImportedFn(self: *ProgramBuilder, imported: ImportedFn) std.mem.Allocator.Error!ImportedFnId {
-        const id: ImportedFnId = @enumFromInt(@as(u32, @intCast(self.imported_fns.len())));
-        try self.imported_fns.append(self.allocator, imported);
-        return id;
-    }
-
-    pub fn importedFnsView(self: *const ProgramBuilder) []const ImportedFn {
-        return self.imported_fns.unsafeRawItemsForView();
     }
 
     pub fn addDef(self: *ProgramBuilder, def: Def) std.mem.Allocator.Error!DefId {
@@ -1836,7 +1788,6 @@ pub const ProgramBuilder = struct {
             .names = &self.names,
             .types = self.types.view(),
             .specs = self.specs.unsafeRawItemsForView(),
-            .imported_fns = self.imported_fns.unsafeRawItemsForView(),
             .fns = self.fns.unsafeRawItemsForView(),
             .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
             .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
@@ -2529,7 +2480,7 @@ test "completed monotype type id verifier requires frozen in-bounds type ids" {
     );
 }
 
-test "monotype call target verifier checks local and imported slots" {
+test "monotype call target verifier checks local slots" {
     {
         var program = Program.init(std.testing.allocator);
         defer program.deinit();
@@ -2542,22 +2493,6 @@ test "monotype call target verifier checks local and imported slots" {
         const fn_id = try program.addFn(testFnSource(fn_ty));
         _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
             .callee = localProcCallee(fn_id),
-            .args = Span(ExprId).empty(),
-        } } });
-        try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
-    }
-
-    {
-        var program = Program.init(std.testing.allocator);
-        defer program.deinit();
-
-        const unit_ty = try program.types.add(.zst);
-        const imported = try program.addImportedFn(.{
-            .shard = @enumFromInt(1),
-            .fn_id = undefined, // external-shard function id is not inspected by this verifier test
-        });
-        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-            .callee = importedProcCallee(imported),
             .args = Span(ExprId).empty(),
         } } });
         try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
@@ -2624,21 +2559,9 @@ test "monotype call target verifier checks local and imported slots" {
         } } });
         try std.testing.expectEqual(CallTargetVerifyError.local_call_arity_mismatch, program.verifyCallTargets().?);
     }
-
-    {
-        var program = Program.init(std.testing.allocator);
-        defer program.deinit();
-
-        const unit_ty = try program.types.add(.zst);
-        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-            .callee = importedProcCallee(@enumFromInt(99)),
-            .args = Span(ExprId).empty(),
-        } } });
-        try std.testing.expectEqual(CallTargetVerifyError.imported_fn_out_of_bounds, program.verifyCallTargets().?);
-    }
 }
 
-test "fresh single-shard view preserves builder local call graph" {
+test "fresh program view preserves builder local call graph" {
     var program = Program.init(std.testing.allocator);
     defer program.deinit();
 
@@ -2726,7 +2649,6 @@ fn collectSingleShardLocalCallTargets(
         switch (expr.data.call_proc.callee) {
             .func => |slot| switch (slot) {
                 .local => |fn_id| try out.append(allocator, fn_id),
-                .imported => return error.TestUnexpectedResult,
             },
             .lifted => return error.TestUnexpectedResult,
         }

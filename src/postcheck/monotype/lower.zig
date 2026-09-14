@@ -13,7 +13,6 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
 const solve = @import("solve.zig");
-const serialize = @import("serialize.zig");
 
 const InstGraph = solve.InstGraph;
 const InstNode = solve.InstNode;
@@ -211,46 +210,6 @@ const TemplateRequestAccounting = enum {
     already_counted,
 };
 
-/// Internal control surface for Monotype specialization cache integration.
-pub const SpecializationCacheControl = struct {
-    /// Load valid specialization cache shards before fresh lowering starts.
-    read: bool = true,
-    /// Write a verified specialization cache image after successful lowering.
-    write: bool = true,
-
-    /// Disable both cache reads and writes for debugging and equivalence tests.
-    pub const disabled: SpecializationCacheControl = .{ .read = false, .write = false };
-};
-
-/// Already-validated specialization shard that can satisfy in-body template
-/// requests without copying function bodies into the current program.
-pub const LoadedSpecializationShard = struct {
-    shard_id: Ast.ShardId,
-    types: Type.DurableView,
-    specs: []const Ast.SpecRecord,
-    /// Explicit retained function/evidence data for every specialization in
-    /// `specs`. Imported reuse validates the requesting edge against this
-    /// narrow durable topology instead of trying to derive dispatch provenance
-    /// from a type or borrowing a live program view.
-    fns: []const Ast.Fn,
-    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
-    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
-
-    /// Construct the lowering input from one already-validated mapped cache
-    /// view, keeping types, records, functions, and evidence bound to the same
-    /// durable shard authority.
-    pub fn fromMapped(program: serialize.MappedProgramView) LoadedSpecializationShard {
-        return .{
-            .shard_id = program.shard_id,
-            .types = program.types,
-            .specs = program.specs,
-            .fns = program.fns,
-            .const_fn_evidence = program.const_fn_evidence,
-            .const_fn_evidence_frames = program.const_fn_evidence_frames,
-        };
-    }
-};
-
 /// Options used while lowering checked modules into Monotype IR.
 pub const InlineExpectMode = enum {
     run,
@@ -275,10 +234,6 @@ pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
-    /// Control Monotype specialization cache reads and writes.
-    specialization_cache: SpecializationCacheControl = .{},
-    /// Valid loaded specialization shards to index when cache reads are enabled.
-    loaded_specialization_shards: []const LoadedSpecializationShard = &.{},
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -696,7 +651,6 @@ pub fn run(
         builder.addDigestStats(digest_stats);
     }
     try builder.initHostedCatalog();
-    try builder.loadCandidateSpecializationShards();
     setup_timing_scope.end();
 
     // Wave 1: roots in listed order, then the specialization queue. Each
@@ -2306,36 +2260,6 @@ fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) Sto
     };
 }
 
-fn retainedFnEvidence(
-    fns: []const Ast.Fn,
-    evidence: []const check.ConstStore.ConstFnEvidence,
-    frames: []const check.ConstStore.ConstFnEvidenceFrame,
-    fn_id: Ast.FnId,
-) StoredConstFnEvidence {
-    const raw_fn = @intFromEnum(fn_id);
-    if (raw_fn >= fns.len) Common.invariant("loaded specialization evidence referenced an absent function");
-    const template = fns[raw_fn].source;
-    const evidence_end = std.math.add(usize, template.const_evidence.start, template.const_evidence.len) catch
-        Common.invariant("loaded specialization evidence span overflowed");
-    const frames_end = std.math.add(usize, template.const_evidence_frames.start, template.const_evidence_frames.len) catch
-        Common.invariant("loaded specialization evidence frame span overflowed");
-    if (evidence_end > evidence.len or frames_end > frames.len) {
-        Common.invariant("loaded specialization evidence span exceeded its retained section");
-    }
-    if (template.const_evidence_frame_head) |head| {
-        if (head >= template.const_evidence_frames.len) {
-            Common.invariant("loaded specialization evidence head exceeded its retained frame span");
-        }
-    } else if (template.const_evidence_frames.len != 0) {
-        Common.invariant("loaded specialization evidence frames had no explicit head");
-    }
-    return .{
-        .nodes = evidence[template.const_evidence.start..evidence_end],
-        .frames = frames[template.const_evidence_frames.start..frames_end],
-        .head = template.const_evidence_frame_head,
-    };
-}
-
 /// Pass-local lowering state for one procedure template specialization,
 /// keyed by the specialization's function id. Its identity, type views, and
 /// status live on the `Ast.SpecRecord` owned by `spec_store`; this entry only
@@ -2727,8 +2651,6 @@ const SpecJobWorkerInputs = struct {
     modules: Common.CheckedModules,
     program: *Ast.Program,
     proc_debug_names: bool,
-    specialization_cache: SpecializationCacheControl,
-    loaded_specialization_shards: []const LoadedSpecializationShard,
     interface_summaries: *const InterfaceSummaryCache,
     collect_counters: bool,
     collect_diagnostics: bool,
@@ -2822,9 +2744,9 @@ const FinalBodyOutputCounts = struct {
 };
 
 fn localFnIdFromSlot(slot: Ast.FnSlot, comptime message: []const u8) Ast.FnId {
+    _ = message;
     return switch (slot) {
         .local => |fn_id| fn_id,
-        .imported => Common.invariant(message),
     };
 }
 
@@ -3105,8 +3027,6 @@ const Builder = struct {
     current_loc: base.SourceLoc,
     current_region: base.Region,
     proc_debug_names: bool,
-    specialization_cache: SpecializationCacheControl,
-    loaded_specialization_shards: []const LoadedSpecializationShard,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -3266,8 +3186,6 @@ const Builder = struct {
             .current_loc = program.current_loc,
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
-            .specialization_cache = options.specialization_cache,
-            .loaded_specialization_shards = options.loaded_specialization_shards,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -3307,8 +3225,6 @@ const Builder = struct {
         errdefer worker.allocator.destroy(builder);
         builder.* = Builder.init(worker.allocator, inputs.modules, inputs.program, .{
             .proc_debug_names = inputs.proc_debug_names,
-            .specialization_cache = inputs.specialization_cache,
-            .loaded_specialization_shards = inputs.loaded_specialization_shards,
             .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
             .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
             .inline_expects = inputs.inline_expects,
@@ -3325,74 +3241,6 @@ const Builder = struct {
         builder.coordinator_interface_summaries = inputs.interface_summaries;
         worker.builder = builder;
         return builder;
-    }
-
-    fn loadCandidateSpecializationShards(self: *Builder) Allocator.Error!void {
-        if (!self.specialization_cache.read) return;
-
-        for (self.loaded_specialization_shards, 0..) |shard, shard_index| {
-            if (shard.shard_id == .local) {
-                Common.invariant("loaded Monotype specialization shard used the local shard id");
-            }
-            for (self.loaded_specialization_shards[0..shard_index]) |prior| {
-                if (prior.shard_id == shard.shard_id) {
-                    Common.invariant("loaded Monotype specialization shards reused a shard id");
-                }
-            }
-            for (shard.specs) |record| {
-                if (record.status != .ready) {
-                    Common.invariant("loaded Monotype specialization shard contained an unfinished record");
-                }
-                const imported = try self.program.addImportedFn(.{
-                    .shard = shard.shard_id,
-                    .fn_id = record.fn_id,
-                });
-                const evidence = retainedFnEvidence(
-                    shard.fns,
-                    shard.const_fn_evidence,
-                    shard.const_fn_evidence_frames,
-                    record.fn_id,
-                );
-                _ = try self.spec_store.insertLoadedReady(record, shard.types, imported, specializationEvidenceView(evidence));
-            }
-        }
-    }
-
-    fn importedFnEvidence(self: *Builder, id: Ast.ImportedFnId) StoredConstFnEvidence {
-        const imported_fns = self.program.importedFnsView();
-        const raw_id = @intFromEnum(id);
-        if (raw_id >= imported_fns.len) {
-            Common.invariant("imported specialization evidence referenced an absent import");
-        }
-        const imported = imported_fns[raw_id];
-        for (self.loaded_specialization_shards) |shard| {
-            if (shard.shard_id != imported.shard) continue;
-            return retainedFnEvidence(
-                shard.fns,
-                shard.const_fn_evidence,
-                shard.const_fn_evidence_frames,
-                imported.fn_id,
-            );
-        }
-        Common.invariant("imported specialization evidence referenced an absent loaded shard");
-    }
-
-    fn importedFnSignatureRelation(self: *Builder, id: Ast.ImportedFnId) Ast.SignatureRelation {
-        const imported_fns = self.program.importedFnsView();
-        const raw_id = @intFromEnum(id);
-        if (raw_id >= imported_fns.len) {
-            Common.invariant("imported specialization signature referenced an absent import");
-        }
-        const imported = imported_fns[raw_id];
-        for (self.loaded_specialization_shards) |shard| {
-            if (shard.shard_id != imported.shard) continue;
-            const raw_fn = @intFromEnum(imported.fn_id);
-            if (raw_fn >= shard.fns.len) {
-                Common.invariant("imported specialization signature referenced an absent shard function");
-            }
-            return shard.fns[raw_fn].signature_relation;
-        }
-        Common.invariant("imported specialization signature referenced an absent loaded shard");
     }
 
     fn deinit(self: *Builder) void {
@@ -4003,8 +3851,6 @@ const Builder = struct {
             .modules = self.modules,
             .program = self.program,
             .proc_debug_names = self.proc_debug_names,
-            .specialization_cache = self.specialization_cache,
-            .loaded_specialization_shards = self.loaded_specialization_shards,
             .interface_summaries = &self.interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
@@ -4878,13 +4724,13 @@ const Builder = struct {
             const existing = self.lowered_templates.get(hit.fn_id) orelse
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
             if (!specEvidenceVectorEql(existing.evidence, spec_evidence)) {
-                Common.invariant("Monotype specialization cache hit disagreed on dispatch evidence");
+                Common.invariant("Monotype specialization hit disagreed on dispatch evidence");
             }
             if (stored_source_topology) |requested| {
                 const existing_topology = existing.topology orelse
-                    Common.invariant("Monotype specialization cache hit had no explicit evidence topology");
+                    Common.invariant("Monotype specialization hit had no explicit evidence topology");
                 if (!storedConstFnEvidenceEql(existing_topology, requested)) {
-                    Common.invariant("Monotype specialization cache hit disagreed on lexical evidence topology");
+                    Common.invariant("Monotype specialization hit disagreed on lexical evidence topology");
                 }
             }
             switch (hit.status) {
@@ -5258,8 +5104,6 @@ const Builder = struct {
             .modules = self.modules,
             .program = self.program,
             .proc_debug_names = self.proc_debug_names,
-            .specialization_cache = self.specialization_cache,
-            .loaded_specialization_shards = self.loaded_specialization_shards,
             .interface_summaries = &self.interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
@@ -9496,38 +9340,17 @@ const Builder = struct {
             request_digest,
         );
 
-        var found_local = false;
-        const loaded_slot: ?Ast.FnSlot = if (spec.requires_local)
-            null
-        else if (try self.spec_store.find(identity, specializationEvidenceView(requested_evidence))) |hit|
-            switch (hit) {
-                // `lowerTemplateWithMono` owns the validation and recursive
-                // state handling for local specializations.
-                .local => blk: {
-                    found_local = true;
-                    break :blk null;
-                },
-                .loaded => |imported| blk: {
-                    if (draft_fn.signature_relation == .exact_graph and
-                        self.importedFnSignatureRelation(imported) != .exact_graph)
-                    {
-                        break :blk null;
-                    }
-                    if (!storedConstFnEvidenceEql(self.importedFnEvidence(imported), requested_evidence)) {
-                        Common.invariant("loaded procedure specialization disagreed on dispatch evidence topology");
-                    }
-                    break :blk Ast.FnSlot{ .imported = imported };
-                },
-            }
-        else
-            null;
+        // `lowerTemplateWithMono` owns the validation and recursive state
+        // handling for local specializations.
+        const found_local = !spec.requires_local and
+            try self.spec_store.find(identity, specializationEvidenceView(requested_evidence)) != null;
 
-        if (found_local or loaded_slot != null) {
+        if (found_local) {
             self.countBodyDiagnostic("deferred_template_reuses");
         } else {
             self.countBodyDiagnostic("deferred_template_bodies_lowered");
         }
-        const resolved_slot: Ast.FnSlot = loaded_slot orelse blk: {
+        const resolved_slot: Ast.FnSlot = blk: {
             const def = try self.lowerTemplateWithMono(
                 spec.template_ref,
                 self.moduleForId(spec.method_scope),
@@ -9724,7 +9547,6 @@ const Builder = struct {
                 .head = fn_.source.const_evidence_frame_head,
             };
             var identity: ?Ast.SpecIdentity = null;
-            var allow_imported = false;
             var allow_identity_merge = true;
             var lexical_owner: ?DraftOwner = null;
             if (template_spec) |spec| {
@@ -9750,7 +9572,6 @@ const Builder = struct {
                     );
                 }
                 lexical_owner = spec.lexical_owner;
-                allow_imported = !spec.requires_local;
                 allow_identity_merge = !spec.requires_local;
             }
             if (identity == null) {
@@ -9817,21 +9638,17 @@ const Builder = struct {
                         }
                     }
                 } else {
-                    const committed: ?specialize.LookupResult = if (!allow_identity_merge)
-                        null
-                    else if (allow_imported)
-                        try self.spec_store.find(wanted, specializationEvidenceView(requested_evidence))
-                    else if (try self.spec_store.findLocal(wanted, specializationEvidenceView(requested_evidence))) |hit|
-                        .{ .local = hit }
+                    const committed: ?specialize.LookupResult = if (allow_identity_merge)
+                        if (try self.spec_store.findLocal(wanted, specializationEvidenceView(requested_evidence))) |hit|
+                            .{ .local = hit }
+                        else
+                            null
                     else
                         null;
                     if (committed) |hit| {
-                        const committed_evidence = switch (hit) {
-                            .local => |local| programViewFnEvidence(self.program.view(), self.program.fnSource(local.fn_id)),
-                            .loaded => |imported| self.importedFnEvidence(imported),
-                        };
+                        const committed_evidence = programViewFnEvidence(self.program.view(), self.program.fnSource(hit.local.fn_id));
                         if (!storedConstFnEvidenceEql(committed_evidence, requested_evidence)) {
-                            Common.invariant("committed specialization cache hit disagreed on dispatch evidence topology");
+                            Common.invariant("committed specialization hit disagreed on dispatch evidence topology");
                         }
                         fn_slots[raw_index] = hit.target();
                         emit_fns[raw_index] = false;
@@ -10169,10 +9986,7 @@ const Builder = struct {
             .root_tys = sealed_roots,
             .extra_ty = sealed_extra,
             .root_def = if (root_def) |draft_def| body_ids.def(draft_def) else null,
-            .root_fn = if (root_fn) |draft_fn| switch (body_ids.fnSlot(draft_fn)) {
-                .local => |local| local,
-                .imported => null,
-            } else null,
+            .root_fn = if (root_fn) |draft_fn| body_ids.fnSlot(draft_fn).local else null,
             .core_maps = retained_core_maps,
         };
     }
@@ -12166,7 +11980,6 @@ const DraftCallValue = struct {
 
 const DraftFnSlot = union(enum(u8)) {
     local: DraftFnTarget,
-    imported: Ast.ImportedFnId,
 };
 
 const ClosedDirectDraftSpecialization = struct {
@@ -16154,7 +15967,6 @@ const FinalIdOffsets = struct {
         if (self.fn_slots.len != 0) return switch (self.fn_slots[@intFromEnum(id)] orelse
             Common.invariant("unreachable draft function required a final function id")) {
             .local => |fn_id| fn_id,
-            .imported => Common.invariant("draft function required a local id after converging to an imported specialization"),
         };
         return @enumFromInt(self.fn_start + @intFromEnum(id));
     }
@@ -16274,7 +16086,6 @@ const FinalIdOffsets = struct {
                     .draft => |draft| self.fnSlot(draft),
                     .final => |final| .{ .local = final },
                 },
-                .imported => |imported| .{ .imported = imported },
             } },
             .lifted => |lifted| .{ .lifted = lifted },
         };
@@ -33699,7 +33510,6 @@ const BodyContext = struct {
                 }
                 break :blk local;
             },
-            .imported => Common.invariant("active procedure value resolved directly to an imported function without a local value definition"),
         };
     }
 
@@ -33723,10 +33533,6 @@ const BodyContext = struct {
                     );
                 },
             },
-            // Imported slots were selected from this exact request. Their
-            // durable signature belongs to another shard, while the active
-            // graph request is already the local representation witness.
-            .imported => imported_fallback,
         };
     }
 
@@ -33861,14 +33667,7 @@ const BodyContext = struct {
 
         const resolved = self.draft.template_specs.items[spec_index].resolved_slot orelse
             Common.invariant("eager iterator-result completion produced no specialization target");
-        const completed_node = switch (resolved) {
-            .local => |final_fn| try self.programFnSourceTypeNode(final_fn),
-            // Loaded specializations are indexed only by their solved shape.
-            // A public request that needs new private evidence therefore
-            // lowers locally; an exact loaded request already carries that
-            // evidence in `current_node`.
-            .imported => return current_node,
-        };
+        const completed_node = try self.programFnSourceTypeNode(resolved.local);
         const completed_ty = try self.activeTypeFromNode(completed_node);
         // Adoption is keyed on the produced result representation, the same
         // predicate `adoptCompletedIteratorResult` applies: a completion whose
@@ -39660,13 +39459,10 @@ const BodyContext = struct {
                 .independent_roots,
                 .inherit,
             );
-            const draft_spec: ?u32 = switch (created) {
-                .local => |local| switch (local) {
-                    .draft => |draft_fn| self.draft.template_spec_by_fn.get(draft_fn) orelse
-                        Common.invariant("closed direct call created a draft function without a specialization record"),
-                    .final => null,
-                },
-                .imported => null,
+            const draft_spec: ?u32 = switch (created.local) {
+                .draft => |draft_fn| self.draft.template_spec_by_fn.get(draft_fn) orelse
+                    Common.invariant("closed direct call created a draft function without a specialization record"),
+                .final => null,
             };
             try self.draft.closed_direct_specializations.put(direct_key, .{
                 .slot = created,
@@ -58208,8 +58004,6 @@ fn verifyMonotypeCallTargets(program: *const Ast.Program) void {
         .local_fn_type_not_function => Common.invariant("Monotype direct call referenced a local function with a non-function type"),
         .local_fn_definition_arity_mismatch => Common.invariant("Monotype local function definition arity differed from its function type"),
         .local_call_arity_mismatch => Common.invariant("Monotype direct call arity differed from the callee function type"),
-        .imported_fn_out_of_bounds => Common.invariant("Monotype direct call referenced a missing imported function table entry"),
-        .imported_local_fn_out_of_bounds => Common.invariant("Monotype imported function table referenced a missing local function"),
         .lifted_fn_before_lifting => Common.invariant("Monotype direct call referenced a lifted function before Monotype lifting"),
     };
 }
@@ -60040,89 +59834,6 @@ test "body draft block statement spans use the retained compaction map" {
     const sealed = draft.stmtSpan(ids, .{ .start = 1, .len = 2 });
     try std.testing.expectEqual(@as(u32, 40), sealed.start);
     try std.testing.expectEqual(@as(u32, 2), sealed.len);
-}
-
-test "body draft sealed output maps back from specialization cache without body fixups" {
-    const gpa = std.testing.allocator;
-
-    var program = Ast.Program.init(gpa);
-    defer program.deinit();
-
-    const graph = try InstGraph.create(gpa, &program.types, &program.names);
-    defer graph.destroy();
-
-    var draft = BodyDraftStore.init(gpa);
-    defer draft.deinit();
-
-    const unit_node = try graph.newNode(.zst);
-    const list_node = try graph.newNode(.{ .list = unit_node });
-    const unit_cell = DraftTypeCell.fromGraphNode(unit_node);
-    const list_cell = DraftTypeCell.fromGraphNode(list_node);
-
-    var symbol_gen = Common.SymbolGen{};
-    const local = try draft.addLocal(symbol_gen.fresh(), list_cell, null, null);
-    const pat = try draft.addPat(.{ .ty = list_cell, .data = .{ .bind = local } });
-    const expr = try draft.addExpr(.{ .ty = list_cell, .data = .{ .local = local } });
-    const stmt = try draft.addStmt(.{ .let_ = .{
-        .pat = pat,
-        .value = expr,
-        .comptime_site = null,
-    } });
-    _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
-    _ = try draft.addStmtSpan(&.{stmt});
-    _ = try draft.addExpr(.{ .ty = unit_cell, .data = .unit });
-
-    try graph.freezeRelations();
-    var sealer = GraphTypeFinals.init(graph);
-    defer sealer.deinit();
-    try draft.sealCoreIntoProgram(&program, graph, &sealer);
-    program.freeze();
-
-    const fresh = program.view();
-    try std.testing.expectEqual(@as(?Ast.CompletedTypeIdVerifyError, null), fresh.verifyCompletedTypeIds());
-    try std.testing.expectEqual(@as(?Type.Store.VerifyError, null), fresh.types.verify(fresh.names));
-
-    const type_digests = try gpa.alloc(names.TypeDigest, fresh.types.types.len);
-    defer gpa.free(type_digests);
-    for (type_digests, 0..) |*digest, index| {
-        digest.* = program.types.typeDigest(&program.names, @enumFromInt(@as(u32, @intCast(index))));
-    }
-
-    const zero_hash = [_]u8{0} ** 32;
-    const image = try serialize.buildImage(gpa, zero_hash, zero_hash, &.{
-        .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(fresh.types.types) },
-        .{ .id = .type_args, .bytes = std.mem.sliceAsBytes(fresh.types.spans) },
-        .{ .id = .fields, .bytes = std.mem.sliceAsBytes(fresh.types.fields) },
-        .{ .id = .tags, .bytes = std.mem.sliceAsBytes(fresh.types.tags) },
-        .{ .id = .declared_fields, .bytes = std.mem.sliceAsBytes(fresh.types.declared_fields) },
-        .{ .id = .type_digests, .bytes = std.mem.sliceAsBytes(type_digests) },
-        .{ .id = .exprs, .bytes = std.mem.sliceAsBytes(fresh.exprs) },
-        .{ .id = .pats, .bytes = std.mem.sliceAsBytes(fresh.pats) },
-        .{ .id = .stmts, .bytes = std.mem.sliceAsBytes(fresh.stmts) },
-        .{ .id = .locals, .bytes = std.mem.sliceAsBytes(fresh.locals) },
-        .{ .id = .typed_locals, .bytes = std.mem.sliceAsBytes(fresh.typed_locals) },
-        .{ .id = .stmt_ids, .bytes = std.mem.sliceAsBytes(fresh.stmt_ids) },
-        .{ .id = .expr_locs, .bytes = std.mem.sliceAsBytes(fresh.expr_locs) },
-        .{ .id = .expr_regions, .bytes = std.mem.sliceAsBytes(fresh.expr_regions) },
-        .{ .id = .stmt_locs, .bytes = std.mem.sliceAsBytes(fresh.stmt_locs) },
-        .{ .id = .stmt_regions, .bytes = std.mem.sliceAsBytes(fresh.stmt_regions) },
-    });
-    defer gpa.free(image);
-
-    var header: serialize.SpecializationCacheHeader = undefined;
-    @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(serialize.SpecializationCacheHeader)]);
-    const mapped = try serialize.viewMappedFile(&header, image.ptr, image.len, zero_hash, zero_hash, 0);
-    const mapped_program = try serialize.mappedProgramView(mapped);
-
-    try std.testing.expectEqual(@as(?Type.Store.VerifyError, null), mapped_program.types.verify(&program.names));
-    try std.testing.expectEqualSlices(Type.Content, fresh.types.types, mapped_program.types.types);
-    try std.testing.expectEqualSlices(Type.TypeId, fresh.types.spans, mapped_program.types.spans);
-    try std.testing.expectEqualSlices(Ast.Expr, fresh.exprs, mapped_program.exprs);
-    try std.testing.expectEqualSlices(Ast.Pat, fresh.pats, mapped_program.pats);
-    try std.testing.expectEqualSlices(Ast.Stmt, fresh.stmts, mapped_program.stmts);
-    try std.testing.expectEqualSlices(Ast.Local, fresh.locals, mapped_program.locals);
-    try std.testing.expectEqualSlices(Ast.TypedLocal, fresh.typed_locals, mapped_program.typed_locals);
-    try std.testing.expectEqualSlices(Ast.StmtId, fresh.stmt_ids, mapped_program.stmt_ids);
 }
 
 test "record parser presence words cover fields wider than one u64" {

@@ -144,8 +144,6 @@ pub const TargetConfig = struct {
     /// shape-comparison tests turn it off because promotion intentionally
     /// changes the loop skeleton of qualifying sides.
     promote_loop_appends: bool = true,
-    /// Control Monotype specialization cache reads and writes.
-    monotype_cache: MonotypeCacheControl = .{},
     /// Build ConstStore materialization plans for requested layouts.
     /// Disable this only for consumers that read requested layout metadata and
     /// never materialize requested-layout values.
@@ -553,7 +551,6 @@ pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema
 pub const InlineMode = postcheck.SolvedInline.Mode;
 pub const SpecConstrCloneInlining = postcheck.MonotypeLifted.SpecConstr.CloneInlining;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
-pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
 
 /// Materialized Lambda Mono program type, re-exported for harnesses that
 /// receive one through `TargetConfig.debug_materialized_out`.
@@ -826,7 +823,6 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
-                .specialization_cache = target.monotype_cache,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,

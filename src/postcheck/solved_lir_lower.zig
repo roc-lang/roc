@@ -1597,10 +1597,7 @@ const Lowerer = struct {
             .return_ => |return_| self.isWorkerBodyExpr(return_.value, next_depth),
             .call_proc => |call| blk: {
                 if (call.captures.len != 0) break :blk false;
-                const callee = switch (Lifted.directCallee(call)) {
-                    .local => |local| local,
-                    .imported => break :blk false,
-                };
+                const callee = Lifted.directCallee(call).local;
                 const callee_fn = self.solved.lifted.getFn(callee);
                 if (self.solved.lifted.typedLocalSpan(callee_fn.captures).len != 0) break :blk false;
                 if (!call.is_cold and self.inline_plan.bodyForFn(callee) != null) break :blk false;
@@ -1711,10 +1708,7 @@ const Lowerer = struct {
             },
             .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, next_depth),
             .call_proc => |call| {
-                const callee = switch (Lifted.directCallee(call)) {
-                    .local => |local| local,
-                    .imported => Common.invariant("certified worker body contained an imported direct call"),
-                };
+                const callee = Lifted.directCallee(call).local;
                 const callee_fn_id = try self.ensureOwnFnSpec(callee, .finite);
                 _ = try self.procPlaceholder(callee_fn_id);
                 for (view.exprSpan(call.args)) |arg| {
@@ -3945,18 +3939,15 @@ const Lowerer = struct {
             .fn_ref => |fn_ref| try self.lowerFnRefInto(target, expr_id, fn_ref.fn_id, self.solved.lifted.captureOperandSpan(fn_ref.captures), next),
             .nominal => |backing| try self.lowerNominalInto(target, expr_ty, backing, next),
             .let_ => |let_| try self.lowerLetIntoAtType(target, expr_ty, let_, next),
-            .call_proc => |call| switch (Lifted.directCallee(call)) {
-                .local => |callee| try self.lowerDirectProcCallInto(
-                    target,
-                    expr_ty,
-                    callee,
-                    self.solved.lifted.exprSpan(call.args),
-                    self.solved.lifted.captureOperandSpan(call.captures),
-                    call.is_cold,
-                    next,
-                ),
-                .imported => Common.invariant("direct LIR lowering requires imported Monotype calls to be linked before this stage"),
-            },
+            .call_proc => |call| try self.lowerDirectProcCallInto(
+                target,
+                expr_ty,
+                Lifted.directCallee(call).local,
+                self.solved.lifted.exprSpan(call.args),
+                self.solved.lifted.captureOperandSpan(call.captures),
+                call.is_cold,
+                next,
+            ),
             .call_value => |call| try self.lowerValueCallInto(target, expr_ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .low_level => |call| try self.lowerLowLevelInto(target, call.op, call.args, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.segments, next),
@@ -4035,18 +4026,15 @@ const Lowerer = struct {
             .record => |fields| try self.lowerRecordInto(target, ty, fields, next),
             .record_update => |update| try self.lowerRecordUpdateInto(target, ty, update, next),
             .tag => |tag| try self.lowerTagInto(target, ty, tag.name, tag.payloads, next),
-            .call_proc => |call| switch (Lifted.directCallee(call)) {
-                .local => |callee| try self.lowerDirectProcCallInto(
-                    target,
-                    ty,
-                    callee,
-                    self.solved.lifted.exprSpan(call.args),
-                    self.solved.lifted.captureOperandSpan(call.captures),
-                    call.is_cold,
-                    next,
-                ),
-                .imported => Common.invariant("direct LIR lowering requires imported Monotype calls to be linked before this stage"),
-            },
+            .call_proc => |call| try self.lowerDirectProcCallInto(
+                target,
+                ty,
+                Lifted.directCallee(call).local,
+                self.solved.lifted.exprSpan(call.args),
+                self.solved.lifted.captureOperandSpan(call.captures),
+                call.is_cold,
+                next,
+            ),
             .fn_ref => |fn_ref| try self.lowerFnRefIntoAtType(
                 target,
                 expr_id,
@@ -11348,8 +11336,6 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     var const_fn_evidence_frames = try clonedLiftedProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames", allocator, view.const_fn_evidence_frames);
     errdefer const_fn_evidence_frames.deinit(allocator);
 
-    var imported_fns = try clonedLiftedProgramList(Lifted.ImportedFn, "imported_fns", allocator, view.imported_fns);
-    errdefer imported_fns.deinit(allocator);
     var fns = try clonedLiftedProgramList(Lifted.Fn, "fns", allocator, view.fns);
     errdefer fns.deinit(allocator);
     var exprs = try clonedLiftedProgramList(Lifted.Expr, "exprs", allocator, view.exprs);
@@ -11419,7 +11405,6 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .names = name_store,
         .next_symbol = program.next_symbol,
         .types = types,
-        .imported_fns = imported_fns,
         .const_fn_evidence = const_fn_evidence,
         .const_fn_evidence_frames = const_fn_evidence_frames,
         .fns = fns,
@@ -11722,7 +11707,6 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         allocator,
         NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs

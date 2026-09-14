@@ -13978,7 +13978,6 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         allocator,
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs
@@ -15269,44 +15268,6 @@ test "expression traversal visits both operands of structural_hash" {
     try std.testing.expect(exprContainsReturn(&program, hash_expr));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, value_local, hash_expr));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, hasher_local, hash_expr));
-}
-
-test "call-pattern specialization preserves imported direct calls" {
-    const allocator = std.testing.allocator;
-    var mono = Mono.Program.init(allocator);
-    errdefer mono.deinit();
-
-    const unit_ty = try mono.types.add(.zst);
-    const imported = try mono.addImportedFn(.{
-        .shard = @enumFromInt(1),
-        .fn_id = @enumFromInt(1),
-    });
-    const body = try mono.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-        .callee = Mono.importedProcCallee(imported),
-        .args = Mono.Span(Mono.ExprId).empty(),
-    } } });
-    try mono.defs.append(allocator, .{
-        .symbol = @enumFromInt(1),
-        .args = Mono.Span(Mono.TypedLocal).empty(),
-        .body = .{ .roc = body },
-        .ret = unit_ty,
-    });
-
-    var lifted = try @import("lift.zig").run(allocator, mono);
-    defer lifted.deinit();
-
-    try run(allocator, &lifted, .all_calls);
-
-    const body_data = lifted.getExpr(body).data;
-    if (body_data != .call_proc) return error.TestUnexpectedResult;
-    const call = body_data.call_proc;
-    switch (call.callee) {
-        .func => |slot| switch (slot) {
-            .imported => |actual| try std.testing.expectEqual(imported, actual),
-            .local => return error.TestUnexpectedResult,
-        },
-        .lifted => return error.TestUnexpectedResult,
-    }
 }
 
 test "static match verdicts separate definite no-match from statically undecidable" {

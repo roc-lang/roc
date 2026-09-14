@@ -726,7 +726,6 @@ pub const Evaluator = struct {
     fn evalDirectCall(self: *Evaluator, frame: *Frame, call: Ast.DirectCall) EvalError!Value {
         const fn_id = switch (call.target) {
             .local => |id| id,
-            .imported => return self.unsupported_("imported function call"),
         };
         const args = try self.evalExprSpan(frame, call.args);
         return self.callFn(fn_id, args);
