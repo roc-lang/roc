@@ -130,7 +130,6 @@ test "Monotype specialization has no target backend or LIR imports" {
         @embedFile("monotype/lower.zig"),
         @embedFile("monotype/solve.zig"),
         @embedFile("monotype/specialize.zig"),
-        @embedFile("monotype/serialize.zig"),
         @embedFile("monotype_lifted/ast.zig"),
         @embedFile("monotype_lifted/lift.zig"),
         @embedFile("monotype_lifted/spec_constr.zig"),
@@ -162,7 +161,6 @@ test "Lifted functions own captures and consume Monotype expression storage" {
     try std.testing.expect(@hasField(Lifted.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Lifted.ExprData, "call_value"));
     try std.testing.expect(@hasField(Mono.FnSlot, "local"));
-    try std.testing.expect(@hasField(Mono.FnSlot, "imported"));
     try std.testing.expect(@hasField(Mono.ProcCallee, "func"));
     try std.testing.expect(@hasField(Mono.ProcCallee, "lifted"));
 }

@@ -167,7 +167,7 @@ my @lowering_debug_print_forbidden = (
 );
 
 my @guarded_program_fields = qw(
-    specs imported_fns fns defs nested_defs exprs pats stmts locals expr_ids
+    specs fns defs nested_defs exprs pats stmts locals expr_ids
     pat_ids typed_locals stmt_ids field_exprs fn_def_captures capture_operands
     record_destructs str_pattern_steps branches if_branches string_literals
     roots layout_requests runtime_schema_requests comptime_sites source_files
