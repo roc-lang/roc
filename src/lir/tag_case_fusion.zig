@@ -969,7 +969,7 @@ fn applyCandidate(
     if (store.procNeedsStackProbe(layouts, proc.*)) proc.stack_probe = .required;
 }
 
-/// Rebuild the releases carried on a producer edge so that the edge ends in
+/// Copy the releases carried on a producer edge so that the edge ends in
 /// a jump to the variant's own join. The original statements are left in
 /// place: an edge is only ever redirected through a fresh copy, so a release
 /// reachable from elsewhere keeps its old continuation.
