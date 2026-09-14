@@ -2120,6 +2120,7 @@ const DevProgram = struct {
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
         codegen.boxy_native_fns = null;
+        try codegen.finishImage();
         var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
         errdefer executable.deinit();
 
@@ -3711,6 +3712,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     const source_entry = try codegen.generateEntrypointWrapper("native_slot_source", producer, &.{}, .str);
     const consumer_entry = try codegen.generateEntrypointWrapper("native_slot_consumer", consumer, &.{}, .str);
+    try codegen.finishImage();
     var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
     defer executable.deinit();
     const Demand = struct {

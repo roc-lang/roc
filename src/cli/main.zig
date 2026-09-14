@@ -6488,6 +6488,7 @@ fn writeDevRunImageToSharedMemory(
             };
         }
 
+        try codegen.finishImage();
         const generated_code = codegen.getGeneratedCode();
         const relocations = codegen.getRelocations();
 

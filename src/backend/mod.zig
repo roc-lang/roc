@@ -438,6 +438,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
     // MOVDQU m128, XMM0 is the unaligned full-width store into the result slot.
+    try codegen.finishImage();
     const code = codegen.getGeneratedCode();
     var return_code: ?[]const u8 = null;
     for (codegen.getRelocations()) |relocation| {
@@ -484,6 +485,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
 
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const entrypoint = try codegen.generateEntrypointWrapper("roc_u128_identity", proc, &.{}, .u128);
+    try codegen.finishImage();
     const code = codegen.getGeneratedCode();
     const entrypoint_code = code[entrypoint.offset..][0..entrypoint.size];
 

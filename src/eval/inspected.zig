@@ -2913,6 +2913,7 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
 
         const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
+        try codegen.finishImage();
         var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
             codegen.getGeneratedCode(),
             0,
